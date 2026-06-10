@@ -27,6 +27,8 @@ use rand::rngs::StdRng;
 
 use burn::backend::{Autodiff, NdArray};
 use burn::backend::ndarray::NdArrayDevice;
+use burn::tensor::backend::{AutodiffBackend, Backend};
+use burn_cuda::{Cuda, CudaDevice};
 
 use pronlex_core::Vocab;
 use pronlex_data::{
@@ -36,8 +38,17 @@ use pronlex_model::{ModelConfig, TrainConfig, eval_report, load_model, predict, 
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
-type InferBackend = NdArray<f32>;
-type TrainBackend = Autodiff<InferBackend>;
+type CpuInferBackend = NdArray<f32>;
+type CpuTrainBackend = Autodiff<CpuInferBackend>;
+
+type CudaInferBackend = Cuda<f32, i32>;
+type CudaTrainBackend = Autodiff<CudaInferBackend>;
+
+#[derive(ValueEnum, Clone, Debug, Copy, PartialEq, Eq)]
+enum DeviceArg {
+    Cpu,
+    Cuda,
+}
 
 // ── CLI definition ─────────────────────────────────────────────────────────
 
@@ -45,6 +56,10 @@ type TrainBackend = Autodiff<InferBackend>;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
+    /// Device to use (cuda or cpu)
+    #[arg(long, global = true, default_value = "cuda")]
+    device: DeviceArg,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -148,18 +163,17 @@ enum Commands {
     },
 
     /// Run masked-phone prediction for a single word
+    #[command(alias = "infer")]
     Predict {
-        /// Directory containing the trained model
-        #[arg(long)]
-        model: PathBuf,
-
         /// Spelling of the word (lowercase)
-        #[arg(long)]
         word: String,
 
         /// Phone sequence with MASK at unknown positions, e.g. "SH AA1 R L MASK T"
-        #[arg(long)]
         phones: String,
+
+        /// Directory containing the trained model
+        #[arg(long, default_value = "models/cmudict-v0")]
+        model: PathBuf,
 
         /// Number of top predictions to show per mask position
         #[arg(long, default_value_t = 5)]
@@ -212,14 +226,15 @@ fn main() -> Result<()> {
             patience,
             batch_size,
             seed,
+            cli.device,
         ),
-        Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data),
+        Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data, cli.device),
         Commands::Predict {
             model,
             word,
             phones,
             top_k,
-        } => cmd_predict(&model, &word, &phones, top_k),
+        } => cmd_predict(&model, &word, &phones, top_k, cli.device),
     }
 }
 
@@ -378,6 +393,7 @@ fn cmd_train(
     patience: usize,
     batch_size: usize,
     seed: u64,
+    device_arg: DeviceArg,
 ) -> Result<()> {
     let vocab: Vocab = {
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
@@ -431,22 +447,68 @@ fn cmd_train(
     )?;
 
     let model_path = out.join("model");
-    let device: NdArrayDevice = Default::default();
-    let mut rng = StdRng::seed_from_u64(seed);
 
     println!("Starting training...");
     println!("  mask_policy: {:?}", train_config.mask_policy);
     println!("  lr={} wd={} dropout={}", learning_rate, weight_decay, dropout);
     println!("  epochs={} patience={} batch_size={}", epochs, patience, batch_size);
 
-    let best_loss = train::<TrainBackend, _>(
-        &model_config,
-        &train_config,
-        &train_lexemes,
-        &valid_lexemes,
-        &vocab,
-        &model_path,
-        &device,
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_train::<CpuTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &train_lexemes,
+                &valid_lexemes,
+                &vocab,
+                &model_path,
+                seed,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            run_train::<CudaTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &train_lexemes,
+                &valid_lexemes,
+                &vocab,
+                &model_path,
+                seed,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_train<B: AutodiffBackend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    train_config: &TrainConfig,
+    train_lexemes: &[Lexeme],
+    valid_lexemes: &[Lexeme],
+    vocab: &Vocab,
+    model_path: &Path,
+    seed: u64,
+) -> Result<()>
+where
+    <pronlex_model::PhonePredictorModel<B> as burn::module::Module<B>>::Record: Send,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+    let best_loss = train::<B, _>(
+        model_config,
+        train_config,
+        train_lexemes,
+        valid_lexemes,
+        vocab,
+        model_path,
+        device,
         &mut rng,
     )?;
 
@@ -457,7 +519,7 @@ fn cmd_train(
 
 // ── eval ───────────────────────────────────────────────────────────────────
 
-fn cmd_eval(model_dir: &Path, split: &str, data: &Path) -> Result<()> {
+fn cmd_eval(model_dir: &Path, split: &str, data: &Path, device_arg: DeviceArg) -> Result<()> {
     let vocab: Vocab = {
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
         serde_json::from_str(&s)?
@@ -477,18 +539,57 @@ fn cmd_eval(model_dir: &Path, split: &str, data: &Path) -> Result<()> {
         test_lexemes.len()
     );
 
-    let device: NdArrayDevice = Default::default();
-    let model = load_model::<InferBackend>(&model_config, &model_dir.join("model"), &device)?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_eval::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                split,
+                &vocab,
+                &test_lexemes,
+                &train_lexemes,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            run_eval::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                split,
+                &vocab,
+                &test_lexemes,
+                &train_lexemes,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn run_eval<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    _split: &str,
+    vocab: &Vocab,
+    test_lexemes: &[Lexeme],
+    train_lexemes: &[Lexeme],
+) -> Result<()> {
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
     let mut rng = StdRng::seed_from_u64(0);
 
     let report = eval_report(
         &model,
-        &test_lexemes,
-        &train_lexemes,
-        &vocab,
+        test_lexemes,
+        train_lexemes,
+        vocab,
         model_config.max_word_chars,
         model_config.max_phones,
-        &device,
+        device,
         &mut rng,
     );
 
@@ -524,7 +625,13 @@ fn cmd_eval(model_dir: &Path, split: &str, data: &Path) -> Result<()> {
 
 // ── predict ────────────────────────────────────────────────────────────────
 
-fn cmd_predict(model_dir: &Path, word: &str, phones_str: &str, top_k: usize) -> Result<()> {
+fn cmd_predict(
+    model_dir: &Path,
+    word: &str,
+    phones_str: &str,
+    top_k: usize,
+    device_arg: DeviceArg,
+) -> Result<()> {
     // Load vocab from the model directory (co-located during train)
     let vocab_path = model_dir.parent().unwrap_or(model_dir).join("vocab.json");
     // Also check if vocab is next to the data (common layout)
@@ -555,8 +662,47 @@ fn cmd_predict(model_dir: &Path, word: &str, phones_str: &str, top_k: usize) -> 
         serde_json::from_str(&s)?
     };
 
-    let device: NdArrayDevice = Default::default();
-    let model = load_model::<InferBackend>(&model_config, &model_dir.join("model"), &device)?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_predict::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                word,
+                phones_str,
+                top_k,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            run_predict::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                word,
+                phones_str,
+                top_k,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn run_predict<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    word: &str,
+    phones_str: &str,
+    top_k: usize,
+) -> Result<()> {
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
 
     let phone_tokens: Vec<&str> = phones_str.split_ascii_whitespace().collect();
 
@@ -566,11 +712,11 @@ fn cmd_predict(model_dir: &Path, word: &str, phones_str: &str, top_k: usize) -> 
         &model,
         &word.to_lowercase(),
         &phone_tokens,
-        &vocab,
+        vocab,
         top_k,
         model_config.max_word_chars,
         model_config.max_phones,
-        &device,
+        device,
     );
 
     if results.is_empty() {

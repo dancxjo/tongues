@@ -465,12 +465,37 @@ where
     let max_word_len = model_config.max_word_chars;
     let max_phone_len = model_config.max_phones;
 
-    let mut model: PhonePredictorModel<B> = model_config.init(device);
+    let mut best_val_loss = f32::INFINITY;
+    let model_file = model_path.with_extension("bin");
+    let mut model: PhonePredictorModel<B> = if model_file.exists() {
+        println!("Loading existing model from {} to resume training...", model_file.display());
+        let loaded = model_config
+            .init(device)
+            .load_file(model_path, &make_recorder(), device)
+            .with_context(|| format!("loading model to resume from {}", model_path.display()))?;
+
+        // Evaluate on validation set to establish baseline validation loss
+        let eval_model: PhonePredictorModel<B::InnerBackend> = loaded.valid();
+        let (val_loss, _, _) = evaluate(
+            &eval_model,
+            valid_lexemes,
+            vocab,
+            max_word_len,
+            max_phone_len,
+            device,
+            rng,
+        );
+        println!("Loaded model baseline validation loss: {:.4}", val_loss);
+        best_val_loss = val_loss;
+        loaded
+    } else {
+        println!("No existing model found at {}. Initializing new model...", model_file.display());
+        model_config.init(device)
+    };
+
     let mut optimizer = AdamWConfig::new()
         .with_weight_decay(train_config.weight_decay)
         .init::<B, PhonePredictorModel<B>>();
-
-    let mut best_val_loss = f32::INFINITY;
     let mut patience_counter = 0usize;
 
     for epoch in 1..=train_config.epochs {

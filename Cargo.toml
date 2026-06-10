@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.dependencies]
 burn = { version = "0.21", features = ["ndarray", "autodiff"] }
+burn-cuda = "0.21"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
