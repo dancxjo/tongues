@@ -1,0 +1,12 @@
+[package]
+name = "pronlex-data"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pronlex-core = { path = "../pronlex-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

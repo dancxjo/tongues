@@ -1,0 +1,7 @@
+/target/
+data/
+runs/
+models/
+*.bin
+*.bin.gz
+Cargo.lock
