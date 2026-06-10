@@ -178,6 +178,10 @@ enum Commands {
         /// Number of top predictions to show per mask position
         #[arg(long, default_value_t = 5)]
         top_k: usize,
+
+        /// Optional path to the prepared data directory containing vocab.json
+        #[arg(long)]
+        data: Option<PathBuf>,
     },
 }
 
@@ -234,7 +238,8 @@ fn main() -> Result<()> {
             word,
             phones,
             top_k,
-        } => cmd_predict(&model, &word, &phones, top_k, cli.device),
+            data,
+        } => cmd_predict(&model, &word, &phones, top_k, cli.device, data.as_deref()),
     }
 }
 
@@ -446,6 +451,14 @@ fn cmd_train(
         serde_json::to_string_pretty(&train_config)?,
     )?;
 
+    // Copy vocab.json to model output directory to make it self-contained
+    let vocab_src = data.join("vocab.json");
+    let vocab_dst = out.join("vocab.json");
+    if vocab_src.exists() {
+        fs::copy(&vocab_src, &vocab_dst)
+            .context("copying vocab.json to model directory")?;
+    }
+
     let model_path = out.join("model");
 
     println!("Starting training...");
@@ -631,26 +644,49 @@ fn cmd_predict(
     phones_str: &str,
     top_k: usize,
     device_arg: DeviceArg,
+    data_arg: Option<&Path>,
 ) -> Result<()> {
-    // Load vocab from the model directory (co-located during train)
-    let vocab_path = model_dir.parent().unwrap_or(model_dir).join("vocab.json");
-    // Also check if vocab is next to the data (common layout)
+    // Load vocab
     let vocab: Vocab = {
-        let search_paths = [
-            model_dir.join("vocab.json"),
-            vocab_path.clone(),
-        ];
         let mut found = None;
-        for p in &search_paths {
+
+        // 1. Check if data_arg was passed
+        if let Some(data_path) = data_arg {
+            let p = data_path.join("vocab.json");
             if p.exists() {
-                found = Some(p.clone());
-                break;
+                found = Some(p);
             }
         }
-        // Fall back: look in sibling data dir
+
+        // 2. Check next to the model file
+        if found.is_none() {
+            let p = model_dir.join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        // 3. Check model parent dir
+        if found.is_none() {
+            let p = model_dir.parent().unwrap_or(model_dir).join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        // 4. Try sibling folder (substituting "models" for "runs" or next to model_dir)
+        if found.is_none() {
+            let p = model_dir.parent().unwrap_or(model_dir).parent().unwrap_or(model_dir)
+                .join("runs")
+                .join(model_dir.file_name().unwrap_or_default())
+                .join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
         let path = found.context(
-            "vocab.json not found next to the model. \
-             Pass --data to specify the prepared data directory, or co-locate vocab.json.",
+            "vocab.json not found. Pass --data to specify the prepared data directory containing vocab.json, or copy vocab.json to the model directory.",
         )?;
         let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&s)?
