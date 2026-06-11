@@ -1,107 +1,117 @@
 # pronlex
 
-A Rust/Burn sequence-to-sequence pronunciation model.
-
-`pronlex` trains a Transformer to translate in both directions:
+`pronlex` is a Rust toolkit for experimenting with neural lexical and speech-front-end models. Its first working blade is a small Burn-powered sequence-to-sequence model that learns a reversible-ish mapping between English spelling and broad IPA phonemic strings.
 
 ```text
 spelling -> broad IPA phonemes
 farkle   -> ˈfɑɹ.kəl
 
 broad IPA phonemes -> spelling
-ˈfɑɹ.kəl           -> farkle
+ˈfɑɹ.kəl           -> farkel
 ```
 
-The current data pipeline starts from CMUdict word entries, filters to base
-words, phonemicizes those words through the local `speech` crate, and writes
-training examples as spelling/broad-IPA pairs.
+It is not just a dictionary lookup. The model is trained from lexicons and then asked to generalize to words it has never seen:
+
+```text
+pneumocryptology -> ˌnuː.məˈkɹɪp.təˌloʊ.dʒiː
+ˈzwɪ.kɚ.bɚɡ     -> zwickerberg
+```
+
+The longer-term goal is high-quality streaming TTS plumbing: text segmentation, pronunciation prediction, lexical repair, prosody-ready phonological forms, and eventually related ASR-side representation work.
 
 ---
 
-## Quick Start
+## Current status
 
-The default path is:
+Pronlex currently includes:
+
+- a Rust workspace using Burn 0.21;
+- a seq2seq pronunciation model;
+- spelling-to-phoneme (`g2p`) prediction;
+- phoneme-to-spelling (`p2g`) prediction;
+- a REPL that keeps the model loaded for interactive use;
+- CMUdict-based data preparation;
+- OpenEPD-based discrepancy mining and refinement;
+- a local `speech` crate for rule-based phonemicization/realization;
+- StyleTTS2/Piper-adjacent speech plumbing that is still experimental.
+
+This project is moving quickly. Some old command help may still refer to the earlier masked-phone prototype. The active model path is now sequence-to-sequence translation.
+
+---
+
+## Workspace layout
+
+```text
+pronlex-core   shared vocabulary and special token IDs
+pronlex-data   CMUdict parsing, IPA phonemicization, splits, collation
+pronlex-model  Burn seq2seq model, training, evaluation, prediction
+pronlex-cli    command-line interface and model/data wiring
+speech         rule-based phonemicization and realization pipeline
+styletts2      StyleTTS2 symbol lowering and backend experiments
+```
+
+The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/autodiff plus optional CUDA support.
+
+---
+
+## Quick start
+
+The easiest path is through the `just` recipes:
 
 ```sh
 just train
 ```
 
-`just train` runs:
+That trains the default model at `models/cmudict-v0` using data in `runs/cmudict-v0`. If the prepared data is missing, training prepares it. If `data/cmudict.dict` is missing, training downloads CMUdict first.
+
+Direct form:
 
 ```sh
-cargo run --bin pronlex -- train \
+cargo run --release -- train \
     --data runs/cmudict-v0 \
     --out models/cmudict-v0 \
     --task both
 ```
 
-If `runs/cmudict-v0` is missing `vocab.json`, `train.jsonl`, or `valid.jsonl`,
-training automatically prepares the data first. If `data/cmudict.dict` is also
-missing, training automatically downloads CMUdict first.
-
-So the usual first run is just:
-
-```sh
-just train
-```
+The default `both` task trains spelling-to-phoneme and phoneme-to-spelling directions together.
 
 ---
 
-## Just Recipes
+## Common commands
+
+### Fetch CMUdict
 
 ```sh
 just fetch
 ```
 
-Downloads CMUdict to `data/cmudict.dict`.
+or:
+
+```sh
+cargo run --release -- fetch-cmudict --out data/cmudict.dict
+```
+
+CMUdict is fetched from:
+
+```text
+https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
+```
+
+### Prepare data
 
 ```sh
 just prepare
 ```
 
-Optional. Builds `runs/cmudict-v0` without starting training. Use this when you
-want to refresh or inspect the generated data, or pass custom prepare arguments.
+or:
 
 ```sh
-just train
+cargo run --release -- prepare \
+    --input data/cmudict.dict \
+    --out runs/cmudict-v0
 ```
 
-Trains `models/cmudict-v0`. By default it trains `--task both`, with an even
-mix of grapheme-to-phoneme and phoneme-to-grapheme examples.
-
-```sh
-just infer "farkle"
-just infer --task p2g "ˈfɑɹ.kəl"
-```
-
-Runs one translation prediction.
-
-```sh
-just refine
-```
-
-Mines validation/test pronunciation discrepancies and fine-tunes a copy of the
-model on those failed examples. The recipe enables verbose output, so each
-exceptional word is printed as it is found.
-
-```sh
-just phonemes "hello world"
-just phones "hello world"
-```
-
-Runs the rule-based speech pipeline directly.
-
-```sh
-just speak "hello world"
-```
-
-Synthesizes speech through the configured backend.
-
----
-
-## Data Flow
-
-`prepare` writes a prepared data directory containing:
+`prepare` writes:
 
 | File | Purpose |
 |------|---------|
@@ -111,23 +121,23 @@ Synthesizes speech through the configured backend.
 | `train_words.txt` | Words assigned to train |
 | `valid_words.txt` | Words assigned to validation |
 | `test_words.txt` | Words assigned to test |
-| `vocab.json` | Unified character vocabulary and special tokens |
+| `vocab.json` | Unified vocabulary and special tokens |
 
-Each JSONL row is a `Lexeme`:
+Each JSONL row looks like:
 
 ```json
 {"base_word":"farkle","phonemes":"ˈfɑɹ.kəl"}
 ```
 
-The split is deterministic by base word. Alternate source entries for the same
-base word are collapsed before splitting, so a word cannot appear in multiple
-splits.
+Splits are deterministic by base word. Alternate source entries for the same base word are collapsed before splitting, so a word cannot leak across train/validation/test.
 
----
+### Train
 
-## Training
+```sh
+just train
+```
 
-Useful direct CLI form:
+Direct form:
 
 ```sh
 cargo run --release -- train \
@@ -142,46 +152,77 @@ cargo run --release -- train \
     --patience 5
 ```
 
-CUDA is used automatically when available. Pass global `--cpu` to force the
-CPU backend:
-
-```sh
-cargo run --release -- --cpu train --data runs/cmudict-v0
-```
-
-`--task` controls the direction:
+Tasks:
 
 | Task | Meaning |
 |------|---------|
-| `g2p` | grapheme to phoneme |
-| `p2g` | phoneme to grapheme |
+| `g2p` | spelling/graphemes to broad IPA phonemes |
+| `p2g` | broad IPA phonemes to spelling/graphemes |
 | `both` | train both directions |
 
-`both` is the default. In training, the default `both` path alternates task
-directions within each shuffled batch, giving an even mix for normal even-sized
-batches.
+Training resumes automatically when a previous `train_state.json` and checkpoints are present.
 
-The train command still accepts legacy masking flags such as `--mask-policy`,
-`--max-mask-rate`, and `--span-mask-prob`. They are currently ignored by the
-seq2seq training path.
+### Predict
 
-The model directory receives:
+```sh
+just infer "farkle"
+just infer --cpu "ˈfɑɹ.kəl"
+```
 
-| File | Purpose |
-|------|---------|
-| `model.bin` | Best model weights |
-| `model-epoch-N.bin` | Per-epoch checkpoints |
-| `model_config.json` | Architecture config |
-| `train_config.json` | Training config, including task direction |
-| `train_state.json` | Resume state |
-| `vocab.json` | Copied vocabulary for self-contained prediction |
+Direct form:
 
-Training resumes automatically when `train_state.json` and checkpoint files are
-present in the output directory.
+```sh
+cargo run --release -- predict \
+    --model models/cmudict-v0 \
+    "farkle"
+```
 
----
+Task detection is automatic by default. You can force a direction:
 
-## Evaluation
+```sh
+cargo run --release -- predict \
+    --model models/cmudict-v0 \
+    --task p2g \
+    "ˈfɑɹ.kəl"
+```
+
+Prediction searches for `vocab.json` in:
+
+1. the explicit `--data` directory;
+2. the model directory;
+3. the model directory's parent;
+4. a sibling `runs/<model-name>/vocab.json`.
+
+Training copies `vocab.json` into the model directory, so ordinary prediction should not require `--data`.
+
+### REPL
+
+```sh
+cargo run --release -- repl --cpu
+```
+
+The REPL loads vocabulary, device, config, and weights once, then accepts repeated inputs:
+
+```text
+pronlex> farkle
+ˈfɑɹ.kəl
+
+pronlex> ˈfɑɹ.kəl
+farkel
+```
+
+Commands:
+
+- `:quit`, `:q`, or `Ctrl-D` exits;
+- `:task g2p` forces spelling-to-phoneme;
+- `:task p2g` forces phoneme-to-spelling;
+- `:auto` restores automatic task detection;
+- `:timings` toggles timing output;
+- `:help` prints available commands.
+
+For these tiny models, CPU inference is often faster than CUDA for interactive use because CUDA launch/transfer overhead can dominate.
+
+### Evaluate
 
 ```sh
 cargo run --release -- eval \
@@ -191,26 +232,21 @@ cargo run --release -- eval \
     --task auto
 ```
 
-`--task auto` reads `train_config.json`. You can also force `g2p`, `p2g`, or
-`both`.
+Metrics currently include:
 
-Metrics currently reported:
+- loss;
+- exact-match accuracy;
+- token accuracy.
 
-- loss
-- exact match accuracy
-- token accuracy
+Use exact match for strict whole-output correctness and token accuracy for “mostly got the pronunciation/spelling right.”
 
----
+### Refine from discrepancies
 
-## Refinement
+```sh
+just refine
+```
 
-Refinement runs the trained model over one or more held-out splits, looks up
-each word in OpenEPD (`open-english-pronouncing-dictionary`), normalizes that
-IPA through the `speech` notation and syllabification layer, compares each
-prediction with that gold target using a broad comparison key, computes
-character-level edit distance on that key, writes every substantive mismatch to
-`discrepancies.jsonl`, and fine-tunes from the source model weights using only
-the mismatched lexemes.
+or:
 
 ```sh
 cargo run --release -- refine \
@@ -225,76 +261,33 @@ cargo run --release -- refine \
     --patience 2
 ```
 
-The default task is `g2p`, grapheme to phoneme. Use `--task p2g` for
-phoneme-to-grapheme refinement, or `--task both` to mine and train both
-directions. The source model directory is left untouched; refinement requires a
-separate `--out` directory. With `--verbose`, each discrepant word is printed
-with its split, task, edit distance, input, gold target, and prediction.
-Length marks, syllable dots, stress mark placement, and common rhotic spellings
-are ignored for discrepancy detection so refinement does not train on merely
-notational differences.
-OpenEPD entries containing IPA characters outside the existing model vocabulary
-are skipped, because the saved model cannot emit tokens that are not in its
-`vocab.json` without rebuilding the vocabulary and retraining.
+Refinement runs the model over held-out splits, looks up reference pronunciations in OpenEPD, normalizes them through the `speech` layer, compares predictions with gold targets, writes substantive mismatches to `discrepancies.jsonl`, and fine-tunes from the source model weights using those hard examples.
+
+Example discrepancy:
+
+```text
+word : zweig
+gold : ˈzwaɪɡ
+pred : ˈzweɪɡ
+```
+
+Some discrepancies are regular patterns worth training. Others are sight-word exceptions and probably belong in an override table rather than in the productive model.
+
+### Rule-based speech helpers
+
+```sh
+just phonemes "hello world"
+just phones "hello world"
+just speak "hello world"
+```
+
+These commands exercise the local speech pipeline directly.
 
 ---
 
-## Prediction
+## Model architecture
 
-```sh
-cargo run --release -- predict \
-    --model models/cmudict-v0 \
-    "farkle"
-```
-
-Task detection is automatic by default. Use `--task` when you want to force a
-direction:
-
-```sh
-cargo run --release -- predict \
-    --model models/cmudict-v0 \
-    --task p2g \
-    "ˈfɑɹ.kəl"
-```
-
-Prediction looks for `vocab.json` in this order:
-
-1. the explicit `--data` directory
-2. the model directory
-3. the model directory's parent
-4. a sibling `runs/<model-name>/vocab.json`
-
-Because training copies `vocab.json` into the model directory, normal prediction
-does not need `--data`.
-
----
-
-## REPL
-
-```sh
-cargo run --release -- repl --cpu
-```
-
-The REPL is also the default subcommand:
-
-```sh
-cargo run --release -- --cpu
-```
-
-REPL commands:
-
-- `:quit`, `:q`, or `Ctrl-D` exits
-- `:task g2p` forces grapheme-to-phoneme
-- `:task p2g` forces phoneme-to-grapheme
-- `:auto` restores automatic task detection
-- `:timings` toggles timing output
-- `:help` prints available commands
-
----
-
-## Model Architecture
-
-The model is a shared-vocabulary encoder-decoder Transformer:
+The current model is a shared-vocabulary encoder-decoder Transformer:
 
 ```text
 task token + source chars -> embedding + position -> Transformer encoder
@@ -328,20 +321,42 @@ Optimizer: AdamW. Early stopping uses validation loss.
 
 ---
 
-## Crate Layout
+## Why this exists
 
-| Crate | Contents |
-|-------|----------|
-| `pronlex-core` | Unified vocabulary and special token IDs |
-| `pronlex-data` | CMUdict parsing, IPA phonemicization, splits, collation |
-| `pronlex-model` | Burn seq2seq model, training loop, eval, predict |
-| `pronlex-cli` | CLI commands and model/data wiring |
-| `speech` | Rule-based phonemicization and realization pipeline |
-| `styletts2` | StyleTTS2 symbol lowering and backend support |
+Pronlex is one piece of a larger streaming speech system. A practical streaming TTS stack needs more than a synthesizer:
+
+```text
+incoming text stream
+  -> safe prefix / sentence-boundary detector
+  -> repair and rewind protocol for bad cuts
+  -> normalization
+  -> lexical pronunciation
+  -> prosody-ready phonological form
+  -> synthesis
+  -> playback queue / barge-in control
+```
+
+Pronlex currently focuses on the lexical/phonological part:
+
+```text
+orthography <-> phonology
+```
+
+Future sibling models may handle:
+
+- end-of-utterance detection;
+- headless sentence/chunk detection;
+- streaming chunk repair;
+- sight-word exception routing;
+- pronunciation discrepancy mining;
+- surface realizations and allophony;
+- ASR-adjacent phone/phoneme representations.
+
+The CLI will likely be reshaped around multiple model families rather than one monolithic `pronlex` model.
 
 ---
 
-## Running Tests
+## Tests
 
 ```sh
 cargo test
@@ -355,7 +370,14 @@ cargo test -p pronlex-model
 
 ---
 
-## Notes
+## Development notes
 
-Some CLI help strings still mention the older masked-phone predictor. The
-runtime model and data pipeline are now sequence-to-sequence translation.
+- Models and prepared datasets are intentionally local artifacts and are not expected to be committed.
+- The current name, `pronlex`, may change. The project is becoming more of a neural lexical/speech toolkit than a single pronunciation lexicon.
+- Outputs can be wrong in useful ways. For reverse spelling especially, the model often produces plausible spellings rather than dictionary spellings: `ˈhɛ.loʊ -> hellow`, `ˈfɑɹ.kəl -> farkel`.
+
+---
+
+## License
+
+TBD
