@@ -1,0 +1,43 @@
+source_kind = "pie-etymology"
+dataset_id = "enwiktionary-pie-roots-2026-06-01-v0"
+dump_index_url = "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/"
+train_frac = 0.8
+valid_frac = 0.1
+seed = 42
+include_reverse = true
+include_language_guessing = false
+include_descendant_pairs = true
+
+# PIE itself plus major Indo-European branches, proto-languages, historical
+# witnesses, and common modern descendants using Wiktionary language codes.
+languages = [
+  "ine-pro",
+  "germanic", "gem-pro", "gmw-pro", "gmq-pro", "got", "en", "enm", "ang",
+  "sco", "de", "nl", "odt", "osx", "non", "is", "da", "sv", "no", "nb",
+  "nn", "fy", "nds",
+  "italic", "itc-pro", "la", "xum", "osc", "it", "fr", "pro", "es", "pt",
+  "ro",
+  "hellenic", "grc", "el",
+  "indo-aryan", "inc-pro", "sa", "pi", "hi", "ur", "bn", "pa", "mr", "ne",
+  "iranian", "ira-pro", "ae", "peo", "fa", "ku", "ps", "os",
+  "slavic", "sla-pro", "cu", "ru", "uk", "pl", "cs", "sk", "bg", "sh",
+  "sl",
+  "baltic", "ine-bsl-pro", "bat-pro", "lt", "lv", "prg",
+  "celtic", "cel-pro", "cel-bry-pro", "cel-gau", "sga", "mga", "ga", "cy",
+  "wlm", "owl", "br", "kw",
+  "armenian", "hy", "xcl",
+  "albanian", "sqj-pro", "sq",
+  "tocharian", "txh", "txb", "xto",
+  "anatolian", "hit", "luw", "xlu", "xlc", "lyd", "xld",
+  "proto-indo-european-descendant", "indo-european-descendant",
+]
+
+# Optional supplemental Wikipedia table source. Leave empty to train only from
+# Wiktionary etymology/root/descendant templates.
+wikipedia_raw_urls = []
+
+# Set this to avoid scanning the dump index, or to pin a specific dump file.
+# dump_file_url = "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/enwiktionary-2026-06-01-p6p11719661.xml.bz2"
+
+# Set this or pass `--dump` to parse an already decompressed local XML dump.
+# dump_path = "/home/dancxjo/Downloads/enwiktionary-2026-06-01-p6p11719661.xml"

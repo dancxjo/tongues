@@ -1296,9 +1296,10 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
                 report.dump_path
             );
             println!(
-                "Parsed {} phonemes and {} phones into train/valid/test examples: {}/{}/{}",
+                "Parsed {} phonemes, {} phones, and {} PIE roots into train/valid/test examples: {}/{}/{}",
                 report.parsed_phonemes,
                 report.parsed_phones,
+                report.parsed_pie_roots,
                 report.train_examples,
                 report.valid_examples,
                 report.test_examples
@@ -1366,6 +1367,28 @@ fn cmd_wiktionary_train(
     seed: u64,
     device_arg: DeviceArg,
 ) -> Result<()> {
+    if config.source_kind == tongues_wiktionary::WiktionarySourceKind::PieEtymology {
+        let task = if task == "spelling-to-ipa" {
+            "etymology-translation"
+        } else {
+            task
+        };
+        return cmd_wiktionary_train_prepared_rows(
+            data,
+            out,
+            config,
+            task,
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            epochs,
+            patience,
+            seed,
+            device_arg,
+        );
+    }
+
     let source_file = match notation {
         WiktionaryNotationArg::Phones => data.join("phones.jsonl"),
         WiktionaryNotationArg::Phonemes => data.join("phonemes.jsonl"),
@@ -1394,6 +1417,99 @@ fn cmd_wiktionary_train(
         task
     );
 
+    write_and_train_wiktionary_seq2seq(
+        data,
+        out,
+        config,
+        &format!("{:?}:{task}", notation).to_lowercase(),
+        learning_rate,
+        weight_decay,
+        dropout,
+        batch_size,
+        epochs,
+        patience,
+        seed,
+        device_arg,
+        vocab,
+        train_examples,
+        valid_examples,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_wiktionary_train_prepared_rows(
+    data: &Path,
+    out: &Path,
+    config: &tongues_wiktionary::WiktionaryConfig,
+    task: &str,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let train_rows = filter_wiktionary_examples(read_jsonl_as(&data.join("train.jsonl"))?, task)?;
+    let valid_rows = filter_wiktionary_examples(read_jsonl_as(&data.join("valid.jsonl"))?, task)?;
+    anyhow::ensure!(
+        !train_rows.is_empty(),
+        "no prepared Wiktionary examples found for task={task}"
+    );
+    anyhow::ensure!(
+        !valid_rows.is_empty(),
+        "no prepared Wiktionary validation examples found for task={task}"
+    );
+
+    let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
+    let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
+    let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+
+    println!(
+        "Loaded prepared rows -> {} train / {} valid examples for task={}",
+        train_examples.len(),
+        valid_examples.len(),
+        task
+    );
+
+    write_and_train_wiktionary_seq2seq(
+        data,
+        out,
+        config,
+        &format!("pie-etymology:{task}"),
+        learning_rate,
+        weight_decay,
+        dropout,
+        batch_size,
+        epochs,
+        patience,
+        seed,
+        device_arg,
+        vocab,
+        train_examples,
+        valid_examples,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_and_train_wiktionary_seq2seq(
+    data: &Path,
+    out: &Path,
+    config: &tongues_wiktionary::WiktionaryConfig,
+    task_label: &str,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    device_arg: DeviceArg,
+    vocab: Vocab,
+    train_examples: Vec<Seq2SeqExample>,
+    valid_examples: Vec<Seq2SeqExample>,
+) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
     let train_config = TrainConfig {
@@ -1427,7 +1543,7 @@ fn cmd_wiktionary_train(
     write_manifest(
         out,
         &ModelArtifactManifest::new("wiktionary", "seq2seq-transformer", data_id_from_path(data))
-            .with_task(format!("{:?}:{task}", notation).to_lowercase()),
+            .with_task(task_label.to_string()),
     )?;
 
     let model_path = out.join("model");
@@ -1477,6 +1593,19 @@ fn filter_wiktionary_examples(
     let keep = |task: WiktionaryTask| match normalized.as_str() {
         "spelling-to-ipa" | "g2p" | "s2ipa" | "forward" => task == WiktionaryTask::SpellingToIpa,
         "ipa-to-spelling" | "p2g" | "ipa2s" | "reverse" => task == WiktionaryTask::IpaToSpelling,
+        "etymology"
+        | "etymology-translation"
+        | "translate-etymology"
+        | "pie-to-descendant"
+        | "pie2daughter"
+        | "pie-to-daughter"
+        | "descendant-to-pie"
+        | "daughter-to-pie"
+        | "daughter2pie"
+        | "descendant-to-descendant"
+        | "daughter-to-daughter"
+        | "daughter2daughter"
+        | "cognate" => task == WiktionaryTask::EtymologyTranslation,
         "normalize" | "normalise" => task == WiktionaryTask::NormalizeText,
         "align" => task == WiktionaryTask::AlignAudioText,
         "lang" | "language" | "language-guessing" => matches!(
@@ -1498,6 +1627,19 @@ fn filter_wiktionary_examples(
             | "ipa2s"
             | "p2g"
             | "reverse"
+            | "etymology"
+            | "etymology-translation"
+            | "translate-etymology"
+            | "pie-to-descendant"
+            | "pie2daughter"
+            | "pie-to-daughter"
+            | "descendant-to-pie"
+            | "daughter-to-pie"
+            | "daughter2pie"
+            | "descendant-to-descendant"
+            | "daughter-to-daughter"
+            | "daughter2daughter"
+            | "cognate"
             | "normalize"
             | "normalise"
             | "align"
@@ -1506,7 +1648,7 @@ fn filter_wiktionary_examples(
             | "language-guessing"
             | "all"
     ) {
-        anyhow::bail!("Invalid Wiktionary task. Supported: g2p, p2g, normalize, align, lang, all");
+        anyhow::bail!("Invalid Wiktionary task. Supported: g2p, p2g, etymology-translation, normalize, align, lang, all");
     }
 
     Ok(examples

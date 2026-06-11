@@ -24,16 +24,23 @@ pub const ARCHITECTURE: &str = "wiktionary-pronunciation-seq2seq-scaffold";
 pub const DEFAULT_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
 pub const DEFAULT_DUMP_INDEX_URL: &str =
     "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/";
+pub const DEFAULT_PIE_DATASET_ID: &str = "enwiktionary-pie-roots-2026-06-01-v0";
+pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
+    "https://en.wikipedia.org/w/index.php?title=Indo-European_vocabulary&action=raw";
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
+    #[serde(default)]
+    pub source_kind: WiktionarySourceKind,
     pub dataset_id: String,
     pub dump_index_url: String,
     #[serde(default)]
     pub dump_file_url: Option<String>,
     #[serde(default)]
     pub dump_path: Option<String>,
+    #[serde(default)]
+    pub wikipedia_raw_urls: Vec<String>,
     pub train_frac: f64,
     pub valid_frac: f64,
     pub seed: u64,
@@ -41,16 +48,33 @@ pub struct WiktionaryConfig {
     pub include_reverse: bool,
     pub include_language_guessing: bool,
     #[serde(default)]
+    pub include_descendant_pairs: bool,
+    #[serde(default)]
     pub max_pages: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WiktionarySourceKind {
+    Pronunciation,
+    PieEtymology,
+}
+
+impl Default for WiktionarySourceKind {
+    fn default() -> Self {
+        Self::Pronunciation
+    }
 }
 
 impl Default for WiktionaryConfig {
     fn default() -> Self {
         Self {
+            source_kind: WiktionarySourceKind::Pronunciation,
             dataset_id: DEFAULT_DATASET_ID.to_string(),
             dump_index_url: DEFAULT_DUMP_INDEX_URL.to_string(),
             dump_file_url: None,
             dump_path: None,
+            wikipedia_raw_urls: Vec::new(),
             train_frac: 0.8,
             valid_frac: 0.1,
             seed: 42,
@@ -60,6 +84,31 @@ impl Default for WiktionaryConfig {
                 .collect(),
             include_reverse: true,
             include_language_guessing: true,
+            include_descendant_pairs: false,
+            max_pages: None,
+        }
+    }
+}
+
+impl WiktionaryConfig {
+    pub fn pie_etymology() -> Self {
+        Self {
+            source_kind: WiktionarySourceKind::PieEtymology,
+            dataset_id: DEFAULT_PIE_DATASET_ID.to_string(),
+            dump_index_url: DEFAULT_DUMP_INDEX_URL.to_string(),
+            dump_file_url: None,
+            dump_path: None,
+            wikipedia_raw_urls: Vec::new(),
+            train_frac: 0.8,
+            valid_frac: 0.1,
+            seed: 42,
+            languages: pie_descendant_language_codes()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            include_reverse: true,
+            include_language_guessing: false,
+            include_descendant_pairs: true,
             max_pages: None,
         }
     }
@@ -90,6 +139,17 @@ pub struct WiktionaryPattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PieEtymologyEntry {
+    pub pie: String,
+    pub lang: String,
+    pub branch: String,
+    pub descendant: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gloss: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrainingExample {
     pub task: WiktionaryTask,
     pub lang: Option<String>,
@@ -107,6 +167,10 @@ pub struct TrainingExample {
 pub enum WiktionaryTask {
     SpellingToIpa,
     IpaToSpelling,
+    EtymologyTranslation,
+    PieToDescendant,
+    DescendantToPie,
+    DescendantToDescendant,
     AlignAudioText,
     NormalizeText,
     GuessLangFromSpelling,
@@ -119,6 +183,10 @@ impl WiktionaryTask {
         match self {
             Self::SpellingToIpa => "<task:g2p>",
             Self::IpaToSpelling => "<task:p2g>",
+            Self::EtymologyTranslation => "<task:etymology_translate>",
+            Self::PieToDescendant => "<task:pie_to_descendant>",
+            Self::DescendantToPie => "<task:descendant_to_pie>",
+            Self::DescendantToDescendant => "<task:descendant_to_descendant>",
             Self::AlignAudioText => "<task:align>",
             Self::NormalizeText => "<task:normalize>",
             Self::GuessLangFromSpelling => "<task:guess_lang_from_spelling>",
@@ -134,6 +202,7 @@ pub struct PrepareReport {
     pub extracted_patterns: usize,
     pub parsed_phonemes: usize,
     pub parsed_phones: usize,
+    pub parsed_pie_roots: usize,
     pub train_examples: usize,
     pub valid_examples: usize,
     pub test_examples: usize,
@@ -154,6 +223,10 @@ pub fn prepare_dataset(
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(cache_dir).with_context(|| format!("creating {}", cache_dir.display()))?;
+
+    if config.source_kind == WiktionarySourceKind::PieEtymology {
+        return prepare_pie_dataset(out, cache_dir, config);
+    }
 
     let dump_path = resolve_dump_path(cache_dir, config)?;
     let extracted = parse_dump(&dump_path, config)?;
@@ -188,10 +261,104 @@ pub fn prepare_dataset(
         extracted_patterns: extracted.patterns.len(),
         parsed_phonemes: phonemes.len(),
         parsed_phones: phones.len(),
+        parsed_pie_roots: 0,
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
+}
+
+fn prepare_pie_dataset(
+    out: &Path,
+    cache_dir: &Path,
+    config: &WiktionaryConfig,
+) -> Result<PrepareReport> {
+    let dump_path = resolve_dump_path(cache_dir, config)?;
+    let extracted = parse_dump(&dump_path, config)?;
+    let mut roots = extracted.pie_roots;
+    let mut source_paths = vec![dump_path];
+    let wikipedia_paths = resolve_wikipedia_source_paths(cache_dir, config)?;
+    source_paths.extend(wikipedia_paths.iter().cloned());
+    for path in &wikipedia_paths {
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        roots.extend(extract_pie_etymology_entries(&raw, config));
+    }
+    roots.sort_by(|a, b| {
+        (&a.pie, &a.lang, &a.branch, &a.descendant).cmp(&(
+            &b.pie,
+            &b.lang,
+            &b.branch,
+            &b.descendant,
+        ))
+    });
+    roots.dedup_by(|a, b| {
+        a.pie == b.pie && a.lang == b.lang && a.branch == b.branch && a.descendant == b.descendant
+    });
+
+    let examples = expand_pie_training_examples(&roots, config);
+    let (train, valid, test) =
+        split_examples(examples, config.train_frac, config.valid_frac, config.seed);
+
+    write_jsonl(&out.join("train.jsonl"), &train)?;
+    write_jsonl(&out.join("valid.jsonl"), &valid)?;
+    write_jsonl(&out.join("test.jsonl"), &test)?;
+    write_jsonl(&out.join("pie_roots.jsonl"), &roots)?;
+    write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
+    fs::write(
+        out.join("dataset_config.json"),
+        serde_json::to_string_pretty(config)?,
+    )?;
+    fs::write(
+        out.join("README.md"),
+        pie_dataset_readme(config, &source_paths),
+    )?;
+
+    Ok(PrepareReport {
+        dump_path: source_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        extracted_patterns: roots.len(),
+        parsed_phonemes: 0,
+        parsed_phones: 0,
+        parsed_pie_roots: roots.len(),
+        train_examples: train.len(),
+        valid_examples: valid.len(),
+        test_examples: test.len(),
+    })
+}
+
+fn resolve_wikipedia_source_paths(
+    cache_dir: &Path,
+    config: &WiktionaryConfig,
+) -> Result<Vec<PathBuf>> {
+    if let Some(path) = &config.dump_path {
+        return Ok(vec![PathBuf::from(path)]);
+    }
+    let urls = config.wikipedia_raw_urls.clone();
+    let mut paths = Vec::new();
+    for (index, url) in urls.iter().enumerate() {
+        let filename = wikipedia_cache_filename(url, index);
+        let path = cache_dir.join(filename);
+        if !path.exists() || path.metadata()?.len() == 0 {
+            download_to_file(url, &path)?;
+        }
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
+fn wikipedia_cache_filename(url: &str, index: usize) -> String {
+    let title = url
+        .split("title=")
+        .nth(1)
+        .and_then(|tail| tail.split('&').next())
+        .unwrap_or("wikipedia-pie-source")
+        .replace("%20", "_")
+        .replace(['/', '\\', ':', '?', '&', '='], "_");
+    format!("{index:02}-{title}.wiki")
 }
 
 pub fn resolve_dump_path(cache_dir: &Path, config: &WiktionaryConfig) -> Result<PathBuf> {
@@ -295,6 +462,7 @@ pub struct ExtractedWiktionaryData {
     pub patterns: Vec<WiktionaryPattern>,
     pub phonemes: Vec<PronunciationEntry>,
     pub phones: Vec<PronunciationEntry>,
+    pub pie_roots: Vec<PieEtymologyEntry>,
 }
 
 pub fn parse_dump(dump_path: &Path, config: &WiktionaryConfig) -> Result<ExtractedWiktionaryData> {
@@ -371,6 +539,7 @@ impl ExtractedWiktionaryData {
         self.patterns.extend(other.patterns);
         self.phonemes.extend(other.phonemes);
         self.phones.extend(other.phones);
+        self.pie_roots.extend(other.pie_roots);
     }
 }
 
@@ -395,6 +564,13 @@ pub fn extract_page_data(
     wikitext: &str,
     config: &WiktionaryConfig,
 ) -> ExtractedWiktionaryData {
+    if config.source_kind == WiktionarySourceKind::PieEtymology {
+        return ExtractedWiktionaryData {
+            pie_roots: extract_wiktionary_pie_etymology_entries(spelling, wikitext, config),
+            ..ExtractedWiktionaryData::default()
+        };
+    }
+
     if spelling.is_empty() || spelling.contains(':') {
         return ExtractedWiktionaryData::default();
     }
@@ -464,6 +640,710 @@ pub fn extract_page_data(
         }
     }
     data
+}
+
+pub fn extract_pie_etymology_entries(
+    wikitext: &str,
+    config: &WiktionaryConfig,
+) -> Vec<PieEtymologyEntry> {
+    let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
+    let mut entries = Vec::new();
+    for table in find_wikitables(wikitext) {
+        let headers = parse_table_headers(table);
+        if headers
+            .first()
+            .is_none_or(|header| pie_column_code(header).is_none())
+        {
+            continue;
+        }
+        for row in parse_table_rows(table) {
+            if row.len() < 2 {
+                continue;
+            }
+            let pie = clean_wikitext_cell(&row[0]);
+            if pie.is_empty() {
+                continue;
+            }
+            let gloss = extract_quoted_gloss(&row[0]).or_else(|| extract_quoted_gloss(&pie));
+            for (index, cell) in row.iter().enumerate().skip(1) {
+                let Some(header) = headers.get(index) else {
+                    continue;
+                };
+                let Some((lang, branch)) = descendant_column(header) else {
+                    continue;
+                };
+                if !allowed.is_empty()
+                    && !allowed.contains(lang)
+                    && !allowed.contains(branch)
+                    && !allowed.contains("ine-pro")
+                {
+                    continue;
+                }
+                let descendant = clean_wikitext_cell(cell);
+                if descendant.is_empty() {
+                    continue;
+                }
+                entries.push(PieEtymologyEntry {
+                    pie: pie.clone(),
+                    lang: lang.to_string(),
+                    branch: branch.to_string(),
+                    descendant,
+                    gloss: gloss.clone(),
+                    source: "wikipedia:Indo-European vocabulary".to_string(),
+                });
+            }
+        }
+    }
+    entries
+}
+
+pub fn extract_wiktionary_pie_etymology_entries(
+    spelling: &str,
+    wikitext: &str,
+    config: &WiktionaryConfig,
+) -> Vec<PieEtymologyEntry> {
+    if spelling.is_empty() {
+        return Vec::new();
+    }
+    let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
+    let page_form = wiktionary_page_form(spelling);
+    let mut entries = Vec::new();
+    let mut current_lang = wiktionary_lang_from_heading(wikitext.lines().next().unwrap_or(""));
+    let mut current_pie = if current_lang.as_deref() == Some("ine-pro") {
+        Some(page_form.clone())
+    } else {
+        None
+    };
+
+    for line in wikitext.lines() {
+        if let Some(lang) = wiktionary_lang_from_heading(line) {
+            current_pie = (lang == "ine-pro").then(|| page_form.clone());
+            current_lang = Some(lang);
+        }
+
+        for template in find_named_templates(
+            line,
+            &[
+                "root", "der", "inh", "bor", "lbor", "cog", "m", "l", "desc", "desctree", "etymon",
+            ],
+        ) {
+            let params = split_template_params(template);
+            if params.is_empty() {
+                continue;
+            }
+            let name = params[0].trim().to_ascii_lowercase();
+            match name.as_str() {
+                "root" => {
+                    if params.get(2).is_some_and(|lang| lang.trim() == "ine-pro") {
+                        if let (Some(lang), Some(pie)) = (params.get(1), params.get(3)) {
+                            push_pie_entry(
+                                &mut entries,
+                                &allowed,
+                                clean_template_form(pie),
+                                lang.trim(),
+                                &page_form,
+                                template_named_param(&params, "t"),
+                                "enwiktionary:root-template",
+                            );
+                        }
+                    }
+                }
+                "der" | "inh" | "bor" | "lbor" => {
+                    if params.get(2).is_some_and(|lang| lang.trim() == "ine-pro") {
+                        if let (Some(lang), Some(pie)) = (params.get(1), params.get(3)) {
+                            push_pie_entry(
+                                &mut entries,
+                                &allowed,
+                                clean_template_form(pie),
+                                lang.trim(),
+                                &page_form,
+                                template_named_param(&params, "t"),
+                                "enwiktionary:etymology-template",
+                            );
+                        }
+                    }
+                }
+                "cog" => {
+                    if let Some(lang) = params.get(1) {
+                        if lang.trim() == "ine-pro" {
+                            if let Some(pie) = params.get(2) {
+                                if let Some(desc_lang) = current_lang.as_deref() {
+                                    push_pie_entry(
+                                        &mut entries,
+                                        &allowed,
+                                        clean_template_form(pie),
+                                        desc_lang,
+                                        &page_form,
+                                        template_named_param(&params, "t"),
+                                        "enwiktionary:cognate-template",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                "m" | "l" => {
+                    if params.get(1).is_some_and(|lang| lang.trim() == "ine-pro") {
+                        if let Some(pie) = template_form_param(&params) {
+                            if let Some(desc_lang) = current_lang.as_deref() {
+                                push_pie_entry(
+                                    &mut entries,
+                                    &allowed,
+                                    clean_template_form(&pie),
+                                    desc_lang,
+                                    &page_form,
+                                    template_named_param(&params, "t"),
+                                    "enwiktionary:mention-template",
+                                );
+                            }
+                        }
+                    }
+                }
+                "etymon" => {
+                    if params.get(1).is_some_and(|lang| lang.trim() == "ine-pro") {
+                        current_pie = Some(page_form.clone());
+                    }
+                }
+                "desc" | "desctree" => {
+                    let Some(pie) = current_pie.as_deref() else {
+                        continue;
+                    };
+                    let Some(lang) = params.get(1).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    let descendant = template_form_param(&params)
+                        .or_else(|| template_named_param(&params, "alt"))
+                        .or_else(|| template_named_param(&params, "alt1"))
+                        .unwrap_or_default();
+                    push_pie_entry(
+                        &mut entries,
+                        &allowed,
+                        pie.to_string(),
+                        lang,
+                        &clean_template_form(&descendant),
+                        template_named_param(&params, "t"),
+                        "enwiktionary:desc-template",
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        (&a.pie, &a.lang, &a.descendant, &a.source).cmp(&(
+            &b.pie,
+            &b.lang,
+            &b.descendant,
+            &b.source,
+        ))
+    });
+    entries.dedup_by(|a, b| {
+        a.pie == b.pie && a.lang == b.lang && a.descendant == b.descendant && a.source == b.source
+    });
+    entries
+}
+
+fn push_pie_entry(
+    entries: &mut Vec<PieEtymologyEntry>,
+    allowed: &BTreeSet<&str>,
+    pie: String,
+    lang: &str,
+    descendant: &str,
+    gloss: Option<String>,
+    source: &str,
+) {
+    let pie = clean_template_form(&pie);
+    let descendant = clean_template_form(descendant);
+    if pie.is_empty() || descendant.is_empty() || lang.is_empty() || lang == "ine-pro" {
+        return;
+    }
+    let branch = pie_branch_for_wiktionary_lang(lang);
+    if !allowed.is_empty() && !allowed.contains(lang) && !allowed.contains(branch) {
+        return;
+    }
+    entries.push(PieEtymologyEntry {
+        pie,
+        lang: lang.to_string(),
+        branch: branch.to_string(),
+        descendant,
+        gloss: gloss.map(|value| clean_template_form(&value)),
+        source: source.to_string(),
+    });
+}
+
+fn template_form_param(params: &[String]) -> Option<String> {
+    params
+        .get(2)
+        .filter(|value| !value.trim().is_empty() && !value.contains('='))
+        .cloned()
+        .or_else(|| params.get(3).filter(|value| !value.contains('=')).cloned())
+}
+
+fn wiktionary_page_form(title: &str) -> String {
+    let leaf = title
+        .rsplit('/')
+        .next()
+        .unwrap_or(title)
+        .trim()
+        .trim_start_matches("Reconstruction:");
+    let form = clean_template_form(leaf);
+    if title.contains("Proto-Indo-European/") && !form.starts_with('*') {
+        format!("*{form}")
+    } else {
+        form
+    }
+}
+
+fn clean_template_form(value: &str) -> String {
+    clean_wikitext_cell(value)
+        .trim_matches(|ch: char| matches!(ch, '[' | ']' | '{' | '}' | '|'))
+        .trim()
+        .to_string()
+}
+
+fn wiktionary_lang_from_heading(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !(trimmed.starts_with("==") && trimmed.ends_with("==")) {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|ch| *ch == '=').count();
+    if level != 2 {
+        return None;
+    }
+    let heading = trimmed.trim_matches('=').trim();
+    Some(
+        match heading {
+            "English" => "en",
+            "Middle English" => "enm",
+            "Old English" => "ang",
+            "Old Dutch" => "odt",
+            "Old Saxon" => "osx",
+            "Old Norse" => "non",
+            "German" => "de",
+            "Dutch" => "nl",
+            "Proto-Indo-European" => "ine-pro",
+            "Proto-Celtic" => "cel-pro",
+            "Proto-Germanic" => "gem-pro",
+            "Proto-West Germanic" => "gmw-pro",
+            "Proto-Brythonic" => "cel-bry-pro",
+            "Proto-Italic" => "itc-pro",
+            "Latin" => "la",
+            "Ancient Greek" => "grc",
+            "Sanskrit" => "sa",
+            "Avestan" => "ae",
+            "Old Persian" => "peo",
+            "Lithuanian" => "lt",
+            "Latvian" => "lv",
+            "Old Church Slavonic" => "cu",
+            "Armenian" => "hy",
+            "Albanian" => "sq",
+            "Hittite" => "hit",
+            "Tocharian A" => "xto",
+            "Tocharian B" => "txb",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+fn pie_branch_for_wiktionary_lang(lang: &str) -> &'static str {
+    match lang {
+        "ine-pro" => "pie",
+        "en" | "enm" | "ang" | "sco" | "de" | "nl" | "odt" | "osx" | "non" | "is" | "da" | "sv"
+        | "no" | "nb" | "nn" | "fy" | "stq" | "nds" | "nds-de" | "nds-nl" | "gem-pro"
+        | "gmw-pro" | "gmq-pro" | "gmw-cfr" | "gmw-msc" | "gml" | "got" => "germanic",
+        "la" | "itc-pro" | "xum" | "osc" | "it" | "fr" | "es" | "pt" | "ro" | "pro" => "italic",
+        "grc" | "el" => "hellenic",
+        "sa" | "inc-pro" | "pi" | "hi" | "ur" | "bn" | "pa" | "mr" | "ne" => "indo-aryan",
+        "ira-pro" | "ira" | "ae" | "peo" | "pal" | "fa" | "ku" | "ps" | "os" => "iranian",
+        "sla-pro" | "ine-bsl-pro" | "cu" | "ru" | "uk" | "pl" | "cs" | "sk" | "bg" | "sh"
+        | "sl" => "slavic",
+        "bat-pro" | "lt" | "lv" | "prg" => "baltic",
+        "cel-pro" | "cel-bry-pro" | "cel-gau" | "sga" | "mga" | "ga" | "cy" | "wlm" | "owl"
+        | "br" | "kw" => "celtic",
+        "hy" | "xcl" => "armenian",
+        "sq" | "sqj-pro" => "albanian",
+        "txb" | "xto" | "txh" => "tocharian",
+        "hit" | "luw" | "xlu" | "xlc" | "lyd" | "xld" => "anatolian",
+        _ if lang.ends_with("-pro") => "proto-indo-european-descendant",
+        _ => "indo-european-descendant",
+    }
+}
+
+fn find_wikitables(wikitext: &str) -> Vec<&str> {
+    let mut tables = Vec::new();
+    let mut offset = 0;
+    while let Some(start_relative) = wikitext[offset..].find("{|") {
+        let start = offset + start_relative;
+        let Some(end_relative) = wikitext[start..].find("\n|}") else {
+            break;
+        };
+        let end = start + end_relative + 3;
+        tables.push(&wikitext[start..end]);
+        offset = end;
+    }
+    tables
+}
+
+fn parse_table_headers(table: &str) -> Vec<String> {
+    table
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix('!'))
+        .flat_map(|line| split_table_line(line, "!!"))
+        .map(|cell| clean_wikitext_cell(&cell))
+        .filter(|cell| !cell.is_empty())
+        .collect()
+}
+
+fn parse_table_rows(table: &str) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut current = Vec::new();
+    for line in table.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("|-") {
+            if !current.is_empty() {
+                rows.push(current);
+                current = Vec::new();
+            }
+        } else if trimmed.starts_with('|') && !trimmed.starts_with("|}") {
+            let content = trimmed.trim_start_matches('|');
+            let cells = split_table_line(content, "||");
+            if cells.len() > 1 {
+                current.extend(cells);
+            } else if let Some(cell) = current.last_mut() {
+                if !content.trim().is_empty() {
+                    cell.push('\n');
+                    cell.push_str(content);
+                }
+            } else {
+                current.push(content.to_string());
+            }
+        } else if !current.is_empty() && !trimmed.starts_with('!') && !trimmed.starts_with("{|") {
+            let Some(cell) = current.last_mut() else {
+                continue;
+            };
+            cell.push('\n');
+            cell.push_str(line);
+        }
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+    rows
+}
+
+fn split_table_line(line: &str, separator: &str) -> Vec<String> {
+    line.split(separator)
+        .map(strip_table_cell_attrs)
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn strip_table_cell_attrs(cell: &str) -> &str {
+    let trimmed = cell.trim();
+    if trimmed.contains("=\"") || trimmed.contains("width=") || trimmed.contains("style=") {
+        trimmed.rsplit_once('|').map_or(trimmed, |(_, value)| value)
+    } else {
+        trimmed
+    }
+}
+
+fn pie_column_code(header: &str) -> Option<&'static str> {
+    header.eq_ignore_ascii_case("pie").then_some("ine-pro")
+}
+
+fn descendant_column(header: &str) -> Option<(&'static str, &'static str)> {
+    let normalized = header
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    match normalized.trim() {
+        "english" => Some(("eng", "germanic")),
+        "gothic" => Some(("got", "germanic")),
+        "latin" => Some(("lat", "italic")),
+        "ancient greek" | "greek" => Some(("grc", "hellenic")),
+        "sanskrit" => Some(("san", "indo-aryan")),
+        "iranian" => Some(("ira", "iranian")),
+        "slavic" => Some(("sla", "slavic")),
+        "baltic" => Some(("bat", "baltic")),
+        "celtic" => Some(("cel", "celtic")),
+        "armenian" => Some(("hye", "armenian")),
+        "albanian" => Some(("sqi", "albanian")),
+        "tocharian" => Some(("txh", "tocharian")),
+        "hittite" => Some(("hit", "anatolian")),
+        _ => None,
+    }
+}
+
+fn pie_descendant_language_codes() -> Vec<&'static str> {
+    vec![
+        "ine-pro",
+        "germanic",
+        "gem-pro",
+        "gmw-pro",
+        "gmq-pro",
+        "got",
+        "en",
+        "enm",
+        "ang",
+        "sco",
+        "de",
+        "nl",
+        "odt",
+        "osx",
+        "non",
+        "is",
+        "da",
+        "sv",
+        "no",
+        "nb",
+        "nn",
+        "fy",
+        "nds",
+        "italic",
+        "itc-pro",
+        "la",
+        "xum",
+        "osc",
+        "it",
+        "fr",
+        "pro",
+        "es",
+        "pt",
+        "ro",
+        "hellenic",
+        "grc",
+        "el",
+        "indo-aryan",
+        "inc-pro",
+        "sa",
+        "pi",
+        "hi",
+        "ur",
+        "bn",
+        "pa",
+        "mr",
+        "ne",
+        "iranian",
+        "ira-pro",
+        "ae",
+        "peo",
+        "fa",
+        "ku",
+        "ps",
+        "os",
+        "slavic",
+        "sla-pro",
+        "cu",
+        "ru",
+        "uk",
+        "pl",
+        "cs",
+        "sk",
+        "bg",
+        "sh",
+        "sl",
+        "baltic",
+        "ine-bsl-pro",
+        "bat-pro",
+        "lt",
+        "lv",
+        "prg",
+        "celtic",
+        "cel-pro",
+        "cel-bry-pro",
+        "cel-gau",
+        "sga",
+        "mga",
+        "ga",
+        "cy",
+        "wlm",
+        "owl",
+        "br",
+        "kw",
+        "armenian",
+        "hy",
+        "xcl",
+        "albanian",
+        "sqj-pro",
+        "sq",
+        "tocharian",
+        "txh",
+        "txb",
+        "xto",
+        "anatolian",
+        "hit",
+        "luw",
+        "xlu",
+        "xlc",
+        "lyd",
+        "xld",
+        "proto-indo-european-descendant",
+        "indo-european-descendant",
+    ]
+}
+
+fn clean_wikitext_cell(cell: &str) -> String {
+    let mut text = cell.to_string();
+    text = remove_between(&text, "<!--", "-->");
+    text = remove_refs(&text);
+    text = replace_lang_templates(&text);
+    text = replace_note_templates(&text);
+    text = replace_links(&text);
+    text = strip_markup(&text);
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|ch: char| matches!(ch, ';' | ',' | '|'))
+        .trim()
+        .to_string()
+}
+
+fn remove_between(text: &str, start_marker: &str, end_marker: &str) -> String {
+    let mut out = text.to_string();
+    while let Some(start) = out.find(start_marker) {
+        let Some(end) = out[start + start_marker.len()..]
+            .find(end_marker)
+            .map(|end| start + start_marker.len() + end + end_marker.len())
+        else {
+            out.truncate(start);
+            break;
+        };
+        out.replace_range(start..end, "");
+    }
+    out
+}
+
+fn remove_refs(text: &str) -> String {
+    let mut out = remove_between(text, "<ref", "</ref>");
+    while let Some(start) = out.find("<ref") {
+        let Some(end) = out[start..].find("/>").map(|end| start + end + 2) else {
+            break;
+        };
+        out.replace_range(start..end, "");
+    }
+    out
+}
+
+fn replace_lang_templates(text: &str) -> String {
+    replace_templates_by(text, |parts| {
+        let name = parts.first()?.trim().to_ascii_lowercase();
+        if name == "lang" || name == "langx" {
+            parts.last().map(|part| part.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn replace_note_templates(text: &str) -> String {
+    replace_templates_by(text, |parts| {
+        let name = parts.first()?.trim().to_ascii_lowercase();
+        if matches!(
+            name.as_str(),
+            "efn" | "refn" | "notetag" | "sfn" | "sfnp" | "cite book" | "cite journal"
+        ) {
+            Some(String::new())
+        } else {
+            None
+        }
+    })
+}
+
+fn replace_templates_by<F>(text: &str, mut replacement: F) -> String
+where
+    F: FnMut(&[String]) -> Option<String>,
+{
+    let mut out = String::new();
+    let mut offset = 0;
+    while let Some(relative_start) = text[offset..].find("{{") {
+        let start = offset + relative_start;
+        out.push_str(&text[offset..start]);
+        let Some(end) = find_template_end(text, start) else {
+            out.push_str(&text[start..]);
+            return out;
+        };
+        let template = &text[start + 2..end];
+        let parts = split_template_params(template);
+        if let Some(value) = replacement(&parts) {
+            out.push_str(&value);
+        } else {
+            out.push_str(&text[start..end + 2]);
+        }
+        offset = end + 2;
+    }
+    out.push_str(&text[offset..]);
+    out
+}
+
+fn find_template_end(text: &str, start: usize) -> Option<usize> {
+    let mut index = start;
+    let mut depth = 0_i32;
+    let bytes = text.as_bytes();
+    while index + 1 < text.len() {
+        match &bytes[index..index + 2] {
+            b"{{" => {
+                depth += 1;
+                index += 2;
+            }
+            b"}}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+                index += 2;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn replace_links(text: &str) -> String {
+    let mut out = String::new();
+    let mut offset = 0;
+    while let Some(relative_start) = text[offset..].find("[[") {
+        let start = offset + relative_start;
+        out.push_str(&text[offset..start]);
+        let Some(end) = text[start + 2..].find("]]").map(|end| start + 2 + end) else {
+            out.push_str(&text[start..]);
+            return out;
+        };
+        let link = &text[start + 2..end];
+        let label = link.rsplit_once('|').map_or(link, |(_, label)| label);
+        out.push_str(label);
+        offset = end + 2;
+    }
+    out.push_str(&text[offset..]);
+    out
+}
+
+fn strip_markup(text: &str) -> String {
+    let mut out = text
+        .replace("'''", "")
+        .replace("''", "")
+        .replace("<br />", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("&nbsp;", " ");
+    out = remove_between(&out, "<", ">");
+    decode_xml_entities(&out)
+}
+
+fn extract_quoted_gloss(text: &str) -> Option<String> {
+    let start = text.find('"')? + 1;
+    let end = text[start..].find('"')? + start;
+    let gloss = clean_wikitext_cell(&text[start..end]);
+    (!gloss.is_empty()).then_some(gloss)
 }
 
 fn allowed_wiktionary_langs(config: &WiktionaryConfig) -> BTreeSet<&str> {
@@ -737,6 +1617,93 @@ pub fn expand_training_examples(
     examples
 }
 
+pub fn expand_pie_training_examples(
+    entries: &[PieEtymologyEntry],
+    config: &WiktionaryConfig,
+) -> Vec<TrainingExample> {
+    let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
+    let mut examples = Vec::new();
+    let eligible = entries
+        .iter()
+        .filter(|entry| {
+            allowed.is_empty()
+                || allowed.contains(entry.lang.as_str())
+                || allowed.contains(entry.branch.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    for entry in &eligible {
+        if !allowed.is_empty()
+            && !allowed.contains(entry.lang.as_str())
+            && !allowed.contains(entry.branch.as_str())
+        {
+            continue;
+        }
+        examples.push(TrainingExample {
+            task: WiktionaryTask::EtymologyTranslation,
+            lang: Some(entry.lang.clone()),
+            notation: Some("etymology".to_string()),
+            accent: None,
+            input: etymology_translation_input("ine-pro", &entry.lang, &entry.pie),
+            output: entry.descendant.clone(),
+            source: entry.source.clone(),
+        });
+
+        if config.include_reverse {
+            examples.push(TrainingExample {
+                task: WiktionaryTask::EtymologyTranslation,
+                lang: Some("ine-pro".to_string()),
+                notation: Some("etymology".to_string()),
+                accent: None,
+                input: etymology_translation_input(&entry.lang, "ine-pro", &entry.descendant),
+                output: entry.pie.clone(),
+                source: entry.source.clone(),
+            });
+        }
+    }
+
+    if config.include_descendant_pairs {
+        let mut seen = HashSet::new();
+        for source in &eligible {
+            for target in &eligible {
+                if source.pie != target.pie
+                    || source.lang == target.lang && source.descendant == target.descendant
+                {
+                    continue;
+                }
+                let key = format!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    source.pie, source.lang, source.descendant, target.lang, target.descendant
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                examples.push(TrainingExample {
+                    task: WiktionaryTask::EtymologyTranslation,
+                    lang: Some(target.lang.clone()),
+                    notation: Some("etymology".to_string()),
+                    accent: None,
+                    input: etymology_translation_input(
+                        &source.lang,
+                        &target.lang,
+                        &source.descendant,
+                    ),
+                    output: target.descendant.clone(),
+                    source: format!("{}+{}", source.source, target.source),
+                });
+            }
+        }
+    }
+    examples
+}
+
+fn etymology_translation_input(source_lang: &str, target_lang: &str, word: &str) -> String {
+    format!(
+        "{} <from:{source_lang}> <to:{target_lang}> {word}",
+        WiktionaryTask::EtymologyTranslation.token()
+    )
+}
+
 pub fn normalize_ipa_for_training(ipa: &str) -> String {
     let trimmed = ipa.trim();
     if (trimmed.starts_with('/') && trimmed.ends_with('/'))
@@ -867,6 +1834,18 @@ fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     )
 }
 
+fn pie_dataset_readme(config: &WiktionaryConfig, source_paths: &[PathBuf]) -> String {
+    format!(
+        "# Wiktionary PIE etymology dataset\n\nSource pages: `{}`\n\nConfigured languages: {}\n\n`pie_roots.jsonl` contains reconstructed Proto-Indo-European roots or words paired with descendant and cognate forms from Wiktionary etymology/root/descendant templates, plus any configured supplemental Wikipedia tables. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those pairs into one model-facing translation task:\n\n```text\n<task:etymology_translate> <from:ine-pro> <to:la> *meh2ter => mater\n<task:etymology_translate> <from:la> <to:ine-pro> mater => *meh2ter\n<task:etymology_translate> <from:en> <to:de> thorp => Dorf\n```\n\nThe configured language list includes PIE (`ine-pro`) plus major Indo-European branches, proto-languages, historical witnesses, and common modern descendants using Wiktionary language codes.\n",
+        source_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("`, `"),
+        config.languages.join(", ")
+    )
+}
+
 pub fn write_scaffold_model(out: &Path, config: &WiktionaryConfig) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::write(out.join("model.bin"), b"wiktionary scaffold\n")?;
@@ -933,6 +1912,106 @@ mod tests {
             example.task == WiktionaryTask::NormalizeText
                 && example.input == "<task:normalize> <lang:deu> schief"
                 && example.output == "schief"
+        }));
+    }
+
+    #[test]
+    fn extracts_pie_root_templates_from_wiktionary_descendant_pages() {
+        let config = WiktionaryConfig::pie_etymology();
+        let entries = extract_wiktionary_pie_etymology_entries(
+            "thorp",
+            r#"
+==English==
+
+===Etymology===
+{{root|en|ine-pro|*treb-}}
+From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*trab-}}, {{m|ine-pro|*treb-|t=dwelling, room}}.
+
+===Noun===
+# A hamlet.
+"#,
+            &config,
+        );
+
+        assert!(entries.iter().any(|entry| {
+            entry.pie == "*treb-" && entry.lang == "en" && entry.descendant == "thorp"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.pie == "*trab-" && entry.lang == "en" && entry.descendant == "thorp"
+        }));
+    }
+
+    #[test]
+    fn extracts_pie_reconstruction_descendants() {
+        let config = WiktionaryConfig::pie_etymology();
+        let entries = extract_wiktionary_pie_etymology_entries(
+            "Reconstruction:Proto-Indo-European/treb-",
+            r#"
+{{reconstructed}}
+==Proto-Indo-European==
+{{etymon|ine-pro|pos=root}}
+
+===Root===
+{{ine-root}}
+
+# [[settlement]], [[dwelling]]
+
+====Derived terms====
+* {{l|ine-pro||*treb-eh₂}}
+** {{desc|cel-pro|*trebā|t=settlement}} {{see desc}}
+* {{l|ine-pro||*tr̥b-om}}
+** {{desc|gem-pro|*þurpą}} {{see desc}}
+"#,
+            &config,
+        );
+
+        assert!(entries.iter().any(|entry| {
+            entry.pie == "*treb-" && entry.lang == "cel-pro" && entry.descendant == "*trebā"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.pie == "*treb-" && entry.lang == "gem-pro" && entry.descendant == "*þurpą"
+        }));
+    }
+
+    #[test]
+    fn expands_pie_pairs_in_both_directions() {
+        let config = WiktionaryConfig::pie_etymology();
+        let examples = expand_pie_training_examples(
+            &[
+                PieEtymologyEntry {
+                    pie: "*treb-".to_string(),
+                    lang: "en".to_string(),
+                    branch: "germanic".to_string(),
+                    descendant: "thorp".to_string(),
+                    gloss: Some("dwelling, room".to_string()),
+                    source: "test".to_string(),
+                },
+                PieEtymologyEntry {
+                    pie: "*treb-".to_string(),
+                    lang: "de".to_string(),
+                    branch: "germanic".to_string(),
+                    descendant: "Dorf".to_string(),
+                    gloss: Some("village".to_string()),
+                    source: "test".to_string(),
+                },
+            ],
+            &config,
+        );
+
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::EtymologyTranslation
+                && example.input == "<task:etymology_translate> <from:ine-pro> <to:en> *treb-"
+                && example.output == "thorp"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::EtymologyTranslation
+                && example.input == "<task:etymology_translate> <from:en> <to:ine-pro> thorp"
+                && example.output == "*treb-"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::EtymologyTranslation
+                && example.input == "<task:etymology_translate> <from:en> <to:de> thorp"
+                && example.output == "Dorf"
         }));
     }
 
