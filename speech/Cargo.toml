@@ -1,0 +1,8 @@
+[package]
+name = "speech"
+version = "0.1.0"
+edition = "2024"
+description = "Backend-free linguistic and acoustic speech ontology"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

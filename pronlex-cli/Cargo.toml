@@ -18,3 +18,25 @@ serde_json = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
 anyhow = { workspace = true }
+dirs = { workspace = true }
+ureq = { workspace = true }
+zip = { workspace = true }
+hound = { workspace = true }
+sha2 = { workspace = true }
+cpal = { workspace = true }
+inquire = { workspace = true }
+owo-colors = { workspace = true }
+speech = { path = "../speech" }
+styletts2 = { path = "../styletts2" }
+
+[dependencies.ort]
+version = "=2.0.0-rc.12"
+optional = true
+default-features = false
+features = ["load-dynamic", "api-23"]
+
+[features]
+default = ["styletts2-onnx", "piper-onnx"]
+styletts2-onnx = ["styletts2/styletts2-onnx"]
+piper-onnx = ["dep:ort"]
+

@@ -1,5 +1,5 @@
 [workspace]
-members = ["pronlex-core", "pronlex-data", "pronlex-model", "pronlex-cli"]
+members = ["pronlex-core", "pronlex-data", "pronlex-model", "pronlex-cli", "speech", "styletts2"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -11,3 +11,13 @@ clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 anyhow = "1"
 thiserror = "1"
+dirs = "6"
+hound = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
+cpal = "0.15"
+inquire = "0.9.4"
+owo-colors = "4"
+
+

@@ -16,6 +16,10 @@
 //!                 --word charlotte --phones "SH AA1 R L MASK T"
 //! ```
 
+mod speak;
+mod piper;
+pub mod models;
+
 use std::fs;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -183,6 +187,15 @@ enum Commands {
         #[arg(long)]
         data: Option<PathBuf>,
     },
+
+    /// Speak/synthesize text into a WAV file using speech plans
+    Speak(speak::SpeakCommand),
+
+    /// Manage local models
+    Models {
+        #[command(subcommand)]
+        command: Option<models::ModelsCommand>,
+    },
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -240,6 +253,8 @@ fn main() -> Result<()> {
             top_k,
             data,
         } => cmd_predict(&model, &word, &phones, top_k, cli.device, data.as_deref()),
+        Commands::Speak(command) => speak::run_speak(command),
+        Commands::Models { command } => models::run(command),
     }
 }
 

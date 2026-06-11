@@ -1,0 +1,25 @@
+[package]
+name = "styletts2"
+version = "0.1.0"
+edition = "2024"
+description = "Backend-gated StyleTTS2 synthesis seam for Mortar speech plans"
+
+[features]
+default = ["styletts2-onnx-cuda", "styletts2-onnx-onednn", "styletts2-onnx-xnnpack"]
+styletts2-onnx = ["dep:ort"]
+styletts2-onnx-cuda = ["styletts2-onnx", "ort/cuda"]
+styletts2-onnx-onednn = ["styletts2-onnx", "ort/onednn"]
+styletts2-onnx-xnnpack = ["styletts2-onnx", "ort/xnnpack"]
+
+[dependencies]
+hound = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+speech = { path = "../speech" }
+thiserror = "1"
+
+[dependencies.ort]
+version = "=2.0.0-rc.12"
+optional = true
+default-features = false
+features = ["load-dynamic", "api-23"]
