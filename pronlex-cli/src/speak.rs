@@ -411,6 +411,10 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     let mut total_samples = 0;
 
     let process_chunk = |text_chunk: &str, backend: &mut BackendInstance, player: &Option<AudioStreamPlayer>, all_pcm: &mut Vec<f32>, all_timings: &mut Vec<StyleTts2Timing>, total_samples: &mut usize| -> Result<()> {
+        if text_chunk.trim().is_empty() {
+            return Ok(());
+        }
+
         let phonemicized = EnglishPhonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: text_chunk.to_string(),
@@ -420,6 +424,10 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             .context("failed to phonemicize text into a speech plan")?;
         
         let plan = utterance_plan_from_phonemicized(&phonemicized);
+
+        if plan.intended_phonemes.is_empty() {
+            return Ok(());
+        }
         
         if command.fail_on_guessed_pronunciation
             && phonemicized.warnings.iter().any(is_guessed_pronunciation)
