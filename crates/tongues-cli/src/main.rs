@@ -90,6 +90,12 @@ enum Commands {
         command: SpeechManifoldCommands,
     },
 
+    /// Prepare English Wiktionary pronunciation data
+    Wiktionary {
+        #[command(subcommand)]
+        command: WiktionaryCommands,
+    },
+
     /// Download CMUdict from GitHub
     FetchCmudict {
         /// Output path for the downloaded file
@@ -641,6 +647,43 @@ enum SpeechManifoldCommands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum WiktionaryCommands {
+    /// Download the Wiktionary dump and prepare pronunciation training JSONL
+    Prepare {
+        /// TOML config file for the Wiktionary pipeline
+        #[arg(long, default_value = "configs/wiktionary/default.toml")]
+        config: PathBuf,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
+        out: PathBuf,
+
+        /// Cache directory for downloaded Wikimedia dumps
+        #[arg(long, default_value = "data/wiktionary")]
+        cache_dir: PathBuf,
+    },
+
+    /// Write a Wiktionary model scaffold
+    Train {
+        /// TOML config file for the Wiktionary pipeline
+        #[arg(long, default_value = "configs/wiktionary/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/wiktionary/enwiktionary-2026-06-01-v0")]
+        out: PathBuf,
+
+        /// Cache directory for downloaded Wikimedia dumps if data is missing
+        #[arg(long, default_value = "data/wiktionary")]
+        cache_dir: PathBuf,
+    },
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum MaskPolicyArg {
     Single,
@@ -697,6 +740,7 @@ fn main() -> Result<()> {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg),
         Commands::SentenceParser { command } => run_sentence_parser_command(command),
         Commands::SpeechManifold { command } => run_speech_manifold_command(command, device_arg),
+        Commands::Wiktionary { command } => run_wiktionary_command(command),
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -1171,6 +1215,49 @@ fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
             };
             let analysis = tongues_sentence_parser::parse_sentence(&text, lowercase);
             println!("{}", serde_json::to_string_pretty(&analysis)?);
+            Ok(())
+        }
+    }
+}
+
+fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
+    match command {
+        WiktionaryCommands::Prepare {
+            config,
+            out,
+            cache_dir,
+        } => {
+            let config = tongues_wiktionary::read_config(&config)?;
+            let report = tongues_wiktionary::prepare_dataset(&out, &cache_dir, &config)?;
+            println!(
+                "Wiktionary dataset written to {} from {}",
+                out.display(),
+                report.dump_path
+            );
+            println!(
+                "Parsed {} entries into train/valid/test examples: {}/{}/{}",
+                report.parsed_entries,
+                report.train_examples,
+                report.valid_examples,
+                report.test_examples
+            );
+            Ok(())
+        }
+        WiktionaryCommands::Train {
+            config,
+            data,
+            out,
+            cache_dir,
+        } => {
+            let config = tongues_wiktionary::read_config(&config)?;
+            if !data.join("train.jsonl").exists()
+                || !data.join("valid.jsonl").exists()
+                || !data.join("test.jsonl").exists()
+            {
+                tongues_wiktionary::prepare_dataset(&data, &cache_dir, &config)?;
+            }
+            tongues_wiktionary::write_scaffold_model(&out, &config)?;
+            println!("Wiktionary model scaffold written to {}", out.display());
             Ok(())
         }
     }
@@ -3752,6 +3839,25 @@ mod tests {
             cli.command,
             Some(Commands::SpeechManifold {
                 command: SpeechManifoldCommands::Infer { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_wiktionary_family_commands() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "wiktionary",
+            "prepare",
+            "--out",
+            "datasets/wiktionary/enwiktionary-2026-06-01-v0",
+        ])
+        .expect("wiktionary prepare should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Wiktionary {
+                command: WiktionaryCommands::Prepare { .. }
             })
         ));
     }

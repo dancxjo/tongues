@@ -27,6 +27,7 @@ Tongues currently includes:
 
 - a Rust workspace using Burn 0.21;
 - a `g2p2g` seq2seq pronunciation model family;
+- a `wiktionary` pronunciation-data model family scaffold for multilingual spelling/IPA tasks;
 - a `sentence-parser` model-family scaffold that emits `speech::syntax::SentenceSyntaxAnalysis`;
 - a `speech-manifold` multimodal model family scaffold/trainer with OpenEPD-derived lexical data, derived speech modalities, and sampled synthetic/reference audio provenance;
 - spelling-to-phoneme (`g2p`) prediction;
@@ -49,6 +50,7 @@ crates/tongues-core              shared vocabulary and special token IDs
 crates/tongues-data              Lexicon parsing, IPA normalization, splits, collation
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
+crates/tongues-wiktionary        English Wiktionary dump download and pronunciation data scaffold
 crates/tongues-speech-manifold   shared multimodal speech-manifold data/model family
 crates/tongues-sentence-parser   sentence parser artifact/output scaffold
 crates/tongues-cli               command-line routing and model/data wiring
@@ -194,6 +196,21 @@ Rows are accepted only when:
 Good candidates for these manifests include Wikimedia Commons/Wiktionary pronunciation audio with per-file licenses, curated classroom/dictionary recordings you have permission to use, public-domain or permissively licensed word-list recordings, and locally generated TTS audio whose model/output terms allow your use. Sentence corpora such as Common Voice, LibriSpeech, CMU Arctic, or VoxPopuli should only be imported at the word level after segmentation/alignment and verification; the raw sentence audio does not by itself assure a specific isolated word pronunciation.
 
 Splits are deterministic by base word. Alternate source entries for the same base word are collapsed before splitting, so a word cannot leak across train/validation/test.
+
+### Prepare Wiktionary pronunciation data
+
+```sh
+cargo run --release -- wiktionary prepare \
+    --out datasets/wiktionary/enwiktionary-2026-06-01-v0
+```
+
+This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configured Wikimedia dump index:
+
+```text
+https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/
+```
+
+The parser is currently a stub. The prepared split files and row schema are in place for `eng`, `fra`, `deu`, and `spa` spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
 
 ### Train
 

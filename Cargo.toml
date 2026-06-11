@@ -6,6 +6,7 @@ members = [
     "crates/tongues-g2p2g",
     "crates/tongues-speech-manifold",
     "crates/tongues-sentence-parser",
+    "crates/tongues-wiktionary",
     "crates/tongues-cli",
     "crates/speech",
     "crates/styletts2",
