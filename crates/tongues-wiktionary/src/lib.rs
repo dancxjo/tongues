@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bzip2::read::BzDecoder;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -282,17 +283,19 @@ pub struct ExtractedWiktionaryData {
 }
 
 pub fn parse_dump(dump_path: &Path, config: &WiktionaryConfig) -> Result<ExtractedWiktionaryData> {
-    anyhow::ensure!(
-        !dump_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension == "bz2"),
-        "compressed .bz2 parsing is not implemented yet; decompress the dump or set dump_path to an .xml file"
-    );
-
     let file = File::open(dump_path).with_context(|| format!("opening {}", dump_path.display()))?;
-    let reader = BufReader::with_capacity(1024 * 1024, file);
-    parse_xml_pages(reader, config)
+    if dump_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension == "bz2")
+    {
+        let decoder = BzDecoder::new(file);
+        let reader = BufReader::with_capacity(1024 * 1024, decoder);
+        parse_xml_pages(reader, config)
+    } else {
+        let reader = BufReader::with_capacity(1024 * 1024, file);
+        parse_xml_pages(reader, config)
+    }
 }
 
 fn parse_xml_pages<R: BufRead>(
@@ -835,5 +838,41 @@ mod tests {
             .patterns
             .iter()
             .any(|pattern| pattern.kind == "rhymes" && pattern.values == ["iː"]));
+    }
+
+    #[test]
+    fn parses_bzip2_xml_dump() {
+        let config = WiktionaryConfig {
+            max_pages: Some(1),
+            ..WiktionaryConfig::default()
+        };
+        let xml = r#"<mediawiki>
+  <page>
+    <title>free</title>
+    <revision>
+      <text xml:space="preserve">==English==
+===Pronunciation===
+* {{IPA|en|/fɹiː/|[fɹɪi̯]|a=RP}}
+</text>
+    </revision>
+  </page>
+</mediawiki>
+"#;
+        let path = std::env::temp_dir().join(format!(
+            "tongues-wiktionary-test-{}.xml.bz2",
+            std::process::id()
+        ));
+        let file = File::create(&path).expect("create compressed fixture");
+        let mut encoder = bzip2::write::BzEncoder::new(file, bzip2::Compression::best());
+        encoder.write_all(xml.as_bytes()).expect("write fixture");
+        encoder.finish().expect("finish fixture");
+
+        let data = parse_dump(&path, &config).expect("parse compressed dump");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(data.phonemes.len(), 1);
+        assert_eq!(data.phones.len(), 1);
+        assert_eq!(data.phonemes[0].ipa, "/fɹiː/");
+        assert_eq!(data.phones[0].ipa, "[fɹɪi̯]");
     }
 }
