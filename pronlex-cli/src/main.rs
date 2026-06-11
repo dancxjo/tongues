@@ -21,7 +21,7 @@ mod piper;
 pub mod models;
 
 use std::fs;
-use std::io::{BufRead, BufWriter};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -48,7 +48,7 @@ type CpuTrainBackend = Autodiff<CpuInferBackend>;
 type CudaInferBackend = Cuda<f32, i32>;
 type CudaTrainBackend = Autodiff<CudaInferBackend>;
 
-#[derive(ValueEnum, Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 enum DeviceArg {
     Cpu,
     Cuda,
@@ -60,9 +60,9 @@ enum DeviceArg {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Device to use (cuda or cpu)
-    #[arg(long, global = true, default_value = "cuda")]
-    device: DeviceArg,
+    /// Use CPU instead of CUDA GPU
+    #[arg(long, global = true)]
+    cpu: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -213,10 +213,39 @@ enum MaskPolicyArg {
     Variable,
 }
 
+fn is_cuda_available() -> bool {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| {
+        let device = CudaDevice::default();
+        type B = Cuda<f32, i32>;
+        let _tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
+    });
+    std::panic::set_hook(default_hook);
+    result.is_ok()
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Determine target device (CUDA with fallback to CPU, or forced CPU)
+    let device_arg = if cli.cpu {
+        DeviceArg::Cpu
+    } else if is_cuda_available() {
+        DeviceArg::Cuda
+    } else {
+        // Only warn for commands that actually run model computations on the device
+        match &cli.command {
+            Commands::Train { .. } | Commands::Eval { .. } | Commands::Predict { .. } => {
+                println!("Warning: CUDA is not available. Falling back to CPU.");
+            }
+            _ => {}
+        }
+        DeviceArg::Cpu
+    };
+
     match cli.command {
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
@@ -252,15 +281,15 @@ fn main() -> Result<()> {
             patience,
             batch_size,
             seed,
-            cli.device,
+            device_arg,
         ),
-        Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data, cli.device),
+        Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data, device_arg),
         Commands::Predict {
             model,
             input,
             task,
             data,
-        } => cmd_predict(&model, &task, &input, cli.device, data.as_deref()),
+        } => cmd_predict(&model, &task, &input, device_arg, data.as_deref()),
         Commands::Speak(command) => speak::run_speak(command),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
