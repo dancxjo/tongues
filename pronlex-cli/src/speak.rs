@@ -22,12 +22,12 @@ use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
 
 const DEFAULT_STYLE_ALPHA: f32 = 0.3;
 const DEFAULT_STYLE_BETA: f32 = 0.1;
-const DEFAULT_SPEED: f64 = 1.0;
+const DEFAULT_SPEED: f64 = 1.8;
 
 #[derive(Debug, Args, Clone)]
 pub struct SpeakCommand {
-    #[arg(default_value = "hello world")]
-    pub text: String,
+    #[arg(help = "The text to speak. If not provided, reads from stdin.")]
+    pub text: Option<String>,
     #[arg(long, default_value = "en-US")]
     pub variety: String,
     #[arg(long, value_enum, default_value_t = SpeakBackend::Styletts2)]
