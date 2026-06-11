@@ -23,6 +23,10 @@ phonemes *args:
 phones *args:
     cargo run --bin pronlex -- phones "$@"
 
+# Run translation prediction (graphemes to phonemes or vice-versa)
+infer *args:
+    cargo run --bin pronlex -- predict "$@"
+
 # Train the pronlex masked-phone predictor model
 train *args:
     cargo run --bin pronlex -- train --data runs/cmudict-v0 --out models/cmudict-v0 "$@"

@@ -172,8 +172,8 @@ enum Commands {
         /// The input sequence to translate
         input: String,
 
-        /// Direction of translation: s2pm, pm2s
-        #[arg(long, default_value = "s2pm")]
+        /// Direction of translation: s2pm, pm2s, auto
+        #[arg(long, default_value = "auto")]
         task: String,
 
         /// Directory containing the trained model
@@ -1017,8 +1017,17 @@ fn cmd_predict(
         serde_json::from_str(&s)?
     };
 
-    let task = Task::from_str(task_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s"))?;
+    let task = if task_str.to_lowercase() == "auto" {
+        let is_spelling = input.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-');
+        if is_spelling {
+            Task::S2Pm
+        } else {
+            Task::Pm2S
+        }
+    } else {
+        Task::from_str(task_str)
+            .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s, auto"))?
+    };
 
     let model_config: ModelConfig = {
         let s = fs::read_to_string(model_dir.join("model_config.json"))

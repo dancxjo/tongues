@@ -322,7 +322,8 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .iter()
             .map(|&i| {
                 let lex = &lexemes[i];
-                make_seq2seq_example(lex, Task::S2Pm, vocab)
+                let task = Task::sample(rng);
+                make_seq2seq_example(lex, task, vocab)
             })
             .collect();
 
