@@ -191,8 +191,14 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
-    /// Phonemize text into an IPA sequence
+    /// Phonemize text into a broad IPA phoneme sequence
     Phonemes {
+        /// The text to phonemize
+        text: String,
+    },
+
+    /// Phonemize text into a narrow IPA phone sequence
+    Phones {
         /// The text to phonemize
         text: String,
     },
@@ -261,6 +267,7 @@ fn main() -> Result<()> {
         } => cmd_predict(&model, &word, &phones, top_k, cli.device, data.as_deref()),
         Commands::Speak(command) => speak::run_speak(command),
         Commands::Phonemes { text } => cmd_phonemes(&text),
+        Commands::Phones { text } => cmd_phones(&text),
         Commands::Models { command } => models::run(command),
     }
 }
@@ -277,31 +284,57 @@ fn cmd_phonemes(text: &str) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
 
-    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
-    for syllable in phonemicized.syllables {
-        if let Some(first_phone) = syllable.phones.first() {
-            if let Some(word_idx) = token_word_index(&first_phone.features) {
-                if let Some(last_word) = words.last_mut() {
-                    if last_word.0 == word_idx {
-                        last_word.1.push(syllable);
-                        continue;
-                    }
-                }
-                words.push((word_idx, vec![syllable]));
-            }
+    println!("--- PHONEMES ---");
+    for p in &phonemicized.phonemes {
+        if let speech::Spec::Known(id) = &p.phoneme {
+            let symbol = speech::phoneme_default_phone_display_symbol(id, &phonemicized.variety);
+            println!("{:?} -> {}", id, symbol);
         }
     }
-
-    let mut ipa_words = Vec::new();
-    for (_, word_syllables) in words {
-        let ipa = speech::syllables_to_ipa(&word_syllables).replace('.', "");
-        if !ipa.is_empty() {
-            ipa_words.push(ipa);
-        }
-    }
-
-    println!("/{}/", ipa_words.join(" "));
     Ok(())
+}
+
+fn phone_ipa(phone: &speech::PhoneToken) -> &str {
+    match &phone.phone {
+        speech::Spec::Known(id) => id
+            .as_str()
+            .strip_prefix("ipa.phone.")
+            .unwrap_or(id.as_str()),
+        _ => "",
+    }
+}
+
+fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
+    syllables
+        .iter()
+        .enumerate()
+        .map(|(index, syllable)| {
+            let mut text = String::new();
+            let mut has_stress_mark = false;
+            let stress_char = match syllable.stress {
+                speech::Spec::Known(speech::Stress::Primary) => {
+                    has_stress_mark = true;
+                    Some('ˈ')
+                }
+                speech::Spec::Known(speech::Stress::Secondary) => {
+                    has_stress_mark = true;
+                    Some('ˌ')
+                }
+                _ => None,
+            };
+
+            if index > 0 && !has_stress_mark {
+                text.push('.');
+            }
+            if let Some(c) = stress_char {
+                text.push(c);
+            }
+            for phone in &syllable.phones {
+                text.push_str(phone_ipa(phone));
+            }
+            text
+        })
+        .collect()
 }
 
 fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
