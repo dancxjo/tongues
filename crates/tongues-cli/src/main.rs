@@ -867,7 +867,14 @@ struct SpeechManifoldFileConfig {
     synthesis_backends: Option<Vec<String>>,
     allow_placeholder_acoustics: Option<bool>,
     max_examples: Option<usize>,
+    max_audio_examples_per_backend: Option<usize>,
     max_espeak_examples: Option<usize>,
+    max_google_translate_examples: Option<usize>,
+    max_wiktionary_audio_examples: Option<usize>,
+    include_reference_uris: Option<bool>,
+    external_audio_manifests: Option<Vec<String>>,
+    espeak_voices: Option<Vec<String>>,
+    google_translate_speeds: Option<Vec<f32>>,
     train: Option<SpeechManifoldFileTrainConfig>,
 }
 
@@ -915,9 +922,28 @@ fn speech_manifold_prepare_config(path: &Path) -> Result<SpeechManifoldConfig> {
             .allow_placeholder_acoustics
             .unwrap_or(default.allow_placeholder_acoustics),
         max_examples: file.max_examples.or(default.max_examples),
+        max_audio_examples_per_backend: file
+            .max_audio_examples_per_backend
+            .unwrap_or(default.max_audio_examples_per_backend),
         max_espeak_examples: file
             .max_espeak_examples
             .unwrap_or(default.max_espeak_examples),
+        max_google_translate_examples: file
+            .max_google_translate_examples
+            .unwrap_or(default.max_google_translate_examples),
+        max_wiktionary_audio_examples: file
+            .max_wiktionary_audio_examples
+            .unwrap_or(default.max_wiktionary_audio_examples),
+        include_reference_uris: file
+            .include_reference_uris
+            .unwrap_or(default.include_reference_uris),
+        external_audio_manifests: file
+            .external_audio_manifests
+            .unwrap_or(default.external_audio_manifests),
+        espeak_voices: file.espeak_voices.unwrap_or(default.espeak_voices),
+        google_translate_speeds: file
+            .google_translate_speeds
+            .unwrap_or(default.google_translate_speeds),
     })
 }
 

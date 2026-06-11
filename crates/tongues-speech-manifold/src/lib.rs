@@ -5,10 +5,10 @@
 //! are represented by deterministic vector summaries when real feature
 //! extraction is not available.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -33,6 +33,7 @@ use tongues_neural::{
     ModelArtifactManifest, TrainState,
 };
 
+const USER_AGENT: &str = "tongues-speech-manifold/0.1";
 pub const FAMILY: &str = "speech-manifold";
 pub const ARCHITECTURE: &str = "shared-multimodal-transformer";
 pub const DEFAULT_DATASET_ID: &str = "openepd-synth-v0";
@@ -59,7 +60,17 @@ pub struct SpeechManifoldConfig {
     pub synthesis_backends: Vec<String>,
     pub allow_placeholder_acoustics: bool,
     pub max_examples: Option<usize>,
+    pub max_audio_examples_per_backend: usize,
     pub max_espeak_examples: usize,
+    pub max_google_translate_examples: usize,
+    pub max_wiktionary_audio_examples: usize,
+    pub include_reference_uris: bool,
+    #[serde(default)]
+    pub external_audio_manifests: Vec<String>,
+    #[serde(default = "default_espeak_voices")]
+    pub espeak_voices: Vec<String>,
+    #[serde(default = "default_google_translate_speeds")]
+    pub google_translate_speeds: Vec<f32>,
 }
 
 impl Default for SpeechManifoldConfig {
@@ -73,7 +84,14 @@ impl Default for SpeechManifoldConfig {
             synthesis_backends: default_synthesis_backends(),
             allow_placeholder_acoustics: true,
             max_examples: Some(5000),
-            max_espeak_examples: 128,
+            max_audio_examples_per_backend: 64,
+            max_espeak_examples: 64,
+            max_google_translate_examples: 64,
+            max_wiktionary_audio_examples: 32,
+            include_reference_uris: true,
+            external_audio_manifests: Vec::new(),
+            espeak_voices: default_espeak_voices(),
+            google_translate_speeds: default_google_translate_speeds(),
         }
     }
 }
@@ -113,10 +131,36 @@ fn default_tasks() -> Vec<SpeechManifoldTask> {
 }
 
 fn default_synthesis_backends() -> Vec<String> {
-    ["espeak-ng", "styletts2", "piper", "mock"]
+    [
+        "espeak-ng",
+        "google-translate",
+        "wiktionary-audio",
+        "styletts2",
+        "piper",
+        "mock",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn default_espeak_voices() -> Vec<String> {
+    ["en-us", "en-gb", "en-sc", "en-uk-north"]
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+fn default_google_translate_speeds() -> Vec<f32> {
+    vec![1.0, 0.85, 0.7]
+}
+
+fn join_display<T: fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -191,6 +235,27 @@ pub struct SpeechManifoldExample {
     pub sample_rate_hz: Option<u32>,
     pub source_backend: String,
     pub provenance: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_uris: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalAudioManifestRow {
+    pub word: String,
+    pub audio_uri: String,
+    #[serde(default)]
+    pub broad_ipa: Option<String>,
+    pub source: String,
+    pub license: String,
+    pub attribution: String,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub speaker: Option<String>,
+    #[serde(default)]
+    pub variety: Option<String>,
+    #[serde(default)]
+    pub pronunciation_assurance: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,13 +302,54 @@ const OPENEPD_SOURCE_PREFERENCE: &[&str] = &[
 
 pub fn prepare_dataset(out: &Path, config: &SpeechManifoldConfig) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    let audio_dir = out.join("audio").join("espeak-ng");
+    let audio_dir = out.join("audio");
     fs::create_dir_all(&audio_dir).with_context(|| format!("creating {}", audio_dir.display()))?;
 
-    let examples = openepd_examples(config, &audio_dir)?;
+    println!("Preparing speech-manifold dataset");
+    println!("  output: {}", out.display());
+    println!("  dataset_id: {}", config.dataset_id);
+    println!(
+        "  split: train={:.2} valid={:.2} test={:.2} seed={}",
+        config.train_frac,
+        config.valid_frac,
+        (1.0 - config.train_frac - config.valid_frac).max(0.0),
+        config.seed
+    );
+    println!(
+        "  max_examples: {}",
+        config
+            .max_examples
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unbounded".to_string())
+    );
+    println!("  tasks: {}", join_display(&config.tasks));
+    println!(
+        "  synthesis_backends: {}",
+        config.synthesis_backends.join(", ")
+    );
+    if config.external_audio_manifests.is_empty() {
+        println!("  external_audio_manifests: none");
+    } else {
+        println!(
+            "  external_audio_manifests: {}",
+            config.external_audio_manifests.join(", ")
+        );
+    }
+    println!(
+        "  audio caps: per_backend={} espeak={} google_translate={} wiktionary={}",
+        config.max_audio_examples_per_backend,
+        config.max_espeak_examples,
+        config.max_google_translate_examples,
+        config.max_wiktionary_audio_examples
+    );
+    println!("  network policy: checking robots.txt before every network audio fetch");
+
+    let mut examples = openepd_examples(config, &audio_dir)?;
+    apply_external_audio_manifests(&mut examples, config)?;
     write_splits(out, config, &examples)?;
     write_vocab(out, &examples, &config.tasks)?;
     write_sidecars(out, config)?;
+    println!("Prepare complete: wrote {} examples", examples.len());
     Ok(())
 }
 
@@ -254,49 +360,289 @@ fn openepd_examples(
     let raw: BTreeMap<String, OpenEpdEntry> =
         serde_json::from_str(open_english_pronouncing_dictionary::CORPUS_JSON)
             .context("parsing embedded OpenEPD JSON")?;
-    let espeak_available = config
-        .synthesis_backends
-        .iter()
-        .any(|backend| backend == "espeak-ng")
-        && Command::new("espeak-ng").arg("--version").output().is_ok();
+    println!("Loaded {} OpenEPD entries", raw.len());
+    let mut audio_state = AudioSynthesisState::new(config, audio_dir)?;
 
     let mut examples = Vec::new();
+    let mut skipped_word_filter = 0usize;
+    let mut skipped_ipa = 0usize;
+    let mut skipped_phonemicizer = 0usize;
     for (base_word, entry) in raw {
         if config.max_examples.is_some_and(|max| examples.len() >= max) {
             break;
         }
         if !is_prepare_word(&base_word) {
+            skipped_word_filter += 1;
             continue;
         }
         let Some(raw_ipa) = preferred_openepd_ipa(&entry.ipa) else {
+            skipped_ipa += 1;
             continue;
         };
         let broad_ipa = match normalize_openepd_ipa(raw_ipa) {
             Ok(ipa) => ipa,
-            Err(_) => continue,
+            Err(_) => {
+                skipped_ipa += 1;
+                continue;
+            }
         };
-        let Some(mut example) = example_from_word(&base_word, &broad_ipa, entry.rarity) else {
+        let source_labels = entry.ipa.keys().cloned().collect::<Vec<_>>();
+        let Some(mut example) =
+            example_from_word(&base_word, &broad_ipa, entry.rarity, &source_labels, config)
+        else {
+            skipped_phonemicizer += 1;
             continue;
         };
 
-        if espeak_available && examples.len() < config.max_espeak_examples {
-            let wav_path = audio_dir.join(format!("{}.wav", safe_id(&base_word)));
-            if synthesize_espeak(&base_word, &wav_path).is_ok() {
-                example.audio_uri = Some(path_to_uri(&wav_path));
-                example.sample_rate_hz = Some(22_050);
-                example.source_backend = "espeak-ng+placeholder-acoustics".to_string();
-            }
-        }
+        audio_state.try_attach_audio(&mut example);
 
         examples.push(example);
+        if examples.len() <= 10 || examples.len() % 250 == 0 {
+            println!(
+                "  prepared {:>5} examples; latest={} backend={}",
+                examples.len(),
+                base_word,
+                examples
+                    .last()
+                    .map(|example| example.source_backend.as_str())
+                    .unwrap_or("unknown")
+            );
+        }
     }
+    println!(
+        "OpenEPD conversion summary: examples={} skipped_word_filter={} skipped_ipa={} skipped_phonemicizer={}",
+        examples.len(),
+        skipped_word_filter,
+        skipped_ipa,
+        skipped_phonemicizer
+    );
+    audio_state.print_summary();
     Ok(examples)
+}
+
+#[derive(Debug)]
+struct AudioSynthesisState<'a> {
+    config: &'a SpeechManifoldConfig,
+    audio_dir: &'a Path,
+    espeak_available: bool,
+    google_enabled: bool,
+    wiktionary_enabled: bool,
+    espeak_count: usize,
+    google_count: usize,
+    wiktionary_count: usize,
+    espeak_failures: usize,
+    google_skips: BTreeMap<String, usize>,
+    wiktionary_skips: BTreeMap<String, usize>,
+    next_backend: usize,
+    robots: RobotsCache,
+}
+
+impl<'a> AudioSynthesisState<'a> {
+    fn new(config: &'a SpeechManifoldConfig, audio_dir: &'a Path) -> Result<Self> {
+        fs::create_dir_all(audio_dir.join("espeak-ng"))?;
+        fs::create_dir_all(audio_dir.join("google-translate"))?;
+        Ok(Self {
+            config,
+            audio_dir,
+            espeak_available: config.backend_enabled("espeak-ng")
+                && Command::new("espeak-ng").arg("--version").output().is_ok(),
+            google_enabled: config.backend_enabled("google-translate"),
+            wiktionary_enabled: config.backend_enabled("wiktionary-audio"),
+            espeak_count: 0,
+            google_count: 0,
+            wiktionary_count: 0,
+            espeak_failures: 0,
+            google_skips: BTreeMap::new(),
+            wiktionary_skips: BTreeMap::new(),
+            next_backend: 0,
+            robots: RobotsCache::default(),
+        })
+    }
+
+    fn try_attach_audio(&mut self, example: &mut SpeechManifoldExample) {
+        let backends = [
+            AudioBackend::Espeak,
+            AudioBackend::GoogleTranslate,
+            AudioBackend::WiktionaryAudio,
+        ];
+        for offset in 0..backends.len() {
+            let index = (self.next_backend + offset) % backends.len();
+            let backend = backends[index];
+            if self.try_backend(example, backend) {
+                self.next_backend = (index + 1) % backends.len();
+                return;
+            }
+        }
+    }
+
+    fn try_backend(&mut self, example: &mut SpeechManifoldExample, backend: AudioBackend) -> bool {
+        match backend {
+            AudioBackend::Espeak => self.try_espeak(example),
+            AudioBackend::GoogleTranslate => self.try_google_translate(example),
+            AudioBackend::WiktionaryAudio => self.try_wiktionary_audio(example),
+        }
+    }
+
+    fn try_espeak(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_espeak_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.espeak_available || self.espeak_count >= cap {
+            return false;
+        }
+        if self.config.espeak_voices.is_empty() {
+            return false;
+        }
+        let voice =
+            self.config.espeak_voices[self.espeak_count % self.config.espeak_voices.len()].clone();
+        let wav_path = self.audio_dir.join("espeak-ng").join(format!(
+            "{}-{}.wav",
+            safe_id(&voice),
+            example.id
+        ));
+        if synthesize_espeak(&example.spelling, &voice, &wav_path).is_err() {
+            self.espeak_failures += 1;
+            return false;
+        }
+        self.espeak_count += 1;
+        example.audio_uri = Some(path_to_uri(&wav_path));
+        example.sample_rate_hz = Some(22_050);
+        example.source_backend = format!("espeak-ng:{voice}+placeholder-acoustics");
+        example
+            .provenance
+            .push_str(&format!(" + espeak-ng voice {voice} WAV"));
+        true
+    }
+
+    fn try_google_translate(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_google_translate_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.google_enabled || self.google_count >= cap {
+            return false;
+        }
+        if self.config.google_translate_speeds.is_empty() {
+            return false;
+        }
+        let speed = self.config.google_translate_speeds
+            [self.google_count % self.config.google_translate_speeds.len()];
+        let mp3_path = self
+            .audio_dir
+            .join("google-translate")
+            .join(format!("speed-{:.2}-{}.mp3", speed, example.id));
+        match synthesize_google_translate(&example.spelling, speed, &mp3_path, &mut self.robots) {
+            Ok(()) => {}
+            Err(error) => {
+                *self.google_skips.entry(error.to_string()).or_insert(0) += 1;
+                if self.google_skips.values().sum::<usize>() <= 3 {
+                    println!("  google-translate skipped {}: {error}", example.spelling);
+                }
+                return false;
+            }
+        }
+        self.google_count += 1;
+        example.audio_uri = Some(path_to_uri(&mp3_path));
+        example.sample_rate_hz = None;
+        example.source_backend = format!("google-translate:speed-{speed:.2}+placeholder-acoustics");
+        example
+            .provenance
+            .push_str(&format!(" + Google Translate TTS MP3 speed {speed:.2}"));
+        true
+    }
+
+    fn try_wiktionary_audio(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_wiktionary_audio_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.wiktionary_enabled || self.wiktionary_count >= cap {
+            return false;
+        }
+        let ogg_path = self
+            .audio_dir
+            .join("wiktionary")
+            .join(format!("{}.ogg", example.id));
+        if fs::create_dir_all(ogg_path.parent().expect("wiktionary audio path has parent")).is_err()
+        {
+            return false;
+        }
+        let source_url =
+            match fetch_wiktionary_audio(&example.spelling, &ogg_path, &mut self.robots) {
+                Ok(Some(source_url)) => source_url,
+                Ok(None) => {
+                    *self
+                        .wiktionary_skips
+                        .entry("no audio file found".to_string())
+                        .or_insert(0) += 1;
+                    return false;
+                }
+                Err(error) => {
+                    *self.wiktionary_skips.entry(error.to_string()).or_insert(0) += 1;
+                    if self.wiktionary_skips.values().sum::<usize>() <= 3 {
+                        println!("  wiktionary-audio skipped {}: {error}", example.spelling);
+                    }
+                    return false;
+                }
+            };
+        self.wiktionary_count += 1;
+        example.audio_uri = Some(path_to_uri(&ogg_path));
+        example.sample_rate_hz = None;
+        example.source_backend = "wiktionary-audio+placeholder-acoustics".to_string();
+        example
+            .provenance
+            .push_str(&format!(" + Wiktionary/Wikimedia audio {source_url}"));
+        true
+    }
+
+    fn print_summary(&self) {
+        println!("Audio synthesis summary:");
+        println!(
+            "  espeak-ng: written={} failures={} voices={}",
+            self.espeak_count,
+            self.espeak_failures,
+            self.config.espeak_voices.join(", ")
+        );
+        println!(
+            "  google-translate: written={} skipped={}",
+            self.google_count,
+            self.google_skips.values().sum::<usize>()
+        );
+        for (reason, count) in &self.google_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        println!(
+            "  wiktionary-audio: written={} skipped={}",
+            self.wiktionary_count,
+            self.wiktionary_skips.values().sum::<usize>()
+        );
+        for (reason, count) in &self.wiktionary_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        self.robots.print_summary();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AudioBackend {
+    Espeak,
+    GoogleTranslate,
+    WiktionaryAudio,
+}
+
+impl SpeechManifoldConfig {
+    fn backend_enabled(&self, backend: &str) -> bool {
+        self.synthesis_backends.iter().any(|name| name == backend)
+    }
 }
 
 fn example_from_word(
     base_word: &str,
     broad_ipa: &str,
     rarity: f32,
+    source_labels: &[String],
+    config: &SpeechManifoldConfig,
 ) -> Option<SpeechManifoldExample> {
     let phonemicized = EnglishPhonemicizer
         .phonemicize(&PhonemicizeRequest {
@@ -316,6 +662,11 @@ fn example_from_word(
     let stress_pattern = stress_pattern(&phonemicized.syllables);
     let acoustic_frames = placeholder_acoustic_frames(base_word, broad_ipa, rarity);
 
+    let source_summary = if source_labels.is_empty() {
+        "unknown".to_string()
+    } else {
+        source_labels.join(",")
+    };
     Some(SpeechManifoldExample {
         id: safe_id(base_word),
         text: base_word.to_string(),
@@ -329,7 +680,10 @@ fn example_from_word(
         audio_uri: None,
         sample_rate_hz: None,
         source_backend: "mock-placeholder-acoustics".to_string(),
-        provenance: "OpenEPD lexical source + speech phonemicizer + deterministic placeholder acoustic frames".to_string(),
+        provenance: format!(
+            "OpenEPD lexical source ({source_summary}) + speech phonemicizer + deterministic placeholder acoustic frames"
+        ),
+        reference_uris: reference_uris(base_word, source_labels, config.include_reference_uris),
     })
 }
 
@@ -355,13 +709,493 @@ fn is_prepare_word(word: &str) -> bool {
             .all(|c| c.is_alphabetic() || c == '\'' || c == '-')
 }
 
-fn synthesize_espeak(text: &str, wav_path: &Path) -> Result<()> {
+fn reference_uris(word: &str, source_labels: &[String], enabled: bool) -> Vec<String> {
+    if !enabled {
+        return Vec::new();
+    }
+    let escaped = simple_url_component(word);
+    let mut refs = vec![format!("https://www.dictionary.com/browse/{escaped}")];
+    if source_labels
+        .iter()
+        .any(|label| label.starts_with("wikipron") || label.starts_with("wiktionary"))
+    {
+        refs.push(format!("https://en.wiktionary.org/wiki/{escaped}"));
+    }
+    refs
+}
+
+#[derive(Debug, Default)]
+struct ExternalAudioImportSummary {
+    accepted: usize,
+    skipped_no_base_word: usize,
+    skipped_missing_rights: usize,
+    skipped_unverified_pronunciation: usize,
+    skipped_parse: usize,
+}
+
+fn apply_external_audio_manifests(
+    examples: &mut Vec<SpeechManifoldExample>,
+    config: &SpeechManifoldConfig,
+) -> Result<()> {
+    if config.external_audio_manifests.is_empty() {
+        return Ok(());
+    }
+
+    let base_by_word = examples
+        .iter()
+        .map(|example| (example.spelling.clone(), example.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut summary = ExternalAudioImportSummary::default();
+    let mut imported_by_word = BTreeMap::<String, usize>::new();
+
+    for manifest in &config.external_audio_manifests {
+        println!("Importing external audio manifest: {manifest}");
+        let file = match fs::File::open(manifest) {
+            Ok(file) => file,
+            Err(error) => {
+                println!("  skipped manifest {manifest}: {error}");
+                continue;
+            }
+        };
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: ExternalAudioManifestRow = match serde_json::from_str(&line) {
+                Ok(row) => row,
+                Err(error) => {
+                    summary.skipped_parse += 1;
+                    if summary.skipped_parse <= 3 {
+                        println!("  skipped external audio row: JSON parse error: {error}");
+                    }
+                    continue;
+                }
+            };
+            let word = row.word.to_lowercase();
+            let Some(base) = base_by_word.get(&word) else {
+                summary.skipped_no_base_word += 1;
+                continue;
+            };
+            if !has_rights_metadata(&row) {
+                summary.skipped_missing_rights += 1;
+                continue;
+            }
+            let Some(assurance) = pronunciation_assurance(base, &row) else {
+                summary.skipped_unverified_pronunciation += 1;
+                continue;
+            };
+
+            let index = imported_by_word.entry(word.clone()).or_insert(0);
+            *index += 1;
+            let mut imported = base.clone();
+            imported.id = format!("{}-external-audio-{}", imported.id, index);
+            imported.audio_uri = Some(row.audio_uri.clone());
+            imported.sample_rate_hz = None;
+            imported.source_backend = format!("external-audio:{}+{}", row.source, assurance);
+            imported.provenance = external_audio_provenance(&row, &assurance);
+            if let Some(source_url) = row.source_url.clone() {
+                imported.reference_uris.push(source_url);
+            }
+            imported.reference_uris.sort();
+            imported.reference_uris.dedup();
+            examples.push(imported);
+            summary.accepted += 1;
+        }
+    }
+
+    println!("External audio import summary:");
+    println!("  accepted={}", summary.accepted);
+    println!("  skipped_no_base_word={}", summary.skipped_no_base_word);
+    println!(
+        "  skipped_missing_rights={}",
+        summary.skipped_missing_rights
+    );
+    println!(
+        "  skipped_unverified_pronunciation={}",
+        summary.skipped_unverified_pronunciation
+    );
+    println!("  skipped_parse={}", summary.skipped_parse);
+    Ok(())
+}
+
+fn has_rights_metadata(row: &ExternalAudioManifestRow) -> bool {
+    !row.license.trim().is_empty() && !row.attribution.trim().is_empty()
+}
+
+fn pronunciation_assurance(
+    base: &SpeechManifoldExample,
+    row: &ExternalAudioManifestRow,
+) -> Option<String> {
+    if let Some(ipa) = &row.broad_ipa {
+        if normalize_openepd_ipa(ipa).ok().as_deref() == Some(base.broad_ipa.as_str()) {
+            return Some("openepd-ipa-match".to_string());
+        }
+    }
+    match row.pronunciation_assurance.as_deref() {
+        Some("single-word-pronunciation")
+        | Some("source-pronunciation-entry")
+        | Some("manually-verified") => Some(
+            row.pronunciation_assurance
+                .clone()
+                .expect("matched Some above"),
+        ),
+        _ => None,
+    }
+}
+
+fn external_audio_provenance(row: &ExternalAudioManifestRow, assurance: &str) -> String {
+    let mut parts = vec![
+        format!("external audio source `{}`", row.source),
+        format!("license `{}`", row.license),
+        format!("attribution `{}`", row.attribution),
+        format!("pronunciation assurance `{assurance}`"),
+    ];
+    if let Some(speaker) = &row.speaker {
+        parts.push(format!("speaker `{speaker}`"));
+    }
+    if let Some(variety) = &row.variety {
+        parts.push(format!("variety `{variety}`"));
+    }
+    if let Some(source_url) = &row.source_url {
+        parts.push(format!("source_url `{source_url}`"));
+    }
+    parts.join(" + ")
+}
+
+fn synthesize_espeak(text: &str, voice: &str, wav_path: &Path) -> Result<()> {
     let status = Command::new("espeak-ng")
-        .args(["-w", wav_path.to_str().context("non-UTF-8 WAV path")?, text])
+        .args([
+            "-v",
+            voice,
+            "-w",
+            wav_path.to_str().context("non-UTF-8 WAV path")?,
+            text,
+        ])
         .status()
         .context("running espeak-ng")?;
     anyhow::ensure!(status.success(), "espeak-ng failed");
     Ok(())
+}
+
+fn synthesize_google_translate(
+    text: &str,
+    speed: f32,
+    mp3_path: &Path,
+    robots: &mut RobotsCache,
+) -> Result<()> {
+    let url = tts_urls::google_translate::url_with_speed(text, "en", speed);
+    download_to_file_checked(&url, mp3_path, robots)
+}
+
+fn fetch_wiktionary_audio(
+    word: &str,
+    out_path: &Path,
+    robots: &mut RobotsCache,
+) -> Result<Option<String>> {
+    for file_name in wiktionary_audio_file_candidates(word) {
+        let api_url = format!(
+            "https://en.wiktionary.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles=File:{}",
+            simple_url_component(&file_name)
+        );
+        ensure_robots_allowed(&api_url, robots)?;
+        let response = ureq::get(&api_url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .with_context(|| format!("GET {api_url}"))?;
+        let mut body = response.into_body();
+        let mut reader = body.as_reader();
+        let mut raw = String::new();
+        reader.read_to_string(&mut raw)?;
+        let value: serde_json::Value = serde_json::from_str(&raw)?;
+        let Some(source_url) = value
+            .pointer("/query/pages")
+            .and_then(|pages| pages.as_object())
+            .and_then(|pages| pages.values().next())
+            .and_then(|page| page.get("imageinfo"))
+            .and_then(|info| info.as_array())
+            .and_then(|info| info.first())
+            .and_then(|info| info.get("url"))
+            .and_then(|url| url.as_str())
+        else {
+            continue;
+        };
+        if download_to_file_checked(source_url, out_path, robots).is_ok() {
+            return Ok(Some(source_url.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn wiktionary_audio_file_candidates(word: &str) -> Vec<String> {
+    let lower = word.to_lowercase();
+    vec![
+        format!("En-us-{lower}.ogg"),
+        format!("En-us-{lower}.oga"),
+        format!("En-uk-{lower}.ogg"),
+        format!("En-uk-{lower}.oga"),
+        format!("en-us-{lower}.ogg"),
+        format!("en-uk-{lower}.ogg"),
+    ]
+}
+
+fn download_to_file_checked(url: &str, path: &Path, robots: &mut RobotsCache) -> Result<()> {
+    ensure_robots_allowed(url, robots)?;
+    download_to_file(url, path)
+}
+
+fn download_to_file(url: &str, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let response = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("GET {url}"))?;
+    let mut body = response.into_body();
+    let mut reader = body.as_reader();
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    anyhow::ensure!(!bytes.is_empty(), "empty TTS response");
+    fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+}
+
+fn ensure_robots_allowed(url: &str, cache: &mut RobotsCache) -> Result<()> {
+    let target = UrlParts::parse(url).with_context(|| format!("parsing URL {url}"))?;
+    if cache.allows(&target)? {
+        Ok(())
+    } else {
+        anyhow::bail!("robots.txt disallows {}{}", target.host, target.path)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UrlParts {
+    scheme: String,
+    host: String,
+    path: String,
+}
+
+impl UrlParts {
+    fn parse(url: &str) -> Result<Self> {
+        let (scheme, rest) = url
+            .split_once("://")
+            .context("URL is missing scheme separator")?;
+        let (host, path_and_query) = rest
+            .split_once('/')
+            .map(|(host, path)| (host, format!("/{path}")))
+            .unwrap_or((rest, "/".to_string()));
+        let path = path_and_query
+            .split_once('?')
+            .map(|(path, _)| path.to_string())
+            .unwrap_or(path_and_query);
+        anyhow::ensure!(
+            scheme == "https" || scheme == "http",
+            "unsupported URL scheme"
+        );
+        anyhow::ensure!(!host.is_empty(), "URL is missing host");
+        Ok(Self {
+            scheme: scheme.to_string(),
+            host: host.to_string(),
+            path,
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct RobotsCache {
+    rules_by_host: HashMap<String, RobotsRules>,
+    decisions: BTreeMap<String, bool>,
+}
+
+impl RobotsCache {
+    fn allows(&mut self, target: &UrlParts) -> Result<bool> {
+        if let Some(decision) = self
+            .decisions
+            .get(&format!("{}{}", target.host, target.path))
+        {
+            return Ok(*decision);
+        }
+        if !self.rules_by_host.contains_key(&target.host) {
+            let robots_url = format!("{}://{}/robots.txt", target.scheme, target.host);
+            println!("  robots.txt: checking {robots_url}");
+            let rules = RobotsRules::fetch(&robots_url).unwrap_or_else(|error| {
+                println!(
+                    "  robots.txt: could not read {} ({}); network fetches for this host will be skipped",
+                    robots_url, error
+                );
+                RobotsRules::deny_all(target.host.clone())
+            });
+            println!(
+                "  robots.txt: host={} default_policy={}",
+                target.host,
+                if rules.default_allow {
+                    "allow unless disallowed"
+                } else {
+                    "deny"
+                }
+            );
+            self.rules_by_host.insert(target.host.clone(), rules);
+        }
+        let allowed = self
+            .rules_by_host
+            .get(&target.host)
+            .expect("rules inserted")
+            .allows(&target.path);
+        self.decisions
+            .insert(format!("{}{}", target.host, target.path), allowed);
+        Ok(allowed)
+    }
+
+    fn print_summary(&self) {
+        if self.decisions.is_empty() {
+            println!("Robots policy summary: no network URL checks were needed");
+            return;
+        }
+        println!("Robots policy summary:");
+        for (target, allowed) in &self.decisions {
+            println!(
+                "  {} => {}",
+                target,
+                if *allowed { "allowed" } else { "disallowed" }
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RobotsRules {
+    default_allow: bool,
+    records: Vec<RobotsDirective>,
+}
+
+#[derive(Debug, Clone)]
+struct RobotsDirective {
+    path: String,
+    allow: bool,
+}
+
+impl RobotsRules {
+    fn fetch(robots_url: &str) -> Result<Self> {
+        let target = UrlParts::parse(robots_url)?;
+        let response = ureq::get(robots_url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .with_context(|| format!("GET {robots_url}"))?;
+        if !response.status().is_success() {
+            return Ok(Self {
+                default_allow: true,
+                records: Vec::new(),
+            });
+        }
+        let mut body = response.into_body();
+        let mut reader = body.as_reader();
+        let mut raw = String::new();
+        reader.read_to_string(&mut raw)?;
+        Ok(Self::parse(target.host, &raw))
+    }
+
+    fn deny_all(_host: String) -> Self {
+        Self {
+            default_allow: false,
+            records: Vec::new(),
+        }
+    }
+
+    fn parse(_host: String, raw: &str) -> Self {
+        let mut records = Vec::new();
+        let mut applies = false;
+        let mut saw_agent_in_group = false;
+        for line in raw.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                applies = false;
+                saw_agent_in_group = false;
+                continue;
+            }
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim().to_ascii_lowercase();
+            let value = value.trim();
+            match key.as_str() {
+                "user-agent" => {
+                    if !saw_agent_in_group {
+                        applies = false;
+                    }
+                    saw_agent_in_group = true;
+                    let agent = value.to_ascii_lowercase();
+                    if agent == "*" || USER_AGENT.to_ascii_lowercase().starts_with(&agent) {
+                        applies = true;
+                    }
+                }
+                "allow" if applies => {
+                    if !value.is_empty() {
+                        records.push(RobotsDirective {
+                            path: value.to_string(),
+                            allow: true,
+                        });
+                    }
+                }
+                "disallow" if applies => {
+                    if !value.is_empty() {
+                        records.push(RobotsDirective {
+                            path: value.to_string(),
+                            allow: false,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Self {
+            default_allow: true,
+            records,
+        }
+    }
+
+    fn allows(&self, path: &str) -> bool {
+        if !self.default_allow {
+            return false;
+        }
+        let mut best: Option<&RobotsDirective> = None;
+        for record in &self.records {
+            if robots_path_matches(&record.path, path)
+                && best
+                    .map(|best| record.path.len() > best.path.len())
+                    .unwrap_or(true)
+            {
+                best = Some(record);
+            }
+        }
+        best.map(|record| record.allow).unwrap_or(true)
+    }
+}
+
+fn robots_path_matches(pattern: &str, path: &str) -> bool {
+    if pattern == "/" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        path.starts_with(prefix)
+    } else {
+        path.starts_with(pattern)
+    }
+}
+
+fn simple_url_component(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn path_to_uri(path: &Path) -> String {
@@ -639,11 +1473,85 @@ fn write_sidecars(out: &Path, config: &SpeechManifoldConfig) -> Result<()> {
             output_type: "tongues_speech_manifold::SpeechManifoldExample".to_string(),
         })?,
     )?;
-    fs::write(
-        out.join("README.md"),
-        "Speech-manifold dataset with OpenEPD lexical records, derived speech modalities, and synthetic/placeholder acoustic provenance.\n",
-    )?;
+    fs::write(out.join("README.md"), dataset_readme(config))?;
     Ok(())
+}
+
+fn dataset_readme(config: &SpeechManifoldConfig) -> String {
+    format!(
+        r#"# speech-manifold dataset
+
+Dataset id: `{dataset_id}`
+
+This prepared dataset was generated by `tongues speech-manifold prepare`.
+It contains OpenEPD-derived lexical records, locally derived speech modalities,
+placeholder acoustic frames, and optional sampled audio files when a configured
+backend was available and allowed by robots.txt.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `train.jsonl`, `valid.jsonl`, `test.jsonl` | Prepared `SpeechManifoldExample` rows. |
+| `*_words.txt` | Split word lists. |
+| `vocab.json` | Unified token vocabulary. |
+| `dataset_config.json` | Exact prepare configuration. |
+| `modality_schema.json` | Task/schema summary. |
+| `audio/` | Optional generated or fetched audio samples. |
+
+## Data Sources
+
+| Source/backend | What is stored | License/terms note |
+|---|---|---|
+| OpenEPD (`open-english-pronouncing-dictionary`) | Primary spelling, IPA variants, rarity, and source labels. | OpenEPD is documented upstream as CC-BY-SA 4.0 because it includes WikiPron/Wiktionary-derived material. |
+| WikiPron/Wiktionary-derived labels | Preserved in per-row provenance and used for optional Wiktionary reference URLs. | Share-alike provenance should be preserved when redistributing prepared data. |
+| `speech` crate phonemicizer | Narrow phones, syllables, stress patterns, and placeholder acoustic frames. | Project-local generated annotations. |
+| eSpeak NG | Optional local WAV samples with configured voices. | eSpeak NG is GPL-3-or-later; review eSpeak NG terms before redistributing generated audio. |
+| Google Translate TTS URL support (`tts-urls`) | Optional MP3 samples, only when robots.txt allows the TTS path. | The URL helper crate is MIT; access/output from Google's service is governed by Google's terms and robots policy. This project is not affiliated with Google. |
+| Wiktionary/Wikimedia audio | Optional OGG samples from public media URLs, only when robots.txt allows the requested paths. | Individual media files may have their own licenses; keep source URLs/provenance with redistributed audio. |
+| Dictionary.com | Reference URLs only. No Dictionary.com pages are fetched by prepare. | Respect Dictionary.com's terms if following or using those links manually. |
+
+## External Audio Manifests
+
+Additional permissioned audio can be imported with `external_audio_manifests`
+in the prepare config. Each manifest is JSONL. Rows must include `word`,
+`audio_uri`, `source`, `license`, and `attribution`. Rows are accepted only
+when the word exists in OpenEPD-derived examples and either:
+
+- `broad_ipa` normalizes to the same broad IPA as OpenEPD, or
+- `pronunciation_assurance` is `single-word-pronunciation`,
+  `source-pronunciation-entry`, or `manually-verified`.
+
+Example row:
+
+```json
+{{"word":"cat","audio_uri":"/data/audio/cat-us.ogg","broad_ipa":"kæt","source":"wikimedia-commons","license":"CC BY-SA 4.0","attribution":"Example Speaker / Wikimedia Commons","source_url":"https://commons.wikimedia.org/wiki/File:En-us-cat.ogg"}}
+```
+
+Suitable manifest sources include Wikimedia Commons/Wiktionary pronunciation
+audio with per-file license metadata, curated dictionary/classroom recordings
+you have permission to use, public-domain or permissively licensed word-list
+recordings, and locally generated TTS whose model/output terms permit your use.
+Sentence corpora should only be imported after word-level segmentation and
+pronunciation verification.
+
+## Network And Robots Policy
+
+`speech-manifold prepare` checks `robots.txt` before every network audio fetch.
+If a host disallows a target path, the backend is skipped and the example falls
+back to local eSpeak or mock/placeholder provenance. Failed or skipped network
+attempts are reported in the prepare log.
+
+## Redistribution Notes
+
+The `tongues` source code is MIT licensed, but this prepared dataset may carry
+additional obligations from OpenEPD/WikiPron/Wiktionary, eSpeak NG, or any
+downloaded media. Treat `source_backend`, `provenance`, `reference_uris`, and
+`audio_uri` as required attribution/audit metadata. Review upstream terms before
+publishing generated JSONL or audio files.
+"#,
+        dataset_id = config.dataset_id
+    )
 }
 
 pub fn read_examples(path: &Path) -> Result<Vec<SpeechManifoldExample>> {
@@ -1157,7 +2065,14 @@ mod tests {
 
     #[test]
     fn placeholder_acoustic_example_roundtrips_with_provenance() {
-        let example = example_from_word("cat", "kæt", 50_000.0).unwrap();
+        let example = example_from_word(
+            "cat",
+            "kæt",
+            50_000.0,
+            &[],
+            &SpeechManifoldConfig::default(),
+        )
+        .unwrap();
         let json = serde_json::to_string(&example).unwrap();
         let parsed: SpeechManifoldExample = serde_json::from_str(&json).unwrap();
 
@@ -1168,7 +2083,8 @@ mod tests {
 
     #[test]
     fn task_sampler_skips_placeholder_acoustics_when_disabled() {
-        let example = example_from_word("cat", "kæt", 100.0).unwrap();
+        let example =
+            example_from_word("cat", "kæt", 100.0, &[], &SpeechManifoldConfig::default()).unwrap();
         let mut rng = rand::thread_rng();
         let task = sample_task(
             &example,
@@ -1182,7 +2098,8 @@ mod tests {
 
     #[test]
     fn seq2seq_example_uses_task_prefix() {
-        let example = example_from_word("cat", "kæt", 100.0).unwrap();
+        let example =
+            example_from_word("cat", "kæt", 100.0, &[], &SpeechManifoldConfig::default()).unwrap();
         let mut tokens = vec![
             "<PAD>".to_string(),
             "<UNK>".to_string(),
@@ -1210,5 +2127,56 @@ mod tests {
             seq.src_ids[0],
             vocab.get_id(SpeechManifoldTask::SpellingToIpa.token())
         );
+    }
+
+    #[test]
+    fn generated_readme_records_sources_and_license_notes() {
+        let readme = dataset_readme(&SpeechManifoldConfig::default());
+
+        assert!(readme.contains("OpenEPD"));
+        assert!(readme.contains("CC-BY-SA"));
+        assert!(readme.contains("eSpeak NG"));
+        assert!(readme.contains("Google Translate"));
+        assert!(readme.contains("robots.txt"));
+        assert!(readme.contains("Dictionary.com"));
+        assert!(readme.contains("External Audio Manifests"));
+    }
+
+    #[test]
+    fn external_audio_manifest_requires_rights_and_pronunciation_assurance() {
+        let mut examples = vec![example_from_word(
+            "cat",
+            "kæt",
+            100.0,
+            &["wikipron".to_string()],
+            &SpeechManifoldConfig::default(),
+        )
+        .unwrap()];
+        let dir = Path::new("target/test-speech-manifold");
+        fs::create_dir_all(dir).unwrap();
+        let manifest = dir.join("external-audio.jsonl");
+        fs::write(
+            &manifest,
+            [
+                r#"{"word":"cat","audio_uri":"/audio/cat.ogg","broad_ipa":"kæt","source":"wikimedia-commons","license":"CC BY-SA 4.0","attribution":"Example Speaker","source_url":"https://commons.wikimedia.org/wiki/File:En-us-cat.ogg"}"#,
+                r#"{"word":"cat","audio_uri":"/audio/cat-bad.ogg","source":"unknown","license":"CC0","attribution":"Example Speaker"}"#,
+                r#"{"word":"dog","audio_uri":"/audio/dog.ogg","broad_ipa":"dɔɡ","source":"wikimedia-commons","license":"CC BY-SA 4.0","attribution":"Example Speaker"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut config = SpeechManifoldConfig::default();
+        config.external_audio_manifests = vec![manifest.display().to_string()];
+
+        apply_external_audio_manifests(&mut examples, &config).unwrap();
+
+        assert_eq!(examples.len(), 2);
+        let imported = examples
+            .iter()
+            .find(|example| example.id.contains("external-audio"))
+            .unwrap();
+        assert_eq!(imported.audio_uri.as_deref(), Some("/audio/cat.ogg"));
+        assert!(imported.source_backend.contains("openepd-ipa-match"));
+        assert!(imported.provenance.contains("CC BY-SA 4.0"));
     }
 }

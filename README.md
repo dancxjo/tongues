@@ -28,6 +28,7 @@ Tongues currently includes:
 - a Rust workspace using Burn 0.21;
 - a `g2p2g` seq2seq pronunciation model family;
 - a `sentence-parser` model-family scaffold that emits `speech::syntax::SentenceSyntaxAnalysis`;
+- a `speech-manifold` multimodal model family scaffold/trainer with OpenEPD-derived lexical data, derived speech modalities, and sampled synthetic/reference audio provenance;
 - spelling-to-phoneme (`g2p`) prediction;
 - phoneme-to-spelling (`p2g`) prediction;
 - a REPL that keeps the model loaded for interactive use;
@@ -48,6 +49,7 @@ crates/tongues-core              shared vocabulary and special token IDs
 crates/tongues-data              Lexicon parsing, IPA normalization, splits, collation
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
+crates/tongues-speech-manifold   shared multimodal speech-manifold data/model family
 crates/tongues-sentence-parser   sentence parser artifact/output scaffold
 crates/tongues-cli               command-line routing and model/data wiring
 crates/speech                    rule-based phonemicization and realization pipeline
@@ -140,6 +142,54 @@ Each JSONL row looks like:
 ```
 
 `rarity` is OpenEPD's 0-indexed wordfreq rank: lower means more frequent.
+
+### Prepare speech-manifold data
+
+```sh
+cargo run --release -- speech-manifold prepare \
+    --out datasets/speech-manifold/openepd-synth-v0
+```
+
+This builds a multimodal dataset from the embedded OpenEPD corpus. Each example records spelling, broad IPA, narrow phones, stress, syllable structure, placeholder acoustic frames, source labels, and optional sampled audio provenance. The audio stage is intentionally quota-based: it samples a small diversity of available voices/backends rather than generating a WAV for every word.
+
+Network-backed audio fetches are conservative. The prepare step checks `robots.txt` before attempting each network audio URL. If a host disallows a path, that backend is skipped and the example falls back to local eSpeak/mock provenance. Dictionary.com and Wiktionary page URLs are recorded as reference metadata only; Dictionary.com pages are not fetched.
+
+#### Speech-manifold sources and license notes
+
+The source code in this repository is MIT licensed, but generated datasets may include or point to material with different terms. Treat prepared data directories as local artifacts and review their generated `README.md`, `dataset_config.json`, and per-row provenance before redistributing them.
+
+| Source/backend | Use in `speech-manifold` | License/terms note |
+|---|---|---|
+| OpenEPD (`open-english-pronouncing-dictionary`) | Primary lexical source for spelling, IPA variants, rarity, and source labels. | OpenEPD is documented upstream as CC-BY-SA 4.0 because it includes WikiPron/Wiktionary-derived data. |
+| WikiPron/Wiktionary-derived labels | Preserved through OpenEPD source labels and used to add Wiktionary reference URLs. | WikiPron/Wiktionary material is share-alike; preserve attribution and license notes when redistributing generated data. |
+| `speech` crate phonemicizer | Derives narrow phones, syllables, stress, and placeholder acoustic features locally. | Project-local code under this repository's license. |
+| eSpeak NG | Optional local WAV generation with a small rotating voice set. | eSpeak NG is GPL-3-or-later; some data/docs mention CC-BY-SA components. Review eSpeak NG terms before redistributing generated audio. |
+| Google Translate TTS URL support (`tts-urls`) | Optional network audio backend; skipped when robots policy disallows the TTS path. | URL helper crate is MIT, but Google service output/access is governed by Google's terms and robots policy; this project is not affiliated with Google. |
+| Wiktionary/Wikimedia audio | Optional best-effort audio lookup through public file metadata/audio URLs, only when robots policy allows. | Individual media files may have their own licenses; keep source URLs/provenance with any redistributed audio. |
+| Dictionary.com | Reference URL metadata only. | Pages are not fetched by prepare; respect Dictionary.com's terms if using those links manually. |
+| StyleTTS2/Piper | Listed as future/opportunistic local synthesis backends; current prepare does not scrape third-party pages for them. | Model/audio asset terms depend on the specific installed assets. |
+
+#### External audio manifests
+
+For real voice diversity, prefer permissioned local manifests over scraping. Add one or more JSONL manifests through `external_audio_manifests` in `configs/speech-manifold/default.toml` or a custom config:
+
+```toml
+external_audio_manifests = ["data/audio/wikimedia_pronunciations.jsonl"]
+```
+
+Each row must include rights metadata and a pronunciation assurance:
+
+```json
+{"word":"cat","audio_uri":"/data/audio/cat-us.ogg","broad_ipa":"kæt","source":"wikimedia-commons","license":"CC BY-SA 4.0","attribution":"Example Speaker / Wikimedia Commons","source_url":"https://commons.wikimedia.org/wiki/File:En-us-cat.ogg"}
+```
+
+Rows are accepted only when:
+
+- `word` exists in the prepared OpenEPD-derived examples;
+- `license` and `attribution` are non-empty;
+- `broad_ipa` normalizes to the same IPA as OpenEPD, or `pronunciation_assurance` is one of `single-word-pronunciation`, `source-pronunciation-entry`, or `manually-verified`.
+
+Good candidates for these manifests include Wikimedia Commons/Wiktionary pronunciation audio with per-file licenses, curated classroom/dictionary recordings you have permission to use, public-domain or permissively licensed word-list recordings, and locally generated TTS audio whose model/output terms allow your use. Sentence corpora such as Common Voice, LibriSpeech, CMU Arctic, or VoxPopuli should only be imported at the word level after segmentation/alignment and verification; the raw sentence audio does not by itself assure a specific isolated word pronunciation.
 
 Splits are deterministic by base word. Alternate source entries for the same base word are collapsed before splitting, so a word cannot leak across train/validation/test.
 
