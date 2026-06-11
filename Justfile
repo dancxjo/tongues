@@ -5,7 +5,7 @@ default:
 
 # Create a new model-family crate/config/artifact scaffold
 new-family family:
-    bash scripts/new-model-family.sh "{{family}}"
+    cargo run -q -p xtask -- new-family "{{family}}"
 
 # Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:

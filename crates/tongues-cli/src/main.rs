@@ -1209,13 +1209,23 @@ fn prepare_lexeme_from_openepd_entry(base_word: String, entry: OpenEpdEntry) -> 
     if !is_prepare_word(&base_word) {
         return None;
     }
-    let raw_ipa = preferred_openepd_ipa(&entry.ipa)?;
+    let raw_ipa =
+        openepd_prepare_ipa_correction(&base_word).or_else(|| preferred_openepd_ipa(&entry.ipa))?;
     let phonemes = normalize_openepd_ipa(raw_ipa).ok()?;
     Some(Lexeme {
         base_word,
         phonemes,
         rarity: entry.rarity,
     })
+}
+
+fn openepd_prepare_ipa_correction(word: &str) -> Option<&'static str> {
+    match word {
+        // OpenEPD 0.1.0 has only `misaki_silver: ʌnɹˈɑʔn`, which broadens to
+        // `ʌnˈɹɑtn` and loses the schwa syllable in "rotten".
+        "unrotten" => Some("ʌnɹˈɑtən"),
+        _ => None,
+    }
 }
 
 fn preferred_openepd_ipa(ipa: &std::collections::BTreeMap<String, String>) -> Option<&str> {
@@ -3212,6 +3222,24 @@ mod tests {
         assert_eq!(have.base_word, "have");
         assert_eq!(have.phonemes, "hæv");
         assert_eq!(have.rarity, 23.0);
+    }
+
+    #[test]
+    fn openepd_prepare_corrects_unrotten_gold_transcription() {
+        let entry = OpenEpdEntry {
+            rarity: 271886.0,
+            ipa: std::collections::BTreeMap::from([(
+                "misaki_silver".to_string(),
+                "ʌnɹˈɑʔn".to_string(),
+            )]),
+        };
+
+        let unrotten = prepare_lexeme_from_openepd_entry("unrotten".to_string(), entry)
+            .expect("unrotten entry should prepare");
+
+        assert_eq!(unrotten.base_word, "unrotten");
+        assert_eq!(unrotten.phonemes, "ʌnˈɹɑ.tən");
+        assert_eq!(unrotten.rarity, 271886.0);
     }
 
     #[test]

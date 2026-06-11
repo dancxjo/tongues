@@ -8,6 +8,7 @@ members = [
     "crates/tongues-cli",
     "crates/speech",
     "crates/styletts2",
+    "xtask",
 ]
 resolver = "2"
 
