@@ -22,7 +22,7 @@ use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
 
 const DEFAULT_STYLE_ALPHA: f32 = 0.3;
 const DEFAULT_STYLE_BETA: f32 = 0.1;
-const DEFAULT_SPEED: f64 = 1.8;
+const DEFAULT_SPEED: f64 = 1.0;
 
 #[derive(Debug, Args, Clone)]
 pub struct SpeakCommand {
