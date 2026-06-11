@@ -11,7 +11,7 @@ use speech::{
     phoneme_default_phone_display_symbol,
 };
 use styletts2::{
-    BackendSynthesisPlan, DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend,
+    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend,
     StyleTts2PlanOptions, StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan,
     styletts2_en_us_symbol_set, styletts2_text_for_symbols, validate_styletts2_plan,
 };
@@ -410,7 +410,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     let mut all_timings = Vec::new();
     let mut total_samples = 0;
 
-    let mut process_chunk = |text_chunk: &str, backend: &mut BackendInstance, player: &Option<AudioStreamPlayer>, all_pcm: &mut Vec<f32>, all_timings: &mut Vec<StyleTts2Timing>, total_samples: &mut usize| -> Result<()> {
+    let process_chunk = |text_chunk: &str, backend: &mut BackendInstance, player: &Option<AudioStreamPlayer>, all_pcm: &mut Vec<f32>, all_timings: &mut Vec<StyleTts2Timing>, total_samples: &mut usize| -> Result<()> {
         let phonemicized = EnglishPhonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: text_chunk.to_string(),
