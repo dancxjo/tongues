@@ -65,7 +65,7 @@ struct Cli {
     cpu: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -174,6 +174,21 @@ enum Commands {
         task: String,
     },
 
+    /// Interactive REPL for sequence translation
+    Repl {
+        /// Direction of translation: s2pm, pm2s, auto
+        #[arg(long, default_value = "auto")]
+        task: String,
+
+        /// Directory containing the trained model
+        #[arg(long, default_value = "models/cmudict-v0")]
+        model: PathBuf,
+
+        /// Optional path to the prepared data directory containing vocab.json
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+
     /// Run translation prediction (Seq2Seq)
     #[command(alias = "infer")]
     Predict {
@@ -238,6 +253,12 @@ fn is_cuda_available() -> bool {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    let command = cli.command.unwrap_or_else(|| Commands::Repl {
+        task: "auto".to_string(),
+        model: PathBuf::from("models/cmudict-v0"),
+        data: None,
+    });
+
     // Determine target device (CUDA with fallback to CPU, or forced CPU)
     let device_arg = if cli.cpu {
         DeviceArg::Cpu
@@ -245,8 +266,11 @@ fn main() -> Result<()> {
         DeviceArg::Cuda
     } else {
         // Only warn for commands that actually run model computations on the device
-        match &cli.command {
-            Commands::Train { .. } | Commands::Eval { .. } | Commands::Predict { .. } => {
+        match &command {
+            Commands::Train { .. }
+            | Commands::Eval { .. }
+            | Commands::Predict { .. }
+            | Commands::Repl { .. } => {
                 println!("Warning: CUDA is not available. Falling back to CPU.");
             }
             _ => {}
@@ -254,7 +278,7 @@ fn main() -> Result<()> {
         DeviceArg::Cpu
     };
 
-    match cli.command {
+    match command {
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -305,6 +329,7 @@ fn main() -> Result<()> {
             task,
             data,
         } => cmd_predict(&model, &task, &input, device_arg, data.as_deref()),
+        Commands::Repl { model, task, data } => cmd_repl(&model, &task, device_arg, data.as_deref()),
         Commands::Speak(command) => speak::run_speak(command),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
@@ -1028,6 +1053,10 @@ fn cmd_predict(
     device_arg: DeviceArg,
     data_arg: Option<&Path>,
 ) -> Result<()> {
+    let start_total = std::time::Instant::now();
+
+    println!("Loading vocabulary...");
+    let start_vocab = std::time::Instant::now();
     // Load vocab
     let vocab: Vocab = {
         let mut found = None;
@@ -1073,14 +1102,10 @@ fn cmd_predict(
         let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&s)?
     };
+    println!("  ✓ Loaded vocabulary in {:?}", start_vocab.elapsed());
 
     let task = if task_str.to_lowercase() == "auto" {
-        let is_spelling = input.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-');
-        if is_spelling {
-            Task::S2Pm
-        } else {
-            Task::Pm2S
-        }
+        detect_task(input)
     } else {
         Task::from_str(task_str)
             .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s, auto"))?
@@ -1094,8 +1119,10 @@ fn cmd_predict(
 
     match device_arg {
         DeviceArg::Cpu => {
+            println!("Initializing CPU device (ndarray)...");
+            let start_dev = std::time::Instant::now();
             let device = NdArrayDevice::Cpu;
-            println!("  device: CPU (ndarray)");
+            println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
             run_predict::<CpuInferBackend>(
                 &device,
                 &model_config,
@@ -1103,11 +1130,14 @@ fn cmd_predict(
                 &vocab,
                 task,
                 input,
+                start_total,
             )?;
         }
         DeviceArg::Cuda => {
+            println!("Initializing CUDA GPU device...");
+            let start_dev = std::time::Instant::now();
             let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+            println!("  ✓ Initialized CUDA GPU device in {:?}", start_dev.elapsed());
             run_predict::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -1115,6 +1145,7 @@ fn cmd_predict(
                 &vocab,
                 task,
                 input,
+                start_total,
             )?;
         }
     }
@@ -1128,11 +1159,15 @@ fn run_predict<B: Backend>(
     vocab: &Vocab,
     task: Task,
     input: &str,
+    start_total: std::time::Instant,
 ) -> Result<()> {
+    println!("Loading model config & weights...");
+    let start_load = std::time::Instant::now();
     let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!("  ✓ Loaded model weights in {:?}", start_load.elapsed());
 
-    println!("Translating input='{}' with task={:?}", input, task);
-
+    println!("Translating input='{}' with task={:?}...", input, task);
+    let start_pred = std::time::Instant::now();
     let output = predict(
         &model,
         input,
@@ -1140,8 +1175,263 @@ fn run_predict<B: Backend>(
         vocab,
         device,
     );
+    println!("  ✓ Finished prediction in {:?}", start_pred.elapsed());
 
     println!("\nPrediction output:\n  {}", output);
+    println!("Total time elapsed: {:?}", start_total.elapsed());
 
     Ok(())
+}
+
+fn cmd_repl(
+    model_dir: &Path,
+    task_str: &str,
+    device_arg: DeviceArg,
+    data_arg: Option<&Path>,
+) -> Result<()> {
+    println!("Loading vocabulary...");
+    let start_vocab = std::time::Instant::now();
+    // Load vocab
+    let vocab: Vocab = {
+        let mut found = None;
+
+        // 1. Check if data_arg was passed
+        if let Some(data_path) = data_arg {
+            let p = data_path.join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        // 2. Check next to the model file
+        if found.is_none() {
+            let p = model_dir.join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        // 3. Check model parent dir
+        if found.is_none() {
+            let p = model_dir.parent().unwrap_or(model_dir).join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        // 4. Try sibling folder (substituting "models" for "runs" or next to model_dir)
+        if found.is_none() {
+            let p = model_dir.parent().unwrap_or(model_dir).parent().unwrap_or(model_dir)
+                .join("runs")
+                .join(model_dir.file_name().unwrap_or_default())
+                .join("vocab.json");
+            if p.exists() {
+                found = Some(p);
+            }
+        }
+
+        let path = found.context(
+            "vocab.json not found. Pass --data to specify the prepared data directory containing vocab.json, or copy vocab.json to the model directory.",
+        )?;
+        let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_str(&s)?
+    };
+    println!("  ✓ Loaded vocabulary in {:?}", start_vocab.elapsed());
+
+    let model_config: ModelConfig = {
+        let s = fs::read_to_string(model_dir.join("model_config.json"))
+            .context("reading model_config.json")?;
+        serde_json::from_str(&s)?
+    };
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            println!("Initializing CPU device (ndarray)...");
+            let start_dev = std::time::Instant::now();
+            let device = NdArrayDevice::Cpu;
+            println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
+            run_repl::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                task_str,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            println!("Initializing CUDA GPU device...");
+            let start_dev = std::time::Instant::now();
+            let device = CudaDevice::default();
+            println!("  ✓ Initialized CUDA GPU device in {:?}", start_dev.elapsed());
+            run_repl::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                task_str,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn run_repl<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    initial_task_str: &str,
+) -> Result<()> {
+    println!("Loading model config & weights...");
+    let start_load = std::time::Instant::now();
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!("  ✓ Loaded model weights in {:?}", start_load.elapsed());
+
+    let mut current_task = if initial_task_str.to_lowercase() == "auto" {
+        None
+    } else {
+        Some(
+            Task::from_str(initial_task_str)
+                .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s, auto"))?,
+        )
+    };
+
+    let mut timings_enabled = true;
+
+    println!("\nREPL ready! Enter input, or type :help for commands.");
+
+    use std::io::{self, Write};
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    let mut line = String::new();
+
+    loop {
+        print!("pronlex> ");
+        io::stdout().flush().context("flushing stdout")?;
+
+        line.clear();
+        let bytes_read = reader.read_line(&mut line).context("reading from stdin")?;
+        if bytes_read == 0 {
+            // EOF (Ctrl-D)
+            println!();
+            break;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with(':') {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            match parts[0] {
+                ":quit" | ":q" => {
+                    break;
+                }
+                ":task" => {
+                    if parts.len() < 2 {
+                        println!("Error: specify task (s2pm or pm2s)");
+                    } else {
+                        match parts[1].to_lowercase().as_str() {
+                            "s2pm" => {
+                                current_task = Some(Task::S2Pm);
+                                println!("Task forced to spelling-to-phonemes (S2Pm)");
+                            }
+                            "pm2s" => {
+                                current_task = Some(Task::Pm2S);
+                                println!("Task forced to phonemes-to-spelling (Pm2S)");
+                            }
+                            _ => {
+                                println!("Error: invalid task. Supported: s2pm, pm2s");
+                            }
+                        }
+                    }
+                }
+                ":auto" => {
+                    current_task = None;
+                    println!("Task auto-detect enabled");
+                }
+                ":timings" => {
+                    timings_enabled = !timings_enabled;
+                    if timings_enabled {
+                        println!("Timing output enabled");
+                    } else {
+                        println!("Timing output disabled");
+                    }
+                }
+                ":help" => {
+                    println!("Commands:");
+                    println!("  :quit / :q / Ctrl-D   Exits the REPL");
+                    println!("  :task s2pm            Forces spelling-to-phonemes");
+                    println!("  :task pm2s            Forces phonemes-to-spelling");
+                    println!("  :auto                 Returns to auto-detect task");
+                    println!("  :timings              Toggles timing output");
+                    println!("  :help                 Prints this help message");
+                }
+                _ => {
+                    println!("Unknown command: {}. Type :help for list of commands", parts[0]);
+                }
+            }
+            continue;
+        }
+
+        let task = match current_task {
+            Some(t) => t,
+            None => detect_task(trimmed),
+        };
+
+        if timings_enabled {
+            println!("Translating input='{}' with task={:?}...", trimmed, task);
+        }
+
+        let start_pred = std::time::Instant::now();
+        let output = predict(
+            &model,
+            trimmed,
+            task,
+            vocab,
+            device,
+        );
+        let elapsed_pred = start_pred.elapsed();
+
+        if timings_enabled {
+            println!("  ✓ Finished prediction in {:?}", elapsed_pred);
+            println!("\nPrediction output:\n  {}", output);
+        } else {
+            println!("{}", output);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+/// Auto-detect the task based on the input text.
+/// If all characters are ASCII alphabetic, apostrophes, or hyphens, we assume S2Pm.
+/// Otherwise, we assume Pm2S.
+pub fn detect_task(input: &str) -> Task {
+    let is_spelling = !input.is_empty()
+        && input
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-');
+    if is_spelling {
+        Task::S2Pm
+    } else {
+        Task::Pm2S
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_task() {
+        assert_eq!(detect_task("farkle"), Task::S2Pm);
+        assert_eq!(detect_task("farkle's"), Task::S2Pm);
+        assert_eq!(detect_task("fark-le"), Task::S2Pm);
+        assert_eq!(detect_task("ˈfɑɹ.kəl"), Task::Pm2S);
+        assert_eq!(detect_task("kæt"), Task::Pm2S); // non-ASCII chars
+        assert_eq!(detect_task(""), Task::Pm2S);
+    }
 }

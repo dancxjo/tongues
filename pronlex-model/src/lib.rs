@@ -221,8 +221,18 @@ impl<B: Backend> Seq2SeqModel<B> {
         // 2. Autoregressive loop
         let mut generated = vec![BOS_ID];
 
+        let pb = indicatif::ProgressBar::new(max_tgt_len as u64);
+        pb.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+                .expect("valid template")
+                .progress_chars("#>-")
+        );
+        pb.set_message("Decoding tokens...");
+
         for _ in 0..max_tgt_len {
             let tgt_len = generated.len();
+            pb.set_message(format!("Decoding token {}...", tgt_len));
 
             let tgt_in_ids = Tensor::<B, 2, Int>::from_data(
                 TensorData::new(generated.iter().map(|&x| x as i32).collect::<Vec<_>>(), [1, tgt_len]),
@@ -256,11 +266,15 @@ impl<B: Backend> Seq2SeqModel<B> {
                 .map(|(i, _)| i as u32)
                 .unwrap_or(EOS_ID);
 
+            pb.inc(1);
+
             if next_token == EOS_ID {
                 break;
             }
             generated.push(next_token);
         }
+
+        pb.finish_and_clear();
 
         generated.into_iter().skip(1).collect()
     }

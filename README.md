@@ -55,7 +55,29 @@ cargo run --release -- predict \
     --model  models/cmudict-v0 \
     --word   charlotte \
     --phones "SH AA1 R L MASK T"
+
+# 6. Interactive REPL (Default Subcommand)
+cargo run --release -- repl --cpu
+# Or since REPL is the default subcommand, simply:
+cargo run --release -- --cpu
 ```
+
+### Interactive REPL Details
+
+The `pronlex repl` command starts an interactive session. It loads the vocabulary, device, and model weights once at startup, so subsequent predictions run with sub-millisecond response latency.
+
+Options:
+- `--cpu` / `--cuda`: Forces CPU or CUDA device (defaults to CUDA with fallback to CPU if not available).
+- `--model <PATH>`: Path to model directory (defaults to `models/cmudict-v0`).
+- `--data <PATH>`: Optional path to data directory containing `vocab.json`.
+
+Commands available inside the REPL:
+- `:quit` / `:q` / `Ctrl-D` - Exits the REPL cleanly.
+- `:task s2pm` - Forces spelling-to-phonemes translation direction (e.g. `farkle` -> `ˈfɑɹ.kəl`).
+- `:task pm2s` - Forces phonemes-to-spelling translation direction (e.g. `ˈfɑɹ.kəl` -> `farkle`).
+- `:auto` - Restores automatic task direction detection (default).
+- `:timings` - Toggles printing prediction timing information (default is enabled).
+- `:help` - Prints the list of available commands.
 
 ---
 
