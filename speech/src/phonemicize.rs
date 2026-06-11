@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::cmudict::{self, CmuPhoneme, PronunciationStatus};
+use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
@@ -48,6 +48,10 @@ pub trait PronunciationPipeline {
     -> Result<LinguisticVariety, PhonemicizeError>;
 
     fn text_normalizer(&self, text: &str) -> String {
+        self.normalize_numbers(text)
+    }
+
+    fn normalize_numbers(&self, text: &str) -> String {
         text.to_string()
     }
 
@@ -376,6 +380,10 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         Ok(variety)
     }
 
+    fn normalize_numbers(&self, text: &str) -> String {
+        english_normalize_numbers(text)
+    }
+
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
         tokenize_words(text)
     }
@@ -655,7 +663,10 @@ fn boundary_tokens(text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> 
             .get(index + 1)
             .map(|next| next.span.start_char)
             .unwrap_or(text_len_chars);
-        if let Some(boundary) = punctuation_boundary_after_word(text, word, index, next_start) {
+        let next_word = words.get(index + 1);
+        if let Some(boundary) =
+            punctuation_boundary_after_word(text, word, index, next_start, next_word)
+        {
             boundaries.push(boundary);
         } else if index + 1 < words.len() {
             boundaries.push(SpeechBoundaryToken {
@@ -953,19 +964,142 @@ fn punctuation_boundary_after_word(
     word: &WordToken,
     word_index: usize,
     next_start_char: usize,
+    next_word: Option<&WordToken>,
 ) -> Option<SpeechBoundaryToken> {
+    let is_abbr = matches!(
+        word.normalized.as_str(),
+        "mr" | "mrs"
+            | "ms"
+            | "dr"
+            | "prof"
+            | "sen"
+            | "rep"
+            | "gen"
+            | "col"
+            | "capt"
+            | "sgt"
+            | "lieut"
+            | "corp"
+            | "rev"
+            | "fr"
+            | "br"
+            | "st"
+            | "ave"
+            | "rd"
+            | "blvd"
+            | "ln"
+            | "ct"
+            | "pl"
+            | "co"
+            | "inc"
+            | "ltd"
+            | "etc"
+            | "vs"
+            | "approx"
+            | "jan"
+            | "feb"
+            | "mar"
+            | "apr"
+            | "jun"
+            | "jul"
+            | "aug"
+            | "sep"
+            | "sept"
+            | "oct"
+            | "nov"
+            | "dec"
+            | "jr"
+            | "sr"
+    );
+
     let mut found = None;
     for (char_index, character) in text.chars().enumerate() {
         if char_index < word.span.end_char || char_index >= next_start_char {
             continue;
         }
 
-        let terminal = match character {
+        let mut terminal = match character {
             '.' | '…' => Some(TerminalPunctuation::Period),
             '?' => Some(TerminalPunctuation::Question),
             '!' => Some(TerminalPunctuation::Exclamation),
             _ => None,
         };
+
+        if terminal == Some(TerminalPunctuation::Period) && is_abbr {
+            let is_title_abbr = matches!(
+                word.normalized.as_str(),
+                "mr" | "mrs"
+                    | "ms"
+                    | "dr"
+                    | "prof"
+                    | "sen"
+                    | "rep"
+                    | "gen"
+                    | "col"
+                    | "capt"
+                    | "sgt"
+                    | "lieut"
+                    | "corp"
+                    | "rev"
+                    | "fr"
+                    | "br"
+            );
+
+            if is_title_abbr {
+                if next_word.is_some() {
+                    terminal = None;
+                }
+            } else {
+                if let Some(next) = next_word {
+                    let next_first_char = next.text.chars().next();
+                    let next_is_uppercase = next_first_char.map_or(false, |c| c.is_uppercase());
+                    if !next_is_uppercase {
+                        terminal = None;
+                    } else if word.normalized == "st" {
+                        let next_word_lower = next.normalized.as_str();
+                        let is_sentence_starter = matches!(
+                            next_word_lower,
+                            "the"
+                                | "he"
+                                | "she"
+                                | "it"
+                                | "they"
+                                | "we"
+                                | "i"
+                                | "you"
+                                | "this"
+                                | "that"
+                                | "these"
+                                | "those"
+                                | "there"
+                                | "here"
+                                | "but"
+                                | "and"
+                                | "then"
+                                | "so"
+                                | "if"
+                                | "when"
+                                | "as"
+                                | "what"
+                                | "who"
+                                | "how"
+                                | "why"
+                                | "my"
+                                | "your"
+                                | "our"
+                                | "their"
+                                | "his"
+                                | "her"
+                                | "its"
+                        );
+                        if !is_sentence_starter {
+                            terminal = None;
+                        }
+                    }
+                }
+            }
+        }
+
         let pause = match character {
             ',' | ';' | ':' => Some(PauseKind::Comma),
             _ => None,
@@ -1110,9 +1244,28 @@ fn pronunciation_for_word(
             status: entry.status,
             provenance: cmudict_pronunciation_provenance(
                 entry.status,
+                entry.source,
                 context.part_of_speech,
                 selection.applied_pos,
             ),
+            warnings: Vec::new(),
+            letter_break_offsets: Vec::new(),
+            letter_indices: Vec::new(),
+            part_of_speech: context.part_of_speech,
+        };
+    }
+
+    use crate::data::varieties::english::morphology;
+    if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
+        let candidates = vec![morphology::compose_pronunciation(variety, &morph_parts)];
+        return WordPronunciation {
+            candidates,
+            status: PronunciationStatus::Exact,
+            provenance: EvidenceProvenance {
+                source: EvidenceSource::Rule,
+                method: "morphological composition".into(),
+                version: Some("0.1".into()),
+            },
             warnings: Vec::new(),
             letter_break_offsets: Vec::new(),
             letter_indices: Vec::new(),
@@ -1136,10 +1289,15 @@ fn pronunciation_for_word(
             part_of_speech: context.part_of_speech,
         }
     } else {
+        eprintln!("GUESSED: {}", word.text);
         WordPronunciation {
             candidates: vec![guessed],
             status: PronunciationStatus::Guessed,
-            provenance: pronunciation_provenance(PronunciationStatus::Guessed),
+            provenance: EvidenceProvenance {
+                source: EvidenceSource::Rule,
+                method: "unknown-word fallback".into(),
+                version: Some("0.1".into()),
+            },
             warnings: vec![PronunciationWarning {
                 token: word.text.clone(),
                 kind: PronunciationWarningKind::GuessedWord,
@@ -1594,34 +1752,46 @@ fn orthographic_unit_candidate(
 }
 
 fn guess_pronunciation(word: &str) -> Vec<CmuPhoneme> {
-    word.chars()
+    let mut phonemes: Vec<CmuPhoneme> = word
+        .chars()
         .filter_map(|character| fallback_symbol_for_char(character).map(CmuPhoneme::parse))
-        .collect()
+        .collect();
+
+    let vowels = [
+        "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
+    ];
+    if let Some(first_vowel_idx) = phonemes
+        .iter()
+        .position(|p| vowels.contains(&p.base.as_str()))
+    {
+        phonemes[first_vowel_idx].stress = Some(CmuStress::Primary);
+    }
+    phonemes
 }
 
 fn fallback_symbol_for_char(character: char) -> Option<&'static str> {
     match character {
-        'a' => Some("AE1"),
+        'a' => Some("AH0"),
         'b' => Some("B"),
         'c' => Some("K"),
         'd' => Some("D"),
-        'e' => Some("EH1"),
+        'e' => Some("IH0"),
         'f' => Some("F"),
         'g' => Some("G"),
         'h' => Some("HH"),
-        'i' => Some("IH1"),
+        'i' => Some("IH0"),
         'j' => Some("JH"),
         'k' => Some("K"),
         'l' => Some("L"),
         'm' => Some("M"),
         'n' => Some("N"),
-        'o' => Some("OW1"),
+        'o' => Some("AH0"),
         'p' => Some("P"),
         'q' => Some("K"),
         'r' => Some("R"),
         's' => Some("S"),
         't' => Some("T"),
-        'u' => Some("AH1"),
+        'u' => Some("AH0"),
         'v' => Some("V"),
         'w' => Some("W"),
         'x' => Some("K"),
@@ -1814,12 +1984,17 @@ fn confidence_for_status(status: PronunciationStatus) -> f32 {
 }
 
 fn cmudict_pronunciation_provenance(
-    status: PronunciationStatus,
+    _status: PronunciationStatus,
+    source: &'static str,
     part_of_speech: Option<PartOfSpeech>,
     applied_pos: bool,
 ) -> EvidenceProvenance {
+    let mut provenance = EvidenceProvenance {
+        source: EvidenceSource::Lexicon,
+        method: format!("{} lookup", source),
+        version: Some("0.1".into()),
+    };
     if applied_pos {
-        let mut provenance = pronunciation_provenance(status);
         if let Some(part_of_speech) = part_of_speech {
             provenance.method = format!(
                 "{} + link-grammar POS {}",
@@ -1827,9 +2002,8 @@ fn cmudict_pronunciation_provenance(
                 part_of_speech_feature_value(part_of_speech)
             );
         }
-        return provenance;
     }
-    pronunciation_provenance(status)
+    provenance
 }
 
 fn pronunciation_provenance(status: PronunciationStatus) -> EvidenceProvenance {
@@ -1887,12 +2061,661 @@ pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     split_stress(symbol).0
 }
 
+const PREFIX: &[&str] = &[
+    "",
+    "m",
+    "b",
+    "tr",
+    "quadr",
+    "quint",
+    "sext",
+    "sept",
+    "oct",
+    "non",
+    "dec",
+    "undec",
+    "duodec",
+    "tredec",
+    "quattuordec",
+    "quindec",
+    "sexdec",
+    "septendec",
+    "octodec",
+    "novemdec",
+    "vigint",
+];
+
+fn power_name(p: usize) -> Result<String, &'static str> {
+    if p == 0 {
+        return Ok("thousand".to_string());
+    }
+    if p == 100 {
+        return Ok("centillion".to_string());
+    }
+    if p >= PREFIX.len() {
+        return Err("The number is too large to be represented in text.");
+    }
+    Ok(format!("{}illion", PREFIX[p]))
+}
+
+fn ilog10_u128(mut n: u128) -> u32 {
+    let mut count = 0;
+    while n >= 10 {
+        n /= 10;
+        count += 1;
+    }
+    count
+}
+
+fn spell_out(i: u128) -> String {
+    match i {
+        0 => "zero".to_string(),
+        1 => "one".to_string(),
+        2 => "two".to_string(),
+        3 => "three".to_string(),
+        4 => "four".to_string(),
+        5 => "five".to_string(),
+        6 => "six".to_string(),
+        7 => "seven".to_string(),
+        8 => "eight".to_string(),
+        9 => "nine".to_string(),
+        10 => "ten".to_string(),
+        11 => "eleven".to_string(),
+        12 => "twelve".to_string(),
+        13 => "thirteen".to_string(),
+        14 => "fourteen".to_string(),
+        15 => "fifteen".to_string(),
+        16 => "sixteen".to_string(),
+        17 => "seventeen".to_string(),
+        18 => "eighteen".to_string(),
+        19 => "nineteen".to_string(),
+        20 => "twenty".to_string(),
+        30 => "thirty".to_string(),
+        40 => "forty".to_string(),
+        50 => "fifty".to_string(),
+        60 => "sixty".to_string(),
+        70 => "seventy".to_string(),
+        80 => "eighty".to_string(),
+        90 => "ninety".to_string(),
+        _ => {
+            let l = ilog10_u128(i);
+            match l {
+                1 => {
+                    let head = i / 10;
+                    let tail = i % 10;
+                    format!("{}-{}", spell_out(head * 10), spell_out(tail))
+                }
+                2 => {
+                    let head = i / 100;
+                    let tail = i % 100;
+                    if tail > 0 {
+                        format!("{} hundred {}", spell_out(head), spell_out(tail))
+                    } else {
+                        format!("{} hundred", spell_out(head))
+                    }
+                }
+                _ => {
+                    let p = (l / 3) - 1;
+                    let num_digits = l - (l % 3);
+                    let divisor = 10u128.pow(num_digits);
+                    let head = i / divisor;
+                    let tail = i % divisor;
+
+                    let power_name_str = match power_name(p as usize) {
+                        Ok(name) => name,
+                        Err(_) => {
+                            return i.to_string();
+                        }
+                    };
+
+                    if tail > 0 {
+                        format!("{} {} {}", spell_out(head), power_name_str, spell_out(tail))
+                    } else {
+                        format!("{} {}", spell_out(head), power_name_str)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn is_scale_word(word: &str) -> bool {
+    matches!(
+        word,
+        "thousand"
+            | "million"
+            | "billion"
+            | "trillion"
+            | "quadrillion"
+            | "quintillion"
+            | "sextillion"
+            | "septillion"
+            | "octillion"
+            | "nonillion"
+            | "decillion"
+    )
+}
+
+fn is_known_unit(word: &str) -> bool {
+    matches!(
+        word,
+        "ft" | "feet"
+            | "foot"
+            | "in"
+            | "inch"
+            | "inches"
+            | "mph"
+            | "lb"
+            | "lbs"
+            | "pound"
+            | "pounds"
+            | "kg"
+            | "kilo"
+            | "kilos"
+            | "kilograms"
+            | "cm"
+            | "centimeter"
+            | "centimeters"
+            | "m"
+            | "meter"
+            | "meters"
+            | "%"
+            | "percent"
+    )
+}
+
+fn spell_unit(val: u128, unit: &str) -> &'static str {
+    match unit {
+        "ft" | "feet" | "foot" => {
+            if val == 1 {
+                "foot"
+            } else {
+                "feet"
+            }
+        }
+        "in" | "inch" | "inches" => {
+            if val == 1 {
+                "inch"
+            } else {
+                "inches"
+            }
+        }
+        "mph" => "miles per hour",
+        "lb" | "lbs" | "pound" | "pounds" => {
+            if val == 1 {
+                "pound"
+            } else {
+                "pounds"
+            }
+        }
+        "kg" | "kilo" | "kilos" | "kilograms" => {
+            if val == 1 {
+                "kilogram"
+            } else {
+                "kilograms"
+            }
+        }
+        "cm" | "centimeter" | "centimeters" => {
+            if val == 1 {
+                "centimeter"
+            } else {
+                "centimeters"
+            }
+        }
+        "m" | "meter" | "meters" => {
+            if val == 1 {
+                "meter"
+            } else {
+                "meters"
+            }
+        }
+        "%" | "percent" => "percent",
+        _ => "",
+    }
+}
+
+fn is_number_or_scale_word(word: &str) -> bool {
+    if is_scale_word(word) {
+        return true;
+    }
+    word.chars()
+        .all(|c| c.is_ascii_digit() || c == ',' || c == '.')
+}
+
+fn is_linked_as_modifier(
+    word_idx: usize,
+    syntax: &crate::syntax::SentenceSyntaxAnalysis,
+    words: &[WordToken],
+) -> bool {
+    let parse = match syntax.primary_parse() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let mut current_idx = word_idx;
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(current_idx);
+
+    while let Some(link) = parse.links.iter().find(|l| {
+        l.left == current_idx
+            && (l.kind == crate::syntax::SyntacticLinkKind::NounCompound
+                || l.kind == crate::syntax::SyntacticLinkKind::Modifier)
+            && !visited.contains(&l.right)
+    }) {
+        current_idx = link.right;
+        visited.insert(current_idx);
+
+        if let Some(target_word) = words.get(current_idx) {
+            let text_lower = target_word.normalized.to_lowercase();
+            if !is_number_or_scale_word(&text_lower) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn find_word_index_at(c_idx: usize, words: &[WordToken]) -> Option<usize> {
+    words
+        .iter()
+        .position(|w| w.span.start_char <= c_idx && c_idx < w.span.end_char)
+}
+
+pub fn english_normalize_numbers(text: &str) -> String {
+    let words = tokenize_words(text);
+    if words.is_empty() {
+        return text.to_string();
+    }
+
+    let words_str: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
+    let syntax = crate::syntax::HeuristicLinkGrammarParser.parse(&words_str, None);
+
+    let char_vec: Vec<char> = text.chars().collect();
+    let mut result = String::new();
+    let mut idx = 0;
+
+    while idx < char_vec.len() {
+        // Check currency amount at `idx`
+        if char_vec[idx] == '$' {
+            let mut int_part = String::new();
+            let mut temp_idx = idx + 1;
+            while temp_idx < char_vec.len()
+                && (char_vec[temp_idx].is_ascii_digit() || char_vec[temp_idx] == ',')
+            {
+                int_part.push(char_vec[temp_idx]);
+                temp_idx += 1;
+            }
+
+            let mut cents_part: Option<String> = None;
+            let mut cents_temp = temp_idx;
+            if cents_temp < char_vec.len() && char_vec[cents_temp] == '.' {
+                cents_temp += 1;
+                if cents_temp + 1 < char_vec.len()
+                    && char_vec[cents_temp].is_ascii_digit()
+                    && char_vec[cents_temp + 1].is_ascii_digit()
+                {
+                    if cents_temp + 2 >= char_vec.len()
+                        || !char_vec[cents_temp + 2].is_ascii_digit()
+                    {
+                        cents_part = Some(format!(
+                            "{}{}",
+                            char_vec[cents_temp],
+                            char_vec[cents_temp + 1]
+                        ));
+                        temp_idx = cents_temp + 2;
+                    }
+                }
+            }
+
+            let mut scale_temp = temp_idx;
+            while scale_temp < char_vec.len() && char_vec[scale_temp] == ' ' {
+                scale_temp += 1;
+            }
+            let mut scale_word = String::new();
+            while scale_temp < char_vec.len() && char_vec[scale_temp].is_alphabetic() {
+                scale_word.push(char_vec[scale_temp]);
+                scale_temp += 1;
+            }
+
+            let scale_valid = !scale_word.is_empty()
+                && is_scale_word(&scale_word.to_lowercase())
+                && (scale_temp >= char_vec.len() || !char_vec[scale_temp].is_alphanumeric());
+
+            let actual_scale = if scale_valid {
+                temp_idx = scale_temp;
+                Some(scale_word.to_lowercase())
+            } else {
+                None
+            };
+
+            let clean_int: String = int_part.chars().filter(|&c| c != ',').collect();
+            let commas_valid = if int_part.contains(',') {
+                let groups: Vec<&str> = int_part.split(',').collect();
+                groups.first().is_some_and(|g| {
+                    !g.is_empty() && g.len() <= 3 && g.chars().all(|c| c.is_ascii_digit())
+                }) && groups
+                    .iter()
+                    .skip(1)
+                    .all(|g| g.len() == 3 && g.chars().all(|c| c.is_ascii_digit()))
+            } else {
+                true
+            };
+
+            if !clean_int.is_empty() && commas_valid {
+                if let Ok(dollars_val) = clean_int.parse::<u128>() {
+                    let word_idx = find_word_index_at(idx + 1, &words).unwrap_or(0);
+                    let query_idx = if actual_scale.is_some() {
+                        find_word_index_at(temp_idx - 1, &words).unwrap_or(word_idx)
+                    } else {
+                        word_idx
+                    };
+
+                    let modifier = is_linked_as_modifier(query_idx, &syntax, &words);
+
+                    let spelled = if modifier {
+                        let dollars_spelled = spell_out(dollars_val);
+                        let base = if let Some(ref scale) = actual_scale {
+                            format!("{}-{}", dollars_spelled, scale)
+                        } else {
+                            dollars_spelled
+                        };
+                        if let Some(ref cents_str) = cents_part {
+                            if let Ok(cents_val) = cents_str.parse::<u128>() {
+                                let cents_spelled = spell_out(cents_val);
+                                format!(
+                                    "{}-dollar-and-{}-cent",
+                                    base.replace(' ', "-"),
+                                    cents_spelled.replace(' ', "-")
+                                )
+                            } else {
+                                format!("{}-dollar", base.replace(' ', "-"))
+                            }
+                        } else {
+                            format!("{}-dollar", base.replace(' ', "-"))
+                        }
+                    } else {
+                        let dollars_spelled = spell_out(dollars_val);
+                        let base = if let Some(ref scale) = actual_scale {
+                            format!("{} {}", dollars_spelled, scale)
+                        } else {
+                            dollars_spelled
+                        };
+                        let dollars_unit = if dollars_val == 1 && actual_scale.is_none() {
+                            "dollar"
+                        } else {
+                            "dollars"
+                        };
+                        if let Some(ref cents_str) = cents_part {
+                            if let Ok(cents_val) = cents_str.parse::<u128>() {
+                                let cents_spelled = spell_out(cents_val);
+                                let cents_unit = if cents_val == 1 { "cent" } else { "cents" };
+                                format!(
+                                    "{} {} and {} {}",
+                                    base, dollars_unit, cents_spelled, cents_unit
+                                )
+                            } else {
+                                format!("{} {}", base, dollars_unit)
+                            }
+                        } else {
+                            format!("{} {}", base, dollars_unit)
+                        }
+                    };
+
+                    result.push_str(&spelled);
+                    idx = temp_idx;
+                    continue;
+                }
+            }
+        }
+
+        // Check cardinal number or measurement at `idx`
+        if char_vec[idx].is_ascii_digit() {
+            let mut int_part = String::new();
+            let mut temp_idx = idx;
+            while temp_idx < char_vec.len()
+                && (char_vec[temp_idx].is_ascii_digit() || char_vec[temp_idx] == ',')
+            {
+                int_part.push(char_vec[temp_idx]);
+                temp_idx += 1;
+            }
+
+            // Check if this digit sequence is part of a mixed alphanumeric word
+            let mut is_part_of_word = false;
+            if idx > 0 && char_vec[idx - 1].is_alphabetic() {
+                is_part_of_word = true;
+            }
+            if !is_part_of_word && temp_idx < char_vec.len() && char_vec[temp_idx].is_alphabetic() {
+                let mut suffix_temp = temp_idx;
+                let mut suffix_word = String::new();
+                while suffix_temp < char_vec.len() && char_vec[suffix_temp].is_alphabetic() {
+                    suffix_word.push(char_vec[suffix_temp]);
+                    suffix_temp += 1;
+                }
+                let suffix_valid = !suffix_word.is_empty()
+                    && is_known_unit(&suffix_word.to_lowercase())
+                    && (suffix_temp >= char_vec.len() || !char_vec[suffix_temp].is_alphanumeric());
+                if !suffix_valid {
+                    is_part_of_word = true;
+                }
+            }
+
+            if is_part_of_word {
+                result.push_str(&int_part);
+                idx = temp_idx;
+                continue;
+            }
+
+            let clean_int: String = int_part.chars().filter(|&c| c != ',').collect();
+            let commas_valid = if int_part.contains(',') {
+                let groups: Vec<&str> = int_part.split(',').collect();
+                groups.first().is_some_and(|g| {
+                    !g.is_empty() && g.len() <= 3 && g.chars().all(|c| c.is_ascii_digit())
+                }) && groups
+                    .iter()
+                    .skip(1)
+                    .all(|g| g.len() == 3 && g.chars().all(|c| c.is_ascii_digit()))
+            } else {
+                true
+            };
+
+            if !clean_int.is_empty() && commas_valid {
+                if let Ok(val) = clean_int.parse::<u128>() {
+                    let mut suffix_temp = temp_idx;
+                    while suffix_temp < char_vec.len() && char_vec[suffix_temp] == ' ' {
+                        suffix_temp += 1;
+                    }
+
+                    let mut suffix_word = String::new();
+                    if suffix_temp < char_vec.len() && char_vec[suffix_temp] == '%' {
+                        suffix_word.push('%');
+                        suffix_temp += 1;
+                    } else {
+                        while suffix_temp < char_vec.len() && char_vec[suffix_temp].is_alphabetic()
+                        {
+                            suffix_word.push(char_vec[suffix_temp]);
+                            suffix_temp += 1;
+                        }
+                    }
+
+                    let suffix_valid = !suffix_word.is_empty()
+                        && is_known_unit(&suffix_word.to_lowercase())
+                        && (suffix_temp >= char_vec.len()
+                            || !char_vec[suffix_temp].is_alphanumeric());
+
+                    if suffix_valid {
+                        let unit_str = suffix_word.to_lowercase();
+                        let mut height_inches_val: Option<u128> = None;
+                        let mut height_temp = suffix_temp;
+
+                        if matches!(unit_str.as_str(), "ft" | "feet" | "foot") {
+                            while height_temp < char_vec.len() && char_vec[height_temp] == ' ' {
+                                height_temp += 1;
+                            }
+                            let mut inches_str = String::new();
+                            while height_temp < char_vec.len()
+                                && char_vec[height_temp].is_ascii_digit()
+                            {
+                                inches_str.push(char_vec[height_temp]);
+                                height_temp += 1;
+                            }
+                            let inches_valid = !inches_str.is_empty()
+                                && (height_temp >= char_vec.len()
+                                    || !char_vec[height_temp].is_alphanumeric());
+
+                            if inches_valid {
+                                if let Ok(inches) = inches_str.parse::<u128>() {
+                                    height_inches_val = Some(inches);
+                                }
+                            }
+                        }
+
+                        let spelled = if let Some(inches) = height_inches_val {
+                            temp_idx = height_temp;
+                            format!("{} foot {}", spell_out(val), spell_out(inches))
+                        } else {
+                            temp_idx = suffix_temp;
+                            let unit_spelled = spell_unit(val, &unit_str);
+                            format!("{} {}", spell_out(val), unit_spelled)
+                        };
+
+                        result.push_str(&spelled);
+                        idx = temp_idx;
+                        continue;
+                    } else {
+                        let mut decimal_temp = temp_idx;
+                        let mut is_decimal = false;
+                        if decimal_temp < char_vec.len() && char_vec[decimal_temp] == '.' {
+                            decimal_temp += 1;
+                            let mut dec_digits = String::new();
+                            while decimal_temp < char_vec.len()
+                                && char_vec[decimal_temp].is_ascii_digit()
+                            {
+                                dec_digits.push(char_vec[decimal_temp]);
+                                decimal_temp += 1;
+                            }
+                            if !dec_digits.is_empty() {
+                                is_decimal = true;
+                            }
+                        }
+
+                        if !is_decimal {
+                            let spelled = spell_out(val);
+                            result.push_str(&spelled);
+                            idx = temp_idx;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        result.push(char_vec[idx]);
+        idx += 1;
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rules::RuleCondition;
     use crate::syntax::SyntacticLinkKind;
     use crate::variety::VarietyImplementationStatus;
+
+    #[test]
+    fn test_number_normalization() {
+        assert_eq!(
+            english_normalize_numbers("He has $15 million."),
+            "He has fifteen million dollars."
+        );
+        assert_eq!(
+            english_normalize_numbers("A $15 million renovation."),
+            "A fifteen-million-dollar renovation."
+        );
+        assert_eq!(
+            english_normalize_numbers("His $15 million slush fund."),
+            "His fifteen-million-dollar slush fund."
+        );
+        assert_eq!(
+            english_normalize_numbers("He is 6ft 4."),
+            "He is six foot four."
+        );
+        assert_eq!(
+            english_normalize_numbers("We reached 60mph."),
+            "We reached sixty miles per hour."
+        );
+        assert_eq!(
+            english_normalize_numbers("The price was $15.52."),
+            "The price was fifteen dollars and fifty-two cents."
+        );
+        assert_eq!(
+            english_normalize_numbers("A 5% discount."),
+            "A five percent discount."
+        );
+        assert_eq!(
+            english_normalize_numbers("affects over 100,000 pending immigration cases"),
+            "affects over one hundred thousand pending immigration cases"
+        );
+    }
+
+    #[test]
+    fn test_tts_pronunciation_pipeline_regression() {
+        let phonemicizer = EnglishPhonemicizer;
+
+        // Test "logorrhea" (override)
+        let out_logo = phonemicizer
+            .phonemicize(&request("logorrhea", "en-US"))
+            .unwrap();
+        let syms_logo = cmudict_symbols(&out_logo);
+        assert_eq!(syms_logo, vec!["L", "AO2", "G", "ER0", "IY1", "AH0"]);
+
+        // Test "talkativeness" (morphology)
+        let out_talk = phonemicizer
+            .phonemicize(&request("talkativeness", "en-US"))
+            .unwrap();
+        let syms_talk = cmudict_symbols(&out_talk);
+        assert_eq!(
+            syms_talk,
+            vec!["T", "AO1", "K", "AH0", "T", "IH0", "V", "N", "AH0", "S"]
+        );
+
+        // Test "wordiness" (morphology)
+        let out_word = phonemicizer
+            .phonemicize(&request("wordiness", "en-US"))
+            .unwrap();
+        let syms_word = cmudict_symbols(&out_word);
+        assert_eq!(syms_word, vec!["W", "ER1", "D", "IY0", "N", "AH0", "S"]);
+
+        // Test "excessive" (base dict/morphology)
+        let out_exc = phonemicizer
+            .phonemicize(&request("excessive", "en-US"))
+            .unwrap();
+        let syms_exc = cmudict_symbols(&out_exc);
+        assert_eq!(syms_exc, vec!["IH0", "K", "S", "EH1", "S", "IH0", "V"]);
+
+        // Test "incoherent" (base dict/morphology)
+        let out_inc = phonemicizer
+            .phonemicize(&request("incoherent", "en-US"))
+            .unwrap();
+        let syms_inc = cmudict_symbols(&out_inc);
+        assert_eq!(
+            syms_inc,
+            vec!["IH2", "N", "K", "OW0", "HH", "IH1", "R", "AH0", "N", "T"]
+        );
+
+        // Test fallback (humble G2P with single stress)
+        let out_fallback = phonemicizer
+            .phonemicize(&request("xyzzyqux", "en-US"))
+            .unwrap();
+        let syms_fallback = cmudict_symbols(&out_fallback);
+        let primary_stress_count = syms_fallback.iter().filter(|s| s.ends_with('1')).count();
+        assert!(
+            primary_stress_count <= 1,
+            "Fallback should never have more than one primary stress"
+        );
+    }
 
     fn request(text: &str, variety: &str) -> PhonemicizeRequest {
         PhonemicizeRequest {
@@ -2439,6 +3262,69 @@ mod tests {
         assert!(output.prosody.labels.iter().any(|label| {
             label.kind == ProsodicLabelKind::QuestionRise && label.confidence > 0.0
         }));
+    }
+
+    #[test]
+    fn test_abbreviation_periods_are_not_terminal_boundaries() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("About 17,000 cases will stay at 630 Sansome St. in San Francisco, another, smaller location with just two operating courtrooms.", "en-US"))
+            .expect("should phonemicize");
+
+        let st_boundary = output.boundaries.iter().find(|b| {
+            output
+                .graphemes
+                .get(b.after_grapheme_index)
+                .is_some_and(|g| g.text == "St")
+        });
+        assert!(
+            st_boundary.is_some_and(|b| b.terminal.is_none()),
+            "St. followed by lowercase should not be a sentence boundary"
+        );
+
+        let output2 = EnglishPhonemicizer
+            .phonemicize(&request(
+                "He lives on Sansome St. The house is blue.",
+                "en-US",
+            ))
+            .expect("should phonemicize");
+        let st_boundary2 = output2.boundaries.iter().find(|b| {
+            output2
+                .graphemes
+                .get(b.after_grapheme_index)
+                .is_some_and(|g| g.text == "St")
+        });
+        assert!(
+            st_boundary2.is_some_and(|b| b.terminal == Some(TerminalPunctuation::Period)),
+            "St. followed by sentence starter should be a sentence boundary"
+        );
+
+        let output3 = EnglishPhonemicizer
+            .phonemicize(&request("We visited St. Charles.", "en-US"))
+            .expect("should phonemicize");
+        let st_boundary3 = output3.boundaries.iter().find(|b| {
+            output3
+                .graphemes
+                .get(b.after_grapheme_index)
+                .is_some_and(|g| g.text == "St")
+        });
+        assert!(
+            st_boundary3.is_none() || st_boundary3.is_some_and(|b| b.terminal.is_none()),
+            "St. Charles should not have a terminal period after St."
+        );
+
+        let output4 = EnglishPhonemicizer
+            .phonemicize(&request("He lives on Sansome St.", "en-US"))
+            .expect("should phonemicize");
+        let st_boundary4 = output4.boundaries.iter().find(|b| {
+            output4
+                .graphemes
+                .get(b.after_grapheme_index)
+                .is_some_and(|g| g.text == "St")
+        });
+        assert!(
+            st_boundary4.is_some_and(|b| b.terminal == Some(TerminalPunctuation::Period)),
+            "St. at the end of the text should be a sentence boundary"
+        );
     }
 
     #[test]

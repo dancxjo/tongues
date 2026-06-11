@@ -191,6 +191,12 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
+    /// Phonemize text into an IPA sequence
+    Phonemes {
+        /// The text to phonemize
+        text: String,
+    },
+
     /// Manage local models
     Models {
         #[command(subcommand)]
@@ -254,7 +260,59 @@ fn main() -> Result<()> {
             data,
         } => cmd_predict(&model, &word, &phones, top_k, cli.device, data.as_deref()),
         Commands::Speak(command) => speak::run_speak(command),
+        Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Models { command } => models::run(command),
+    }
+}
+
+fn cmd_phonemes(text: &str) -> Result<()> {
+    use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+
+    let phonemicizer = EnglishPhonemicizer;
+    let phonemicized = phonemicizer
+        .phonemicize(&PhonemicizeRequest {
+            text: text.to_string(),
+            variety: VarietyId("en-US".to_string()),
+            style: None,
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
+
+    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    for syllable in phonemicized.syllables {
+        if let Some(first_phone) = syllable.phones.first() {
+            if let Some(word_idx) = token_word_index(&first_phone.features) {
+                if let Some(last_word) = words.last_mut() {
+                    if last_word.0 == word_idx {
+                        last_word.1.push(syllable);
+                        continue;
+                    }
+                }
+                words.push((word_idx, vec![syllable]));
+            }
+        }
+    }
+
+    let mut ipa_words = Vec::new();
+    for (_, word_syllables) in words {
+        let ipa = speech::syllables_to_ipa(&word_syllables).replace('.', "");
+        if !ipa.is_empty() {
+            ipa_words.push(ipa);
+        }
+    }
+
+    println!("/{}/", ipa_words.join(" "));
+    Ok(())
+}
+
+fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
+    let value = features
+        .values
+        .get(&speech::FeatureId("orthography.word_index".into()))?;
+    match value {
+        speech::Spec::Known(speech::FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+            Some(*value as usize)
+        }
+        _ => None,
     }
 }
 

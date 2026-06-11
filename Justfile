@@ -15,6 +15,10 @@ fetch *args:
 speak *args:
     cargo run -- speak "$@"
 
+# Phonemize text into an IPA sequence
+phonemes *args:
+    cargo run -- phonemes "$@"
+
 # Train the pronlex masked-phone predictor model
 train *args:
     cargo run -- train --data runs/cmudict-v0 --out models/cmudict-v0 "$@"

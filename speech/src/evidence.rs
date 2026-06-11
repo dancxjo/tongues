@@ -22,3 +22,13 @@ pub enum EvidenceSource {
     Inference,
     Unknown,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PronunciationSource {
+    Lexicon,
+    MorphologicalComposition,
+    LearnedSuffix,
+    GraphemeToPhoneme,
+    Unknown,
+}
