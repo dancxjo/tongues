@@ -629,12 +629,12 @@ fn speech_spine_lowers_to_ipa_text_without_lexical_stress_for_styletts2() {
         ("world", "wɝld"),
         (
             "I’ll inspect the current English rule.",
-            "aɪl ɪnspɛkt ðə kɝənt ɪŋɡlɪʃ ɹuːl↘ .",
+            "aɪl ɪnspɛkt ðə kɝənt ɪŋɡlɪʃ ɹuːl↘.",
         ),
         ("StyleTTS2", "staɪl tiː tiːj ɛs tuː"),
         (
             "I've traveled the world and the seven seas.",
-            "aɪv tɹævəld ðə wɝld ənd ðə sɛvən siːz↘ .",
+            "aɪv tɹævəld ðə wɝld ənd ðə sɛvən siːz↘.",
         ),
         ("current", "kɝənt"),
         ("derived", "dɚaɪvd"),
@@ -646,12 +646,12 @@ fn speech_spine_lowers_to_ipa_text_without_lexical_stress_for_styletts2() {
         ),
         (
             "That points to a real phonological rule.",
-            "ðæt pɔɪnts tuː ə ɹiːl foʊnəlɑːdʒɪkəl ɹuːl↘ .",
+            "ðæt pɔɪnts tuː ə ɹiːl foʊnəlɑːdʒɪkəl ɹuːl↘.",
         ),
-        ("What is your name?", "wʌt ɪz jɔːɹ neɪm↘ ?"),
+        ("What is your name?", "wʌt ɪz jɔːɹ neɪm↘?"),
         (
             "Want to see hundreds of baby herons? Go to King County's busiest dog park.",
-            "wɑːnt tə siː hʌndɹədz əv beɪbiː hɛɹənz↗ ?  || ɡoʊ tə kɪŋ kaʊntiːz bɪziːəst dɔːɡ pɑːɹk↘ .",
+            "wɑːnt tə siː hʌndɹədz əv beɪbiː hɛɹənz↗?  || ɡoʊ tə kɪŋ kaʊntiːz bɪziːəst dɔːɡ pɑːɹk↘.",
         ),
     ] {
         let actual = styletts2_text_from_english(input);
@@ -694,11 +694,11 @@ fn english_either_or_question_lowers_with_falling_final_contour() {
     let actual = styletts2_text_from_english("Do you want either tea or coffee?");
 
     assert!(
-        actual.contains("↘ ?"),
+        actual.contains("↘?"),
         "either/or question should lower to a falling final question contour: {actual}"
     );
     assert!(
-        !actual.contains("↗ ?"),
+        !actual.contains("↗?"),
         "either/or question should not lower to a yes/no rise: {actual}"
     );
 }
@@ -712,11 +712,11 @@ fn english_would_you_rather_question_lowers_first_option_rise_and_final_fall() {
         "first linked option should lower with a rise before the coordinator boundary: {actual}"
     );
     assert!(
-        actual.contains("↘ ?"),
+        actual.contains("↘?"),
         "final option should lower with a falling question contour: {actual}"
     );
     assert!(
-        !actual.contains("↗ ?"),
+        !actual.contains("↗?"),
         "alternative question should not lower as a simple yes/no final rise: {actual}"
     );
 }
