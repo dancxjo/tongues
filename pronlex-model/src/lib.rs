@@ -329,9 +329,10 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
     for chunk in indices.chunks(config.batch_size) {
         let examples: Vec<Seq2SeqExample> = chunk
             .iter()
-            .map(|&i| {
+            .enumerate()
+            .map(|(position, &i)| {
                 let lex = &lexemes[i];
-                let task = config.task.unwrap_or_else(|| Task::sample(rng));
+                let task = config.task.unwrap_or_else(|| balanced_batch_task(position));
                 make_seq2seq_example(lex, task, vocab)
             })
             .collect();
@@ -387,6 +388,14 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
         0.0
     } else {
         total_loss / n_batches as f32
+    }
+}
+
+fn balanced_batch_task(position: usize) -> Task {
+    if position % 2 == 0 {
+        Task::S2Pm
+    } else {
+        Task::Pm2S
     }
 }
 
@@ -826,6 +835,23 @@ mod tests {
     use burn::backend::ndarray::NdArray;
 
     type TestBackend = NdArray<f32>;
+
+    #[test]
+    fn default_training_tasks_alternate_within_batch() {
+        let tasks: Vec<Task> = (0..6).map(balanced_batch_task).collect();
+
+        assert_eq!(
+            tasks,
+            vec![
+                Task::S2Pm,
+                Task::Pm2S,
+                Task::S2Pm,
+                Task::Pm2S,
+                Task::S2Pm,
+                Task::Pm2S,
+            ]
+        );
+    }
 
     #[test]
     fn model_forward_shape() {

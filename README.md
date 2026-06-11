@@ -1,217 +1,316 @@
 # pronlex
 
-A Rust/Burn masked-phone predictor trained on raw CMUdict ARPABET data.
+A Rust/Burn sequence-to-sequence pronunciation model.
 
-## What it does
+`pronlex` trains a Transformer to translate in both directions:
 
-`pronlex` trains a small Transformer model to predict missing phones in a
-pronunciation sequence, given the word's spelling plus the surrounding phone
-context.
+```text
+spelling -> broad IPA phonemes
+farkle   -> ˈfɑɹ.kəl
 
-```
-spelling: "charlotte"
-phones:   SH AA1 R L <MASK> T
-target:   AH0
+broad IPA phonemes -> spelling
+ˈfɑɹ.kəl           -> farkle
 ```
 
-This is **v0**: ARPABET phones from CMUdict, CPU-only via the
-[Burn](https://burn.dev) framework.  IPA support and a Listenbury integration
-come later.
+The current data pipeline starts from CMUdict word entries, filters to base
+words, phonemicizes those words through the local `speech` crate, and writes
+training examples as spelling/broad-IPA pairs.
 
 ---
 
-## Quick start
+## Quick Start
+
+The default path is:
 
 ```sh
-# 1. Fetch the dictionary
-cargo run --release -- fetch-cmudict --out data/cmudict.dict
+just train
+```
 
-# 2. Build vocabularies and splits
-cargo run --release -- prepare \
-    --input data/cmudict.dict \
-    --out   runs/cmudict-v0
+`just train` runs:
 
-# 3. Train
+```sh
+cargo run --bin pronlex -- train \
+    --data runs/cmudict-v0 \
+    --out models/cmudict-v0 \
+    --task both
+```
+
+If `runs/cmudict-v0` is missing `vocab.json`, `train.jsonl`, or `valid.jsonl`,
+training automatically prepares the data first. If `data/cmudict.dict` is also
+missing, training automatically downloads CMUdict first.
+
+So the usual first run is just:
+
+```sh
+just train
+```
+
+---
+
+## Just Recipes
+
+```sh
+just fetch
+```
+
+Downloads CMUdict to `data/cmudict.dict`.
+
+```sh
+just prepare
+```
+
+Optional. Builds `runs/cmudict-v0` without starting training. Use this when you
+want to refresh or inspect the generated data, or pass custom prepare arguments.
+
+```sh
+just train
+```
+
+Trains `models/cmudict-v0`. By default it trains `--task both`, with an even
+mix of spelling-to-phonemes and phonemes-to-spelling examples.
+
+```sh
+just infer "farkle"
+just infer --task pm2s "ˈfɑɹ.kəl"
+```
+
+Runs one translation prediction.
+
+```sh
+just phonemes "hello world"
+just phones "hello world"
+```
+
+Runs the rule-based speech pipeline directly.
+
+```sh
+just speak "hello world"
+```
+
+Synthesizes speech through the configured backend.
+
+---
+
+## Data Flow
+
+`prepare` writes a prepared data directory containing:
+
+| File | Purpose |
+|------|---------|
+| `train.jsonl` | Training lexemes |
+| `valid.jsonl` | Validation lexemes |
+| `test.jsonl` | Test lexemes |
+| `train_words.txt` | Words assigned to train |
+| `valid_words.txt` | Words assigned to validation |
+| `test_words.txt` | Words assigned to test |
+| `vocab.json` | Unified character vocabulary and special tokens |
+
+Each JSONL row is a `Lexeme`:
+
+```json
+{"base_word":"farkle","phonemes":"ˈfɑɹ.kəl"}
+```
+
+The split is deterministic by base word. Alternate source entries for the same
+base word are collapsed before splitting, so a word cannot appear in multiple
+splits.
+
+---
+
+## Training
+
+Useful direct CLI form:
+
+```sh
 cargo run --release -- train \
     --data runs/cmudict-v0 \
-    --out  models/cmudict-v0 \
-    --mask-policy variable \
-    --max-mask-rate 0.4 \
-    --span-mask-prob 0.15 \
+    --out models/cmudict-v0 \
+    --task both \
     --learning-rate 3e-4 \
     --weight-decay 1e-4 \
     --dropout 0.1 \
+    --batch-size 64 \
     --epochs 20 \
     --patience 5
+```
 
-# 4. Evaluate
+CUDA is used automatically when available. Pass global `--cpu` to force the
+CPU backend:
+
+```sh
+cargo run --release -- --cpu train --data runs/cmudict-v0
+```
+
+`--task` controls the direction:
+
+| Task | Meaning |
+|------|---------|
+| `s2pm` | spelling to phonemes |
+| `pm2s` | phonemes to spelling |
+| `both` | train both directions |
+
+`both` is the default. In training, the default `both` path alternates task
+directions within each shuffled batch, giving an even mix for normal even-sized
+batches.
+
+The train command still accepts legacy masking flags such as `--mask-policy`,
+`--max-mask-rate`, and `--span-mask-prob`. They are currently ignored by the
+seq2seq training path.
+
+The model directory receives:
+
+| File | Purpose |
+|------|---------|
+| `model.bin` | Best model weights |
+| `model-epoch-N.bin` | Per-epoch checkpoints |
+| `model_config.json` | Architecture config |
+| `train_config.json` | Training config, including task direction |
+| `train_state.json` | Resume state |
+| `vocab.json` | Copied vocabulary for self-contained prediction |
+
+Training resumes automatically when `train_state.json` and checkpoint files are
+present in the output directory.
+
+---
+
+## Evaluation
+
+```sh
 cargo run --release -- eval \
     --model models/cmudict-v0 \
-    --data  runs/cmudict-v0 \
-    --split test
+    --data runs/cmudict-v0 \
+    --split test \
+    --task auto
+```
 
-# 5. Predict
+`--task auto` reads `train_config.json`. You can also force `s2pm`, `pm2s`, or
+`both`.
+
+Metrics currently reported:
+
+- loss
+- exact match accuracy
+- token accuracy
+
+---
+
+## Prediction
+
+```sh
 cargo run --release -- predict \
-    --model  models/cmudict-v0 \
-    --word   charlotte \
-    --phones "SH AA1 R L MASK T"
+    --model models/cmudict-v0 \
+    "farkle"
+```
 
-# 6. Interactive REPL (Default Subcommand)
+Task detection is automatic by default. Use `--task` when you want to force a
+direction:
+
+```sh
+cargo run --release -- predict \
+    --model models/cmudict-v0 \
+    --task pm2s \
+    "ˈfɑɹ.kəl"
+```
+
+Prediction looks for `vocab.json` in this order:
+
+1. the explicit `--data` directory
+2. the model directory
+3. the model directory's parent
+4. a sibling `runs/<model-name>/vocab.json`
+
+Because training copies `vocab.json` into the model directory, normal prediction
+does not need `--data`.
+
+---
+
+## REPL
+
+```sh
 cargo run --release -- repl --cpu
-# Or since REPL is the default subcommand, simply:
+```
+
+The REPL is also the default subcommand:
+
+```sh
 cargo run --release -- --cpu
 ```
 
-### Interactive REPL Details
+REPL commands:
 
-The `pronlex repl` command starts an interactive session. It loads the vocabulary, device, and model weights once at startup, so subsequent predictions run with sub-millisecond response latency.
-
-Options:
-- `--cpu` / `--cuda`: Forces CPU or CUDA device (defaults to CUDA with fallback to CPU if not available).
-- `--model <PATH>`: Path to model directory (defaults to `models/cmudict-v0`).
-- `--data <PATH>`: Optional path to data directory containing `vocab.json`.
-
-Commands available inside the REPL:
-- `:quit` / `:q` / `Ctrl-D` - Exits the REPL cleanly.
-- `:task s2pm` - Forces spelling-to-phonemes translation direction (e.g. `farkle` -> `ˈfɑɹ.kəl`).
-- `:task pm2s` - Forces phonemes-to-spelling translation direction (e.g. `ˈfɑɹ.kəl` -> `farkle`).
-- `:auto` - Restores automatic task direction detection (default).
-- `:timings` - Toggles printing prediction timing information (default is enabled).
-- `:help` - Prints the list of available commands.
+- `:quit`, `:q`, or `Ctrl-D` exits
+- `:task s2pm` forces spelling-to-phonemes
+- `:task pm2s` forces phonemes-to-spelling
+- `:auto` restores automatic task detection
+- `:timings` toggles timing output
+- `:help` prints available commands
 
 ---
 
-## Data source
+## Model Architecture
 
-CMUdict is downloaded from the public CMUShinx GitHub mirror:
+The model is a shared-vocabulary encoder-decoder Transformer:
 
-```
-https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
+```text
+task token + source chars -> embedding + position -> Transformer encoder
+BOS + target chars        -> embedding + position -> Transformer decoder
+decoder states            -> linear -> vocabulary logits
 ```
 
-A local path is accepted too (`--input /path/to/cmudict.dict`).
+Default architecture:
+
+| Parameter | Default |
+|-----------|---------|
+| `d_model` | 128 |
+| `n_heads` | 4 |
+| `n_layers` | 3 |
+| `d_ff` | 512 |
+| `dropout` | 0.1 |
+| `max_seq_len` | 128 |
+
+Default training:
+
+| Parameter | Default |
+|-----------|---------|
+| `batch_size` | 64 |
+| `epochs` | 20 |
+| `learning_rate` | 3e-4 |
+| `weight_decay` | 1e-4 |
+| `patience` | 5 |
+| `task` | `both` |
+
+Optimizer: AdamW. Early stopping uses validation loss.
 
 ---
 
-## Why ARPABET first?
+## Crate Layout
 
-CMUdict ships ARPABET phones that include stress digits (`AH0`, `AH1`, `AH2`).
-These are preserved exactly — they are distinct tokens.  IPA conversion is a
-separate later step; v0 focuses on the prediction task with the raw source data.
-
----
-
-## Train / validation / test split
-
-Splits are made by **base word**, not by individual pronunciation variant.
-
-`WORD`, `WORD(2)`, `WORD(3)` always land in the same split.  This prevents the
-model from memorising a word's pronunciation from one variant and "predicting"
-another.
-
-A warning is printed if any base word appears in more than one split (should
-never happen, but the check is there).
+| Crate | Contents |
+|-------|----------|
+| `pronlex-core` | Unified vocabulary and special token IDs |
+| `pronlex-data` | CMUdict parsing, IPA phonemicization, splits, collation |
+| `pronlex-model` | Burn seq2seq model, training loop, eval, predict |
+| `pronlex-cli` | CLI commands and model/data wiring |
+| `speech` | Rule-based phonemicization and realization pipeline |
+| `styletts2` | StyleTTS2 symbol lowering and backend support |
 
 ---
 
-## Variable masking with curriculum schedule
-
-Training uses on-the-fly masking controlled by `--mask-policy`:
-
-| Policy     | Description                                  |
-|------------|----------------------------------------------|
-| `single`   | Always mask exactly one phone per example    |
-| `variable` | Curriculum schedule (see below)              |
-
-**Variable schedule** (epochs → sampling weights):
-
-| Epoch range | Single | Double | Span | Random % |
-|-------------|--------|--------|------|----------|
-| 1–3         | 70 %   | 20 %   | 10 % | 0 %      |
-| 4–8         | 50 %   | 30 %   | 15 % | 5 %      |
-| 9+          | 40 %   | 30 %   | 20 % | 10 %     |
-
-Loss is computed at **all** masked positions, not just one.  The same
-architecture handles one or many missing phones.
-
----
-
-## Model architecture
-
-```
-char_ids  [B, W]  ──embedding + pos─→ masked-mean-pool ─────┐
-                                                              │ broadcast-add
-phone_ids [B, P]  ──embedding + pos────────────────────────→ [B, P, D]
-                                                              │
-                                              2-layer Transformer encoder
-                                                              │
-                                              Linear → [B, P, phone_vocab]
-```
-
-Default hyper-parameters (all configurable):
-
-| Parameter        | Default |
-|------------------|---------|
-| `d_model`        | 64      |
-| `n_heads`        | 2       |
-| `n_layers`       | 2       |
-| `d_ff`           | 256     |
-| `dropout`        | 0.1     |
-| `batch_size`     | 64      |
-| `epochs`         | 20      |
-| `learning_rate`  | 3e-4    |
-| `weight_decay`   | 1e-4    |
-| `patience`       | 5       |
-
-Optimizer: **AdamW** with configurable lr and weight decay.
-Early stopping on validation loss (patience = number of epochs without
-improvement before stopping).
-
----
-
-## Metrics reported by `eval`
-
-- Top-1 accuracy
-- Top-3 accuracy
-- Validation loss
-- Confusion matrix (masked output)
-- Per-phone accuracy
-- Baseline comparison (most-common-phone-overall and most-common-by-position)
-
----
-
-## Crate layout
-
-| Crate           | Contents                                          |
-|-----------------|---------------------------------------------------|
-| `pronlex-core`  | `PhoneVocab`, `CharVocab`, token IDs              |
-| `pronlex-data`  | CMUdict parser, masking, curriculum, data splits  |
-| `pronlex-model` | Burn model, training loop, eval, predict          |
-| `pronlex-cli`   | `clap`-based CLI wiring all commands together     |
-
----
-
-## Running tests
+## Running Tests
 
 ```sh
 cargo test
 ```
 
-16 unit tests cover:
+For the model crate only:
 
-- CMUdict parser (comments, blanks, stress digits, alternate variants)
-- Split leakage prevention
-- Masking strategies (single, double, span, random-pct)
-- Curriculum weight schedule
-- Model forward-pass shape
-- Tiny training fixture (no panic)
-- Predict returns ranked phones
+```sh
+cargo test -p pronlex-model
+```
 
 ---
 
-## Next steps
+## Notes
 
-- IPA tokenisation via `data/phones.toml` registry
-- Surface-realisation modelling (latent phoneme bottleneck)
-- GPU backend support (WGPU)
-- Listenbury integration
+Some CLI help strings still mention the older masked-phone predictor. The
+runtime model and data pipeline are now sequence-to-sequence translation.

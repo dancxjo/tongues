@@ -27,6 +27,6 @@ phones *args:
 infer *args:
     cargo run --bin pronlex -- predict "$@"
 
-# Train the pronlex masked-phone predictor model
+# Train the pronlex translation model with an even mix of both directions
 train *args:
-    cargo run --bin pronlex -- train --data runs/cmudict-v0 --out models/cmudict-v0 "$@"
+    cargo run --bin pronlex -- train --data runs/cmudict-v0 --out models/cmudict-v0 --task both "$@"
