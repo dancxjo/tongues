@@ -45,27 +45,43 @@ impl Vocab {
             "<SEP>".into(),
             "<G2P>".into(),
             "<P2G>".into(),
+            "<task:g2p>".into(),
+            "<task:p2g>".into(),
+            "<task:align>".into(),
+            "<task:normalize>".into(),
+            "<task:guess_lang_from_spelling>".into(),
+            "<task:guess_lang_from_ipa>".into(),
+            "<task:guess_lang_from_spelling_and_ipa>".into(),
         ];
 
+        let mut control_tokens = std::collections::BTreeSet::new();
         let mut seen = std::collections::BTreeSet::new();
 
         // Collect all unique characters
         for word in words {
+            collect_angle_bracket_tokens(word, &mut control_tokens);
             for c in word.chars() {
                 seen.insert(c.to_string());
             }
         }
         for pm in phonemes {
+            collect_angle_bracket_tokens(pm, &mut control_tokens);
             for c in pm.chars() {
                 seen.insert(c.to_string());
             }
         }
         for ph in phones {
+            collect_angle_bracket_tokens(ph, &mut control_tokens);
             for c in ph.chars() {
                 seen.insert(c.to_string());
             }
         }
 
+        for token in control_tokens {
+            if !tokens.contains(&token) {
+                tokens.push(token);
+            }
+        }
         tokens.extend(seen);
 
         let token_to_id: HashMap<String, u32> = tokens
@@ -98,9 +114,30 @@ impl Vocab {
         self.tokens.len()
     }
 
-    /// Encode a string as character-level IDs.
+    /// Encode a string as IDs, preserving known `<...>` control tokens as atoms.
     pub fn encode_string(&self, s: &str) -> Vec<u32> {
-        s.chars().map(|c| self.get_id(&c.to_string())).collect()
+        let mut ids = Vec::new();
+        let mut index = 0;
+        while index < s.len() {
+            let rest = &s[index..];
+            if rest.starts_with('<') {
+                if let Some(end) = rest.find('>') {
+                    let candidate = &rest[..=end];
+                    if let Some(id) = self.token_to_id.get(candidate) {
+                        ids.push(*id);
+                        index += candidate.len();
+                        continue;
+                    }
+                }
+            }
+
+            let Some(ch) = rest.chars().next() else {
+                break;
+            };
+            ids.push(self.get_id(&ch.to_string()));
+            index += ch.len_utf8();
+        }
+        ids
     }
 
     /// Decode a list of IDs back to a string (filtering out PAD/BOS/EOS/SEP).
@@ -110,6 +147,20 @@ impl Vocab {
             .filter(|&tok| tok != "<PAD>" && tok != "<BOS>" && tok != "<EOS>" && tok != "<SEP>")
             .collect::<Vec<_>>()
             .join("")
+    }
+}
+
+fn collect_angle_bracket_tokens(value: &str, out: &mut std::collections::BTreeSet<String>) {
+    let mut offset = 0;
+    while let Some(start) = value[offset..].find('<') {
+        let start = offset + start;
+        let Some(end) = value[start..].find('>').map(|end| start + end) else {
+            break;
+        };
+        if end > start + 1 {
+            out.insert(value[start..=end].to_string());
+        }
+        offset = end + 1;
     }
 }
 
@@ -144,5 +195,23 @@ mod tests {
         assert_eq!(encoded.len(), 5);
         let decoded = v.decode_ids(&encoded);
         assert_eq!(decoded, "hello");
+    }
+
+    #[test]
+    fn vocab_encodes_angle_bracket_controls_as_atomic_tokens() {
+        let words = vec!["<task:g2p> <lang:eng> disease".to_string()];
+        let phonemes = vec!["dəˈziːz".to_string()];
+        let v = Vocab::build(&words, &phonemes, &[]);
+
+        let task_id = v.get_id("<task:g2p>");
+        let lang_id = v.get_id("<lang:eng>");
+        let align_id = v.get_id("<task:align>");
+        assert_ne!(task_id, UNK_ID);
+        assert_ne!(lang_id, UNK_ID);
+        assert_ne!(align_id, UNK_ID);
+
+        let encoded = v.encode_string("<task:g2p> <lang:eng> disease");
+        assert_eq!(encoded[0], task_id);
+        assert_eq!(encoded[2], lang_id);
     }
 }

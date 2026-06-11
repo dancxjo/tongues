@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 
@@ -30,10 +31,11 @@ use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
 use speech::data::notation::openepd::normalize_openepd_ipa;
-use tongues_core::{Vocab, UNK_ID};
-use tongues_data::{Lexeme, Task};
+use tongues_core::{Vocab, BOS_ID, EOS_ID, UNK_ID};
+use tongues_data::{Lexeme, Seq2SeqExample, Task};
 use tongues_g2p2g::{
-    eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
+    eval_report, load_model, predict, train, train_seq2seq_examples, ModelConfig, Seq2SeqModel,
+    TrainConfig,
 };
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 use tongues_speech_manifold::{
@@ -668,7 +670,7 @@ enum WiktionaryCommands {
         cache_dir: PathBuf,
     },
 
-    /// Write a Wiktionary model scaffold
+    /// Train a Wiktionary pronunciation seq2seq model
     Train {
         /// TOML config file for the Wiktionary pipeline
         #[arg(long, default_value = "configs/wiktionary/default.toml")]
@@ -682,14 +684,61 @@ enum WiktionaryCommands {
         #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
         data: PathBuf,
 
+        /// Pronunciation notation to train from
+        #[arg(long, value_enum, default_value = "phones")]
+        notation: WiktionaryNotationArg,
+
+        /// Wiktionary task mix: spelling-to-ipa, ipa-to-spelling, lang, or all
+        #[arg(long, default_value = "spelling-to-ipa")]
+        task: String,
+
         /// Output directory for the model
-        #[arg(long, default_value = "models/wiktionary/enwiktionary-2026-06-01-v0")]
+        #[arg(
+            long,
+            default_value = "models/wiktionary/enwiktionary-2026-06-01-v0-phones"
+        )]
         out: PathBuf,
 
         /// Cache directory for downloaded Wikimedia dumps if data is missing
         #[arg(long, default_value = "data/wiktionary")]
         cache_dir: PathBuf,
+
+        /// AdamW learning rate
+        #[arg(long, default_value_t = 3e-4)]
+        learning_rate: f64,
+
+        /// AdamW weight decay
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f32,
+
+        /// Dropout rate
+        #[arg(long, default_value_t = 0.1)]
+        dropout: f64,
+
+        /// Mini-batch size
+        #[arg(long, default_value_t = 64)]
+        batch_size: usize,
+
+        /// Maximum training epochs
+        #[arg(long, default_value_t = 20)]
+        epochs: usize,
+
+        /// Early stopping patience
+        #[arg(long, default_value_t = 5)]
+        patience: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum WiktionaryNotationArg {
+    /// Train from bracket-delimited phonetic rows in phones.jsonl.
+    Phones,
+    /// Train from slash-delimited phonemic rows in phonemes.jsonl.
+    Phonemes,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -748,7 +797,7 @@ fn main() -> Result<()> {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg),
         Commands::SentenceParser { command } => run_sentence_parser_command(command),
         Commands::SpeechManifold { command } => run_speech_manifold_command(command, device_arg),
-        Commands::Wiktionary { command } => run_wiktionary_command(command),
+        Commands::Wiktionary { command } => run_wiktionary_command(command, device_arg),
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -1228,7 +1277,7 @@ fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
     }
 }
 
-fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
+fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) -> Result<()> {
     match command {
         WiktionaryCommands::Prepare {
             config,
@@ -1260,8 +1309,17 @@ fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
             config,
             dump,
             data,
+            notation,
+            task,
             out,
             cache_dir,
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            epochs,
+            patience,
+            seed,
         } => {
             let mut config = tongues_wiktionary::read_config(&config)?;
             if let Some(dump) = dump {
@@ -1273,11 +1331,281 @@ fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
             {
                 tongues_wiktionary::prepare_dataset(&data, &cache_dir, &config)?;
             }
-            tongues_wiktionary::write_scaffold_model(&out, &config)?;
-            println!("Wiktionary model scaffold written to {}", out.display());
-            Ok(())
+            cmd_wiktionary_train(
+                &data,
+                &out,
+                &config,
+                notation,
+                &task,
+                learning_rate,
+                weight_decay,
+                dropout,
+                batch_size,
+                epochs,
+                patience,
+                seed,
+                device_arg,
+            )
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_wiktionary_train(
+    data: &Path,
+    out: &Path,
+    config: &tongues_wiktionary::WiktionaryConfig,
+    notation: WiktionaryNotationArg,
+    task: &str,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let source_file = match notation {
+        WiktionaryNotationArg::Phones => data.join("phones.jsonl"),
+        WiktionaryNotationArg::Phonemes => data.join("phonemes.jsonl"),
+    };
+    let entries: Vec<tongues_wiktionary::PronunciationEntry> = read_jsonl_as(&source_file)?;
+    let expanded = tongues_wiktionary::expand_training_examples(&entries, config);
+    let examples = filter_wiktionary_examples(expanded, task)?;
+    anyhow::ensure!(
+        !examples.is_empty(),
+        "no Wiktionary examples found for notation={:?} task={task}",
+        notation
+    );
+
+    let (train_rows, valid_rows, _test_rows) =
+        split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
+    let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
+    let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
+    let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+
+    println!(
+        "Loaded {} {:?} rows -> {} train / {} valid examples for task={}",
+        entries.len(),
+        notation,
+        train_examples.len(),
+        valid_examples.len(),
+        task
+    );
+
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
+    let train_config = TrainConfig {
+        learning_rate,
+        weight_decay,
+        dropout,
+        batch_size,
+        epochs,
+        early_stopping_patience: patience,
+        task: None,
+        max_frequency_repeat: 1,
+        frequency_rarity_cap: 0.0,
+    };
+
+    fs::write(
+        out.join("model_config.json"),
+        serde_json::to_string_pretty(&model_config)?,
+    )?;
+    fs::write(
+        out.join("train_config.json"),
+        serde_json::to_string_pretty(&train_config)?,
+    )?;
+    fs::write(
+        out.join("wiktionary_config.json"),
+        serde_json::to_string_pretty(config)?,
+    )?;
+    fs::write(
+        out.join("vocab.json"),
+        serde_json::to_string_pretty(&vocab)?,
+    )?;
+    write_manifest(
+        out,
+        &ModelArtifactManifest::new("wiktionary", "seq2seq-transformer", data_id_from_path(data))
+            .with_task(format!("{:?}:{task}", notation).to_lowercase()),
+    )?;
+
+    let model_path = out.join("model");
+    println!("Starting Wiktionary training...");
+    println!(
+        "  lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
+        learning_rate, weight_decay, dropout, epochs, patience, batch_size
+    );
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_wiktionary_train::<CpuTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                seed,
+            )
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            run_wiktionary_train::<CudaTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                seed,
+            )
+        }
+    }
+}
+
+fn filter_wiktionary_examples(
+    examples: Vec<tongues_wiktionary::TrainingExample>,
+    task: &str,
+) -> Result<Vec<tongues_wiktionary::TrainingExample>> {
+    use tongues_wiktionary::WiktionaryTask;
+
+    let normalized = task.to_ascii_lowercase();
+    let keep = |task: WiktionaryTask| match normalized.as_str() {
+        "spelling-to-ipa" | "g2p" | "s2ipa" | "forward" => task == WiktionaryTask::SpellingToIpa,
+        "ipa-to-spelling" | "p2g" | "ipa2s" | "reverse" => task == WiktionaryTask::IpaToSpelling,
+        "normalize" | "normalise" => task == WiktionaryTask::NormalizeText,
+        "align" => task == WiktionaryTask::AlignAudioText,
+        "lang" | "language" | "language-guessing" => matches!(
+            task,
+            WiktionaryTask::GuessLangFromSpelling
+                | WiktionaryTask::GuessLangFromIpa
+                | WiktionaryTask::GuessLangFromSpellingAndIpa
+        ),
+        "all" => true,
+        _ => false,
+    };
+    if !matches!(
+        normalized.as_str(),
+        "spelling-to-ipa"
+            | "s2ipa"
+            | "g2p"
+            | "forward"
+            | "ipa-to-spelling"
+            | "ipa2s"
+            | "p2g"
+            | "reverse"
+            | "normalize"
+            | "normalise"
+            | "align"
+            | "lang"
+            | "language"
+            | "language-guessing"
+            | "all"
+    ) {
+        anyhow::bail!("Invalid Wiktionary task. Supported: g2p, p2g, normalize, align, lang, all");
+    }
+
+    Ok(examples
+        .into_iter()
+        .filter(|example| keep(example.task))
+        .collect())
+}
+
+fn split_wiktionary_examples(
+    mut examples: Vec<tongues_wiktionary::TrainingExample>,
+    train_frac: f64,
+    valid_frac: f64,
+    seed: u64,
+) -> (
+    Vec<tongues_wiktionary::TrainingExample>,
+    Vec<tongues_wiktionary::TrainingExample>,
+    Vec<tongues_wiktionary::TrainingExample>,
+) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    examples.shuffle(&mut rng);
+    let train_len = ((examples.len() as f64) * train_frac).round() as usize;
+    let valid_len = ((examples.len() as f64) * valid_frac).round() as usize;
+    let train_end = train_len.min(examples.len());
+    let valid_end = (train_end + valid_len).min(examples.len());
+    let test = examples.split_off(valid_end);
+    let valid = examples.split_off(train_end);
+    (examples, valid, test)
+}
+
+fn build_wiktionary_vocab(
+    train: &[tongues_wiktionary::TrainingExample],
+    valid: &[tongues_wiktionary::TrainingExample],
+) -> Vocab {
+    let rows = train.iter().chain(valid.iter());
+    let inputs = rows
+        .clone()
+        .map(|example| wiktionary_source_text(example))
+        .collect::<Vec<_>>();
+    let outputs = rows
+        .map(|example| example.output.clone())
+        .collect::<Vec<_>>();
+    Vocab::build(&inputs, &outputs, &[])
+}
+
+fn wiktionary_seq2seq_examples(
+    rows: &[tongues_wiktionary::TrainingExample],
+    vocab: &Vocab,
+) -> Vec<Seq2SeqExample> {
+    rows.iter()
+        .map(|row| {
+            let source = wiktionary_source_text(row);
+            let mut tgt_in_ids = vec![BOS_ID];
+            tgt_in_ids.extend(vocab.encode_string(&row.output));
+
+            let mut tgt_out_ids = vocab.encode_string(&row.output);
+            tgt_out_ids.push(EOS_ID);
+
+            Seq2SeqExample {
+                src_ids: vocab.encode_string(&source),
+                tgt_in_ids,
+                tgt_out_ids,
+            }
+        })
+        .collect()
+}
+
+fn wiktionary_source_text(example: &tongues_wiktionary::TrainingExample) -> String {
+    example.input.clone()
+}
+
+fn run_wiktionary_train<B: AutodiffBackend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    train_config: &TrainConfig,
+    train_examples: &[Seq2SeqExample],
+    valid_examples: &[Seq2SeqExample],
+    model_path: &Path,
+    seed: u64,
+) -> Result<()>
+where
+    <Seq2SeqModel<B> as burn::module::Module<B>>::Record: Send,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+    let best_loss = train_seq2seq_examples::<B, _>(
+        model_config,
+        train_config,
+        train_examples,
+        valid_examples,
+        model_path,
+        device,
+        &mut rng,
+    )?;
+
+    println!(
+        "\nTraining complete. Best validation loss: {:.4}",
+        best_loss
+    );
+    println!("Model saved to {}", model_path.display());
+    Ok(())
 }
 
 fn run_speech_manifold_command(
@@ -1484,6 +1812,22 @@ fn cmd_speech_manifold_infer(
 fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn read_jsonl_as<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
+    let f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let reader = std::io::BufReader::new(f);
+    let mut out = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: T = serde_json::from_str(&line)
+            .with_context(|| format!("parsing JSONL line: {}", &line[..line.len().min(80)]))?;
+        out.push(value);
+    }
+    Ok(out)
 }
 
 fn cmd_phonemes(text: &str) -> Result<()> {

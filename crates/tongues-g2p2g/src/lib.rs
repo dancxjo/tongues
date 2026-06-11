@@ -367,6 +367,78 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
     }
 }
 
+/// Train the model for one epoch from already-expanded seq2seq examples.
+pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
+    model: &mut Seq2SeqModel<B>,
+    optimizer: &mut impl Optimizer<Seq2SeqModel<B>, B>,
+    examples: &[Seq2SeqExample],
+    config: &TrainConfig,
+    device: &B::Device,
+    rng: &mut R,
+    pb: &indicatif::ProgressBar,
+) -> f32 {
+    let mut indices: Vec<usize> = (0..examples.len()).collect();
+    indices.shuffle(rng);
+
+    let mut total_loss = 0f32;
+    let mut n_batches = 0usize;
+
+    for chunk in indices.chunks(config.batch_size) {
+        let examples = chunk
+            .iter()
+            .map(|&i| examples[i].clone())
+            .collect::<Vec<_>>();
+
+        if examples.is_empty() {
+            continue;
+        }
+
+        let max_src = examples
+            .iter()
+            .map(|ex| ex.src_ids.len())
+            .max()
+            .unwrap_or(1);
+        let max_tgt = examples
+            .iter()
+            .map(|ex| ex.tgt_in_ids.len())
+            .max()
+            .unwrap_or(1);
+        let batch = collate_batch(&examples, max_src, max_tgt);
+
+        let batch = tensor_seq2seq_batch(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.tgt_out_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+            device,
+        );
+
+        let logits = model.forward(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+        );
+        let loss = seq2seq_loss(logits, batch.tgt_out_ids);
+
+        let grads = GradientsParams::from_grads(loss.backward(), model);
+        *model = optimizer.step(config.learning_rate, model.clone(), grads);
+
+        let loss_val: f32 = loss.into_scalar().elem();
+        total_loss += loss_val;
+        n_batches += 1;
+        pb.set_message(format!("{:.4}", total_loss / n_batches as f32));
+        pb.inc(1);
+    }
+
+    if n_batches == 0 {
+        0.0
+    } else {
+        total_loss / n_batches as f32
+    }
+}
+
 fn balanced_batch_task(position: usize) -> Task {
     if position % 2 == 0 {
         Task::G2P
@@ -492,6 +564,105 @@ pub fn evaluate<B: Backend, R: Rng>(
     } else {
         exact_matches as f32 / eval_lexemes.len() as f32
     };
+    let token_acc = if total_tokens > 0 {
+        matched_tokens as f32 / total_tokens as f32
+    } else {
+        0.0
+    };
+
+    (mean_loss, acc, token_acc)
+}
+
+/// Evaluate already-expanded seq2seq examples.
+pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
+    model: &Seq2SeqModel<B>,
+    examples: &[Seq2SeqExample],
+    device: &B::Device,
+    _rng: &mut R,
+) -> (f32, f32, f32) {
+    if examples.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let mut total_loss = 0f32;
+    let mut exact_matches = 0usize;
+    let mut n_batches = 0usize;
+    let mut total_tokens = 0usize;
+    let mut matched_tokens = 0usize;
+
+    let eval_examples = if examples.len() > 1000 {
+        &examples[0..1000]
+    } else {
+        examples
+    };
+
+    for chunk in eval_examples.chunks(64) {
+        let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
+        let max_tgt = chunk
+            .iter()
+            .map(|ex| ex.tgt_in_ids.len())
+            .max()
+            .unwrap_or(1);
+        let batch = collate_batch(chunk, max_src, max_tgt);
+
+        let b = batch.size;
+        let batch = tensor_seq2seq_batch(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.tgt_out_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+            device,
+        );
+
+        let logits = model.forward(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+        );
+        let loss = seq2seq_loss(logits.clone(), batch.tgt_out_ids.clone());
+        total_loss += loss.into_scalar().elem::<f32>();
+        n_batches += 1;
+
+        let [_, tgt_len, vocab_size] = logits.dims();
+        for i in 0..b {
+            let mut matched = true;
+            for j in 0..tgt_len {
+                let tgt_id = chunk[i].tgt_out_ids.get(j).copied().unwrap_or(PAD_ID);
+                if tgt_id == PAD_ID {
+                    break;
+                }
+                total_tokens += 1;
+                let pos_logits = logits
+                    .clone()
+                    .slice([i..i + 1, j..j + 1, 0..vocab_size])
+                    .reshape([vocab_size]);
+                let pos_logits_vec: Vec<f32> = pos_logits.into_data().to_vec().unwrap();
+                let pred = pos_logits_vec
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(idx, _)| idx as u32)
+                    .unwrap_or(0);
+                if pred == tgt_id {
+                    matched_tokens += 1;
+                } else {
+                    matched = false;
+                }
+            }
+            if matched {
+                exact_matches += 1;
+            }
+        }
+    }
+
+    let mean_loss = if n_batches > 0 {
+        total_loss / n_batches as f32
+    } else {
+        0.0
+    };
+    let acc = exact_matches as f32 / eval_examples.len() as f32;
     let token_acc = if total_tokens > 0 {
         matched_tokens as f32 / total_tokens as f32
     } else {
@@ -708,6 +879,210 @@ where
             println!("  ✓ New best model saved (val_loss={:.4})", best_val_loss);
 
             // Update best val loss in train state
+            let best_state = TrainState {
+                current_epoch: epoch,
+                best_val_loss,
+            };
+            std::fs::write(&state_path, serde_json::to_string_pretty(&best_state)?)?;
+        } else {
+            patience_counter += 1;
+            println!(
+                "  (no improvement, patience {}/{})",
+                patience_counter, train_config.early_stopping_patience
+            );
+            if patience_counter >= train_config.early_stopping_patience {
+                println!("Early stopping at epoch {}", epoch);
+                break;
+            }
+        }
+    }
+
+    Ok(best_val_loss)
+}
+
+/// Run the complete training loop over already-expanded seq2seq examples.
+pub fn train_seq2seq_examples<B: AutodiffBackend, R: Rng>(
+    model_config: &ModelConfig,
+    train_config: &TrainConfig,
+    train_examples: &[Seq2SeqExample],
+    valid_examples: &[Seq2SeqExample],
+    model_path: &Path,
+    device: &B::Device,
+    rng: &mut R,
+) -> Result<f32>
+where
+    <Seq2SeqModel<B> as Module<B>>::Record: Send,
+{
+    let out_dir = model_path.parent().unwrap_or(Path::new("."));
+    let state_path = out_dir.join("train_state.json");
+    let model_file = model_path.with_extension("bin");
+
+    let mut start_epoch = 1usize;
+    let mut best_val_loss = f32::INFINITY;
+
+    let mut model: Seq2SeqModel<B> = if state_path.exists() {
+        let state_data =
+            std::fs::read_to_string(&state_path).context("reading train_state.json")?;
+        let state: TrainState =
+            serde_json::from_str(&state_data).context("parsing train_state.json")?;
+
+        let stem = model_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
+        let epoch_model_path = out_dir.join(format!("{}-epoch-{}", stem, state.current_epoch));
+        let epoch_model_file = epoch_model_path.with_extension("bin");
+
+        if epoch_model_file.exists() {
+            println!(
+                "Resuming training from epoch {} checkpoint: {}",
+                state.current_epoch,
+                epoch_model_file.display()
+            );
+            let loaded_model = model_config
+                .init(device)
+                .load_file(&epoch_model_path, &make_recorder(), device)
+                .context("loading epoch model weights")?;
+            start_epoch = state.current_epoch + 1;
+            best_val_loss = state.best_val_loss;
+            loaded_model
+        } else if model_file.exists() {
+            println!(
+                "Epoch checkpoint not found. Resuming training from best model: {}",
+                model_file.display()
+            );
+            let loaded_model = model_config
+                .init(device)
+                .load_file(model_path, &make_recorder(), device)
+                .context("loading model weights")?;
+            start_epoch = state.current_epoch + 1;
+            best_val_loss = state.best_val_loss;
+            loaded_model
+        } else {
+            println!("Checkpoint files not found. Initializing new model weights...");
+            model_config.init(device)
+        }
+    } else if model_file.exists() {
+        println!(
+            "No training state found. Starting from existing model weights: {}",
+            model_file.display()
+        );
+        model_config
+            .init(device)
+            .load_file(model_path, &make_recorder(), device)
+            .context("loading existing model weights")?
+    } else {
+        println!("No existing checkpoint found. Initializing new model weights...");
+        model_config.init(device)
+    };
+
+    if start_epoch > train_config.epochs {
+        println!(
+            "Model has already completed all requested {} epochs.",
+            train_config.epochs
+        );
+        return Ok(best_val_loss);
+    }
+
+    let mut optimizer = AdamWConfig::new()
+        .with_weight_decay(train_config.weight_decay)
+        .init::<B, Seq2SeqModel<B>>();
+    let mut patience_counter = 0usize;
+
+    let mut last_train_loss = None;
+    let mut last_val_loss = None;
+    let mut last_val_acc = None;
+    let mut last_val_token_acc = None;
+
+    for epoch in start_epoch..=train_config.epochs {
+        let n_batches =
+            (train_examples.len() + train_config.batch_size - 1) / train_config.batch_size;
+        let pb = indicatif::ProgressBar::new(n_batches as u64);
+        let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
+            last_train_loss,
+            last_val_loss,
+            last_val_acc,
+            last_val_token_acc,
+        ) {
+            format!(
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
+                epoch,
+                train_config.epochs,
+                tl,
+                vl,
+                va,
+                vt
+            )
+        } else {
+            format!(
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} ({} train / {} valid)",
+                epoch,
+                train_config.epochs,
+                train_examples.len(),
+                valid_examples.len()
+            )
+        };
+        pb.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template(&template)
+                .expect("valid template")
+                .progress_chars("#>-"),
+        );
+        pb.set_message("...");
+
+        let train_loss = train_seq2seq_epoch(
+            &mut model,
+            &mut optimizer,
+            train_examples,
+            train_config,
+            device,
+            rng,
+            &pb,
+        );
+
+        pb.set_message("evaluating...");
+        let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
+        let (val_loss, val_acc, val_token_acc) =
+            evaluate_seq2seq_examples(&eval_model, valid_examples, device, rng);
+
+        pb.finish_and_clear();
+
+        println!(
+            "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
+            epoch, train_loss, val_loss, val_acc, val_token_acc
+        );
+
+        last_train_loss = Some(train_loss);
+        last_val_loss = Some(val_loss);
+        last_val_acc = Some(val_acc);
+        last_val_token_acc = Some(val_token_acc);
+
+        let current_state = TrainState {
+            current_epoch: epoch,
+            best_val_loss,
+        };
+        std::fs::write(&state_path, serde_json::to_string_pretty(&current_state)?)?;
+
+        let stem = model_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
+        let epoch_model_path = out_dir.join(format!("{}-epoch-{}", stem, epoch));
+        eval_model
+            .clone()
+            .save_file(&epoch_model_path, &make_recorder())
+            .context("saving epoch model weights")?;
+        println!("  ✓ Epoch {} checkpoint saved", epoch);
+
+        if val_loss < best_val_loss - 1e-5 {
+            best_val_loss = val_loss;
+            patience_counter = 0;
+
+            eval_model
+                .save_file(model_path, &make_recorder())
+                .context("saving best model weights")?;
+            println!("  ✓ New best model saved (val_loss={:.4})", best_val_loss);
+
             let best_state = TrainState {
                 current_epoch: epoch,
                 best_val_loss,
