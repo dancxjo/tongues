@@ -1,0 +1,26 @@
+dataset_id = "openepd-synth-v0"
+train_frac = 0.8
+valid_frac = 0.1
+seed = 42
+tasks = [
+  "spelling-to-ipa",
+  "ipa-to-spelling",
+  "ipa-to-phones",
+  "stress",
+  "syllables",
+  "acoustic-to-ipa",
+  "ipa-to-acoustic",
+]
+synthesis_backends = ["espeak-ng", "styletts2", "piper", "mock"]
+allow_placeholder_acoustics = true
+max_examples = 5000
+max_espeak_examples = 128
+
+[train]
+learning_rate = 0.0003
+weight_decay = 0.0001
+dropout = 0.1
+epochs = 20
+patience = 5
+batch_size = 64
+seed = 0

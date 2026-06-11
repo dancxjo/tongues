@@ -1,0 +1,19 @@
+[package]
+name = "tongues-speech-manifold"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+burn = { workspace = true }
+indicatif = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+speech = { path = "../speech" }
+thiserror = { workspace = true }
+tongues-core = { path = "../tongues-core" }
+tongues-data = { path = "../tongues-data" }
+tongues-g2p2g = { path = "../tongues-g2p2g" }
+tongues-neural = { path = "../tongues-neural" }
+open-english-pronouncing-dictionary = "0.1.0"

@@ -7,7 +7,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use burn::module::AutodiffModule;
-use burn::nn::loss::CrossEntropyLossConfig;
 use burn::nn::{
     transformer::{
         TransformerDecoder, TransformerDecoderConfig, TransformerDecoderInput, TransformerEncoder,
@@ -17,7 +16,6 @@ use burn::nn::{
 };
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
-use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -25,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use tongues_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
 use tongues_data::{collate_batch, make_seq2seq_example, Lexeme, Seq2SeqExample, Task};
+use tongues_neural::{make_recorder, seq2seq_cross_entropy_loss, tensor_seq2seq_batch, TrainState};
 
 // ── Model configuration ────────────────────────────────────────────────────
 
@@ -282,34 +281,9 @@ impl<B: Backend> Seq2SeqModel<B> {
 
 // ── Checkpoint State ───────────────────────────────────────────────────────
 
-/// Saved checkpoint training state to pick up where training left off.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TrainState {
-    /// Last completed epoch.
-    pub current_epoch: usize,
-    /// Best validation loss achieved.
-    pub best_val_loss: f32,
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-type FileRecorder = BinFileRecorder<FullPrecisionSettings>;
-
-fn make_recorder() -> FileRecorder {
-    FileRecorder::new()
-}
-
 /// Compute cross-entropy loss over all target tokens.
 pub fn seq2seq_loss<B: Backend>(logits: Tensor<B, 3>, targets: Tensor<B, 2, Int>) -> Tensor<B, 1> {
-    let [batch, seq_len, vocab] = logits.dims();
-    let device = logits.device();
-    let ce = CrossEntropyLossConfig::new()
-        .with_pad_tokens(Some(vec![PAD_ID as usize]))
-        .init::<B>(&device);
-
-    let logits_flat = logits.reshape([batch * seq_len, vocab]);
-    let targets_flat = targets.reshape([batch * seq_len]);
-    ce.forward(logits_flat, targets_flat)
+    seq2seq_cross_entropy_loss(logits, targets, PAD_ID as usize)
 }
 
 // ── Training ───────────────────────────────────────────────────────────────
@@ -359,26 +333,22 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .unwrap_or(1);
         let batch = collate_batch(&examples, max_src, max_tgt);
 
-        let b = batch.size;
-        let src_flat: Vec<i32> = batch.src_ids.into_iter().flatten().collect();
-        let tgt_in_flat: Vec<i32> = batch.tgt_in_ids.into_iter().flatten().collect();
-        let tgt_out_flat: Vec<i32> = batch.tgt_out_ids.into_iter().flatten().collect();
-        let src_pad_flat: Vec<bool> = batch.src_pad_mask.into_iter().flatten().collect();
-        let tgt_pad_flat: Vec<bool> = batch.tgt_pad_mask.into_iter().flatten().collect();
+        let batch = tensor_seq2seq_batch(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.tgt_out_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+            device,
+        );
 
-        let src_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
-        let tgt_in_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
-        let tgt_out_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
-        let src_pad_mask =
-            Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
-        let tgt_pad_mask =
-            Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
-
-        let logits = model.forward(src_ids, tgt_in_ids, src_pad_mask, tgt_pad_mask);
-        let loss = seq2seq_loss(logits, tgt_out_ids);
+        let logits = model.forward(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+        );
+        let loss = seq2seq_loss(logits, batch.tgt_out_ids);
 
         let grads = GradientsParams::from_grads(loss.backward(), model);
         *model = optimizer.step(config.learning_rate, model.clone(), grads);
@@ -461,25 +431,22 @@ pub fn evaluate<B: Backend, R: Rng>(
         let batch = collate_batch(chunk, max_src, max_tgt);
 
         let b = batch.size;
-        let src_flat: Vec<i32> = batch.src_ids.into_iter().flatten().collect();
-        let tgt_in_flat: Vec<i32> = batch.tgt_in_ids.into_iter().flatten().collect();
-        let tgt_out_flat: Vec<i32> = batch.tgt_out_ids.into_iter().flatten().collect();
-        let src_pad_flat: Vec<bool> = batch.src_pad_mask.into_iter().flatten().collect();
-        let tgt_pad_flat: Vec<bool> = batch.tgt_pad_mask.into_iter().flatten().collect();
+        let batch = tensor_seq2seq_batch(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.tgt_out_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+            device,
+        );
 
-        let src_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
-        let tgt_in_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
-        let tgt_out_ids =
-            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
-        let src_pad_mask =
-            Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
-        let tgt_pad_mask =
-            Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
-
-        let logits = model.forward(src_ids, tgt_in_ids, src_pad_mask, tgt_pad_mask);
-        let loss = seq2seq_loss(logits.clone(), tgt_out_ids.clone());
+        let logits = model.forward(
+            batch.src_ids,
+            batch.tgt_in_ids,
+            batch.src_pad_mask,
+            batch.tgt_pad_mask,
+        );
+        let loss = seq2seq_loss(logits.clone(), batch.tgt_out_ids.clone());
         total_loss += loss.into_scalar().elem::<f32>();
         n_batches += 1;
 

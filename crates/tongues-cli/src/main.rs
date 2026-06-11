@@ -36,6 +36,9 @@ use tongues_g2p2g::{
     eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
 use tongues_neural::{write_manifest, ModelArtifactManifest};
+use tongues_speech_manifold::{
+    SpeechManifoldConfig, SpeechManifoldTask, SpeechManifoldTrainConfig,
+};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -78,6 +81,13 @@ enum Commands {
     SentenceParser {
         #[command(subcommand)]
         command: SentenceParserCommands,
+    },
+
+    /// Prepare, train, and probe the shared multimodal speech manifold
+    #[command(name = "speech-manifold")]
+    SpeechManifold {
+        #[command(subcommand)]
+        command: SpeechManifoldCommands,
     },
 
     /// Download CMUdict from GitHub
@@ -542,6 +552,95 @@ enum SentenceParserCommands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum SpeechManifoldCommands {
+    /// Prepare an OpenEPD-derived multimodal dataset
+    Prepare {
+        /// TOML config file for the speech-manifold pipeline
+        #[arg(long, default_value = "configs/speech-manifold/default.toml")]
+        config: PathBuf,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
+        out: PathBuf,
+    },
+
+    /// Train the speech-manifold model
+    Train {
+        /// TOML config file for the speech-manifold pipeline
+        #[arg(long, default_value = "configs/speech-manifold/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
+        out: PathBuf,
+
+        /// Maximum training epochs
+        #[arg(long)]
+        epochs: Option<usize>,
+
+        /// Mini-batch size
+        #[arg(long)]
+        batch_size: Option<usize>,
+
+        /// Random seed
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Evaluate a speech-manifold model
+    Eval {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
+        data: PathBuf,
+
+        /// Split to evaluate on: train, valid, or test
+        #[arg(long, default_value = "test")]
+        split: String,
+
+        /// Explicit task to evaluate
+        #[arg(long, default_value = "spelling-to-ipa")]
+        task: String,
+    },
+
+    /// Run inference for one explicit speech-manifold task
+    Infer {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
+        model: PathBuf,
+
+        /// Explicit task, e.g. spelling-to-ipa
+        #[arg(long)]
+        task: String,
+
+        /// Input sequence
+        input: String,
+    },
+
+    /// Summarize split modalities and provenance
+    Probe {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
+        data: PathBuf,
+
+        /// Split to probe: train, valid, or test
+        #[arg(long, default_value = "test")]
+        split: String,
+    },
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum MaskPolicyArg {
     Single,
@@ -597,6 +696,7 @@ fn main() -> Result<()> {
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg),
         Commands::SentenceParser { command } => run_sentence_parser_command(command),
+        Commands::SpeechManifold { command } => run_speech_manifold_command(command, device_arg),
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -713,6 +813,12 @@ fn command_needs_device(command: &Commands) -> bool {
                 | G2p2gCommands::Infer { .. }
                 | G2p2gCommands::Repl { .. }
         ),
+        Commands::SpeechManifold { command } => matches!(
+            command,
+            SpeechManifoldCommands::Train { .. }
+                | SpeechManifoldCommands::Eval { .. }
+                | SpeechManifoldCommands::Infer { .. }
+        ),
         Commands::Train { .. }
         | Commands::Eval { .. }
         | Commands::Refine { .. }
@@ -751,12 +857,93 @@ struct G2p2gTrainConfig {
     task: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SpeechManifoldFileConfig {
+    dataset_id: Option<String>,
+    train_frac: Option<f64>,
+    valid_frac: Option<f64>,
+    seed: Option<u64>,
+    tasks: Option<Vec<SpeechManifoldTask>>,
+    synthesis_backends: Option<Vec<String>>,
+    allow_placeholder_acoustics: Option<bool>,
+    max_examples: Option<usize>,
+    max_espeak_examples: Option<usize>,
+    train: Option<SpeechManifoldFileTrainConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SpeechManifoldFileTrainConfig {
+    learning_rate: Option<f64>,
+    weight_decay: Option<f32>,
+    dropout: Option<f64>,
+    epochs: Option<usize>,
+    patience: Option<usize>,
+    batch_size: Option<usize>,
+    seed: Option<u64>,
+    tasks: Option<Vec<SpeechManifoldTask>>,
+}
+
 fn read_g2p2g_config(path: &Path) -> Result<G2p2gFileConfig> {
     if !path.exists() {
         return Ok(G2p2gFileConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn read_speech_manifold_file_config(path: &Path) -> Result<SpeechManifoldFileConfig> {
+    if !path.exists() {
+        return Ok(SpeechManifoldFileConfig::default());
+    }
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn speech_manifold_prepare_config(path: &Path) -> Result<SpeechManifoldConfig> {
+    let file = read_speech_manifold_file_config(path)?;
+    let default = SpeechManifoldConfig::default();
+    Ok(SpeechManifoldConfig {
+        dataset_id: file.dataset_id.unwrap_or(default.dataset_id),
+        train_frac: file.train_frac.unwrap_or(default.train_frac),
+        valid_frac: file.valid_frac.unwrap_or(default.valid_frac),
+        seed: file.seed.unwrap_or(default.seed),
+        tasks: file.tasks.unwrap_or(default.tasks),
+        synthesis_backends: file
+            .synthesis_backends
+            .unwrap_or(default.synthesis_backends),
+        allow_placeholder_acoustics: file
+            .allow_placeholder_acoustics
+            .unwrap_or(default.allow_placeholder_acoustics),
+        max_examples: file.max_examples.or(default.max_examples),
+        max_espeak_examples: file
+            .max_espeak_examples
+            .unwrap_or(default.max_espeak_examples),
+    })
+}
+
+fn speech_manifold_train_config(
+    path: &Path,
+    epochs: Option<usize>,
+    batch_size: Option<usize>,
+    seed: Option<u64>,
+) -> Result<SpeechManifoldTrainConfig> {
+    let prepare = speech_manifold_prepare_config(path)?;
+    let file = read_speech_manifold_file_config(path)?;
+    let train = file.train.unwrap_or_default();
+    let default = SpeechManifoldTrainConfig::default();
+    Ok(SpeechManifoldTrainConfig {
+        learning_rate: train.learning_rate.unwrap_or(default.learning_rate),
+        weight_decay: train.weight_decay.unwrap_or(default.weight_decay),
+        dropout: train.dropout.unwrap_or(default.dropout),
+        batch_size: batch_size
+            .or(train.batch_size)
+            .unwrap_or(default.batch_size),
+        epochs: epochs.or(train.epochs).unwrap_or(default.epochs),
+        early_stopping_patience: train.patience.unwrap_or(default.early_stopping_patience),
+        seed: seed.or(train.seed).unwrap_or(default.seed),
+        tasks: train.tasks.unwrap_or(prepare.tasks),
+        allow_placeholder_acoustics: prepare.allow_placeholder_acoustics,
+    })
 }
 
 fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()> {
@@ -928,6 +1115,212 @@ fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn run_speech_manifold_command(
+    command: SpeechManifoldCommands,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    match command {
+        SpeechManifoldCommands::Prepare { config, out } => {
+            let config = speech_manifold_prepare_config(&config)?;
+            tongues_speech_manifold::prepare_dataset(&out, &config)?;
+            println!("Speech-manifold dataset written to {}", out.display());
+            Ok(())
+        }
+        SpeechManifoldCommands::Train {
+            config,
+            data,
+            out,
+            epochs,
+            batch_size,
+            seed,
+        } => {
+            if !data.join("vocab.json").exists()
+                || !data.join("train.jsonl").exists()
+                || !data.join("valid.jsonl").exists()
+            {
+                let prepare = speech_manifold_prepare_config(&config)?;
+                tongues_speech_manifold::prepare_dataset(&data, &prepare)?;
+            }
+            let train_config = speech_manifold_train_config(&config, epochs, batch_size, seed)?;
+            cmd_speech_manifold_train(&data, &out, &train_config, device_arg)
+        }
+        SpeechManifoldCommands::Eval {
+            model,
+            data,
+            split,
+            task,
+        } => {
+            let task = parse_speech_manifold_task(&task)?;
+            cmd_speech_manifold_eval(&model, &data, &split, task, device_arg)
+        }
+        SpeechManifoldCommands::Infer { model, task, input } => {
+            let task = parse_speech_manifold_task(&task)?;
+            cmd_speech_manifold_infer(&model, task, &input, device_arg)
+        }
+        SpeechManifoldCommands::Probe { model, data, split } => {
+            let _manifest =
+                tongues_neural::read_manifest(&model.join(tongues_neural::ARTIFACT_MANIFEST_FILE))
+                    .with_context(|| format!("reading manifest in {}", model.display()))?;
+            let train_config: SpeechManifoldTrainConfig =
+                read_json_file(&model.join("train_config.json"))?;
+            let examples =
+                tongues_speech_manifold::read_examples(&data.join(format!("{split}.jsonl")))?;
+            let report = tongues_speech_manifold::probe(&split, &examples, &train_config.tasks);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+    }
+}
+
+fn parse_speech_manifold_task(task: &str) -> Result<SpeechManifoldTask> {
+    SpeechManifoldTask::parse(task).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid speech-manifold task `{}`; supported: spelling-to-ipa, ipa-to-spelling, ipa-to-phones, stress, syllables, acoustic-to-ipa, ipa-to-acoustic",
+            task
+        )
+    })
+}
+
+fn cmd_speech_manifold_train(
+    data: &Path,
+    out: &Path,
+    train_config: &SpeechManifoldTrainConfig,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
+    let train_examples = tongues_speech_manifold::read_examples(&data.join("train.jsonl"))?;
+    let valid_examples = tongues_speech_manifold::read_examples(&data.join("valid.jsonl"))?;
+    fs::create_dir_all(out).context("creating speech-manifold model directory")?;
+    let model_config = ModelConfig::new(vocab.size()).with_dropout(train_config.dropout);
+    tongues_speech_manifold::save_artifact_files(out, data, &model_config, train_config)?;
+    let model_path = out.join("model");
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let mut rng = StdRng::seed_from_u64(train_config.seed);
+            tongues_speech_manifold::train::<CpuTrainBackend, _>(
+                &model_config,
+                train_config,
+                &train_examples,
+                &valid_examples,
+                &vocab,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let mut rng = StdRng::seed_from_u64(train_config.seed);
+            tongues_speech_manifold::train::<CudaTrainBackend, _>(
+                &model_config,
+                train_config,
+                &train_examples,
+                &valid_examples,
+                &vocab,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+    }
+    println!("Speech-manifold model saved to {}", out.display());
+    Ok(())
+}
+
+fn cmd_speech_manifold_eval(
+    model_dir: &Path,
+    data: &Path,
+    split: &str,
+    task: SpeechManifoldTask,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let train_config: SpeechManifoldTrainConfig =
+        read_json_file(&model_dir.join("train_config.json"))?;
+    let examples = tongues_speech_manifold::read_examples(&data.join(format!("{split}.jsonl")))?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model = tongues_speech_manifold::load_model::<CpuInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let report = tongues_speech_manifold::evaluate(
+                &model,
+                &examples,
+                &vocab,
+                task,
+                train_config.allow_placeholder_acoustics,
+                &device,
+            );
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model = tongues_speech_manifold::load_model::<CudaInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let report = tongues_speech_manifold::evaluate(
+                &model,
+                &examples,
+                &vocab,
+                task,
+                train_config.allow_placeholder_acoustics,
+                &device,
+            );
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_speech_manifold_infer(
+    model_dir: &Path,
+    task: SpeechManifoldTask,
+    input: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model = tongues_speech_manifold::load_model::<CpuInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            println!(
+                "{}",
+                tongues_speech_manifold::predict(&model, input, task, &vocab, &device)
+            );
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model = tongues_speech_manifold::load_model::<CudaInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            println!(
+                "{}",
+                tongues_speech_manifold::predict(&model, input, task, &vocab, &device)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
 fn cmd_phonemes(text: &str) -> Result<()> {
@@ -3278,6 +3671,28 @@ mod tests {
             cli.command,
             Some(Commands::SentenceParser {
                 command: SentenceParserCommands::Parse { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_speech_manifold_commands() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "speech-manifold",
+            "infer",
+            "--model",
+            "models/speech-manifold/openepd-synth-v0",
+            "--task",
+            "spelling-to-ipa",
+            "tires",
+        ])
+        .expect("speech-manifold infer should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SpeechManifold {
+                command: SpeechManifoldCommands::Infer { .. }
             })
         ));
     }
