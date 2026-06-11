@@ -4,7 +4,7 @@ default:
     @just --list
 
 # Prepare CMUdict data splits and build vocabulary (runs prepare)
-config *args:
+prepare *args:
     cargo run -- prepare --input data/cmudict.dict --out runs/cmudict-v0 "$@"
 
 # Fetch/Download the CMUdict lexicon data file

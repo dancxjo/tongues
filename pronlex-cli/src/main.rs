@@ -36,9 +36,10 @@ use burn_cuda::{Cuda, CudaDevice};
 
 use pronlex_core::Vocab;
 use pronlex_data::{
-    Lexeme, MaskPolicy, build_vocab, check_split_leakage, parse_cmudict, split_by_base_word,
+    Lexeme, build_vocab, check_split_leakage, parse_cmudict, split_by_base_word,
+    phonemicize_lexemes, Task,
 };
-use pronlex_model::{ModelConfig, TrainConfig, eval_report, load_model, predict, train};
+use pronlex_model::{ModelConfig, TrainConfig, eval_report, load_model, predict, train, Seq2SeqModel};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -166,22 +167,19 @@ enum Commands {
         data: PathBuf,
     },
 
-    /// Run masked-phone prediction for a single word
+    /// Run translation prediction (Seq2Seq)
     #[command(alias = "infer")]
     Predict {
-        /// Spelling of the word (lowercase)
-        word: String,
+        /// The input sequence to translate
+        input: String,
 
-        /// Phone sequence with MASK at unknown positions, e.g. "SH AA1 R L MASK T"
-        phones: String,
+        /// Direction of translation: s2pm, s2ph, pm2s, ph2s, pm2ph, ph2pm
+        #[arg(long, default_value = "s2pm")]
+        task: String,
 
         /// Directory containing the trained model
         #[arg(long, default_value = "models/cmudict-v0")]
         model: PathBuf,
-
-        /// Number of top predictions to show per mask position
-        #[arg(long, default_value_t = 5)]
-        top_k: usize,
 
         /// Optional path to the prepared data directory containing vocab.json
         #[arg(long)]
@@ -260,11 +258,10 @@ fn main() -> Result<()> {
         Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data, cli.device),
         Commands::Predict {
             model,
-            word,
-            phones,
-            top_k,
+            input,
+            task,
             data,
-        } => cmd_predict(&model, &word, &phones, top_k, cli.device, data.as_deref()),
+        } => cmd_predict(&model, &task, &input, cli.device, data.as_deref()),
         Commands::Speak(command) => speak::run_speak(command),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
@@ -504,15 +501,18 @@ fn cmd_prepare(
 ) -> Result<()> {
     println!("Parsing CMUdict from {}", input.display());
     let text = fs::read_to_string(input).context("reading CMUdict")?;
-    let lexemes = parse_cmudict(&text);
-    println!("  {} entries parsed", lexemes.len());
+    let base_words = parse_cmudict(&text);
+    println!("  {} base words parsed", base_words.len());
+
+    println!("Phonemicizing base words in parallel ...");
+    let lexemes = phonemicize_lexemes(base_words);
+    println!("  {} valid lexemes created", lexemes.len());
 
     println!("Building vocabulary ...");
     let vocab = build_vocab(&lexemes);
     println!(
-        "  {} phones, {} chars",
-        vocab.phones.size(),
-        vocab.chars.size()
+        "  Unified vocabulary size: {}",
+        vocab.size()
     );
 
     println!("Splitting by base_word (train={} valid={}) ...", train_frac, valid_frac);
@@ -596,9 +596,9 @@ fn read_jsonl(path: &Path) -> Result<Vec<Lexeme>> {
 fn cmd_train(
     data: &Path,
     out: &Path,
-    mask_policy_arg: MaskPolicyArg,
-    max_mask_rate: f64,
-    span_mask_prob: f64,
+    _mask_policy_arg: MaskPolicyArg,
+    _max_mask_rate: f64,
+    _span_mask_prob: f64,
     learning_rate: f64,
     weight_decay: f32,
     dropout: f64,
@@ -622,15 +622,7 @@ fn cmd_train(
         valid_lexemes.len()
     );
 
-    let mask_policy = match mask_policy_arg {
-        MaskPolicyArg::Single => MaskPolicy::Single,
-        MaskPolicyArg::Variable => MaskPolicy::Variable {
-            max_mask_rate,
-            span_mask_prob,
-        },
-    };
-
-    let model_config = ModelConfig::new(vocab.chars.size(), vocab.phones.size())
+    let model_config = ModelConfig::new(vocab.size())
         .with_dropout(dropout);
 
     let train_config = TrainConfig {
@@ -640,9 +632,6 @@ fn cmd_train(
         batch_size,
         epochs,
         early_stopping_patience: patience,
-        mask_policy,
-        max_mask_rate,
-        span_mask_prob,
     };
 
     fs::create_dir_all(out).context("creating model directory")?;
@@ -670,7 +659,6 @@ fn cmd_train(
     let model_path = out.join("model");
 
     println!("Starting training...");
-    println!("  mask_policy: {:?}", train_config.mask_policy);
     println!("  lr={} wd={} dropout={}", learning_rate, weight_decay, dropout);
     println!("  epochs={} patience={} batch_size={}", epochs, patience, batch_size);
 
@@ -719,7 +707,7 @@ fn run_train<B: AutodiffBackend>(
     seed: u64,
 ) -> Result<()>
 where
-    <pronlex_model::PhonePredictorModel<B> as burn::module::Module<B>>::Record: Send,
+    <Seq2SeqModel<B> as burn::module::Module<B>>::Record: Send,
 {
     let mut rng = StdRng::seed_from_u64(seed);
     let best_loss = train::<B, _>(
@@ -808,38 +796,13 @@ fn run_eval<B: Backend>(
         test_lexemes,
         train_lexemes,
         vocab,
-        model_config.max_word_chars,
-        model_config.max_phones,
         device,
         &mut rng,
     );
 
     println!("\n── Evaluation Results ──");
     println!("  Loss          : {:.4}", report.val_loss);
-    println!("  Top-1 accuracy: {:.3}", report.top1_accuracy);
-    println!("  Top-3 accuracy: {:.3}", report.top3_accuracy);
-    println!(
-        "  Baseline (overall most common phone)    : {:.3}",
-        report.baseline_overall_top1
-    );
-    println!(
-        "  Baseline (most common by position index): {:.3}",
-        report.baseline_by_position_top1
-    );
-
-    println!("\n── Per-phone accuracy (top-20 by total count) ──");
-    let mut per_phone_vec: Vec<(&String, &(usize, usize))> =
-        report.per_phone_accuracy.iter().collect();
-    per_phone_vec.sort_by_key(|(_, &(_, total))| std::cmp::Reverse(total));
-    for (phone, &(correct, total)) in per_phone_vec.iter().take(20) {
-        println!(
-            "  {:6}  {:.3}  ({}/{})",
-            phone,
-            correct as f32 / total as f32,
-            correct,
-            total
-        );
-    }
+    println!("  Exact match   : {:.3}", report.exact_match_accuracy);
 
     Ok(())
 }
@@ -848,9 +811,8 @@ fn run_eval<B: Backend>(
 
 fn cmd_predict(
     model_dir: &Path,
-    word: &str,
-    phones_str: &str,
-    top_k: usize,
+    task_str: &str,
+    input: &str,
     device_arg: DeviceArg,
     data_arg: Option<&Path>,
 ) -> Result<()> {
@@ -900,6 +862,9 @@ fn cmd_predict(
         serde_json::from_str(&s)?
     };
 
+    let task = Task::from_str(task_str)
+        .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, s2ph, pm2s, ph2s, pm2ph, ph2pm"))?;
+
     let model_config: ModelConfig = {
         let s = fs::read_to_string(model_dir.join("model_config.json"))
             .context("reading model_config.json")?;
@@ -915,9 +880,8 @@ fn cmd_predict(
                 &model_config,
                 model_dir,
                 &vocab,
-                word,
-                phones_str,
-                top_k,
+                task,
+                input,
             )?;
         }
         DeviceArg::Cuda => {
@@ -928,9 +892,8 @@ fn cmd_predict(
                 &model_config,
                 model_dir,
                 &vocab,
-                word,
-                phones_str,
-                top_k,
+                task,
+                input,
             )?;
         }
     }
@@ -942,38 +905,22 @@ fn run_predict<B: Backend>(
     model_config: &ModelConfig,
     model_dir: &Path,
     vocab: &Vocab,
-    word: &str,
-    phones_str: &str,
-    top_k: usize,
+    task: Task,
+    input: &str,
 ) -> Result<()> {
     let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
 
-    let phone_tokens: Vec<&str> = phones_str.split_ascii_whitespace().collect();
+    println!("Translating input='{}' with task={:?}", input, task);
 
-    println!("Predicting for word='{}' phones='{}'", word, phones_str);
-
-    let results = predict(
+    let output = predict(
         &model,
-        &word.to_lowercase(),
-        &phone_tokens,
+        input,
+        task,
         vocab,
-        top_k,
-        model_config.max_word_chars,
-        model_config.max_phones,
         device,
     );
 
-    if results.is_empty() {
-        println!("No MASK positions found in the phone sequence.");
-        return Ok(());
-    }
-
-    for (pos, ranked) in &results {
-        println!("\nMASK at position {} (0-indexed):", pos);
-        for (i, (phone, score)) in ranked.iter().enumerate() {
-            println!("  {}. {:6}  logit={:.3}", i + 1, phone, score);
-        }
-    }
+    println!("\nPrediction output:\n  {}", output);
 
     Ok(())
 }
