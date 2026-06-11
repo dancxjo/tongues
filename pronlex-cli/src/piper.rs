@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 #[cfg(feature = "piper-onnx")]
-use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::session::{builder::GraphOptimizationLevel, Session};
 #[cfg(feature = "piper-onnx")]
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 use serde_json::Value;
@@ -303,7 +303,8 @@ fn piper_arpabet_symbol_from_features(features: &speech::FeatureBundle) -> Optio
         return None;
     }
     if is_arpabet_vowel(base) {
-        if let Some(stress) = feature_category(features, "phonology.stress").and_then(stress_digit) {
+        if let Some(stress) = feature_category(features, "phonology.stress").and_then(stress_digit)
+        {
             return Some(format!("{base}{stress}"));
         }
     }
@@ -696,9 +697,10 @@ impl PiperOnnxBackend {
                 .to_text_ids_compatible(&self.config)
                 .context("failed to map Mortar speech plan to Piper phoneme IDs")?;
             let mut output = self.synthesize_ids(&ids)?.pcm_mono_f32;
-            output.extend(std::iter::repeat(0.0).take(
-                pause_sample_count(self.config.sample_rate_hz, chunk.pause_after_ms),
-            ));
+            output.extend(std::iter::repeat(0.0).take(pause_sample_count(
+                self.config.sample_rate_hz,
+                chunk.pause_after_ms,
+            )));
             sink.emit(PiperAudioChunk {
                 chunk_index,
                 is_final: chunk_index + 1 == chunk_count,
@@ -1135,7 +1137,8 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         .iter()
         .map(|sym| (*sym).to_string())
         .collect::<Vec<_>>();
-    if config.phoneme_id_map.contains_key("ː") && matches!(base_symbol, "AA" | "AO" | "IY" | "UW") {
+    if config.phoneme_id_map.contains_key("ː") && matches!(base_symbol, "AA" | "AO" | "IY" | "UW")
+    {
         expanded.push("ː".to_string());
     }
     if !expanded
@@ -1500,18 +1503,23 @@ fn find_onnxruntime_dylib() -> Option<PathBuf> {
             home.join(".vscode-server/extensions"),
         ] {
             if let Ok(entries) = std::fs::read_dir(extensions_dir) {
-                search_dirs.extend(entries.flatten().filter_map(|entry| {
-                    let file_name = entry.file_name();
-                    if file_name.to_string_lossy().contains("windows-ai-studio") {
-                        Some(vec![
-                            entry.path().join("bin"),
-                            entry.path().join("ai-mlstudio/bin"),
-                            entry.path().join("ai-foundry/bin"),
-                        ])
-                    } else {
-                        None
-                    }
-                }).flatten());
+                search_dirs.extend(
+                    entries
+                        .flatten()
+                        .filter_map(|entry| {
+                            let file_name = entry.file_name();
+                            if file_name.to_string_lossy().contains("windows-ai-studio") {
+                                Some(vec![
+                                    entry.path().join("bin"),
+                                    entry.path().join("ai-mlstudio/bin"),
+                                    entry.path().join("ai-foundry/bin"),
+                                ])
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten(),
+                );
             }
         }
     }

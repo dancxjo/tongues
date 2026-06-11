@@ -1,24 +1,21 @@
-
-use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
+use std::path::{Path, PathBuf};
 
 use speech::{
-    EnglishPhonemicizer, EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind,
-    PhonemicizeOutput, PhonemicizeRequest, Phonemicizer, PronunciationWarning,
-    PronunciationWarningKind, ProsodyTrack, Spec, SpeechBoundaryToken, TerminalPunctuation,
-    UtteranceId, UtterancePlan, VarietyId, phone_display_symbol,
-    phoneme_default_phone_display_symbol,
+    phone_display_symbol, phoneme_default_phone_display_symbol, EnglishPhonemicizer,
+    EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
+    PhonemicizeRequest, Phonemicizer, PronunciationWarning, PronunciationWarningKind, ProsodyTrack,
+    Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
 use styletts2::{
-    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend,
-    StyleTts2PlanOptions, StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan,
-    styletts2_en_us_symbol_set, styletts2_text_for_symbols, validate_styletts2_plan,
+    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
+    validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
 };
 
 #[cfg(feature = "styletts2-onnx")]
 use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
-
 
 const DEFAULT_STYLE_ALPHA: f32 = 0.3;
 const DEFAULT_STYLE_BETA: f32 = 0.1;
@@ -201,7 +198,8 @@ impl BackendInstance {
                     styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
                 )
                 .context("failed to prepare StyleTTS2 synthesis plan")?;
-                validate_styletts2_plan(&styletts2_plan).context("invalid StyleTTS2 synthesis plan")?;
+                validate_styletts2_plan(&styletts2_plan)
+                    .context("invalid StyleTTS2 synthesis plan")?;
                 let request = StyleTts2SynthesisRequest::from_backend_plan(
                     styletts2_plan,
                     None,
@@ -233,7 +231,8 @@ impl BackendInstance {
                     styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
                 )
                 .context("failed to prepare StyleTTS2 synthesis plan")?;
-                let default_refs = crate::models::ensure_styletts2_default_reference_audio_available()?;
+                let default_refs =
+                    crate::models::ensure_styletts2_default_reference_audio_available()?;
                 let voice_ref = options.voice_wav.as_ref().unwrap_or(&default_refs.voice);
                 let style_ref = options.style_wav.as_ref().unwrap_or(&default_refs.style);
 
@@ -265,18 +264,23 @@ impl BackendInstance {
             }
             #[cfg(not(feature = "styletts2-onnx"))]
             Self::StyleTts2 => {
-                anyhow::bail!("StyleTTS2 native backend requires compiling with feature `styletts2-onnx`")
+                anyhow::bail!(
+                    "StyleTTS2 native backend requires compiling with feature `styletts2-onnx`"
+                )
             }
             #[cfg(feature = "piper-onnx")]
             Self::Piper(ref mut backend) => {
                 let mut pcm_mono_f32 = Vec::new();
-                backend.synthesize_plan_streaming(plan, &mut |chunk: crate::piper::PiperAudioChunk| {
-                    pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-                    if let Some(ref mut cb) = on_audio {
-                        cb(&chunk.pcm_mono_f32);
-                    }
-                    Ok(())
-                })?;
+                backend.synthesize_plan_streaming(
+                    plan,
+                    &mut |chunk: crate::piper::PiperAudioChunk| {
+                        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                        if let Some(ref mut cb) = on_audio {
+                            cb(&chunk.pcm_mono_f32);
+                        }
+                        Ok(())
+                    },
+                )?;
 
                 Ok(SpeechSynthesisArtifact {
                     sample_rate_hz: backend.sample_rate_hz(),
@@ -374,13 +378,15 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             }
             #[cfg(not(feature = "styletts2-onnx"))]
             {
-                anyhow::bail!("StyleTTS2 native backend requires compiling with feature `styletts2-onnx`")
+                anyhow::bail!(
+                    "StyleTTS2 native backend requires compiling with feature `styletts2-onnx`"
+                )
             }
         }
         SpeakBackend::Piper => {
             #[cfg(feature = "piper-onnx")]
             {
-                use crate::piper::{PiperOnnxBackend, PiperVoiceConfig, piper_voice_config_path};
+                use crate::piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
                 let primary_model = crate::models::ensure_piper_voice_model_available()?;
                 let config_path = piper_voice_config_path(&primary_model);
                 let config = PiperVoiceConfig::from_json_file(&config_path)?;
@@ -410,7 +416,13 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     let mut all_timings = Vec::new();
     let mut total_samples = 0;
 
-    let process_chunk = |text_chunk: &str, backend: &mut BackendInstance, player: &Option<AudioStreamPlayer>, all_pcm: &mut Vec<f32>, all_timings: &mut Vec<StyleTts2Timing>, total_samples: &mut usize| -> Result<()> {
+    let process_chunk = |text_chunk: &str,
+                         backend: &mut BackendInstance,
+                         player: &Option<AudioStreamPlayer>,
+                         all_pcm: &mut Vec<f32>,
+                         all_timings: &mut Vec<StyleTts2Timing>,
+                         total_samples: &mut usize|
+     -> Result<()> {
         if text_chunk.trim().is_empty() {
             return Ok(());
         }
@@ -422,13 +434,13 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 style: None,
             })
             .context("failed to phonemicize text into a speech plan")?;
-        
+
         let plan = utterance_plan_from_phonemicized(&phonemicized);
 
         if plan.intended_phonemes.is_empty() {
             return Ok(());
         }
-        
+
         if command.fail_on_guessed_pronunciation
             && phonemicized.warnings.iter().any(is_guessed_pronunciation)
         {
@@ -465,7 +477,8 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                     .chunks
                     .iter()
                     .map(|chunk| {
-                        styletts2_text_for_symbols(&chunk.symbols).map(|text| text.trim().to_string())
+                        styletts2_text_for_symbols(&chunk.symbols)
+                            .map(|text| text.trim().to_string())
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .context("failed to format StyleTTS2 backend symbols")?
@@ -563,7 +576,14 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     };
 
     if let Some(ref text) = command.text {
-        process_chunk(text, &mut backend, &player, &mut all_pcm, &mut all_timings, &mut total_samples)?;
+        process_chunk(
+            text,
+            &mut backend,
+            &player,
+            &mut all_pcm,
+            &mut all_timings,
+            &mut total_samples,
+        )?;
     } else {
         use std::io::BufRead;
         let stdin = std::io::stdin();
@@ -573,7 +593,14 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             let sentences = split_into_sentences(&line);
             for sentence in sentences {
                 if !sentence.is_empty() {
-                    process_chunk(&sentence, &mut backend, &player, &mut all_pcm, &mut all_timings, &mut total_samples)?;
+                    process_chunk(
+                        &sentence,
+                        &mut backend,
+                        &player,
+                        &mut all_pcm,
+                        &mut all_timings,
+                        &mut total_samples,
+                    )?;
                 }
             }
             line.clear();
@@ -798,10 +825,6 @@ fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f32]) -> Resu
     Ok(())
 }
 
-
-
-
-
 pub struct AudioStreamPlayer {
     samples: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
     cursor: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -811,7 +834,10 @@ pub struct AudioStreamPlayer {
 impl AudioStreamPlayer {
     pub fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
 
         let host = cpal::default_host();
         let device = match host.default_output_device() {
@@ -821,136 +847,141 @@ impl AudioStreamPlayer {
             }
         };
         let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
-        
+
         let config = match device.default_output_config() {
             Ok(c) => c,
             Err(e) => {
-                anyhow::bail!("Failed to get default output config for {}: {}", device_name, e);
+                anyhow::bail!(
+                    "Failed to get default output config for {}: {}",
+                    device_name,
+                    e
+                );
             }
         };
         let sample_format = config.sample_format();
         let output_sample_rate = config.sample_rate().0;
         let channels = config.channels();
-        
+
         let samples = Arc::new(Mutex::new(Vec::new()));
         let cursor = Arc::new(AtomicUsize::new(0));
-        
+
         let cursor_clone = Arc::clone(&cursor);
         let samples_clone = Arc::clone(&samples);
         let resample_ratio = input_sample_rate as f64 / output_sample_rate as f64;
-        
+
         let err_fn = |err| eprintln!("output stream error: {err}");
         let stream_config = config.config();
-        
+
         let mut input_cursor: f64 = 0.0;
-        
+
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                device.build_output_stream(
-                    &stream_config,
-                    move |output: &mut [f32], _| {
-                        let guard = samples_clone.lock().unwrap();
-                        let mut frame_idx = 0;
-                        while frame_idx < output.len() {
-                            let left = input_cursor.floor() as usize;
-                            if !guard.is_empty() && left < guard.len() {
-                                let right = (left + 1).min(guard.len() - 1);
-                                let fraction = (input_cursor - left as f64) as f32;
-                                for chan in 0..channels {
-                                    let sample: f32 = guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = sample;
-                                    }
-                                }
-                                input_cursor += resample_ratio;
-                            } else {
-                                for chan in 0..channels {
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = 0.0;
-                                    }
+            cpal::SampleFormat::F32 => device.build_output_stream(
+                &stream_config,
+                move |output: &mut [f32], _| {
+                    let guard = samples_clone.lock().unwrap();
+                    let mut frame_idx = 0;
+                    while frame_idx < output.len() {
+                        let left = input_cursor.floor() as usize;
+                        if !guard.is_empty() && left < guard.len() {
+                            let right = (left + 1).min(guard.len() - 1);
+                            let fraction = (input_cursor - left as f64) as f32;
+                            for chan in 0..channels {
+                                let sample: f32 =
+                                    guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = sample;
                                 }
                             }
-                            frame_idx += channels as usize;
-                        }
-                        cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
-            cpal::SampleFormat::I16 => {
-                device.build_output_stream(
-                    &stream_config,
-                    move |output: &mut [i16], _| {
-                        let guard = samples_clone.lock().unwrap();
-                        let mut frame_idx = 0;
-                        while frame_idx < output.len() {
-                            let left = input_cursor.floor() as usize;
-                            if !guard.is_empty() && left < guard.len() {
-                                let right = (left + 1).min(guard.len() - 1);
-                                let fraction = (input_cursor - left as f64) as f32;
-                                for chan in 0..channels {
-                                    let sample: f32 = guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
-                                    let sample_i16 = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = sample_i16;
-                                    }
-                                }
-                                input_cursor += resample_ratio;
-                            } else {
-                                for chan in 0..channels {
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = 0;
-                                    }
+                            input_cursor += resample_ratio;
+                        } else {
+                            for chan in 0..channels {
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = 0.0;
                                 }
                             }
-                            frame_idx += channels as usize;
                         }
-                        cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
-            cpal::SampleFormat::U16 => {
-                device.build_output_stream(
-                    &stream_config,
-                    move |output: &mut [u16], _| {
-                        let guard = samples_clone.lock().unwrap();
-                        let mut frame_idx = 0;
-                        while frame_idx < output.len() {
-                            let left = input_cursor.floor() as usize;
-                            if !guard.is_empty() && left < guard.len() {
-                                let right = (left + 1).min(guard.len() - 1);
-                                let fraction = (input_cursor - left as f64) as f32;
-                                for chan in 0..channels {
-                                    let sample: f32 = guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
-                                    let val = ((sample + 1.0_f32) * 0.5_f32 * u16::MAX as f32).clamp(0.0_f32, u16::MAX as f32) as u16;
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = val;
-                                    }
-                                }
-                                input_cursor += resample_ratio;
-                            } else {
-                                for chan in 0..channels {
-                                    if let Some(out) = output.get_mut(frame_idx + chan as usize) {
-                                        *out = 32768;
-                                    }
+                        frame_idx += channels as usize;
+                    }
+                    cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::I16 => device.build_output_stream(
+                &stream_config,
+                move |output: &mut [i16], _| {
+                    let guard = samples_clone.lock().unwrap();
+                    let mut frame_idx = 0;
+                    while frame_idx < output.len() {
+                        let left = input_cursor.floor() as usize;
+                        if !guard.is_empty() && left < guard.len() {
+                            let right = (left + 1).min(guard.len() - 1);
+                            let fraction = (input_cursor - left as f64) as f32;
+                            for chan in 0..channels {
+                                let sample: f32 =
+                                    guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
+                                let sample_i16 = (sample * i16::MAX as f32)
+                                    .clamp(i16::MIN as f32, i16::MAX as f32)
+                                    as i16;
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = sample_i16;
                                 }
                             }
-                            frame_idx += channels as usize;
+                            input_cursor += resample_ratio;
+                        } else {
+                            for chan in 0..channels {
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = 0;
+                                }
+                            }
                         }
-                        cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
-                    },
-                    err_fn,
-                    None,
-                )?
-            }
+                        frame_idx += channels as usize;
+                    }
+                    cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::U16 => device.build_output_stream(
+                &stream_config,
+                move |output: &mut [u16], _| {
+                    let guard = samples_clone.lock().unwrap();
+                    let mut frame_idx = 0;
+                    while frame_idx < output.len() {
+                        let left = input_cursor.floor() as usize;
+                        if !guard.is_empty() && left < guard.len() {
+                            let right = (left + 1).min(guard.len() - 1);
+                            let fraction = (input_cursor - left as f64) as f32;
+                            for chan in 0..channels {
+                                let sample: f32 =
+                                    guard[left] * (1.0_f32 - fraction) + guard[right] * fraction;
+                                let val = ((sample + 1.0_f32) * 0.5_f32 * u16::MAX as f32)
+                                    .clamp(0.0_f32, u16::MAX as f32)
+                                    as u16;
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = val;
+                                }
+                            }
+                            input_cursor += resample_ratio;
+                        } else {
+                            for chan in 0..channels {
+                                if let Some(out) = output.get_mut(frame_idx + chan as usize) {
+                                    *out = 32768;
+                                }
+                            }
+                        }
+                        frame_idx += channels as usize;
+                    }
+                    cursor_clone.store(input_cursor as usize, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )?,
             _ => anyhow::bail!("Unsupported CPAL sample format: {:?}", sample_format),
         };
-        
+
         stream.play().context("failed to play CPAL stream")?;
-        
+
         Ok(Self {
             samples,
             cursor,
@@ -964,17 +995,11 @@ impl AudioStreamPlayer {
     }
 
     pub fn wait_until_done(&self, input_sample_count: usize) {
-        use std::time::Duration;
         use std::sync::atomic::Ordering;
+        use std::time::Duration;
         while self.cursor.load(Ordering::Relaxed) < input_sample_count {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
-
-
-
-
-
-

@@ -351,10 +351,7 @@ mod tests {
         let current = syllables_for("current");
         assert_eq!(
             current[0].phone_positions,
-            [
-                SyllablePosition::Onset,
-                SyllablePosition::Nucleus,
-            ]
+            [SyllablePosition::Onset, SyllablePosition::Nucleus,]
         );
     }
 

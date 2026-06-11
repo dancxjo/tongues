@@ -1155,18 +1155,23 @@ fn find_home_onnxruntime_dylib() -> Option<PathBuf> {
         home.join(".vscode-server/extensions"),
     ] {
         if let Ok(entries) = std::fs::read_dir(extensions_dir) {
-            dirs.extend(entries.flatten().filter_map(|entry| {
-                let file_name = entry.file_name();
-                if file_name.to_string_lossy().contains("windows-ai-studio") {
-                    Some(vec![
-                        entry.path().join("bin"),
-                        entry.path().join("ai-mlstudio/bin"),
-                        entry.path().join("ai-foundry/bin"),
-                    ])
-                } else {
-                    None
-                }
-            }).flatten());
+            dirs.extend(
+                entries
+                    .flatten()
+                    .filter_map(|entry| {
+                        let file_name = entry.file_name();
+                        if file_name.to_string_lossy().contains("windows-ai-studio") {
+                            Some(vec![
+                                entry.path().join("bin"),
+                                entry.path().join("ai-mlstudio/bin"),
+                                entry.path().join("ai-foundry/bin"),
+                            ])
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten(),
+            );
         }
     }
     find_onnxruntime_dylib_in_dirs(dirs)

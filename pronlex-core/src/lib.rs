@@ -74,7 +74,10 @@ impl Vocab {
             .map(|(i, t)| (t.clone(), i as u32))
             .collect();
 
-        Vocab { tokens, token_to_id }
+        Vocab {
+            tokens,
+            token_to_id,
+        }
     }
 
     /// Look up the ID for a token string, returning `UNK_ID` for unknown tokens.

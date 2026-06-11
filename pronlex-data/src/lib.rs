@@ -6,14 +6,11 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use pronlex_core::{
-    BOS_ID, EOS_ID, PAD_ID, Vocab,
-    S2PM_ID, PM2S_ID,
-};
+use pronlex_core::{Vocab, BOS_ID, EOS_ID, PAD_ID, PM2S_ID, S2PM_ID};
 use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────
@@ -51,7 +48,11 @@ pub fn parse_cmudict(text: &str) -> Vec<String> {
         };
 
         // Only keep alphabetical base words with optional apostrophes/hyphens
-        if !base_word.is_empty() && base_word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-') {
+        if !base_word.is_empty()
+            && base_word
+                .chars()
+                .all(|c| c.is_alphabetic() || c == '\'' || c == '-')
+        {
             base_words.insert(base_word);
         }
     }
@@ -69,7 +70,11 @@ pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
         })
         .ok()?;
 
-    if phonemicized.warnings.iter().any(|w| w.kind == speech::PronunciationWarningKind::GuessedWord) {
+    if phonemicized
+        .warnings
+        .iter()
+        .any(|w| w.kind == speech::PronunciationWarningKind::GuessedWord)
+    {
         return None;
     }
 
@@ -91,7 +96,11 @@ pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
     let mut broad_words = Vec::new();
     let mut narrow_words = Vec::new();
     for (_, word_syllables) in words {
-        let broad_ipa = syllables_to_phonemes_ipa(&word_syllables, &phonemicized.phonemes, &phonemicized.variety);
+        let broad_ipa = syllables_to_phonemes_ipa(
+            &word_syllables,
+            &phonemicized.phonemes,
+            &phonemicized.variety,
+        );
         let narrow_ipa = syllables_to_ipa_formatted(&word_syllables);
         if !broad_ipa.is_empty() {
             broad_words.push(broad_ipa);
@@ -263,7 +272,9 @@ fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
         .values
         .get(&speech::FeatureId("orthography.word_index".into()))?;
     match value {
-        speech::Spec::Known(speech::FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+        speech::Spec::Known(speech::FeatureValue::Number(value))
+            if value.is_finite() && *value >= 0.0 =>
+        {
             Some(*value as usize)
         }
         _ => None,
@@ -319,11 +330,7 @@ pub fn split_by_base_word<R: Rng>(
 }
 
 /// No-op verification helper for backward compatibility.
-pub fn check_split_leakage(
-    _train: &[Lexeme],
-    _valid: &[Lexeme],
-    _test: &[Lexeme],
-) -> Vec<String> {
+pub fn check_split_leakage(_train: &[Lexeme], _valid: &[Lexeme], _test: &[Lexeme]) -> Vec<String> {
     Vec::new()
 }
 
@@ -373,11 +380,7 @@ pub struct Seq2SeqExample {
 }
 
 /// Convert a Lexeme to a translation example.
-pub fn make_seq2seq_example(
-    lexeme: &Lexeme,
-    task: Task,
-    vocab: &Vocab,
-) -> Seq2SeqExample {
+pub fn make_seq2seq_example(lexeme: &Lexeme, task: Task, vocab: &Vocab) -> Seq2SeqExample {
     let (src_str, tgt_str) = match task {
         Task::S2Pm => (&lexeme.base_word, &lexeme.phonemes),
         Task::Pm2S => (&lexeme.phonemes, &lexeme.base_word),
@@ -417,11 +420,7 @@ pub struct Batch {
 }
 
 /// Collate sequence-to-sequence examples into a padded batch.
-pub fn collate_batch(
-    examples: &[Seq2SeqExample],
-    max_src_len: usize,
-    max_tgt_len: usize,
-) -> Batch {
+pub fn collate_batch(examples: &[Seq2SeqExample], max_src_len: usize, max_tgt_len: usize) -> Batch {
     let size = examples.len();
     let mut src_ids = vec![vec![PAD_ID as i32; max_src_len]; size];
     let mut tgt_in_ids = vec![vec![PAD_ID as i32; max_tgt_len]; size];
@@ -459,8 +458,8 @@ pub fn collate_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use rand::SeedableRng;
 
     #[test]
     fn test_cmu_parsing_base_words() {
@@ -472,8 +471,14 @@ mod tests {
     #[test]
     fn test_split_no_leakage() {
         let lex = vec![
-            Lexeme { base_word: "cat".into(), phonemes: "kæt".into() },
-            Lexeme { base_word: "dog".into(), phonemes: "dɔɡ".into() },
+            Lexeme {
+                base_word: "cat".into(),
+                phonemes: "kæt".into(),
+            },
+            Lexeme {
+                base_word: "dog".into(),
+                phonemes: "dɔɡ".into(),
+            },
         ];
         let mut rng = StdRng::seed_from_u64(42);
         let (train, valid, test) = split_by_base_word(&lex, 0.5, 0.5, &mut rng);

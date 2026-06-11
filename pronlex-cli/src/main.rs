@@ -16,9 +16,9 @@
 //!                 --word charlotte --phones "SH AA1 R L MASK T"
 //! ```
 
-mod speak;
-mod piper;
 pub mod models;
+mod piper;
+mod speak;
 
 use std::fs;
 use std::io::BufRead;
@@ -26,19 +26,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::SeedableRng;
 
-use burn::backend::{Autodiff, NdArray};
 use burn::backend::ndarray::NdArrayDevice;
+use burn::backend::{Autodiff, NdArray};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
 use pronlex_core::Vocab;
-use pronlex_data::{
-    Lexeme, parse_cmudict, Task,
+use pronlex_data::{parse_cmudict, Lexeme, Task};
+use pronlex_model::{
+    eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
-use pronlex_model::{ModelConfig, TrainConfig, eval_report, load_model, predict, train, Seq2SeqModel};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -329,7 +329,9 @@ fn main() -> Result<()> {
             task,
             data,
         } => cmd_predict(&model, &task, &input, device_arg, data.as_deref()),
-        Commands::Repl { model, task, data } => cmd_repl(&model, &task, device_arg, data.as_deref()),
+        Commands::Repl { model, task, data } => {
+            cmd_repl(&model, &task, device_arg, data.as_deref())
+        }
         Commands::Speak(command) => speak::run_speak(command),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
@@ -366,7 +368,11 @@ fn cmd_phonemes(text: &str) -> Result<()> {
 
     let mut ipa_words = Vec::new();
     for (_, word_syllables) in words {
-        let ipa = syllables_to_phonemes_ipa(&word_syllables, &phonemicized.phonemes, &phonemicized.variety);
+        let ipa = syllables_to_phonemes_ipa(
+            &word_syllables,
+            &phonemicized.phonemes,
+            &phonemicized.variety,
+        );
         if !ipa.is_empty() {
             ipa_words.push(ipa);
         }
@@ -524,7 +530,9 @@ fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
         .values
         .get(&speech::FeatureId("orthography.word_index".into()))?;
     match value {
-        speech::Spec::Known(speech::FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+        speech::Spec::Known(speech::FeatureValue::Number(value))
+            if value.is_finite() && *value >= 0.0 =>
+        {
             Some(*value as usize)
         }
         _ => None,
@@ -534,8 +542,7 @@ fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
 // ── fetch-cmudict ──────────────────────────────────────────────────────────
 
 fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
-    const URL: &str =
-        "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict";
+    const URL: &str = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict";
     println!("Fetching CMUdict from {}", URL);
 
     if let Some(parent) = out.parent() {
@@ -599,9 +606,9 @@ fn cmd_prepare(
     let valid_file = fs::File::create(&valid_path)?;
     let test_file = fs::File::create(&test_path)?;
 
+    use indicatif::{ProgressBar, ProgressStyle};
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-    use indicatif::{ProgressBar, ProgressStyle};
 
     let train_writer = Arc::new(Mutex::new(std::io::BufWriter::new(train_file)));
     let valid_writer = Arc::new(Mutex::new(std::io::BufWriter::new(valid_file)));
@@ -742,7 +749,11 @@ fn cmd_prepare(
     );
 
     // Save word lists
-    for (name, words) in [("train", &t_words), ("valid", &v_words), ("test", &te_words)] {
+    for (name, words) in [
+        ("train", &t_words),
+        ("valid", &v_words),
+        ("test", &te_words),
+    ] {
         let path = out.join(format!("{}_words.txt", name));
         let mut deduped = words.clone();
         deduped.sort_unstable();
@@ -817,8 +828,7 @@ fn cmd_train(
         valid_lexemes.len()
     );
 
-    let model_config = ModelConfig::new(vocab.size())
-        .with_dropout(dropout);
+    let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
 
     let task_opt = match task_str.to_lowercase().as_str() {
         "s2pm" => Some(Task::S2Pm),
@@ -855,15 +865,20 @@ fn cmd_train(
     let vocab_src = data.join("vocab.json");
     let vocab_dst = out.join("vocab.json");
     if vocab_src.exists() {
-        fs::copy(&vocab_src, &vocab_dst)
-            .context("copying vocab.json to model directory")?;
+        fs::copy(&vocab_src, &vocab_dst).context("copying vocab.json to model directory")?;
     }
 
     let model_path = out.join("model");
 
     println!("Starting training...");
-    println!("  lr={} wd={} dropout={}", learning_rate, weight_decay, dropout);
-    println!("  epochs={} patience={} batch_size={}", epochs, patience, batch_size);
+    println!(
+        "  lr={} wd={} dropout={}",
+        learning_rate, weight_decay, dropout
+    );
+    println!(
+        "  epochs={} patience={} batch_size={}",
+        epochs, patience, batch_size
+    );
 
     match device_arg {
         DeviceArg::Cpu => {
@@ -924,7 +939,10 @@ where
         &mut rng,
     )?;
 
-    println!("\nTraining complete. Best validation loss: {:.4}", best_loss);
+    println!(
+        "\nTraining complete. Best validation loss: {:.4}",
+        best_loss
+    );
     println!("Model saved to {}", model_path.display());
     Ok(())
 }
@@ -1087,7 +1105,11 @@ fn cmd_predict(
 
         // 4. Try sibling folder (substituting "models" for "runs" or next to model_dir)
         if found.is_none() {
-            let p = model_dir.parent().unwrap_or(model_dir).parent().unwrap_or(model_dir)
+            let p = model_dir
+                .parent()
+                .unwrap_or(model_dir)
+                .parent()
+                .unwrap_or(model_dir)
                 .join("runs")
                 .join(model_dir.file_name().unwrap_or_default())
                 .join("vocab.json");
@@ -1137,7 +1159,10 @@ fn cmd_predict(
             println!("Initializing CUDA GPU device...");
             let start_dev = std::time::Instant::now();
             let device = CudaDevice::default();
-            println!("  ✓ Initialized CUDA GPU device in {:?}", start_dev.elapsed());
+            println!(
+                "  ✓ Initialized CUDA GPU device in {:?}",
+                start_dev.elapsed()
+            );
             run_predict::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -1168,13 +1193,7 @@ fn run_predict<B: Backend>(
 
     println!("Translating input='{}' with task={:?}...", input, task);
     let start_pred = std::time::Instant::now();
-    let output = predict(
-        &model,
-        input,
-        task,
-        vocab,
-        device,
-    );
+    let output = predict(&model, input, task, vocab, device);
     println!("  ✓ Finished prediction in {:?}", start_pred.elapsed());
 
     println!("\nPrediction output:\n  {}", output);
@@ -1221,7 +1240,11 @@ fn cmd_repl(
 
         // 4. Try sibling folder (substituting "models" for "runs" or next to model_dir)
         if found.is_none() {
-            let p = model_dir.parent().unwrap_or(model_dir).parent().unwrap_or(model_dir)
+            let p = model_dir
+                .parent()
+                .unwrap_or(model_dir)
+                .parent()
+                .unwrap_or(model_dir)
                 .join("runs")
                 .join(model_dir.file_name().unwrap_or_default())
                 .join("vocab.json");
@@ -1250,26 +1273,17 @@ fn cmd_repl(
             let start_dev = std::time::Instant::now();
             let device = NdArrayDevice::Cpu;
             println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
-            run_repl::<CpuInferBackend>(
-                &device,
-                &model_config,
-                model_dir,
-                &vocab,
-                task_str,
-            )?;
+            run_repl::<CpuInferBackend>(&device, &model_config, model_dir, &vocab, task_str)?;
         }
         DeviceArg::Cuda => {
             println!("Initializing CUDA GPU device...");
             let start_dev = std::time::Instant::now();
             let device = CudaDevice::default();
-            println!("  ✓ Initialized CUDA GPU device in {:?}", start_dev.elapsed());
-            run_repl::<CudaInferBackend>(
-                &device,
-                &model_config,
-                model_dir,
-                &vocab,
-                task_str,
-            )?;
+            println!(
+                "  ✓ Initialized CUDA GPU device in {:?}",
+                start_dev.elapsed()
+            );
+            run_repl::<CudaInferBackend>(&device, &model_config, model_dir, &vocab, task_str)?;
         }
     }
     Ok(())
@@ -1369,7 +1383,10 @@ fn run_repl<B: Backend>(
                     println!("  :help                 Prints this help message");
                 }
                 _ => {
-                    println!("Unknown command: {}. Type :help for list of commands", parts[0]);
+                    println!(
+                        "Unknown command: {}. Type :help for list of commands",
+                        parts[0]
+                    );
                 }
             }
             continue;
@@ -1385,13 +1402,7 @@ fn run_repl<B: Backend>(
         }
 
         let start_pred = std::time::Instant::now();
-        let output = predict(
-            &model,
-            trimmed,
-            task,
-            vocab,
-            device,
-        );
+        let output = predict(&model, trimmed, task, vocab, device);
         let elapsed_pred = start_pred.elapsed();
 
         if timings_enabled {

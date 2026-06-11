@@ -7,27 +7,24 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use burn::module::AutodiffModule;
-use burn::prelude::*;
-use burn::nn::{
-    Dropout, DropoutConfig, Embedding, EmbeddingConfig, Linear, LinearConfig,
-    transformer::{
-        TransformerEncoder, TransformerEncoderConfig,
-        TransformerDecoder, TransformerDecoderConfig,
-        TransformerDecoderInput,
-    },
-};
 use burn::nn::loss::CrossEntropyLossConfig;
+use burn::nn::{
+    transformer::{
+        TransformerDecoder, TransformerDecoderConfig, TransformerDecoderInput, TransformerEncoder,
+        TransformerEncoderConfig,
+    },
+    Dropout, DropoutConfig, Embedding, EmbeddingConfig, Linear, LinearConfig,
+};
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
+use burn::prelude::*;
 use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use pronlex_core::{PAD_ID, Vocab, BOS_ID, EOS_ID};
-use pronlex_data::{
-    Lexeme, Task, Seq2SeqExample, collate_batch, make_seq2seq_example,
-};
+use pronlex_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
+use pronlex_data::{collate_batch, make_seq2seq_example, Lexeme, Seq2SeqExample, Task};
 
 // ── Model configuration ────────────────────────────────────────────────────
 
@@ -62,23 +59,15 @@ impl ModelConfig {
         let embedding = EmbeddingConfig::new(self.vocab_size, self.d_model).init(device);
         let pos_embedding = EmbeddingConfig::new(self.max_seq_len, self.d_model).init(device);
 
-        let encoder = TransformerEncoderConfig::new(
-            self.d_model,
-            self.d_ff,
-            self.n_heads,
-            self.n_layers,
-        )
-        .with_dropout(self.dropout)
-        .init(device);
+        let encoder =
+            TransformerEncoderConfig::new(self.d_model, self.d_ff, self.n_heads, self.n_layers)
+                .with_dropout(self.dropout)
+                .init(device);
 
-        let decoder = TransformerDecoderConfig::new(
-            self.d_model,
-            self.d_ff,
-            self.n_heads,
-            self.n_layers,
-        )
-        .with_dropout(self.dropout)
-        .init(device);
+        let decoder =
+            TransformerDecoderConfig::new(self.d_model, self.d_ff, self.n_heads, self.n_layers)
+                .with_dropout(self.dropout)
+                .init(device);
 
         let classifier = LinearConfig::new(self.d_model, self.vocab_size).init(device);
         let dropout = DropoutConfig::new(self.dropout).init();
@@ -186,7 +175,8 @@ impl<B: Backend> Seq2SeqModel<B> {
         let tgt_emb = self.dropout.forward(tgt_emb);
 
         // 4. Generate causal self-attention mask for target
-        let tgt_attn_mask = burn::nn::attention::generate_autoregressive_mask(batch, tgt_len, &device);
+        let tgt_attn_mask =
+            burn::nn::attention::generate_autoregressive_mask(batch, tgt_len, &device);
 
         // 5. Decode target
         let decoder_input = TransformerDecoderInput::new(tgt_emb, memory)
@@ -200,14 +190,13 @@ impl<B: Backend> Seq2SeqModel<B> {
     }
 
     /// Autoregressively decode a target sequence given a source sequence.
-    pub fn generate(
-        &self,
-        src_ids: Tensor<B, 2, Int>,
-        max_tgt_len: usize,
-    ) -> Vec<u32> {
+    pub fn generate(&self, src_ids: Tensor<B, 2, Int>, max_tgt_len: usize) -> Vec<u32> {
         let device = src_ids.device();
         let [batch, src_len] = src_ids.dims();
-        assert_eq!(batch, 1, "Only batch size 1 supported for inference generation");
+        assert_eq!(
+            batch, 1,
+            "Only batch size 1 supported for inference generation"
+        );
 
         // 1. Encode source
         let src_pos = Tensor::arange(0..src_len as i64, &device).unsqueeze_dim::<2>(0);
@@ -235,15 +224,20 @@ impl<B: Backend> Seq2SeqModel<B> {
             pb.set_message(format!("Decoding token {}...", tgt_len));
 
             let tgt_in_ids = Tensor::<B, 2, Int>::from_data(
-                TensorData::new(generated.iter().map(|&x| x as i32).collect::<Vec<_>>(), [1, tgt_len]),
+                TensorData::new(
+                    generated.iter().map(|&x| x as i32).collect::<Vec<_>>(),
+                    [1, tgt_len],
+                ),
                 &device,
             );
 
             let tgt_pos = Tensor::arange(0..tgt_len as i64, &device).unsqueeze_dim::<2>(0);
-            let tgt_emb = self.embedding.forward(tgt_in_ids.clone()) + self.pos_embedding.forward(tgt_pos);
+            let tgt_emb =
+                self.embedding.forward(tgt_in_ids.clone()) + self.pos_embedding.forward(tgt_pos);
 
             let tgt_pad_mask = tgt_in_ids.equal_elem(PAD_ID as i32);
-            let tgt_attn_mask = burn::nn::attention::generate_autoregressive_mask(1, tgt_len, &device);
+            let tgt_attn_mask =
+                burn::nn::attention::generate_autoregressive_mask(1, tgt_len, &device);
 
             let decoder_input = TransformerDecoderInput::new(tgt_emb, memory.clone())
                 .target_mask_pad(tgt_pad_mask)
@@ -300,10 +294,7 @@ fn make_recorder() -> FileRecorder {
 }
 
 /// Compute cross-entropy loss over all target tokens.
-pub fn seq2seq_loss<B: Backend>(
-    logits: Tensor<B, 3>,
-    targets: Tensor<B, 2, Int>,
-) -> Tensor<B, 1> {
+pub fn seq2seq_loss<B: Backend>(logits: Tensor<B, 3>, targets: Tensor<B, 2, Int>) -> Tensor<B, 1> {
     let [batch, seq_len, vocab] = logits.dims();
     let device = logits.device();
     let ce = CrossEntropyLossConfig::new()
@@ -349,8 +340,16 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             continue;
         }
 
-        let max_src = examples.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
-        let max_tgt = examples.iter().map(|ex| ex.tgt_in_ids.len()).max().unwrap_or(1);
+        let max_src = examples
+            .iter()
+            .map(|ex| ex.src_ids.len())
+            .max()
+            .unwrap_or(1);
+        let max_tgt = examples
+            .iter()
+            .map(|ex| ex.tgt_in_ids.len())
+            .max()
+            .unwrap_or(1);
         let batch = collate_batch(&examples, max_src, max_tgt);
 
         let b = batch.size;
@@ -360,11 +359,16 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
         let src_pad_flat: Vec<bool> = batch.src_pad_mask.into_iter().flatten().collect();
         let tgt_pad_flat: Vec<bool> = batch.tgt_pad_mask.into_iter().flatten().collect();
 
-        let src_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
-        let tgt_in_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
-        let tgt_out_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
-        let src_pad_mask = Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
-        let tgt_pad_mask = Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
+        let src_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
+        let tgt_in_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
+        let tgt_out_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
+        let src_pad_mask =
+            Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
+        let tgt_pad_mask =
+            Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
 
         let logits = model.forward(src_ids, tgt_in_ids, src_pad_mask, tgt_pad_mask);
         let loss = seq2seq_loss(logits, tgt_out_ids);
@@ -434,7 +438,11 @@ pub fn evaluate<B: Backend, R: Rng>(
 
     for chunk in examples.chunks(64) {
         let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
-        let max_tgt = chunk.iter().map(|ex| ex.tgt_in_ids.len()).max().unwrap_or(1);
+        let max_tgt = chunk
+            .iter()
+            .map(|ex| ex.tgt_in_ids.len())
+            .max()
+            .unwrap_or(1);
         let batch = collate_batch(chunk, max_src, max_tgt);
 
         let b = batch.size;
@@ -444,11 +452,16 @@ pub fn evaluate<B: Backend, R: Rng>(
         let src_pad_flat: Vec<bool> = batch.src_pad_mask.into_iter().flatten().collect();
         let tgt_pad_flat: Vec<bool> = batch.tgt_pad_mask.into_iter().flatten().collect();
 
-        let src_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
-        let tgt_in_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
-        let tgt_out_ids = Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
-        let src_pad_mask = Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
-        let tgt_pad_mask = Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
+        let src_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(src_flat, [b, max_src]), device);
+        let tgt_in_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_in_flat, [b, max_tgt]), device);
+        let tgt_out_ids =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(tgt_out_flat, [b, max_tgt]), device);
+        let src_pad_mask =
+            Tensor::<B, 2, Bool>::from_data(TensorData::new(src_pad_flat, [b, max_src]), device);
+        let tgt_pad_mask =
+            Tensor::<B, 2, Bool>::from_data(TensorData::new(tgt_pad_flat, [b, max_tgt]), device);
 
         let logits = model.forward(src_ids, tgt_in_ids, src_pad_mask, tgt_pad_mask);
         let loss = seq2seq_loss(logits.clone(), tgt_out_ids.clone());
@@ -466,7 +479,7 @@ pub fn evaluate<B: Backend, R: Rng>(
                 total_tokens += 1;
                 let pos_logits = logits
                     .clone()
-                    .slice([i..i+1, j..j+1, 0..vocab_size])
+                    .slice([i..i + 1, j..j + 1, 0..vocab_size])
                     .reshape([vocab_size]);
                 let pos_logits_vec: Vec<f32> = pos_logits.into_data().to_vec().unwrap();
                 let pred = pos_logits_vec
@@ -529,28 +542,66 @@ where
     let mut start_epoch = 1usize;
     let mut best_val_loss = f32::INFINITY;
 
-    let mut model: Seq2SeqModel<B> = if model_file.exists() && state_path.exists() {
-        println!("Resuming training from checkpoint: {}", model_file.display());
-        let loaded_model = model_config
-            .init(device)
-            .load_file(model_path, &make_recorder(), device)
-            .context("loading model weights")?;
+    let mut model: Seq2SeqModel<B> = if state_path.exists() {
+        let state_data =
+            std::fs::read_to_string(&state_path).context("reading train_state.json")?;
+        let state: TrainState =
+            serde_json::from_str(&state_data).context("parsing train_state.json")?;
 
-        let state_data = std::fs::read_to_string(&state_path).context("reading train_state.json")?;
-        let state: TrainState = serde_json::from_str(&state_data).context("parsing train_state.json")?;
+        let stem = model_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
+        let epoch_model_path = out_dir.join(format!("{}-epoch-{}", stem, state.current_epoch));
+        let epoch_model_file = epoch_model_path.with_extension("bin");
 
-        start_epoch = state.current_epoch + 1;
-        best_val_loss = state.best_val_loss;
-        println!("Resuming from epoch {} (previous best val loss: {:.4})", start_epoch, best_val_loss);
-
-        loaded_model
+        if epoch_model_file.exists() {
+            println!(
+                "Resuming training from epoch {} checkpoint: {}",
+                state.current_epoch,
+                epoch_model_file.display()
+            );
+            let loaded_model = model_config
+                .init(device)
+                .load_file(&epoch_model_path, &make_recorder(), device)
+                .context("loading epoch model weights")?;
+            start_epoch = state.current_epoch + 1;
+            best_val_loss = state.best_val_loss;
+            println!(
+                "Resuming from epoch {} (previous best val loss: {:.4})",
+                start_epoch, best_val_loss
+            );
+            loaded_model
+        } else if model_file.exists() {
+            println!(
+                "Epoch checkpoint not found. Resuming training from best model: {}",
+                model_file.display()
+            );
+            let loaded_model = model_config
+                .init(device)
+                .load_file(model_path, &make_recorder(), device)
+                .context("loading model weights")?;
+            start_epoch = state.current_epoch + 1;
+            best_val_loss = state.best_val_loss;
+            println!(
+                "Resuming from epoch {} (previous best val loss: {:.4})",
+                start_epoch, best_val_loss
+            );
+            loaded_model
+        } else {
+            println!("Checkpoint files not found. Initializing new model weights...");
+            model_config.init(device)
+        }
     } else {
         println!("No existing checkpoint found. Initializing new model weights...");
         model_config.init(device)
     };
 
     if start_epoch > train_config.epochs {
-        println!("Model has already completed all requested {} epochs.", train_config.epochs);
+        println!(
+            "Model has already completed all requested {} epochs.",
+            train_config.epochs
+        );
         return Ok(best_val_loss);
     }
 
@@ -565,9 +616,15 @@ where
     let mut last_val_token_acc = None;
 
     for epoch in start_epoch..=train_config.epochs {
-        let n_batches = (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
+        let n_batches =
+            (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
         let pb = indicatif::ProgressBar::new(n_batches as u64);
-        let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (last_train_loss, last_val_loss, last_val_acc, last_val_token_acc) {
+        let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
+            last_train_loss,
+            last_val_loss,
+            last_val_acc,
+            last_val_token_acc,
+        ) {
             format!(
                 "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
                 epoch,
@@ -590,7 +647,7 @@ where
             indicatif::ProgressStyle::default_bar()
                 .template(&template)
                 .expect("valid template")
-                .progress_chars("#>-")
+                .progress_chars("#>-"),
         );
         pb.set_message("...");
 
@@ -608,7 +665,14 @@ where
 
         pb.set_message("evaluating...");
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
-        let (val_loss, val_acc, val_token_acc) = evaluate(&eval_model, valid_lexemes, vocab, train_config.task, device, rng);
+        let (val_loss, val_acc, val_token_acc) = evaluate(
+            &eval_model,
+            valid_lexemes,
+            vocab,
+            train_config.task,
+            device,
+            rng,
+        );
 
         pb.finish_and_clear();
 
@@ -629,6 +693,18 @@ where
         };
         let state_json = serde_json::to_string_pretty(&current_state)?;
         std::fs::write(&state_path, state_json)?;
+
+        // Save per-epoch model checkpoint
+        let stem = model_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
+        let epoch_model_path = out_dir.join(format!("{}-epoch-{}", stem, epoch));
+        eval_model
+            .clone()
+            .save_file(&epoch_model_path, &make_recorder())
+            .context("saving epoch model weights")?;
+        println!("  ✓ Epoch {} checkpoint saved", epoch);
 
         // Early stopping & saving best model
         if val_loss < best_val_loss - 1e-5 {
@@ -706,7 +782,10 @@ pub fn predict<B: Backend>(
 
     let src_len = src_ids.len();
     let src_tensor = Tensor::<B, 2, Int>::from_data(
-        TensorData::new(src_ids.iter().map(|&x| x as i32).collect::<Vec<_>>(), [1, src_len]),
+        TensorData::new(
+            src_ids.iter().map(|&x| x as i32).collect::<Vec<_>>(),
+            [1, src_len],
+        ),
         device,
     );
 
@@ -756,15 +835,127 @@ mod tests {
             &[],
         );
         let device = Default::default();
-        let config = ModelConfig::new(vocab.size()).with_d_model(16).with_n_heads(2).with_n_layers(1);
+        let config = ModelConfig::new(vocab.size())
+            .with_d_model(16)
+            .with_n_heads(2)
+            .with_n_layers(1);
         let model = config.init::<TestBackend>(&device);
 
-        let src = Tensor::<TestBackend, 2, Int>::from_data(TensorData::new(vec![5i32, 11i32, 12i32], [1, 3]), &device);
-        let tgt = Tensor::<TestBackend, 2, Int>::from_data(TensorData::new(vec![2i32, 13i32, 14i32], [1, 3]), &device);
-        let src_mask = Tensor::<TestBackend, 2, Bool>::from_data(TensorData::new(vec![false, false, false], [1, 3]), &device);
-        let tgt_mask = Tensor::<TestBackend, 2, Bool>::from_data(TensorData::new(vec![false, false, false], [1, 3]), &device);
+        let src = Tensor::<TestBackend, 2, Int>::from_data(
+            TensorData::new(vec![5i32, 11i32, 12i32], [1, 3]),
+            &device,
+        );
+        let tgt = Tensor::<TestBackend, 2, Int>::from_data(
+            TensorData::new(vec![2i32, 13i32, 14i32], [1, 3]),
+            &device,
+        );
+        let src_mask = Tensor::<TestBackend, 2, Bool>::from_data(
+            TensorData::new(vec![false, false, false], [1, 3]),
+            &device,
+        );
+        let tgt_mask = Tensor::<TestBackend, 2, Bool>::from_data(
+            TensorData::new(vec![false, false, false], [1, 3]),
+            &device,
+        );
 
         let logits = model.forward(src, tgt, src_mask, tgt_mask);
         assert_eq!(logits.dims(), [1, 3, vocab.size()]);
+    }
+
+    #[test]
+    fn test_train_checkpoint_and_resume() {
+        use burn::backend::Autodiff;
+        use rand::SeedableRng;
+        use std::fs;
+
+        let dir = Path::new("target/test_checkpoints");
+        if dir.exists() {
+            let _ = fs::remove_dir_all(dir);
+        }
+        fs::create_dir_all(dir).unwrap();
+
+        let vocab = Vocab::build(
+            &vec!["cat".to_string(), "dog".to_string()],
+            &vec!["kæt".to_string(), "dɔɡ".to_string()],
+            &[],
+        );
+        let device = Default::default();
+        let config = ModelConfig::new(vocab.size())
+            .with_d_model(16)
+            .with_n_heads(2)
+            .with_n_layers(1);
+
+        let train_lexemes = vec![
+            Lexeme {
+                base_word: "cat".to_string(),
+                phonemes: "kæt".to_string(),
+            },
+            Lexeme {
+                base_word: "dog".to_string(),
+                phonemes: "dɔɡ".to_string(),
+            },
+        ];
+
+        let valid_lexemes = train_lexemes.clone();
+
+        let train_config = TrainConfig {
+            learning_rate: 1e-3,
+            weight_decay: 1e-4,
+            dropout: 0.1,
+            batch_size: 2,
+            epochs: 2,
+            early_stopping_patience: 5,
+            task: None,
+        };
+
+        let model_path = dir.join("model");
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        // Run training for 2 epochs
+        let _best_loss = train::<Autodiff<TestBackend>, _>(
+            &config,
+            &train_config,
+            &train_lexemes,
+            &valid_lexemes,
+            &vocab,
+            &model_path,
+            &device,
+            &mut rng,
+        )
+        .unwrap();
+
+        // Verify that checkpoints were written
+        assert!(dir.join("train_state.json").exists());
+        assert!(dir.join("model-epoch-1.bin").exists());
+        assert!(dir.join("model-epoch-2.bin").exists());
+
+        // Check content of train_state.json
+        let state_data = fs::read_to_string(dir.join("train_state.json")).unwrap();
+        let state: TrainState = serde_json::from_str(&state_data).unwrap();
+        assert_eq!(state.current_epoch, 2);
+
+        // Run training again (resuming) with epochs = 3
+        let mut resume_config = train_config.clone();
+        resume_config.epochs = 3;
+
+        let _best_loss_2 = train::<Autodiff<TestBackend>, _>(
+            &config,
+            &resume_config,
+            &train_lexemes,
+            &valid_lexemes,
+            &vocab,
+            &model_path,
+            &device,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert!(dir.join("model-epoch-3.bin").exists());
+        let state_data_2 = fs::read_to_string(dir.join("train_state.json")).unwrap();
+        let state_2: TrainState = serde_json::from_str(&state_data_2).unwrap();
+        assert_eq!(state_2.current_epoch, 3);
+
+        // Clean up
+        let _ = fs::remove_dir_all(dir);
     }
 }
