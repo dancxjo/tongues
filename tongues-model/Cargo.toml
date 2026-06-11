@@ -1,11 +1,11 @@
 [package]
-name = "pronlex-model"
+name = "tongues-model"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pronlex-core = { path = "../pronlex-core" }
-pronlex-data = { path = "../pronlex-data" }
+tongues-core = { path = "../tongues-core" }
+tongues-data = { path = "../tongues-data" }
 burn = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

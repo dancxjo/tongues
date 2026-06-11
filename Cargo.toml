@@ -1,5 +1,5 @@
 [workspace]
-members = ["pronlex-core", "pronlex-data", "pronlex-model", "pronlex-cli", "speech", "styletts2"]
+members = ["tongues-core", "tongues-data", "tongues-model", "tongues-cli", "speech", "styletts2"]
 resolver = "2"
 
 [workspace.dependencies]

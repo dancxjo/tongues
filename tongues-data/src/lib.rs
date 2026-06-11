@@ -1,4 +1,4 @@
-//! Data pipeline for pronlex sequence-to-sequence translation.
+//! Data pipeline for tongues sequence-to-sequence translation.
 //!
 //! Handles CMUdict parsing, parallelized IPA phonemicization, splitting,
 //! vocabulary construction, and seq2seq batch collation.
@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use pronlex_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
+use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────

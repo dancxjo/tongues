@@ -23,8 +23,8 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use pronlex_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
-use pronlex_data::{collate_batch, make_seq2seq_example, Lexeme, Seq2SeqExample, Task};
+use tongues_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
+use tongues_data::{collate_batch, make_seq2seq_example, Lexeme, Seq2SeqExample, Task};
 
 // ── Model configuration ────────────────────────────────────────────────────
 

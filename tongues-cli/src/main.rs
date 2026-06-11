@@ -1,18 +1,18 @@
-//! `pronlex` CLI – masked-phone prediction with CMUdict ARPABET.
+//! `tongues` CLI – masked-phone prediction with CMUdict ARPABET.
 //!
 //! # Commands
 //!
 //! ```text
-//! pronlex fetch-cmudict --out data/cmudict.dict
-//! pronlex prepare --out runs/cmudict-v0
-//! pronlex train  --data runs/cmudict-v0 --out models/cmudict-v0
+//! tongues fetch-cmudict --out data/cmudict.dict
+//! tongues prepare --out runs/cmudict-v0
+//! tongues train  --data runs/cmudict-v0 --out models/cmudict-v0
 //!                [--mask-policy variable] [--max-mask-rate 0.4]
 //!                [--span-mask-prob 0.15]
 //!                [--learning-rate 3e-4] [--weight-decay 1e-4]
 //!                [--dropout 0.1] [--epochs 20] [--patience 5]
-//! pronlex eval   --model models/cmudict-v0 --split test
+//! tongues eval   --model models/cmudict-v0 --split test
 //!                --data runs/cmudict-v0
-//! pronlex predict --model models/cmudict-v0
+//! tongues predict --model models/cmudict-v0
 //!                 --word charlotte --phones "SH AA1 R L MASK T"
 //! ```
 
@@ -35,9 +35,9 @@ use burn::backend::{Autodiff, NdArray};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
-use pronlex_core::{Vocab, UNK_ID};
-use pronlex_data::{Lexeme, Task};
-use pronlex_model::{
+use tongues_core::{Vocab, UNK_ID};
+use tongues_data::{Lexeme, Task};
+use tongues_model::{
     eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
 use speech::data::notation::openepd::normalize_openepd_ipa;
@@ -58,7 +58,7 @@ enum DeviceArg {
 
 // ── CLI definition ─────────────────────────────────────────────────────────
 
-/// pronlex – ARPABET masked-phone predictor (v0, CMUdict)
+/// tongues – ARPABET masked-phone predictor (v0, CMUdict)
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -2517,7 +2517,7 @@ fn run_repl<B: Backend>(
     let mut line = String::new();
 
     loop {
-        print!("pronlex> ");
+        print!("tongues> ");
         io::stdout().flush().context("flushing stdout")?;
 
         line.clear();

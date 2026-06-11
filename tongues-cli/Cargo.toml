@@ -1,16 +1,16 @@
 [package]
-name = "pronlex-cli"
+name = "tongues-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "pronlex"
+name = "tongues"
 path = "src/main.rs"
 
 [dependencies]
-pronlex-core = { path = "../pronlex-core" }
-pronlex-data = { path = "../pronlex-data" }
-pronlex-model = { path = "../pronlex-model" }
+tongues-core = { path = "../tongues-core" }
+tongues-data = { path = "../tongues-data" }
+tongues-model = { path = "../tongues-model" }
 burn = { workspace = true }
 burn-cuda = { workspace = true }
 serde = { workspace = true }

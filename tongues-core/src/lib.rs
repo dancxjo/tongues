@@ -1,4 +1,4 @@
-//! Unified vocabulary for pronlex sequence translation.
+//! Unified vocabulary for tongues sequence translation.
 //!
 //! Provides a single character-level `Vocab` that maps graphemes, broad IPA
 //! phonemes, narrow IPA phones, and task/control tokens to shared IDs.

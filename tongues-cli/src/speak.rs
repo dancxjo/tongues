@@ -490,7 +490,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             }
         };
 
-        println!("Pronlex speech synthesis plan");
+        println!("Tongues speech synthesis plan");
         println!("backend: {backend_label}");
         println!("variety: {}", phonemicized.variety.0);
         println!("text: {}", phonemicized.text);
@@ -638,7 +638,7 @@ fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan
         style: None,
         provenance: EvidenceProvenance {
             source: EvidenceSource::TtsPlan,
-            method: "pronlex speak phonemicized StyleTTS2 plan".into(),
+            method: "tongues speak phonemicized StyleTTS2 plan".into(),
             version: Some("0.1".into()),
         },
     }

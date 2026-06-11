@@ -1,6 +1,6 @@
-# pronlex
+# tongues
 
-`pronlex` is a Rust toolkit for experimenting with neural lexical and speech-front-end models. Its first working blade is a small Burn-powered sequence-to-sequence model that learns a reversible-ish mapping between English spelling and broad IPA phonemic strings.
+`tongues` is a Rust toolkit for experimenting with neural lexical and speech-front-end models. Its first working blade is a small Burn-powered sequence-to-sequence model that learns a reversible-ish mapping between English spelling and broad IPA phonemic strings.
 
 ```text
 spelling -> broad IPA phonemes
@@ -23,7 +23,7 @@ The longer-term goal is high-quality streaming TTS plumbing: text segmentation, 
 
 ## Current status
 
-Pronlex currently includes:
+Tongues currently includes:
 
 - a Rust workspace using Burn 0.21;
 - a seq2seq pronunciation model;
@@ -43,10 +43,10 @@ This project is moving quickly. Some old command help may still refer to the ear
 ## Workspace layout
 
 ```text
-pronlex-core   shared vocabulary and special token IDs
-pronlex-data   Lexicon parsing, IPA normalization, splits, collation
-pronlex-model  Burn seq2seq model, training, evaluation, prediction
-pronlex-cli    command-line interface and model/data wiring
+tongues-core   shared vocabulary and special token IDs
+tongues-data   Lexicon parsing, IPA normalization, splits, collation
+tongues-model  Burn seq2seq model, training, evaluation, prediction
+tongues-cli    command-line interface and model/data wiring
 speech         rule-based phonemicization and realization pipeline
 styletts2      StyleTTS2 symbol lowering and backend experiments
 ```
@@ -240,10 +240,10 @@ cargo run --release -- --cpu
 The REPL loads vocabulary, device, config, and weights once, then accepts repeated inputs:
 
 ```text
-pronlex> farkle
+tongues> farkle
 ˈfɑɹ.kəl
 
-pronlex> ˈfɑɹ.kəl
+tongues> ˈfɑɹ.kəl
 farkel
 ```
 
@@ -419,7 +419,7 @@ Optimizer: AdamW. Early stopping uses validation loss.
 
 ## Why this exists
 
-Pronlex is one piece of a larger streaming speech system. A practical streaming TTS stack needs more than a synthesizer:
+Tongues is one piece of a larger streaming speech system. A practical streaming TTS stack needs more than a synthesizer:
 
 ```text
 incoming text stream
@@ -432,7 +432,7 @@ incoming text stream
   -> playback queue / barge-in control
 ```
 
-Pronlex currently focuses on the lexical/phonological part:
+Tongues currently focuses on the lexical/phonological part:
 
 ```text
 orthography <-> phonology
@@ -448,7 +448,7 @@ Future sibling models may handle:
 - surface realizations and allophony;
 - ASR-adjacent phone/phoneme representations.
 
-The CLI will likely be reshaped around multiple model families rather than one monolithic `pronlex` model.
+The CLI will likely be reshaped around multiple model families rather than one monolithic `tongues` model.
 
 ---
 
@@ -461,7 +461,7 @@ cargo test
 For the model crate only:
 
 ```sh
-cargo test -p pronlex-model
+cargo test -p tongues-model
 ```
 
 ---
@@ -469,7 +469,7 @@ cargo test -p pronlex-model
 ## Development notes
 
 - Models and prepared datasets are intentionally local artifacts and are not expected to be committed.
-- The current name, `pronlex`, may change. The project is becoming more of a neural lexical/speech toolkit than a single pronunciation lexicon.
+- The current name, `tongues`, may change. The project is becoming more of a neural lexical/speech toolkit than a single pronunciation lexicon.
 - Outputs can be wrong in useful ways. For reverse spelling especially, the model often produces plausible spellings rather than dictionary spellings: `ˈhɛ.loʊ -> hellow`, `ˈfɑɹ.kəl -> farkel`.
 
 ---
