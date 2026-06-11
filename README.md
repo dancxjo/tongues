@@ -210,7 +210,7 @@ This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configur
 https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/
 ```
 
-The parser is currently a stub. The prepared split files and row schema are in place for `eng`, `fra`, `deu`, and `spa` spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
+The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, and `spa`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
 
 ### Train
 

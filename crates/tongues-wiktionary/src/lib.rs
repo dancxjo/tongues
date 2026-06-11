@@ -5,9 +5,9 @@
 //! The XML/wikitext extraction itself is intentionally stubbed until the parser
 //! policy for Wiktionary pronunciation templates is implemented.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -31,6 +31,8 @@ pub struct WiktionaryConfig {
     pub dump_index_url: String,
     #[serde(default)]
     pub dump_file_url: Option<String>,
+    #[serde(default)]
+    pub dump_path: Option<String>,
     pub train_frac: f64,
     pub valid_frac: f64,
     pub seed: u64,
@@ -47,6 +49,7 @@ impl Default for WiktionaryConfig {
             dataset_id: DEFAULT_DATASET_ID.to_string(),
             dump_index_url: DEFAULT_DUMP_INDEX_URL.to_string(),
             dump_file_url: None,
+            dump_path: None,
             train_frac: 0.8,
             valid_frac: 0.1,
             seed: 42,
@@ -64,8 +67,25 @@ impl Default for WiktionaryConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PronunciationEntry {
     pub lang: String,
+    pub wiktionary_lang: String,
     pub spelling: String,
     pub ipa: String,
+    pub notation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    pub raw_template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WiktionaryPattern {
+    pub kind: String,
+    pub lang: String,
+    pub wiktionary_lang: String,
+    pub spelling: String,
+    pub values: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    pub raw_template: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +122,9 @@ impl WiktionaryTask {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepareReport {
     pub dump_path: String,
-    pub parsed_entries: usize,
+    pub extracted_patterns: usize,
+    pub parsed_phonemes: usize,
+    pub parsed_phones: usize,
     pub train_examples: usize,
     pub valid_examples: usize,
     pub test_examples: usize,
@@ -124,15 +146,20 @@ pub fn prepare_dataset(
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(cache_dir).with_context(|| format!("creating {}", cache_dir.display()))?;
 
-    let dump_path = download_dump(cache_dir, config)?;
-    let entries = parse_dump_stub(&dump_path, config)?;
-    let examples = expand_training_examples(&entries, config);
+    let dump_path = resolve_dump_path(cache_dir, config)?;
+    let extracted = parse_dump(&dump_path, config)?;
+    let phonemes = extracted.phonemes;
+    let phones = extracted.phones;
+    let examples = expand_training_examples(&phonemes, config);
     let (train, valid, test) =
         split_examples(examples, config.train_frac, config.valid_frac, config.seed);
 
     write_jsonl(&out.join("train.jsonl"), &train)?;
     write_jsonl(&out.join("valid.jsonl"), &valid)?;
     write_jsonl(&out.join("test.jsonl"), &test)?;
+    write_jsonl(&out.join("patterns.jsonl"), &extracted.patterns)?;
+    write_jsonl(&out.join("phonemes.jsonl"), &phonemes)?;
+    write_jsonl(&out.join("phones.jsonl"), &phones)?;
     write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
     fs::write(
         out.join("dataset_config.json"),
@@ -142,11 +169,20 @@ pub fn prepare_dataset(
 
     Ok(PrepareReport {
         dump_path: dump_path.display().to_string(),
-        parsed_entries: entries.len(),
+        extracted_patterns: extracted.patterns.len(),
+        parsed_phonemes: phonemes.len(),
+        parsed_phones: phones.len(),
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
+}
+
+pub fn resolve_dump_path(cache_dir: &Path, config: &WiktionaryConfig) -> Result<PathBuf> {
+    if let Some(path) = &config.dump_path {
+        return Ok(PathBuf::from(path));
+    }
+    download_dump(cache_dir, config)
 }
 
 pub fn download_dump(cache_dir: &Path, config: &WiktionaryConfig) -> Result<PathBuf> {
@@ -238,11 +274,339 @@ fn download_to_file(url: &str, path: &Path) -> Result<()> {
     })
 }
 
-pub fn parse_dump_stub(
-    _dump_path: &Path,
-    _config: &WiktionaryConfig,
-) -> Result<Vec<PronunciationEntry>> {
-    Ok(Vec::new())
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ExtractedWiktionaryData {
+    pub patterns: Vec<WiktionaryPattern>,
+    pub phonemes: Vec<PronunciationEntry>,
+    pub phones: Vec<PronunciationEntry>,
+}
+
+pub fn parse_dump(dump_path: &Path, config: &WiktionaryConfig) -> Result<ExtractedWiktionaryData> {
+    anyhow::ensure!(
+        !dump_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "bz2"),
+        "compressed .bz2 parsing is not implemented yet; decompress the dump or set dump_path to an .xml file"
+    );
+
+    let file = File::open(dump_path).with_context(|| format!("opening {}", dump_path.display()))?;
+    let reader = BufReader::with_capacity(1024 * 1024, file);
+    parse_xml_pages(reader, config)
+}
+
+fn parse_xml_pages<R: BufRead>(
+    reader: R,
+    config: &WiktionaryConfig,
+) -> Result<ExtractedWiktionaryData> {
+    let mut data = ExtractedWiktionaryData::default();
+    let mut title = String::new();
+    let mut text = String::new();
+    let mut in_text = false;
+    let mut pages_seen = 0_usize;
+
+    for line in reader.lines() {
+        let line = line?;
+        if !in_text {
+            if let Some(value) = xml_tag_value(&line, "title") {
+                title = decode_xml_entities(value);
+            }
+            if let Some(start) = line.find("<text") {
+                in_text = true;
+                if let Some(gt) = line[start..].find('>') {
+                    let after = &line[start + gt + 1..];
+                    if let Some(end) = after.find("</text>") {
+                        text.push_str(&decode_xml_entities(&after[..end]));
+                        data.extend(extract_page_data(&title, &text, config));
+                        text.clear();
+                        in_text = false;
+                        pages_seen += 1;
+                        if config.max_pages.is_some_and(|max| pages_seen >= max) {
+                            break;
+                        }
+                    } else {
+                        text.push_str(after);
+                        text.push('\n');
+                    }
+                }
+            }
+        } else if let Some(end) = line.find("</text>") {
+            text.push_str(&decode_xml_entities(&line[..end]));
+            data.extend(extract_page_data(&title, &text, config));
+            text.clear();
+            in_text = false;
+            pages_seen += 1;
+            if config.max_pages.is_some_and(|max| pages_seen >= max) {
+                break;
+            }
+        } else {
+            text.push_str(&decode_xml_entities(&line));
+            text.push('\n');
+        }
+    }
+
+    Ok(data)
+}
+
+impl ExtractedWiktionaryData {
+    fn extend(&mut self, other: ExtractedWiktionaryData) {
+        self.patterns.extend(other.patterns);
+        self.phonemes.extend(other.phonemes);
+        self.phones.extend(other.phones);
+    }
+}
+
+fn xml_tag_value<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = line.find(&open)? + open.len();
+    let end = line[start..].find(&close)? + start;
+    Some(&line[start..end])
+}
+
+pub fn extract_pronunciations(
+    spelling: &str,
+    wikitext: &str,
+    config: &WiktionaryConfig,
+) -> Vec<PronunciationEntry> {
+    extract_page_data(spelling, wikitext, config).phonemes
+}
+
+pub fn extract_page_data(
+    spelling: &str,
+    wikitext: &str,
+    config: &WiktionaryConfig,
+) -> ExtractedWiktionaryData {
+    if spelling.is_empty() || spelling.contains(':') {
+        return ExtractedWiktionaryData::default();
+    }
+
+    let allowed = allowed_wiktionary_langs(config);
+    let mut data = ExtractedWiktionaryData::default();
+    let mut seen = HashSet::new();
+    for template in find_named_templates(wikitext, &["IPA", "audio", "homophones", "rhymes"]) {
+        let params = split_template_params(template);
+        if params.len() < 2 {
+            continue;
+        }
+        let kind = params[0].trim();
+        let wiktionary_lang = params[1].trim();
+        if !allowed.contains(wiktionary_lang) {
+            continue;
+        }
+        let lang = match iso3_from_wiktionary_lang(wiktionary_lang) {
+            Some(lang) => lang.to_string(),
+            None => continue,
+        };
+        let accent =
+            template_named_param(&params, "a").or_else(|| template_named_param(&params, "aa"));
+        let values = params
+            .iter()
+            .skip(2)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty() && !value.contains('='))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if !values.is_empty() {
+            data.patterns.push(WiktionaryPattern {
+                kind: kind.to_ascii_lowercase(),
+                lang: lang.clone(),
+                wiktionary_lang: wiktionary_lang.to_string(),
+                spelling: spelling.to_string(),
+                values: values.clone(),
+                accent: accent.clone(),
+                raw_template: format!("{{{{{template}}}}}"),
+            });
+        }
+        if !kind.eq_ignore_ascii_case("IPA") {
+            continue;
+        }
+        for value in values {
+            let value = value.trim();
+            let Some(notation) = ipa_notation(value) else {
+                continue;
+            };
+            let key = format!("{lang}\t{spelling}\t{value}");
+            if seen.insert(key) {
+                let entry = PronunciationEntry {
+                    lang: lang.clone(),
+                    wiktionary_lang: wiktionary_lang.to_string(),
+                    spelling: spelling.to_string(),
+                    ipa: value.to_string(),
+                    notation: notation.to_string(),
+                    accent: accent.clone(),
+                    raw_template: format!("{{{{{template}}}}}"),
+                };
+                match notation {
+                    "phonemic" => data.phonemes.push(entry),
+                    "phonetic" => data.phones.push(entry),
+                    _ => {}
+                }
+            }
+        }
+    }
+    data
+}
+
+fn allowed_wiktionary_langs(config: &WiktionaryConfig) -> BTreeSet<&str> {
+    config
+        .languages
+        .iter()
+        .filter_map(|lang| wiktionary_lang_from_iso3(lang))
+        .collect()
+}
+
+fn wiktionary_lang_from_iso3(lang: &str) -> Option<&'static str> {
+    match lang {
+        "eng" => Some("en"),
+        "fra" => Some("fr"),
+        "deu" => Some("de"),
+        "spa" => Some("es"),
+        _ => None,
+    }
+}
+
+fn iso3_from_wiktionary_lang(lang: &str) -> Option<&'static str> {
+    match lang {
+        "en" => Some("eng"),
+        "fr" => Some("fra"),
+        "de" => Some("deu"),
+        "es" => Some("spa"),
+        _ => None,
+    }
+}
+
+fn ipa_notation(value: &str) -> Option<&'static str> {
+    if value.starts_with('/') && value.ends_with('/') {
+        Some("phonemic")
+    } else if value.starts_with('[') && value.ends_with(']') {
+        Some("phonetic")
+    } else {
+        None
+    }
+}
+
+fn template_named_param(params: &[String], name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    params
+        .iter()
+        .find_map(|param| param.trim().strip_prefix(&prefix).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn find_named_templates<'a>(wikitext: &'a str, names: &[&str]) -> Vec<&'a str> {
+    let mut templates = Vec::new();
+    let mut offset = 0;
+    while let Some(relative_start) = wikitext[offset..].find("{{") {
+        let start = offset + relative_start + 2;
+        let Some(name_end) = wikitext[start..].find('|').map(|end| start + end) else {
+            offset = start;
+            continue;
+        };
+        let found_name = &wikitext[start..name_end];
+        if !names
+            .iter()
+            .any(|name| found_name.eq_ignore_ascii_case(name))
+        {
+            offset = start;
+            continue;
+        }
+        let mut index = start;
+        let mut depth = 1_i32;
+        let bytes = wikitext.as_bytes();
+        while index + 1 < wikitext.len() {
+            match &bytes[index..index + 2] {
+                b"{{" => {
+                    depth += 1;
+                    index += 2;
+                }
+                b"}}" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        templates.push(&wikitext[start..index]);
+                        offset = index + 2;
+                        break;
+                    }
+                    index += 2;
+                }
+                _ => index += 1,
+            }
+        }
+        if depth != 0 {
+            break;
+        }
+    }
+    templates
+}
+
+fn split_template_params(template: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    let mut current = String::new();
+    let mut curly_depth = 0_i32;
+    let mut link_depth = 0_i32;
+    let chars = template.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if index + 1 < chars.len() && chars[index] == '{' && chars[index + 1] == '{' {
+            curly_depth += 1;
+            current.push(chars[index]);
+            current.push(chars[index + 1]);
+            index += 2;
+        } else if index + 1 < chars.len() && chars[index] == '}' && chars[index + 1] == '}' {
+            curly_depth -= 1;
+            current.push(chars[index]);
+            current.push(chars[index + 1]);
+            index += 2;
+        } else if index + 1 < chars.len() && chars[index] == '[' && chars[index + 1] == '[' {
+            link_depth += 1;
+            current.push(chars[index]);
+            current.push(chars[index + 1]);
+            index += 2;
+        } else if index + 1 < chars.len() && chars[index] == ']' && chars[index + 1] == ']' {
+            link_depth -= 1;
+            current.push(chars[index]);
+            current.push(chars[index + 1]);
+            index += 2;
+        } else if chars[index] == '|' && curly_depth == 0 && link_depth == 0 {
+            params.push(current.trim().to_string());
+            current.clear();
+            index += 1;
+        } else {
+            current.push(chars[index]);
+            index += 1;
+        }
+    }
+    params.push(current.trim().to_string());
+    params
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    let mut decoded = value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    while let Some(start) = decoded.find("&#") {
+        let Some(end) = decoded[start..].find(';').map(|end| start + end) else {
+            break;
+        };
+        let entity = &decoded[start + 2..end];
+        let codepoint = if let Some(hex) = entity
+            .strip_prefix('x')
+            .or_else(|| entity.strip_prefix('X'))
+        {
+            u32::from_str_radix(hex, 16).ok()
+        } else {
+            entity.parse::<u32>().ok()
+        };
+        let Some(character) = codepoint.and_then(char::from_u32) else {
+            break;
+        };
+        decoded.replace_range(start..=end, &character.to_string());
+    }
+    decoded
 }
 
 pub fn expand_training_examples(
@@ -322,7 +686,7 @@ fn split_examples(
     (examples, valid, test)
 }
 
-fn write_jsonl(path: &Path, examples: &[TrainingExample]) -> Result<()> {
+fn write_jsonl<T: Serialize>(path: &Path, examples: &[T]) -> Result<()> {
     let mut file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     for example in examples {
         writeln!(file, "{}", serde_json::to_string(example)?)?;
@@ -349,7 +713,7 @@ fn write_vocab(out: &Path, examples: &[TrainingExample]) -> Result<()> {
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     format!(
-        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\nThe MediaWiki XML/wikitext pronunciation parser is currently stubbed, so prepare creates the split files and vocabulary schema but emits zero examples until parsing is implemented.\n\nTraining row shape:\n\n```json\n{{\"task\":\"spelling-to-ipa\",\"lang\":\"eng\",\"input\":\"lang=eng | champ\",\"output\":\"/ʃɑ̃/\",\"source\":\"enwiktionary\"}}\n```\n\nReverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`.\n",
+        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve language, spelling, IPA text, notation, accent metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and optional language-guessing tasks.\n\nTraining row shape:\n\n```json\n{{\"task\":\"spelling-to-ipa\",\"lang\":\"eng\",\"input\":\"lang=eng | champ\",\"output\":\"/ʃɑ̃/\",\"source\":\"enwiktionary\"}}\n```\n\nReverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`.\n",
         dump_path.display(),
         config.languages.join(", ")
     )
@@ -397,8 +761,12 @@ mod tests {
         let examples = expand_training_examples(
             &[PronunciationEntry {
                 lang: "deu".to_string(),
+                wiktionary_lang: "de".to_string(),
                 spelling: "schief".to_string(),
                 ipa: "/ʃiːf/".to_string(),
+                notation: "phonemic".to_string(),
+                accent: None,
+                raw_template: "{{IPA|de|/ʃiːf/}}".to_string(),
             }],
             &config,
         );
@@ -422,5 +790,50 @@ mod tests {
             find_dump_href(index),
             Some("enwiktionary-20260601-pages-meta-current.xml.bz2")
         );
+    }
+
+    #[test]
+    fn extracts_ipa_audio_homophone_and_rhyme_patterns_from_page() {
+        let config = WiktionaryConfig::default();
+        let text = r#"==English==
+===Pronunciation===
+* {{enPR|frē}}, {{IPA|en|/fɹiː/|[fɹɪi̯]|a=RP}}
+* {{audio|en|En-uk-free.ogg|a=RP}}
+* {{IPA|en|/fɹi/|a=GA}}
+* {{homophones|en|three|aa=th-fronting}}
+* {{rhymes|en|iː|s=1}}
+"#;
+
+        let data = extract_page_data("free", text, &config);
+
+        assert_eq!(data.phonemes.len(), 2);
+        assert_eq!(data.phones.len(), 1);
+        assert!(data.phonemes.iter().any(|entry| {
+            entry.lang == "eng"
+                && entry.wiktionary_lang == "en"
+                && entry.spelling == "free"
+                && entry.ipa == "/fɹiː/"
+                && entry.notation == "phonemic"
+                && entry.accent.as_deref() == Some("RP")
+        }));
+        assert!(data.phones.iter().any(|entry| {
+            entry.lang == "eng"
+                && entry.wiktionary_lang == "en"
+                && entry.spelling == "free"
+                && entry.ipa == "[fɹɪi̯]"
+                && entry.notation == "phonetic"
+                && entry.accent.as_deref() == Some("RP")
+        }));
+        assert!(data.patterns.iter().any(|pattern| pattern.kind == "audio"
+            && pattern.values == ["En-uk-free.ogg"]
+            && pattern.accent.as_deref() == Some("RP")));
+        assert!(data
+            .patterns
+            .iter()
+            .any(|pattern| pattern.kind == "homophones" && pattern.values == ["three"]));
+        assert!(data
+            .patterns
+            .iter()
+            .any(|pattern| pattern.kind == "rhymes" && pattern.values == ["iː"]));
     }
 }

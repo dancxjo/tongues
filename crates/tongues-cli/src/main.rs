@@ -655,6 +655,10 @@ enum WiktionaryCommands {
         #[arg(long, default_value = "configs/wiktionary/default.toml")]
         config: PathBuf,
 
+        /// Existing decompressed MediaWiki XML dump to parse instead of downloading
+        #[arg(long)]
+        dump: Option<PathBuf>,
+
         /// Output directory for prepared data
         #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
         out: PathBuf,
@@ -669,6 +673,10 @@ enum WiktionaryCommands {
         /// TOML config file for the Wiktionary pipeline
         #[arg(long, default_value = "configs/wiktionary/default.toml")]
         config: PathBuf,
+
+        /// Existing decompressed MediaWiki XML dump to parse if data is missing
+        #[arg(long)]
+        dump: Option<PathBuf>,
 
         /// Prepared data directory
         #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
@@ -1224,10 +1232,14 @@ fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
     match command {
         WiktionaryCommands::Prepare {
             config,
+            dump,
             out,
             cache_dir,
         } => {
-            let config = tongues_wiktionary::read_config(&config)?;
+            let mut config = tongues_wiktionary::read_config(&config)?;
+            if let Some(dump) = dump {
+                config.dump_path = Some(dump.display().to_string());
+            }
             let report = tongues_wiktionary::prepare_dataset(&out, &cache_dir, &config)?;
             println!(
                 "Wiktionary dataset written to {} from {}",
@@ -1235,8 +1247,9 @@ fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
                 report.dump_path
             );
             println!(
-                "Parsed {} entries into train/valid/test examples: {}/{}/{}",
-                report.parsed_entries,
+                "Parsed {} phonemes and {} phones into train/valid/test examples: {}/{}/{}",
+                report.parsed_phonemes,
+                report.parsed_phones,
                 report.train_examples,
                 report.valid_examples,
                 report.test_examples
@@ -1245,11 +1258,15 @@ fn run_wiktionary_command(command: WiktionaryCommands) -> Result<()> {
         }
         WiktionaryCommands::Train {
             config,
+            dump,
             data,
             out,
             cache_dir,
         } => {
-            let config = tongues_wiktionary::read_config(&config)?;
+            let mut config = tongues_wiktionary::read_config(&config)?;
+            if let Some(dump) = dump {
+                config.dump_path = Some(dump.display().to_string());
+            }
             if !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
                 || !data.join("test.jsonl").exists()

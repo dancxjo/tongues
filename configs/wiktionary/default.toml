@@ -10,5 +10,8 @@ include_language_guessing = true
 # Set this to avoid scanning the dump index, or to pin a specific dump file.
 # dump_file_url = "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/enwiktionary-2026-06-01-p6p11719661.xml.bz2"
 
+# Set this or pass `--dump` to parse an already decompressed local XML dump.
+# dump_path = "/home/dancxjo/Downloads/enwiktionary-2026-06-01-p6p11719661.xml"
+
 # Parser is currently stubbed; keep this as a future smoke-test limiter.
 # max_pages = 10000
