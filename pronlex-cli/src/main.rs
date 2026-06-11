@@ -814,6 +814,22 @@ fn cmd_train(
     task_str: String,
     device_arg: DeviceArg,
 ) -> Result<()> {
+    if !data.join("vocab.json").exists()
+        || !data.join("train.jsonl").exists()
+        || !data.join("valid.jsonl").exists()
+    {
+        println!(
+            "Data directory or required splits not found at {}. Automatically preparing...",
+            data.display()
+        );
+        let dict_path = Path::new("data/cmudict.dict");
+        if !dict_path.exists() {
+            println!("CMUdict file not found at data/cmudict.dict. Fetching...");
+            cmd_fetch_cmudict(dict_path)?;
+        }
+        cmd_prepare(dict_path, data, 0.8, 0.1, 42)?;
+    }
+
     let vocab: Vocab = {
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
         serde_json::from_str(&s)?
