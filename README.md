@@ -77,6 +77,14 @@ just infer --task pm2s "ˈfɑɹ.kəl"
 Runs one translation prediction.
 
 ```sh
+just refine
+```
+
+Mines validation/test pronunciation discrepancies and fine-tunes a copy of the
+model on those failed examples. The recipe enables verbose output, so each
+exceptional word is printed as it is found.
+
+```sh
 just phonemes "hello world"
 just phones "hello world"
 ```
@@ -191,6 +199,34 @@ Metrics currently reported:
 - loss
 - exact match accuracy
 - token accuracy
+
+---
+
+## Refinement
+
+Refinement runs the trained model over one or more held-out splits, compares
+each prediction with the gold target, computes character-level edit distance,
+writes every mismatch to `discrepancies.jsonl`, and fine-tunes from the source
+model weights using only the mismatched lexemes.
+
+```sh
+cargo run --release -- refine \
+    --model models/cmudict-v0 \
+    --data runs/cmudict-v0 \
+    --out models/cmudict-v0-refined \
+    --splits valid,test \
+    --task s2pm \
+    --verbose \
+    --learning-rate 1e-4 \
+    --epochs 5 \
+    --patience 2
+```
+
+The default task is `s2pm`, spelling to pronunciation. Use `--task pm2s` for
+pronunciation-to-spelling refinement, or `--task both` to mine and train both
+directions. The source model directory is left untouched; refinement requires a
+separate `--out` directory. With `--verbose`, each discrepant word is printed
+with its split, task, edit distance, input, gold target, and prediction.
 
 ---
 

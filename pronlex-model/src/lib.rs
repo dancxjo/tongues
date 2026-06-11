@@ -601,6 +601,15 @@ where
             println!("Checkpoint files not found. Initializing new model weights...");
             model_config.init(device)
         }
+    } else if model_file.exists() {
+        println!(
+            "No training state found. Starting from existing model weights: {}",
+            model_file.display()
+        );
+        model_config
+            .init(device)
+            .load_file(model_path, &make_recorder(), device)
+            .context("loading existing model weights")?
     } else {
         println!("No existing checkpoint found. Initializing new model weights...");
         model_config.init(device)

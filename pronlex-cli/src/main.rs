@@ -28,6 +28,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use serde::Serialize;
 
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -172,6 +173,57 @@ enum Commands {
         /// Direction of translation to evaluate: s2pm, pm2s, both, or auto (detect from train_config)
         #[arg(long, default_value = "auto")]
         task: String,
+    },
+
+    /// Fine-tune a model on validation/test discrepancies
+    Refine {
+        /// Directory containing the trained source model
+        #[arg(long)]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long)]
+        data: PathBuf,
+
+        /// Output directory for the refined model
+        #[arg(long)]
+        out: PathBuf,
+
+        /// Comma-separated splits to mine for discrepancies
+        #[arg(long, default_value = "valid,test")]
+        splits: String,
+
+        /// Direction to refine: s2pm, pm2s, or both
+        #[arg(long, default_value = "s2pm")]
+        task: String,
+
+        /// AdamW learning rate for refinement
+        #[arg(long, default_value_t = 1e-4)]
+        learning_rate: f64,
+
+        /// AdamW weight decay
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f32,
+
+        /// Maximum refinement epochs
+        #[arg(long, default_value_t = 5)]
+        epochs: usize,
+
+        /// Early stopping patience
+        #[arg(long, default_value_t = 2)]
+        patience: usize,
+
+        /// Mini-batch size
+        #[arg(long, default_value_t = 32)]
+        batch_size: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+
+        /// Print each discrepant word and detailed mining/training context
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Interactive REPL for sequence translation
@@ -323,6 +375,34 @@ fn main() -> Result<()> {
             data,
             task,
         } => cmd_eval(&model, &split, &data, &task, device_arg),
+        Commands::Refine {
+            model,
+            data,
+            out,
+            splits,
+            task,
+            learning_rate,
+            weight_decay,
+            epochs,
+            patience,
+            batch_size,
+            seed,
+            verbose,
+        } => cmd_refine(
+            &model,
+            &data,
+            &out,
+            &splits,
+            &task,
+            learning_rate,
+            weight_decay,
+            epochs,
+            patience,
+            batch_size,
+            seed,
+            verbose,
+            device_arg,
+        ),
         Commands::Predict {
             model,
             input,
@@ -1076,6 +1156,384 @@ fn run_eval<B: Backend>(
     println!("  Token accuracy: {:.3}", report.token_accuracy);
 
     Ok(())
+}
+
+// ── refine ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+struct DiscrepancyRecord {
+    split: String,
+    task: String,
+    base_word: String,
+    input: String,
+    gold: String,
+    prediction: String,
+    edit_distance: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_refine(
+    model_dir: &Path,
+    data: &Path,
+    out: &Path,
+    splits: &str,
+    task_str: &str,
+    learning_rate: f64,
+    weight_decay: f32,
+    epochs: usize,
+    patience: usize,
+    batch_size: usize,
+    seed: u64,
+    verbose: bool,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let vocab: Vocab = {
+        let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
+        serde_json::from_str(&s)?
+    };
+    let model_config: ModelConfig = {
+        let s = fs::read_to_string(model_dir.join("model_config.json"))
+            .context("reading model_config.json")?;
+        serde_json::from_str(&s)?
+    };
+
+    let task_filter = match task_str.to_lowercase().as_str() {
+        "s2pm" => Some(Task::S2Pm),
+        "pm2s" => Some(Task::Pm2S),
+        "both" => None,
+        _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both"),
+    };
+
+    let split_names: Vec<String> = splits
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if split_names.is_empty() {
+        anyhow::bail!("At least one split is required");
+    }
+
+    if out.exists() && model_dir.exists() {
+        let out_canon = out
+            .canonicalize()
+            .context("canonicalizing output directory")?;
+        let model_canon = model_dir
+            .canonicalize()
+            .context("canonicalizing model directory")?;
+        if out_canon == model_canon {
+            anyhow::bail!(
+                "Refinement output must be separate from the source model directory: {}",
+                out.display()
+            );
+        }
+    }
+
+    let mut split_lexemes = Vec::new();
+    for split in &split_names {
+        let path = data.join(format!("{}.jsonl", split));
+        let lexemes = read_jsonl(&path)?;
+        split_lexemes.push((split.clone(), lexemes));
+    }
+
+    fs::create_dir_all(out).context("creating refinement output directory")?;
+    if out.join("train_state.json").exists() {
+        println!(
+            "Existing refinement state found in {}; training will resume there",
+            out.display()
+        );
+    } else {
+        fs::copy(
+            model_dir.join("model_config.json"),
+            out.join("model_config.json"),
+        )
+        .context("copying model_config.json")?;
+        fs::copy(data.join("vocab.json"), out.join("vocab.json")).context("copying vocab.json")?;
+        fs::copy(model_dir.join("model.bin"), out.join("model.bin"))
+            .context("copying base model")?;
+    }
+
+    println!("Mining discrepancies from {}", model_dir.display());
+    println!("  splits: {}", split_names.join(","));
+    for (split, lexemes) in &split_lexemes {
+        println!("  {}: {} lexemes", split, lexemes.len());
+    }
+    if let Some(task) = task_filter {
+        println!("  task: {:?}", task);
+    } else {
+        println!("  task: both");
+    }
+    println!(
+        "  output: {}{}",
+        out.display(),
+        if verbose { " (verbose)" } else { "" }
+    );
+
+    let (records, refine_lexemes) = match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            collect_discrepancies::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                task_filter,
+                &split_lexemes,
+                verbose,
+            )?
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            collect_discrepancies::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                task_filter,
+                &split_lexemes,
+                verbose,
+            )?
+        }
+    };
+
+    let discrepancies_path = out.join("discrepancies.jsonl");
+    write_discrepancies(&discrepancies_path, &records)?;
+    println!(
+        "Stored {} discrepancies at {}",
+        records.len(),
+        discrepancies_path.display()
+    );
+    print_discrepancy_summary(&records);
+
+    if refine_lexemes.is_empty() {
+        println!("No discrepancies found. Refinement skipped.");
+        return Ok(());
+    }
+
+    let total_edit_distance: usize = records.iter().map(|r| r.edit_distance).sum();
+    let mean_edit_distance = total_edit_distance as f32 / records.len() as f32;
+    println!(
+        "Refinement set: {} lexemes, mean edit distance {:.2}",
+        refine_lexemes.len(),
+        mean_edit_distance
+    );
+    println!(
+        "Refinement training: lr={} wd={} epochs={} patience={} batch_size={}",
+        learning_rate, weight_decay, epochs, patience, batch_size
+    );
+
+    let train_config = TrainConfig {
+        learning_rate,
+        weight_decay,
+        dropout: model_config.dropout,
+        batch_size,
+        epochs,
+        early_stopping_patience: patience,
+        task: task_filter,
+    };
+    fs::write(
+        out.join("train_config.json"),
+        serde_json::to_string_pretty(&train_config)?,
+    )?;
+
+    let model_path = out.join("model");
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            run_train::<CpuTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &refine_lexemes,
+                &refine_lexemes,
+                &vocab,
+                &model_path,
+                seed,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            run_train::<CudaTrainBackend>(
+                &device,
+                &model_config,
+                &train_config,
+                &refine_lexemes,
+                &refine_lexemes,
+                &vocab,
+                &model_path,
+                seed,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_discrepancies<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    task_filter: Option<Task>,
+    split_lexemes: &[(String, Vec<Lexeme>)],
+    verbose: bool,
+) -> Result<(Vec<DiscrepancyRecord>, Vec<Lexeme>)> {
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    let tasks: Vec<Task> = match task_filter {
+        Some(task) => vec![task],
+        None => vec![Task::S2Pm, Task::Pm2S],
+    };
+
+    let total: usize = split_lexemes
+        .iter()
+        .map(|(_, lexemes)| lexemes.len() * tasks.len())
+        .sum();
+    let pb = indicatif::ProgressBar::new(total as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
+            .progress_chars("#>-"),
+    );
+
+    let mut records = Vec::new();
+    let mut refine_lexemes = Vec::new();
+    let mut refine_seen = std::collections::BTreeSet::new();
+    for (split, lexemes) in split_lexemes {
+        let mut split_checked = 0usize;
+        let mut split_discrepancies = 0usize;
+        for lex in lexemes {
+            for &task in &tasks {
+                let (input, gold, task_name) = match task {
+                    Task::S2Pm => (
+                        lex.base_word.to_lowercase(),
+                        lex.phonemes.clone(),
+                        "s2pm".to_string(),
+                    ),
+                    Task::Pm2S => (
+                        lex.phonemes.clone(),
+                        lex.base_word.to_lowercase(),
+                        "pm2s".to_string(),
+                    ),
+                };
+                pb.set_message(format!("{} {}", split, lex.base_word));
+                let prediction = predict(&model, &input, task, vocab, device);
+                let edit_distance = edit_distance_chars(&prediction, &gold);
+                split_checked += 1;
+                if edit_distance > 0 {
+                    split_discrepancies += 1;
+                    let record = DiscrepancyRecord {
+                        split: split.clone(),
+                        task: task_name,
+                        base_word: lex.base_word.clone(),
+                        input,
+                        gold,
+                        prediction,
+                        edit_distance,
+                    };
+                    if verbose {
+                        pb.println(format_discrepancy(&record));
+                    }
+                    records.push(record);
+                    if refine_seen.insert(lex.base_word.clone()) {
+                        refine_lexemes.push(lex.clone());
+                    }
+                }
+                pb.inc(1);
+            }
+        }
+        pb.println(format!(
+            "Completed split {}: checked {} examples, found {} discrepancies",
+            split, split_checked, split_discrepancies
+        ));
+    }
+    pb.finish_and_clear();
+
+    Ok((records, refine_lexemes))
+}
+
+fn format_discrepancy(record: &DiscrepancyRecord) -> String {
+    format!(
+        "EXCEPTION split={} task={} word={} edit_distance={}\n  input: {}\n  gold : {}\n  pred : {}",
+        record.split,
+        record.task,
+        record.base_word,
+        record.edit_distance,
+        record.input,
+        record.gold,
+        record.prediction
+    )
+}
+
+fn print_discrepancy_summary(records: &[DiscrepancyRecord]) {
+    if records.is_empty() {
+        return;
+    }
+
+    let mut by_split_task = std::collections::BTreeMap::<(String, String), usize>::new();
+    for record in records {
+        *by_split_task
+            .entry((record.split.clone(), record.task.clone()))
+            .or_default() += 1;
+    }
+
+    println!("Discrepancy counts:");
+    for ((split, task), count) in by_split_task {
+        println!("  {} {}: {}", split, task, count);
+    }
+
+    let mut worst = records.to_vec();
+    worst.sort_by(|a, b| {
+        b.edit_distance
+            .cmp(&a.edit_distance)
+            .then_with(|| a.base_word.cmp(&b.base_word))
+    });
+
+    println!("Largest edit distances:");
+    for record in worst.iter().take(10) {
+        println!(
+            "  {} {} {} edit_distance={} gold={} pred={}",
+            record.split,
+            record.task,
+            record.base_word,
+            record.edit_distance,
+            record.gold,
+            record.prediction
+        );
+    }
+}
+
+fn write_discrepancies(path: &Path, records: &[DiscrepancyRecord]) -> Result<()> {
+    use std::io::Write;
+
+    let file = fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    for record in records {
+        writeln!(writer, "{}", serde_json::to_string(record)?)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn edit_distance_chars(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut prev: Vec<usize> = (0..=right.len()).collect();
+    let mut curr = vec![0; right.len() + 1];
+
+    for (i, lc) in left.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, rc) in right.iter().enumerate() {
+            let substitution = prev[j] + usize::from(lc != rc);
+            let insertion = curr[j] + 1;
+            let deletion = prev[j + 1] + 1;
+            curr[j + 1] = substitution.min(insertion).min(deletion);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[right.len()]
 }
 
 // ── predict ────────────────────────────────────────────────────────────────
