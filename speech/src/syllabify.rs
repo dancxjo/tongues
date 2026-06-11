@@ -103,68 +103,7 @@ fn syllabify_word(phones: &[PhoneToken], variety: &LinguisticVariety) -> Vec<Syl
         ));
     }
 
-    add_rhotic_coda_phones(&mut syllables, variety);
-
     syllables
-}
-
-fn add_rhotic_coda_phones(syllables: &mut [Syllable], variety: &LinguisticVariety) {
-    for syllable in syllables {
-        let Some(nucleus_index) = syllable.nucleus_index else {
-            continue;
-        };
-        let Some(nucleus) = syllable.phones.get(nucleus_index) else {
-            continue;
-        };
-        if !is_r_colored_vowel(nucleus) {
-            continue;
-        }
-
-        let insert_at = nucleus_index + 1;
-        if syllable
-            .phones
-            .get(insert_at)
-            .is_some_and(is_liaison_r_phone)
-        {
-            continue;
-        }
-
-        let liaison = liaison_r_phone(nucleus, variety);
-        syllable.phones.insert(insert_at, liaison);
-        syllable
-            .phone_positions
-            .insert(insert_at, SyllablePosition::Coda);
-    }
-}
-
-fn is_r_colored_vowel(phone: &PhoneToken) -> bool {
-    matches!(&phone.phone, Spec::Known(id) if matches!(id.as_str(), "ipa.phone.ɝ" | "ipa.phone.ɚ"))
-}
-
-fn is_liaison_r_phone(phone: &PhoneToken) -> bool {
-    matches!(&phone.phone, Spec::Known(id) if id.as_str() == "ipa.phone.ɹ")
-}
-
-fn liaison_r_phone(nucleus: &PhoneToken, variety: &LinguisticVariety) -> PhoneToken {
-    let id = PhoneId::from("ipa.phone.ɹ");
-    let features = variety
-        .phones
-        .phones
-        .get(&id)
-        .map(|phone| phone.features.clone())
-        .unwrap_or_default();
-    PhoneToken {
-        phone: Spec::Known(id),
-        span: nucleus.span,
-        features,
-        acoustic_evidence: Vec::new(),
-        confidence: nucleus.confidence,
-        provenance: EvidenceProvenance {
-            source: EvidenceSource::Rule,
-            method: "rhotic vowel coda r from syllabification".into(),
-            version: Some("0.1".into()),
-        },
-    }
 }
 
 fn split_maximum_onset(
@@ -404,19 +343,17 @@ mod tests {
     }
 
     #[test]
-    fn rhotic_vowels_add_typed_coda_r_in_syllables() {
-        assert_eq!(syllables_to_ipa(&syllables_for("current")), "ˈkʰɝɹ.ənt");
-        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚɹ.ˈaɪvd");
-        assert_eq!(syllables_to_ipa(&syllables_for("surface")), "ˈsɝɹ.fəs");
+    fn rhotic_vowels_do_not_add_coda_r_in_syllables() {
+        assert_eq!(syllables_to_ipa(&syllables_for("current")), "ˈkʰɝ.ənt");
+        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚ.ˈaɪvd");
+        assert_eq!(syllables_to_ipa(&syllables_for("surface")), "ˈsɝ.fəs");
 
         let current = syllables_for("current");
-        assert!(current[0].phones.iter().any(is_liaison_r_phone));
         assert_eq!(
             current[0].phone_positions,
             [
                 SyllablePosition::Onset,
                 SyllablePosition::Nucleus,
-                SyllablePosition::Coda
             ]
         );
     }

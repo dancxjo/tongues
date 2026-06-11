@@ -321,8 +321,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .iter()
             .map(|&i| {
                 let lex = &lexemes[i];
-                let task = Task::sample(rng);
-                make_seq2seq_example(lex, task, vocab)
+                make_seq2seq_example(lex, Task::S2Pm, vocab)
             })
             .collect();
 
@@ -392,13 +391,10 @@ pub fn evaluate<B: Backend, R: Rng>(
     let examples: Vec<Seq2SeqExample> = eval_lexemes
         .iter()
         .map(|lex| {
-            let task = match total_examples % 6 {
-                0 => Task::S2Pm,
-                1 => Task::S2Ph,
-                2 => Task::Pm2S,
-                3 => Task::Ph2S,
-                4 => Task::Pm2Ph,
-                _ => Task::Ph2Pm,
+            let task = if total_examples % 2 == 0 {
+                Task::S2Pm
+            } else {
+                Task::Pm2S
             };
             total_examples += 1;
             make_seq2seq_example(lex, task, vocab)
@@ -673,7 +669,7 @@ mod tests {
         let vocab = Vocab::build(
             &vec!["cat".to_string(), "dog".to_string()],
             &vec!["kæt".to_string(), "dɔɡ".to_string()],
-            &vec!["kæt".to_string(), "dɔɡ".to_string()],
+            &[],
         );
         let device = Default::default();
         let config = ModelConfig::new(vocab.size()).with_d_model(16).with_n_heads(2).with_n_layers(1);

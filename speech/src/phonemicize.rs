@@ -1289,7 +1289,7 @@ fn pronunciation_for_word(
             part_of_speech: context.part_of_speech,
         }
     } else {
-        eprintln!("GUESSED: {}", word.text);
+        // eprintln!("GUESSED: {}", word.text);
         WordPronunciation {
             candidates: vec![guessed],
             status: PronunciationStatus::Guessed,

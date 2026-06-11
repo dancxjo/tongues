@@ -28,6 +28,7 @@ inquire = { workspace = true }
 owo-colors = { workspace = true }
 speech = { path = "../speech" }
 styletts2 = { path = "../styletts2" }
+indicatif = { workspace = true }
 
 [dependencies.ort]
 version = "=2.0.0-rc.12"

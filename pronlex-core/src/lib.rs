@@ -19,13 +19,9 @@ pub const SEP_ID: u32 = 4;
 // ── Task prefix token IDs ──────────────────────────────────────────────────
 
 pub const S2PM_ID: u32 = 5;
-pub const S2PH_ID: u32 = 6;
-pub const PM2S_ID: u32 = 7;
-pub const PH2S_ID: u32 = 8;
-pub const PM2PH_ID: u32 = 9;
-pub const PH2PM_ID: u32 = 10;
+pub const PM2S_ID: u32 = 6;
 
-pub const SPECIAL_COUNT: u32 = 11;
+pub const SPECIAL_COUNT: u32 = 7;
 
 // ── Unified Vocab ──────────────────────────────────────────────────────────
 
@@ -48,11 +44,7 @@ impl Vocab {
             "<EOS>".into(),
             "<SEP>".into(),
             "<S2Pm>".into(),
-            "<S2Ph>".into(),
             "<Pm2S>".into(),
-            "<Ph2S>".into(),
-            "<Pm2Ph>".into(),
-            "<Ph2Pm>".into(),
         ];
 
         let mut seen = std::collections::BTreeSet::new();

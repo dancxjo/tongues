@@ -19,5 +19,6 @@ sha2 = "0.10"
 cpal = "0.15"
 inquire = "0.9.4"
 owo-colors = "4"
+indicatif = "0.17"
 
 

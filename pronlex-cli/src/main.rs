@@ -21,7 +21,7 @@ mod piper;
 pub mod models;
 
 use std::fs;
-use std::io::{BufRead, BufWriter, Write};
+use std::io::{BufRead, BufWriter};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -36,8 +36,7 @@ use burn_cuda::{Cuda, CudaDevice};
 
 use pronlex_core::Vocab;
 use pronlex_data::{
-    Lexeme, build_vocab, check_split_leakage, parse_cmudict, split_by_base_word,
-    phonemicize_lexemes, Task,
+    Lexeme, parse_cmudict, Task,
 };
 use pronlex_model::{ModelConfig, TrainConfig, eval_report, load_model, predict, train, Seq2SeqModel};
 
@@ -173,7 +172,7 @@ enum Commands {
         /// The input sequence to translate
         input: String,
 
-        /// Direction of translation: s2pm, s2ph, pm2s, ph2s, pm2ph, ph2pm
+        /// Direction of translation: s2pm, pm2s
         #[arg(long, default_value = "s2pm")]
         task: String,
 
@@ -383,12 +382,27 @@ fn syllables_to_phonemes_ipa(
 ) -> String {
     syllables
         .iter()
-        .map(|syllable| {
+        .enumerate()
+        .map(|(index, syllable)| {
             let mut text = String::new();
-            match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => text.push('ˈ'),
-                speech::Spec::Known(speech::Stress::Secondary) => text.push('ˌ'),
-                _ => {}
+            let mut has_stress_mark = false;
+            let stress_char = match syllable.stress {
+                speech::Spec::Known(speech::Stress::Primary) => {
+                    has_stress_mark = true;
+                    Some('ˈ')
+                }
+                speech::Spec::Known(speech::Stress::Secondary) => {
+                    has_stress_mark = true;
+                    Some('ˌ')
+                }
+                _ => None,
+            };
+
+            if index > 0 && !has_stress_mark {
+                text.push('.');
+            }
+            if let Some(c) = stress_char {
+                text.push(c);
             }
             for phone in &syllable.phones {
                 if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
@@ -497,80 +511,191 @@ fn cmd_prepare(
     out: &Path,
     train_frac: f64,
     valid_frac: f64,
-    seed: u64,
+    _seed: u64,
 ) -> Result<()> {
     println!("Parsing CMUdict from {}", input.display());
     let text = fs::read_to_string(input).context("reading CMUdict")?;
     let base_words = parse_cmudict(&text);
-    println!("  {} base words parsed", base_words.len());
-
-    println!("Phonemicizing base words in parallel ...");
-    let lexemes = phonemicize_lexemes(base_words);
-    println!("  {} valid lexemes created", lexemes.len());
-
-    println!("Building vocabulary ...");
-    let vocab = build_vocab(&lexemes);
-    println!(
-        "  Unified vocabulary size: {}",
-        vocab.size()
-    );
-
-    println!("Splitting by base_word (train={} valid={}) ...", train_frac, valid_frac);
-    let mut rng = StdRng::seed_from_u64(seed);
-    let (train, valid, test) = split_by_base_word(&lexemes, train_frac, valid_frac, &mut rng);
-
-    let leaking = check_split_leakage(&train, &valid, &test);
-    if !leaking.is_empty() {
-        eprintln!(
-            "WARNING: {} base_words appear in more than one split: {:?}",
-            leaking.len(),
-            &leaking[..leaking.len().min(5)]
-        );
-    }
-
-    println!(
-        "  train={} valid={} test={}",
-        train.len(),
-        valid.len(),
-        test.len()
-    );
+    let total_words = base_words.len();
+    println!("  {} base words parsed", total_words);
 
     fs::create_dir_all(out).context("creating output directory")?;
 
-    // Save vocabulary
-    let vocab_path = out.join("vocab.json");
-    let vocab_json = serde_json::to_string_pretty(&vocab)?;
-    fs::write(&vocab_path, &vocab_json).context("writing vocab.json")?;
-    println!("  vocab saved to {}", vocab_path.display());
+    // Open output files
+    let train_path = out.join("train.jsonl");
+    let valid_path = out.join("valid.jsonl");
+    let test_path = out.join("test.jsonl");
 
-    // Save splits as JSONL
-    for (name, split_data) in [("train", &train), ("valid", &valid), ("test", &test)] {
-        let path = out.join(format!("{}.jsonl", name));
-        write_jsonl(&path, split_data)?;
-        println!("  {} saved ({} entries)", path.display(), split_data.len());
+    let train_file = fs::File::create(&train_path)?;
+    let valid_file = fs::File::create(&valid_path)?;
+    let test_file = fs::File::create(&test_path)?;
+
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use indicatif::{ProgressBar, ProgressStyle};
+
+    let train_writer = Arc::new(Mutex::new(std::io::BufWriter::new(train_file)));
+    let valid_writer = Arc::new(Mutex::new(std::io::BufWriter::new(valid_file)));
+    let test_writer = Arc::new(Mutex::new(std::io::BufWriter::new(test_file)));
+
+    // Track word lists for anti-leakage auditing
+    let train_words = Arc::new(Mutex::new(Vec::new()));
+    let valid_words = Arc::new(Mutex::new(Vec::new()));
+    let test_words = Arc::new(Mutex::new(Vec::new()));
+
+    // Vocab character/symbol accumulation
+    let seen_word_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let seen_phoneme_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+
+    // Shared thread-safe list of base words
+    let base_words = Arc::new(Mutex::new(base_words));
+
+    println!("Phonemicizing and writing data splits on-the-fly ...");
+
+    // Setup indicatif progress bar!
+    let pb = ProgressBar::new(total_words as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
+            .progress_chars("#>-")
+    );
+
+    let num_threads = 20;
+    let mut handles = Vec::new();
+
+    // Deterministic FNV-1a hash function for thread-safe split assignment
+    fn fnv1a_hash(s: &str) -> u64 {
+        let mut hash = 0xcbf29ce484222325;
+        for byte in s.bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
     }
 
-    // Save word lists (for anti-leakage auditing)
-    for (name, split_data) in [("train", &train), ("valid", &valid), ("test", &test)] {
+    for _ in 0..num_threads {
+        let base_words = Arc::clone(&base_words);
+        let train_writer = Arc::clone(&train_writer);
+        let valid_writer = Arc::clone(&valid_writer);
+        let test_writer = Arc::clone(&test_writer);
+
+        let train_words = Arc::clone(&train_words);
+        let valid_words = Arc::clone(&valid_words);
+        let test_words = Arc::clone(&test_words);
+
+        let seen_word_chars = Arc::clone(&seen_word_chars);
+        let seen_phoneme_chars = Arc::clone(&seen_phoneme_chars);
+
+        let pb = pb.clone();
+
+        let handle = std::thread::spawn(move || {
+            loop {
+                // Pop next base word
+                let word = {
+                    let mut guard = base_words.lock().unwrap();
+                    guard.pop()
+                };
+
+                let word = match word {
+                    Some(w) => w,
+                    None => break,
+                };
+
+                if let Some((phonemes, _phones)) = pronlex_data::phonemicize_word(&word) {
+                    let lex = Lexeme {
+                        base_word: word.clone(),
+                        phonemes: phonemes.clone(),
+                    };
+
+                    // Add to vocab sets
+                    {
+                        let mut w_chars = seen_word_chars.lock().unwrap();
+                        for c in lex.base_word.chars() {
+                            w_chars.insert(c.to_string());
+                        }
+                        let mut pm_chars = seen_phoneme_chars.lock().unwrap();
+                        for c in lex.phonemes.chars() {
+                            pm_chars.insert(c.to_string());
+                        }
+                    }
+
+                    // Split deterministically via FNV-1a hash
+                    let hash_val = fnv1a_hash(&lex.base_word);
+                    let fraction = (hash_val as f64) / (std::u64::MAX as f64);
+
+                    let line = serde_json::to_string(&lex).unwrap();
+
+                    if fraction < train_frac {
+                        let mut w = train_writer.lock().unwrap();
+                        let _ = writeln!(w, "{}", line);
+                        let mut words = train_words.lock().unwrap();
+                        words.push(lex.base_word);
+                    } else if fraction < train_frac + valid_frac {
+                        let mut w = valid_writer.lock().unwrap();
+                        let _ = writeln!(w, "{}", line);
+                        let mut words = valid_words.lock().unwrap();
+                        words.push(lex.base_word);
+                    } else {
+                        let mut w = test_writer.lock().unwrap();
+                        let _ = writeln!(w, "{}", line);
+                        let mut words = test_words.lock().unwrap();
+                        words.push(lex.base_word);
+                    }
+                }
+
+                pb.inc(1);
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all threads
+    for h in handles {
+        let _ = h.join();
+    }
+
+    pb.finish_with_message("Done!");
+
+    // Flush writers
+    train_writer.lock().unwrap().flush()?;
+    valid_writer.lock().unwrap().flush()?;
+    test_writer.lock().unwrap().flush()?;
+
+    let t_words = train_words.lock().unwrap().clone();
+    let v_words = valid_words.lock().unwrap().clone();
+    let te_words = test_words.lock().unwrap().clone();
+
+    println!(
+        "Data splits generated on-the-fly:\n  train={} valid={} test={}",
+        t_words.len(),
+        v_words.len(),
+        te_words.len()
+    );
+
+    // Save word lists
+    for (name, words) in [("train", &t_words), ("valid", &v_words), ("test", &te_words)] {
         let path = out.join(format!("{}_words.txt", name));
-        let words: Vec<&str> = split_data.iter().map(|l| l.base_word.as_str()).collect();
         let mut deduped = words.clone();
         deduped.sort_unstable();
         deduped.dedup();
         fs::write(&path, deduped.join("\n"))?;
     }
 
-    println!("Prepare complete.");
-    Ok(())
-}
+    // Build & save vocabulary
+    println!("Building vocabulary from seen characters ...");
+    let vocab = {
+        let w_list: Vec<String> = seen_word_chars.lock().unwrap().iter().cloned().collect();
+        let pm_list: Vec<String> = seen_phoneme_chars.lock().unwrap().iter().cloned().collect();
+        Vocab::build(&w_list, &pm_list, &[])
+    };
 
-fn write_jsonl(path: &Path, lexemes: &[Lexeme]) -> Result<()> {
-    let f = fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut w = BufWriter::new(f);
-    for lex in lexemes {
-        let line = serde_json::to_string(lex)?;
-        writeln!(w, "{}", line)?;
-    }
+    println!("  Unified vocabulary size: {}", vocab.size());
+    let vocab_path = out.join("vocab.json");
+    let vocab_json = serde_json::to_string_pretty(&vocab)?;
+    fs::write(&vocab_path, &vocab_json).context("writing vocab.json")?;
+    println!("  Vocab saved to {}", vocab_path.display());
+
+    println!("Prepare complete.");
     Ok(())
 }
 
@@ -863,7 +988,7 @@ fn cmd_predict(
     };
 
     let task = Task::from_str(task_str)
-        .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, s2ph, pm2s, ph2s, pm2ph, ph2pm"))?;
+        .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s"))?;
 
     let model_config: ModelConfig = {
         let s = fs::read_to_string(model_dir.join("model_config.json"))

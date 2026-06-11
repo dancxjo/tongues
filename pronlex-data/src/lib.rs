@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use pronlex_core::{
     BOS_ID, EOS_ID, PAD_ID, Vocab,
-    S2PM_ID, S2PH_ID, PM2S_ID, PH2S_ID, PM2PH_ID, PH2PM_ID,
+    S2PM_ID, PM2S_ID,
 };
 use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
@@ -25,8 +25,6 @@ pub struct Lexeme {
     pub base_word: String,
     /// Broad IPA phoneme string.
     pub phonemes: String,
-    /// Narrow IPA phone string.
-    pub phones: String,
 }
 
 // ── CMUdict parsing and parallel IPA generation ────────────────────────────
@@ -70,6 +68,10 @@ pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
             style: None,
         })
         .ok()?;
+
+    if phonemicized.warnings.iter().any(|w| w.kind == speech::PronunciationWarningKind::GuessedWord) {
+        return None;
+    }
 
     let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
     for syllable in phonemicized.syllables.iter() {
@@ -129,11 +131,10 @@ pub fn phonemicize_lexemes(base_words: Vec<String>) -> Vec<Lexeme> {
             let mut local_results = Vec::new();
             for i in start_idx..end_idx {
                 let word = &base_words[i];
-                if let Some((phonemes, phones)) = phonemicize_word(word) {
+                if let Some((phonemes, _phones)) = phonemicize_word(word) {
                     local_results.push(Lexeme {
                         base_word: word.clone(),
                         phonemes,
-                        phones,
                     });
                 }
             }
@@ -189,12 +190,27 @@ fn syllables_to_phonemes_ipa(
 ) -> String {
     syllables
         .iter()
-        .map(|syllable| {
+        .enumerate()
+        .map(|(index, syllable)| {
             let mut text = String::new();
-            match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => text.push('ˈ'),
-                speech::Spec::Known(speech::Stress::Secondary) => text.push('ˌ'),
-                _ => {}
+            let mut has_stress_mark = false;
+            let stress_char = match syllable.stress {
+                speech::Spec::Known(speech::Stress::Primary) => {
+                    has_stress_mark = true;
+                    Some('ˈ')
+                }
+                speech::Spec::Known(speech::Stress::Secondary) => {
+                    has_stress_mark = true;
+                    Some('ˌ')
+                }
+                _ => None,
+            };
+
+            if index > 0 && !has_stress_mark {
+                text.push('.');
+            }
+            if let Some(c) = stress_char {
+                text.push(c);
             }
             for phone in &syllable.phones {
                 if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
@@ -260,15 +276,13 @@ fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
 pub fn build_vocab(lexemes: &[Lexeme]) -> Vocab {
     let mut words = Vec::new();
     let mut phonemes = Vec::new();
-    let mut phones = Vec::new();
 
     for lex in lexemes {
         words.push(lex.base_word.clone());
         phonemes.push(lex.phonemes.clone());
-        phones.push(lex.phones.clone());
     }
 
-    Vocab::build(&words, &phonemes, &phones)
+    Vocab::build(&words, &phonemes, &[])
 }
 
 // ── Data splitting ─────────────────────────────────────────────────────────
@@ -319,11 +333,7 @@ pub fn check_split_leakage(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Task {
     S2Pm,
-    S2Ph,
     Pm2S,
-    Ph2S,
-    Pm2Ph,
-    Ph2Pm,
 }
 
 impl Task {
@@ -331,24 +341,13 @@ impl Task {
     pub fn get_prefix_id(&self) -> u32 {
         match self {
             Task::S2Pm => S2PM_ID,
-            Task::S2Ph => S2PH_ID,
             Task::Pm2S => PM2S_ID,
-            Task::Ph2S => PH2S_ID,
-            Task::Pm2Ph => PM2PH_ID,
-            Task::Ph2Pm => PH2PM_ID,
         }
     }
 
     /// Randomly sample a task from all available tasks.
     pub fn sample<R: Rng>(rng: &mut R) -> Self {
-        let tasks = [
-            Task::S2Pm,
-            Task::S2Ph,
-            Task::Pm2S,
-            Task::Ph2S,
-            Task::Pm2Ph,
-            Task::Ph2Pm,
-        ];
+        let tasks = [Task::S2Pm, Task::Pm2S];
         *tasks.choose(rng).unwrap()
     }
 
@@ -356,11 +355,7 @@ impl Task {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "s2pm" => Some(Task::S2Pm),
-            "s2ph" => Some(Task::S2Ph),
             "pm2s" => Some(Task::Pm2S),
-            "ph2s" => Some(Task::Ph2S),
-            "pm2ph" => Some(Task::Pm2Ph),
-            "ph2pm" => Some(Task::Ph2Pm),
             _ => None,
         }
     }
@@ -384,21 +379,17 @@ pub fn make_seq2seq_example(
     vocab: &Vocab,
 ) -> Seq2SeqExample {
     let (src_str, tgt_str) = match task {
-        Task::S2Pm => (lexeme.base_word.clone(), lexeme.phonemes.clone()),
-        Task::S2Ph => (lexeme.base_word.clone(), lexeme.phones.clone()),
-        Task::Pm2S => (lexeme.phonemes.clone(), lexeme.base_word.clone()),
-        Task::Ph2S => (lexeme.phones.clone(), lexeme.base_word.clone()),
-        Task::Pm2Ph => (lexeme.phonemes.clone(), lexeme.phones.clone()),
-        Task::Ph2Pm => (lexeme.phones.clone(), lexeme.phonemes.clone()),
+        Task::S2Pm => (&lexeme.base_word, &lexeme.phonemes),
+        Task::Pm2S => (&lexeme.phonemes, &lexeme.base_word),
     };
 
     let mut src_ids = vec![task.get_prefix_id()];
-    src_ids.extend(vocab.encode_string(&src_str));
+    src_ids.extend(vocab.encode_string(src_str));
 
     let mut tgt_in_ids = vec![BOS_ID];
-    tgt_in_ids.extend(vocab.encode_string(&tgt_str));
+    tgt_in_ids.extend(vocab.encode_string(tgt_str));
 
-    let mut tgt_out_ids = vocab.encode_string(&tgt_str);
+    let mut tgt_out_ids = vocab.encode_string(tgt_str);
     tgt_out_ids.push(EOS_ID);
 
     Seq2SeqExample {
@@ -481,8 +472,8 @@ mod tests {
     #[test]
     fn test_split_no_leakage() {
         let lex = vec![
-            Lexeme { base_word: "cat".into(), phonemes: "kæt".into(), phones: "kæt".into() },
-            Lexeme { base_word: "dog".into(), phonemes: "dɔɡ".into(), phones: "dɔɡ".into() },
+            Lexeme { base_word: "cat".into(), phonemes: "kæt".into() },
+            Lexeme { base_word: "dog".into(), phonemes: "dɔɡ".into() },
         ];
         let mut rng = StdRng::seed_from_u64(42);
         let (train, valid, test) = split_by_base_word(&lex, 0.5, 0.5, &mut rng);
