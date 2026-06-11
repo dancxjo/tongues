@@ -1,8 +1,9 @@
-/target/
-data/
-runs/
-models/
+target/
+/data/
+/runs/
+/models/
 *.bin
 *.bin.gz
 Cargo.lock
-/target_verify/
+target_verify/
+speech/src/data/lexicons/cmudict.dict

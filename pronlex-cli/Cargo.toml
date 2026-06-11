@@ -29,6 +29,7 @@ owo-colors = { workspace = true }
 speech = { path = "../speech" }
 styletts2 = { path = "../styletts2" }
 indicatif = { workspace = true }
+open-english-pronouncing-dictionary = "0.1.0"
 
 [dependencies.ort]
 version = "=2.0.0-rc.12"
@@ -40,4 +41,3 @@ features = ["load-dynamic", "api-23"]
 default = ["styletts2-onnx", "piper-onnx"]
 styletts2-onnx = ["styletts2/styletts2-onnx"]
 piper-onnx = ["dep:ort"]
-

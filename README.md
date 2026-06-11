@@ -204,10 +204,13 @@ Metrics currently reported:
 
 ## Refinement
 
-Refinement runs the trained model over one or more held-out splits, compares
-each prediction with the gold target, computes character-level edit distance,
-writes every mismatch to `discrepancies.jsonl`, and fine-tunes from the source
-model weights using only the mismatched lexemes.
+Refinement runs the trained model over one or more held-out splits, looks up
+each word in OpenEPD (`open-english-pronouncing-dictionary`), normalizes that
+IPA through the `speech` notation and syllabification layer, compares each
+prediction with that gold target using a broad comparison key, computes
+character-level edit distance on that key, writes every substantive mismatch to
+`discrepancies.jsonl`, and fine-tunes from the source model weights using only
+the mismatched lexemes.
 
 ```sh
 cargo run --release -- refine \
@@ -227,6 +230,12 @@ pronunciation-to-spelling refinement, or `--task both` to mine and train both
 directions. The source model directory is left untouched; refinement requires a
 separate `--out` directory. With `--verbose`, each discrepant word is printed
 with its split, task, edit distance, input, gold target, and prediction.
+Length marks, syllable dots, stress mark placement, and common rhotic spellings
+are ignored for discrepancy detection so refinement does not train on merely
+notational differences.
+OpenEPD entries containing IPA characters outside the existing model vocabulary
+are skipped, because the saved model cannot emit tokens that are not in its
+`vocab.json` without rebuilding the vocabulary and retraining.
 
 ---
 

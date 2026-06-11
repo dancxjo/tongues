@@ -35,11 +35,12 @@ use burn::backend::{Autodiff, NdArray};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
-use pronlex_core::Vocab;
+use pronlex_core::{Vocab, UNK_ID};
 use pronlex_data::{parse_cmudict, Lexeme, Task};
 use pronlex_model::{
     eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
+use speech::data::notation::openepd::normalize_openepd_ipa;
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -1164,10 +1165,13 @@ fn run_eval<B: Backend>(
 struct DiscrepancyRecord {
     split: String,
     task: String,
+    gold_source: String,
     base_word: String,
     input: String,
     gold: String,
     prediction: String,
+    gold_compare: String,
+    prediction_compare: String,
     edit_distance: usize,
 }
 
@@ -1254,6 +1258,7 @@ fn cmd_refine(
     }
 
     println!("Mining discrepancies from {}", model_dir.display());
+    println!("  gold source: OpenEPD preferred IPA");
     println!("  splits: {}", split_names.join(","));
     for (split, lexemes) in &split_lexemes {
         println!("  {}: {} lexemes", split, lexemes.len());
@@ -1381,6 +1386,11 @@ fn collect_discrepancies<B: Backend>(
     verbose: bool,
 ) -> Result<(Vec<DiscrepancyRecord>, Vec<Lexeme>)> {
     let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!("Loading OpenEPD corpus...");
+    let openepd = open_english_pronouncing_dictionary::load()
+        .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
+    println!("  OpenEPD words: {}", openepd.word_count());
+
     let tasks: Vec<Task> = match task_filter {
         Some(task) => vec![task],
         None => vec![Task::S2Pm, Task::Pm2S],
@@ -1400,70 +1410,163 @@ fn collect_discrepancies<B: Backend>(
     let mut records = Vec::new();
     let mut refine_lexemes = Vec::new();
     let mut refine_seen = std::collections::BTreeSet::new();
+    let mut skipped_missing_openepd = 0usize;
+    let mut skipped_parse_error = 0usize;
+    let mut skipped_unknown_vocab = 0usize;
     for (split, lexemes) in split_lexemes {
         let mut split_checked = 0usize;
         let mut split_discrepancies = 0usize;
+        let mut split_skipped_missing_openepd = 0usize;
+        let mut split_skipped_parse_error = 0usize;
+        let mut split_skipped_unknown_vocab = 0usize;
         for lex in lexemes {
+            let base_word = lex.base_word.to_lowercase();
+            let Some(raw_openepd_ipa) = openepd.preferred_ipa(&base_word) else {
+                skipped_missing_openepd += tasks.len();
+                split_skipped_missing_openepd += tasks.len();
+                if verbose {
+                    pb.println(format!(
+                        "SKIP split={} word={} reason=no-openepd-entry",
+                        split, base_word
+                    ));
+                }
+                pb.inc(tasks.len() as u64);
+                continue;
+            };
+            let openepd_ipa = match normalize_openepd_ipa(raw_openepd_ipa) {
+                Ok(normalized) => normalized,
+                Err(err) => {
+                    skipped_parse_error += tasks.len();
+                    split_skipped_parse_error += tasks.len();
+                    if verbose {
+                        pb.println(format!(
+                            "SKIP split={} word={} reason=openepd-parse-error raw={} error={}",
+                            split, base_word, raw_openepd_ipa, err
+                        ));
+                    }
+                    pb.inc(tasks.len() as u64);
+                    continue;
+                }
+            };
+            let openepd_lexeme = Lexeme {
+                base_word: base_word.clone(),
+                phonemes: openepd_ipa.clone(),
+            };
+
+            if has_unknown_vocab(vocab, &openepd_ipa) {
+                skipped_unknown_vocab += tasks.len();
+                split_skipped_unknown_vocab += tasks.len();
+                if verbose {
+                    pb.println(format!(
+                        "SKIP split={} word={} reason=openepd-gold-not-in-vocab gold={}",
+                        split, base_word, openepd_ipa
+                    ));
+                }
+                pb.inc(tasks.len() as u64);
+                continue;
+            }
+
             for &task in &tasks {
                 let (input, gold, task_name) = match task {
-                    Task::S2Pm => (
-                        lex.base_word.to_lowercase(),
-                        lex.phonemes.clone(),
-                        "s2pm".to_string(),
-                    ),
-                    Task::Pm2S => (
-                        lex.phonemes.clone(),
-                        lex.base_word.to_lowercase(),
-                        "pm2s".to_string(),
-                    ),
+                    Task::S2Pm => (base_word.clone(), openepd_ipa.clone(), "s2pm".to_string()),
+                    Task::Pm2S => (openepd_ipa.clone(), base_word.clone(), "pm2s".to_string()),
                 };
-                pb.set_message(format!("{} {}", split, lex.base_word));
+                pb.set_message(format!("{} {}", split, base_word));
                 let prediction = predict(&model, &input, task, vocab, device);
-                let edit_distance = edit_distance_chars(&prediction, &gold);
+                let gold_compare = comparison_key(&gold, task);
+                let prediction_compare = comparison_key(&prediction, task);
+                let edit_distance = edit_distance_chars(&prediction_compare, &gold_compare);
                 split_checked += 1;
                 if edit_distance > 0 {
                     split_discrepancies += 1;
                     let record = DiscrepancyRecord {
                         split: split.clone(),
                         task: task_name,
-                        base_word: lex.base_word.clone(),
+                        gold_source: "openepd".to_string(),
+                        base_word: base_word.clone(),
                         input,
                         gold,
                         prediction,
+                        gold_compare,
+                        prediction_compare,
                         edit_distance,
                     };
                     if verbose {
                         pb.println(format_discrepancy(&record));
                     }
                     records.push(record);
-                    if refine_seen.insert(lex.base_word.clone()) {
-                        refine_lexemes.push(lex.clone());
+                    if refine_seen.insert(base_word.clone()) {
+                        refine_lexemes.push(openepd_lexeme.clone());
                     }
                 }
                 pb.inc(1);
             }
         }
         pb.println(format!(
-            "Completed split {}: checked {} examples, found {} discrepancies",
-            split, split_checked, split_discrepancies
+            "Completed split {}: checked {} examples, found {} discrepancies, skipped {} missing OpenEPD, skipped {} parse errors, skipped {} unknown-vocab golds",
+            split,
+            split_checked,
+            split_discrepancies,
+            split_skipped_missing_openepd,
+            split_skipped_parse_error,
+            split_skipped_unknown_vocab
         ));
     }
     pb.finish_and_clear();
+    if skipped_missing_openepd > 0 || skipped_parse_error > 0 || skipped_unknown_vocab > 0 {
+        println!(
+            "Skipped during OpenEPD mining: {} missing OpenEPD entries, {} parse errors, {} OpenEPD golds with chars outside vocab",
+            skipped_missing_openepd, skipped_parse_error, skipped_unknown_vocab
+        );
+    }
 
     Ok((records, refine_lexemes))
 }
 
 fn format_discrepancy(record: &DiscrepancyRecord) -> String {
-    format!(
-        "EXCEPTION split={} task={} word={} edit_distance={}\n  input: {}\n  gold : {}\n  pred : {}",
+    let mut text = format!(
+        "EXCEPTION split={} task={} gold_source={} word={} edit_distance={}\n  input: {}\n  gold : {}\n  pred : {}",
         record.split,
         record.task,
+        record.gold_source,
         record.base_word,
         record.edit_distance,
         record.input,
         record.gold,
         record.prediction
-    )
+    );
+    if record.gold_compare != record.gold || record.prediction_compare != record.prediction {
+        text.push_str(&format!(
+            "\n  cmp gold: {}\n  cmp pred: {}",
+            record.gold_compare, record.prediction_compare
+        ));
+    }
+    text
+}
+
+fn has_unknown_vocab(vocab: &Vocab, text: &str) -> bool {
+    vocab.encode_string(text).into_iter().any(|id| id == UNK_ID)
+}
+
+fn comparison_key(value: &str, task: Task) -> String {
+    match task {
+        Task::S2Pm => pronunciation_comparison_key(value),
+        Task::Pm2S => value.to_lowercase(),
+    }
+}
+
+fn pronunciation_comparison_key(value: &str) -> String {
+    let no_length = value.replace('ː', "");
+    let no_syllable_marks = no_length.replace('.', "");
+    no_syllable_marks
+        .chars()
+        .filter(|c| !matches!(c, 'ˈ' | 'ˌ'))
+        .collect::<String>()
+        .replace('ɝ', "ɚ")
+        .replace("iə", "iɚ")
+        .replace("uə", "uɚ")
+        .replace("əɹ", "ɚ")
+        .replace("lɹ", "lɚ")
 }
 
 fn print_discrepancy_summary(records: &[DiscrepancyRecord]) {
@@ -1534,6 +1637,35 @@ fn edit_distance_chars(left: &str, right: &str) -> usize {
     }
 
     prev[right.len()]
+}
+
+#[cfg(test)]
+mod refinement_tests {
+    use super::*;
+
+    #[test]
+    fn pronunciation_comparison_ignores_length_stress_and_syllable_marks() {
+        assert_eq!(
+            pronunciation_comparison_key("ˈziː.ə"),
+            pronunciation_comparison_key("ˈziə")
+        );
+        assert_eq!(
+            pronunciation_comparison_key("ˈʒuː"),
+            pronunciation_comparison_key("ˈʒu")
+        );
+    }
+
+    #[test]
+    fn pronunciation_comparison_collapses_common_r_colored_spellings() {
+        assert_eq!(
+            pronunciation_comparison_key("ˈziː.ɡɚ"),
+            pronunciation_comparison_key("ˈziɡəɹ")
+        );
+        assert_eq!(
+            pronunciation_comparison_key("ˈziː.ɡlɚ"),
+            pronunciation_comparison_key("ˈziɡlɹ")
+        );
+    }
 }
 
 // ── predict ────────────────────────────────────────────────────────────────
