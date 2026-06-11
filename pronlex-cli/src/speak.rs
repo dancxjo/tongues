@@ -173,31 +173,164 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
-pub fn run_speak(command: SpeakCommand) -> Result<()> {
-    let phonemicized = EnglishPhonemicizer
-        .phonemicize(&PhonemicizeRequest {
-            text: command.text.clone(),
-            variety: VarietyId(command.variety.clone()),
-            style: None,
-        })
-        .context("failed to phonemicize text into a speech plan")?;
-    
-    let plan = utterance_plan_from_phonemicized(&phonemicized);
-    
-    if command.fail_on_guessed_pronunciation
-        && phonemicized.warnings.iter().any(is_guessed_pronunciation)
-    {
-        anyhow::bail!(
-            "guessed pronunciation encountered: {}",
-            phonemicized
-                .warnings
-                .iter()
-                .filter(|warning| is_guessed_pronunciation(warning))
-                .map(|warning| warning.token.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+enum BackendInstance {
+    Mock(MockStyleTts2Backend),
+    #[cfg(feature = "styletts2-onnx")]
+    StyleTts2(StyleTts2OnnxBackend),
+    #[cfg(not(feature = "styletts2-onnx"))]
+    StyleTts2,
+    #[cfg(feature = "piper-onnx")]
+    Piper(crate::piper::PiperOnnxBackend),
+    #[cfg(not(feature = "piper-onnx"))]
+    Piper,
+}
+
+impl BackendInstance {
+    fn synthesize(
+        &mut self,
+        plan: &UtterancePlan,
+        options: &SpeechSynthesisOptions,
+        mut on_audio: Option<&mut dyn FnMut(&[f32])>,
+        command: &SpeakCommand,
+    ) -> Result<SpeechSynthesisArtifact> {
+        match self {
+            Self::Mock(ref mut backend) => {
+                let styletts2_plan = prepare_styletts2_plan(
+                    plan,
+                    &styletts2_en_us_symbol_set(),
+                    styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
+                )
+                .context("failed to prepare StyleTTS2 synthesis plan")?;
+                validate_styletts2_plan(&styletts2_plan).context("invalid StyleTTS2 synthesis plan")?;
+                let request = StyleTts2SynthesisRequest::from_backend_plan(
+                    styletts2_plan,
+                    None,
+                    None,
+                    ProsodyTrack::default(),
+                );
+                let mut pcm_mono_f32 = Vec::new();
+                let output = backend
+                    .synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
+                        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                        if let Some(ref mut cb) = on_audio {
+                            cb(&chunk.pcm_mono_f32);
+                        }
+                        Ok(())
+                    })
+                    .context("mock StyleTTS2 synthesis failed")?;
+
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: output.sample_rate_hz,
+                    pcm: pcm_mono_f32,
+                    timings: output.timings,
+                })
+            }
+            #[cfg(feature = "styletts2-onnx")]
+            Self::StyleTts2(ref mut backend) => {
+                let styletts2_plan = prepare_styletts2_plan(
+                    plan,
+                    &styletts2_en_us_symbol_set(),
+                    styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
+                )
+                .context("failed to prepare StyleTTS2 synthesis plan")?;
+                let default_refs = crate::models::ensure_styletts2_default_reference_audio_available()?;
+                let voice_ref = options.voice_wav.as_ref().unwrap_or(&default_refs.voice);
+                let style_ref = options.style_wav.as_ref().unwrap_or(&default_refs.style);
+
+                let request = StyleTts2SynthesisRequest::from_backend_plan(
+                    styletts2_plan,
+                    plan.speaker.clone(),
+                    plan.style.clone(),
+                    plan.target_prosody.clone(),
+                )
+                .with_speaker_reference_audio_uri(voice_ref.display().to_string())
+                .with_style_reference_audio_uri(style_ref.display().to_string());
+
+                let mut pcm_mono_f32 = Vec::new();
+                let output = backend
+                    .synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
+                        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                        if let Some(ref mut cb) = on_audio {
+                            cb(&chunk.pcm_mono_f32);
+                        }
+                        Ok(())
+                    })
+                    .context("native StyleTTS2 ONNX synthesis failed")?;
+
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: output.sample_rate_hz,
+                    pcm: pcm_mono_f32,
+                    timings: output.timings,
+                })
+            }
+            #[cfg(not(feature = "styletts2-onnx"))]
+            Self::StyleTts2 => {
+                anyhow::bail!("StyleTTS2 native backend requires compiling with feature `styletts2-onnx`")
+            }
+            #[cfg(feature = "piper-onnx")]
+            Self::Piper(ref mut backend) => {
+                let mut pcm_mono_f32 = Vec::new();
+                backend.synthesize_plan_streaming(plan, &mut |chunk: crate::piper::PiperAudioChunk| {
+                    pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                    if let Some(ref mut cb) = on_audio {
+                        cb(&chunk.pcm_mono_f32);
+                    }
+                    Ok(())
+                })?;
+
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: backend.sample_rate_hz(),
+                    pcm: pcm_mono_f32,
+                    timings: Vec::new(),
+                })
+            }
+            #[cfg(not(feature = "piper-onnx"))]
+            Self::Piper => {
+                anyhow::bail!("Piper native backend requires compiling with feature `piper-onnx`")
+            }
+        }
     }
+}
+
+fn split_into_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        current.push(c);
+        if c == '.' || c == '?' || c == '!' {
+            let is_boundary = if i + 1 < chars.len() {
+                chars[i + 1].is_whitespace()
+            } else {
+                true
+            };
+            if is_boundary {
+                let s = current.trim().to_string();
+                if !s.is_empty() {
+                    sentences.push(s);
+                }
+                current.clear();
+            }
+        } else if current.len() >= 150 && c.is_whitespace() {
+            let s = current.trim().to_string();
+            if !s.is_empty() {
+                sentences.push(s);
+            }
+            current.clear();
+        }
+        i += 1;
+    }
+    let s = current.trim().to_string();
+    if !s.is_empty() {
+        sentences.push(s);
+    }
+    sentences
+}
+
+pub fn run_speak(command: SpeakCommand) -> Result<()> {
+    let options = SpeechSynthesisOptions::from(&command);
 
     let backend_label = match command.backend {
         SpeakBackend::Mock => "mock",
@@ -209,6 +342,56 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Piper => 22050,
+    };
+
+    let mut backend = match command.backend {
+        SpeakBackend::Mock => {
+            BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
+        }
+        SpeakBackend::Styletts2 => {
+            #[cfg(feature = "styletts2-onnx")]
+            {
+                let primary_model = crate::models::ensure_styletts2_model_available()?;
+                let model_dir = primary_model
+                    .parent()
+                    .context("StyleTTS2 primary model path has no parent directory")?;
+
+                let diffusion_opts = StyleTts2DiffusionOptions {
+                    diffusion_steps: options.diffusion_steps,
+                    alpha: options.style_alpha,
+                    beta: options.style_beta,
+                    embedding_scale: options.embedding_scale,
+                    seed: options.style_seed,
+                };
+
+                let backend = StyleTts2OnnxBackend::from_model_dir(model_dir)
+                    .context("failed to load native StyleTTS2 ONNX backend")?
+                    .with_diffusion_options(diffusion_opts)
+                    .context("invalid StyleTTS2 diffusion options")?
+                    .with_speed(options.speed)
+                    .context("invalid StyleTTS2 speed")?;
+                BackendInstance::StyleTts2(backend)
+            }
+            #[cfg(not(feature = "styletts2-onnx"))]
+            {
+                anyhow::bail!("StyleTTS2 native backend requires compiling with feature `styletts2-onnx`")
+            }
+        }
+        SpeakBackend::Piper => {
+            #[cfg(feature = "piper-onnx")]
+            {
+                use crate::piper::{PiperOnnxBackend, PiperVoiceConfig, piper_voice_config_path};
+                let primary_model = crate::models::ensure_piper_voice_model_available()?;
+                let config_path = piper_voice_config_path(&primary_model);
+                let config = PiperVoiceConfig::from_json_file(&config_path)?;
+                let backend = PiperOnnxBackend::load(&primary_model, config)?;
+                BackendInstance::Piper(backend)
+            }
+            #[cfg(not(feature = "piper-onnx"))]
+            {
+                anyhow::bail!("Piper native backend requires compiling with feature `piper-onnx`")
+            }
+        }
     };
 
     let player = if command.output.is_none() {
@@ -223,162 +406,180 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         None
     };
 
-    let mut audio_callback = |chunk: &[f32]| {
-        if let Some(ref p) = player {
-            p.append(chunk);
-        }
-    };
-    let cb_arg: Option<&mut dyn FnMut(&[f32])> = Some(&mut audio_callback);
+    let mut all_pcm = Vec::new();
+    let mut all_timings = Vec::new();
+    let mut total_samples = 0;
 
-    let options = SpeechSynthesisOptions::from(&command);
-
-    let artifact = match command.backend {
-        SpeakBackend::Mock => {
-            let styletts2_plan = prepare_styletts2_plan(
-                &plan,
-                &styletts2_en_us_symbol_set(),
-                styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
-            )
-            .context("failed to prepare StyleTTS2 synthesis plan")?;
-            synthesize_backend_plan_with_mock_to_wav(
-                styletts2_plan,
-                command.sample_rate_hz,
-                cb_arg,
-            )?
+    let mut process_chunk = |text_chunk: &str, backend: &mut BackendInstance, player: &Option<AudioStreamPlayer>, all_pcm: &mut Vec<f32>, all_timings: &mut Vec<StyleTts2Timing>, total_samples: &mut usize| -> Result<()> {
+        let phonemicized = EnglishPhonemicizer
+            .phonemicize(&PhonemicizeRequest {
+                text: text_chunk.to_string(),
+                variety: VarietyId(command.variety.clone()),
+                style: None,
+            })
+            .context("failed to phonemicize text into a speech plan")?;
+        
+        let plan = utterance_plan_from_phonemicized(&phonemicized);
+        
+        if command.fail_on_guessed_pronunciation
+            && phonemicized.warnings.iter().any(is_guessed_pronunciation)
+        {
+            anyhow::bail!(
+                "guessed pronunciation encountered: {}",
+                phonemicized
+                    .warnings
+                    .iter()
+                    .filter(|warning| is_guessed_pronunciation(warning))
+                    .map(|warning| warning.token.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
-        SpeakBackend::Styletts2 => {
-            let styletts2_plan = prepare_styletts2_plan(
-                &plan,
-                &styletts2_en_us_symbol_set(),
-                styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
-            )
-            .context("failed to prepare StyleTTS2 synthesis plan")?;
-            let primary_model = crate::models::ensure_styletts2_model_available()?;
-            synthesize_backend_plan_with_styletts2_to_wav(
-                styletts2_plan,
-                &plan,
-                &primary_model,
-                &options,
-                cb_arg,
-            )?
-        }
-        SpeakBackend::Piper => {
-            let primary_model = crate::models::ensure_piper_voice_model_available()?;
-            synthesize_plan_with_piper(&plan, &primary_model, cb_arg)?
-        }
-    };
 
-    let backend_symbols = match command.backend {
-        SpeakBackend::Mock | SpeakBackend::Styletts2 => {
-            let styletts2_plan = prepare_styletts2_plan(
-                &plan,
-                &styletts2_en_us_symbol_set(),
-                styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
-            )
-            .context("failed to prepare StyleTTS2 synthesis plan")?;
-            styletts2_plan
-                .chunks
-                .iter()
-                .map(|chunk| {
-                    styletts2_text_for_symbols(&chunk.symbols).map(|text| text.trim().to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .context("failed to format StyleTTS2 backend symbols")?
-                .join(" || ")
+        let mut audio_callback = |chunk: &[f32]| {
+            if let Some(ref p) = player {
+                p.append(chunk);
+            }
+        };
+        let cb_arg: Option<&mut dyn FnMut(&[f32])> = Some(&mut audio_callback);
+
+        let artifact = backend.synthesize(&plan, &options, cb_arg, &command)?;
+
+        let backend_symbols = match command.backend {
+            SpeakBackend::Mock | SpeakBackend::Styletts2 => {
+                let styletts2_plan = prepare_styletts2_plan(
+                    &plan,
+                    &styletts2_en_us_symbol_set(),
+                    styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
+                )
+                .context("failed to prepare StyleTTS2 synthesis plan")?;
+                styletts2_plan
+                    .chunks
+                    .iter()
+                    .map(|chunk| {
+                        styletts2_text_for_symbols(&chunk.symbols).map(|text| text.trim().to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .context("failed to format StyleTTS2 backend symbols")?
+                    .join(" || ")
+            }
+            SpeakBackend::Piper => {
+                let sequence = crate::piper::piper_sequence_from_plan(&plan)?;
+                sequence.symbols.join(" ")
+            }
+        };
+
+        println!("Pronlex speech synthesis plan");
+        println!("backend: {backend_label}");
+        println!("variety: {}", phonemicized.variety.0);
+        println!("text: {}", phonemicized.text);
+        println!("phonemes: {}", format_phonemes(&phonemicized));
+        if command.debug_pronunciation {
+            println!(
+                "phonemes_debug: {}",
+                format_phonemes_with_features(&phonemicized)
+            );
         }
-        SpeakBackend::Piper => {
-            let sequence = crate::piper::piper_sequence_from_plan(&plan)?;
-            sequence.symbols.join(" ")
+        println!("phones: {}", format_phones(&phonemicized));
+        println!("backend_symbols: {backend_symbols}");
+
+        if matches!(command.backend, SpeakBackend::Styletts2) {
+            println!("styletts2_controls:");
+            println!("  diffusion_steps: {}", options.diffusion_steps);
+            println!(
+                "  speaker_reference_strength: {:.3}",
+                1.0 - options.style_alpha
+            );
+            println!(
+                "  style_reference_strength: {:.3}",
+                1.0 - options.style_beta
+            );
+            println!("  alpha: {:.3}", options.style_alpha);
+            println!("  beta: {:.3}", options.style_beta);
+            println!("  embedding_scale: {:.3}", options.embedding_scale);
+            println!("  style_seed: {}", options.style_seed);
+            println!("  speed: {:.3}", options.speed);
         }
-    };
 
-    println!("Pronlex speech synthesis plan");
-    println!("backend: {backend_label}");
-    println!("variety: {}", phonemicized.variety.0);
-    println!("text: {}", phonemicized.text);
-    println!("phonemes: {}", format_phonemes(&phonemicized));
-    if command.debug_pronunciation {
-        println!(
-            "phonemes_debug: {}",
-            format_phonemes_with_features(&phonemicized)
-        );
-    }
-    println!("phones: {}", format_phones(&phonemicized));
-    println!("backend_symbols: {backend_symbols}");
-
-    if matches!(command.backend, SpeakBackend::Styletts2) {
-        println!("styletts2_controls:");
-        println!("  diffusion_steps: {}", options.diffusion_steps);
-        println!(
-            "  speaker_reference_strength: {:.3}",
-            1.0 - options.style_alpha
-        );
-        println!(
-            "  style_reference_strength: {:.3}",
-            1.0 - options.style_beta
-        );
-        println!("  alpha: {:.3}", options.style_alpha);
-        println!("  beta: {:.3}", options.style_beta);
-        println!("  embedding_scale: {:.3}", options.embedding_scale);
-        println!("  style_seed: {}", options.style_seed);
-        println!("  speed: {:.3}", options.speed);
-    }
-
-    println!("chunks:");
-    match command.backend {
-        SpeakBackend::Mock | SpeakBackend::Styletts2 => {
-            let styletts2_plan = prepare_styletts2_plan(
-                &plan,
-                &styletts2_en_us_symbol_set(),
-                styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
-            )
-            .context("failed to prepare StyleTTS2 synthesis plan")?;
-            for (index, chunk) in styletts2_plan.chunks.iter().enumerate() {
-                println!(
-                    "  {}: {}",
-                    index + 1,
-                    styletts2_text_for_symbols(&chunk.symbols)
-                        .map(|text| text.trim().to_string())
-                        .context("failed to format StyleTTS2 chunk")?
-                );
+        println!("chunks:");
+        match command.backend {
+            SpeakBackend::Mock | SpeakBackend::Styletts2 => {
+                let styletts2_plan = prepare_styletts2_plan(
+                    &plan,
+                    &styletts2_en_us_symbol_set(),
+                    styletts2_options_from(command.max_tts_symbols, command.no_tts_chunking),
+                )
+                .context("failed to prepare StyleTTS2 synthesis plan")?;
+                for (index, chunk) in styletts2_plan.chunks.iter().enumerate() {
+                    println!(
+                        "  {}: {}",
+                        index + 1,
+                        styletts2_text_for_symbols(&chunk.symbols)
+                            .map(|text| text.trim().to_string())
+                            .context("failed to format StyleTTS2 chunk")?
+                    );
+                }
+            }
+            SpeakBackend::Piper => {
+                let chunks = crate::piper::piper_synthesis_chunks_from_plan(&plan)?;
+                for (index, chunk) in chunks.iter().enumerate() {
+                    println!(
+                        "  {}: {} (pause_after: {}ms)",
+                        index + 1,
+                        chunk.sequence.symbols.join(" "),
+                        chunk.pause_after_ms
+                    );
+                }
             }
         }
-        SpeakBackend::Piper => {
-            let chunks = crate::piper::piper_synthesis_chunks_from_plan(&plan)?;
-            for (index, chunk) in chunks.iter().enumerate() {
-                println!(
-                    "  {}: {} (pause_after: {}ms)",
-                    index + 1,
-                    chunk.sequence.symbols.join(" "),
-                    chunk.pause_after_ms
-                );
+
+        if !phonemicized.warnings.is_empty() {
+            println!("warnings:");
+            for warning in &phonemicized.warnings {
+                println!("  {}", format_warning(warning));
             }
         }
-    }
-
-    if !phonemicized.warnings.is_empty() {
-        println!("warnings:");
-        for warning in &phonemicized.warnings {
-            println!("  {}", format_warning(warning));
+        println!("sample_rate_hz: {}", artifact.sample_rate_hz);
+        println!("samples: {}", artifact.pcm.len());
+        if command.timings && !artifact.timings.is_empty() {
+            println!("timings_ms:");
+            for timing in &artifact.timings {
+                println!("  {}: {:.2}", timing.stage, timing.elapsed_ms);
+            }
         }
-    }
-    println!("sample_rate_hz: {}", artifact.sample_rate_hz);
-    println!("samples: {}", artifact.pcm.len());
-    if command.timings && !artifact.timings.is_empty() {
-        println!("timings_ms:");
-        for timing in &artifact.timings {
-            println!("  {}: {:.2}", timing.stage, timing.elapsed_ms);
+
+        *total_samples += artifact.pcm.len();
+        all_pcm.extend(artifact.pcm);
+        all_timings.extend(artifact.timings);
+        Ok(())
+    };
+
+    if let Some(ref text) = command.text {
+        process_chunk(text, &mut backend, &player, &mut all_pcm, &mut all_timings, &mut total_samples)?;
+    } else {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
+        let mut line = String::new();
+        while handle.read_line(&mut line)? > 0 {
+            let sentences = split_into_sentences(&line);
+            for sentence in sentences {
+                if !sentence.is_empty() {
+                    process_chunk(&sentence, &mut backend, &player, &mut all_pcm, &mut all_timings, &mut total_samples)?;
+                }
+            }
+            line.clear();
         }
     }
 
     if let Some(ref output_path) = command.output {
-        write_wav_mono_f32(output_path, artifact.sample_rate_hz, &artifact.pcm)
+        write_wav_mono_f32(output_path, target_sample_rate, &all_pcm)
             .with_context(|| format!("failed to write WAV to {}", output_path.display()))?;
         println!("wav: {}", output_path.display());
     } else {
         println!("Playing audio out loud via CPAL...");
         if let Some(ref p) = player {
-            p.wait_until_done(artifact.pcm.len());
+            p.wait_until_done(total_samples);
         }
         println!("wav: <none> (played out loud)");
     }
@@ -589,37 +790,7 @@ fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f32]) -> Resu
     Ok(())
 }
 
-fn synthesize_backend_plan_with_mock_to_wav(
-    backend_plan: BackendSynthesisPlan,
-    sample_rate_hz: u32,
-    on_audio: Option<&mut dyn FnMut(&[f32])>,
-) -> Result<SpeechSynthesisArtifact> {
-    validate_styletts2_plan(&backend_plan).context("invalid StyleTTS2 synthesis plan")?;
-    let request = StyleTts2SynthesisRequest::from_backend_plan(
-        backend_plan,
-        None,
-        None,
-        ProsodyTrack::default(),
-    );
-    let mut backend = MockStyleTts2Backend::new(sample_rate_hz);
-    let mut pcm_mono_f32 = Vec::new();
-    let mut on_audio = on_audio;
-    let output = backend
-        .synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
-            pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-            if let Some(ref mut cb) = on_audio {
-                cb(&chunk.pcm_mono_f32);
-            }
-            Ok(())
-        })
-        .context("mock StyleTTS2 synthesis failed")?;
 
-    Ok(SpeechSynthesisArtifact {
-        sample_rate_hz: output.sample_rate_hz,
-        pcm: pcm_mono_f32,
-        timings: output.timings,
-    })
-}
 
 
 
@@ -795,115 +966,7 @@ impl AudioStreamPlayer {
 }
 
 
-#[cfg(feature = "styletts2-onnx")]
-fn synthesize_backend_plan_with_styletts2_to_wav(
-    backend_plan: BackendSynthesisPlan,
-    plan: &UtterancePlan,
-    primary_model_path: &Path,
-    options: &SpeechSynthesisOptions,
-    on_audio: Option<&mut dyn FnMut(&[f32])>,
-) -> Result<SpeechSynthesisArtifact> {
-    let model_dir = primary_model_path
-        .parent()
-        .context("StyleTTS2 primary model path has no parent directory")?;
 
-    let diffusion_opts = StyleTts2DiffusionOptions {
-        diffusion_steps: options.diffusion_steps,
-        alpha: options.style_alpha,
-        beta: options.style_beta,
-        embedding_scale: options.embedding_scale,
-        seed: options.style_seed,
-    };
-
-    let mut backend = StyleTts2OnnxBackend::from_model_dir(model_dir)
-        .context("failed to load native StyleTTS2 ONNX backend")?
-        .with_diffusion_options(diffusion_opts)
-        .context("invalid StyleTTS2 diffusion options")?
-        .with_speed(options.speed)
-        .context("invalid StyleTTS2 speed")?;
-
-    let default_refs = crate::models::ensure_styletts2_default_reference_audio_available()?;
-    let voice_ref = options.voice_wav.as_ref().unwrap_or(&default_refs.voice);
-    let style_ref = options.style_wav.as_ref().unwrap_or(&default_refs.style);
-
-    let request = StyleTts2SynthesisRequest::from_backend_plan(
-        backend_plan,
-        plan.speaker.clone(),
-        plan.style.clone(),
-        plan.target_prosody.clone(),
-    )
-    .with_speaker_reference_audio_uri(voice_ref.display().to_string())
-    .with_style_reference_audio_uri(style_ref.display().to_string());
-
-    let mut pcm_mono_f32 = Vec::new();
-    let mut on_audio = on_audio;
-    let output = backend
-        .synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
-            pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-            if let Some(ref mut cb) = on_audio {
-                cb(&chunk.pcm_mono_f32);
-            }
-            Ok(())
-        })
-        .context("native StyleTTS2 ONNX synthesis failed")?;
-
-    Ok(SpeechSynthesisArtifact {
-        sample_rate_hz: output.sample_rate_hz,
-        pcm: pcm_mono_f32,
-        timings: output.timings,
-    })
-}
-
-#[cfg(not(feature = "styletts2-onnx"))]
-fn synthesize_backend_plan_with_styletts2_to_wav(
-    _backend_plan: BackendSynthesisPlan,
-    _plan: &UtterancePlan,
-    _primary_model_path: &Path,
-    _options: &SpeechSynthesisOptions,
-    _on_audio: Option<&mut dyn FnMut(&[f32])>,
-) -> Result<SpeechSynthesisArtifact> {
-    anyhow::bail!("StyleTTS2 native backend requires compiling with feature `styletts2-onnx`")
-}
-
-#[cfg(feature = "piper-onnx")]
-fn synthesize_plan_with_piper(
-    plan: &UtterancePlan,
-    model_path: &Path,
-    on_audio: Option<&mut dyn FnMut(&[f32])>,
-) -> Result<SpeechSynthesisArtifact> {
-    use crate::piper::{PiperOnnxBackend, PiperVoiceConfig, piper_voice_config_path, PiperAudioChunk};
-
-    let config_path = piper_voice_config_path(model_path);
-    let config = PiperVoiceConfig::from_json_file(&config_path)?;
-    let sample_rate_hz = config.sample_rate_hz;
-
-    let mut backend = PiperOnnxBackend::load(model_path, config)?;
-    let mut pcm_mono_f32 = Vec::new();
-    let mut on_audio = on_audio;
-
-    backend.synthesize_plan_streaming(plan, &mut |chunk: PiperAudioChunk| {
-        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-        if let Some(ref mut cb) = on_audio {
-            cb(&chunk.pcm_mono_f32);
-        }
-        Ok(())
-    })?;
-
-    Ok(SpeechSynthesisArtifact {
-        sample_rate_hz,
-        pcm: pcm_mono_f32,
-        timings: Vec::new(),
-    })
-}
-
-#[cfg(not(feature = "piper-onnx"))]
-fn synthesize_plan_with_piper(
-    _plan: &UtterancePlan,
-    _model_path: &Path,
-    _on_audio: Option<&mut dyn FnMut(&[f32])>,
-) -> Result<SpeechSynthesisArtifact> {
-    anyhow::bail!("Piper native backend requires compiling with feature `piper-onnx`")
-}
 
 
 
