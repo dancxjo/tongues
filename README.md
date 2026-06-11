@@ -166,8 +166,10 @@ The source code in this repository is MIT licensed, but generated datasets may i
 | eSpeak NG | Optional local WAV generation with a small rotating voice set. | eSpeak NG is GPL-3-or-later; some data/docs mention CC-BY-SA components. Review eSpeak NG terms before redistributing generated audio. |
 | Google Translate TTS URL support (`tts-urls`) | Optional network audio backend; skipped when robots policy disallows the TTS path. | URL helper crate is MIT, but Google service output/access is governed by Google's terms and robots policy; this project is not affiliated with Google. |
 | Wiktionary/Wikimedia audio | Optional best-effort audio lookup through public file metadata/audio URLs, only when robots policy allows. | Individual media files may have their own licenses; keep source URLs/provenance with any redistributed audio. |
+| Wikimedia Commons pronunciation audio | Optional real-human pronunciation audio lookup from allowed Commons file pages and direct media URLs. | Individual Commons files carry their own licenses; prepare preserves source URL, license label, and attribution in provenance. |
+| AnySpeak | Optional local MP3 generation through an AnySpeak checkout (`anyspeak_dir` or `ANYSPEAK_DIR`). | AnySpeak is AGPL-3 and Qwen3-TTS-based; review AnySpeak and model/output terms before redistributing generated audio. |
 | Dictionary.com | Reference URL metadata only. | Pages are not fetched by prepare; respect Dictionary.com's terms if using those links manually. |
-| StyleTTS2/Piper | Listed as future/opportunistic local synthesis backends; current prepare does not scrape third-party pages for them. | Model/audio asset terms depend on the specific installed assets. |
+| StyleTTS2/Piper | Opportunistic local synthesis backends through installed local models. | Model/audio asset terms depend on the specific installed assets. |
 
 #### External audio manifests
 

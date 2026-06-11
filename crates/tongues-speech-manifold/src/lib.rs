@@ -66,7 +66,16 @@ pub struct SpeechManifoldConfig {
     pub max_wiktionary_audio_examples: usize,
     pub max_styletts2_examples: usize,
     pub max_piper_examples: usize,
+    pub max_anyspeak_examples: usize,
     pub max_mock_examples: usize,
+    pub max_wikimedia_commons_examples: usize,
+    pub max_wikimedia_commons_lookup_attempts: usize,
+    #[serde(default)]
+    pub anyspeak_dir: Option<String>,
+    #[serde(default = "default_anyspeak_python")]
+    pub anyspeak_python: String,
+    #[serde(default = "default_anyspeak_voice_tags")]
+    pub anyspeak_voice_tags: Vec<String>,
     pub include_reference_uris: bool,
     #[serde(default)]
     pub external_audio_manifests: Vec<String>,
@@ -93,7 +102,13 @@ impl Default for SpeechManifoldConfig {
             max_wiktionary_audio_examples: 32,
             max_styletts2_examples: 16,
             max_piper_examples: 32,
+            max_anyspeak_examples: 16,
             max_mock_examples: 64,
+            max_wikimedia_commons_examples: 32,
+            max_wikimedia_commons_lookup_attempts: 256,
+            anyspeak_dir: None,
+            anyspeak_python: default_anyspeak_python(),
+            anyspeak_voice_tags: default_anyspeak_voice_tags(),
             include_reference_uris: true,
             external_audio_manifests: Vec::new(),
             espeak_voices: default_espeak_voices(),
@@ -141,6 +156,8 @@ fn default_synthesis_backends() -> Vec<String> {
         "espeak-ng",
         "google-translate",
         "wiktionary-audio",
+        "wikimedia-commons-audio",
+        "anyspeak",
         "styletts2",
         "piper",
         "mock",
@@ -159,6 +176,17 @@ fn default_espeak_voices() -> Vec<String> {
 
 fn default_google_translate_speeds() -> Vec<f32> {
     vec![1.0, 0.85, 0.7]
+}
+
+fn default_anyspeak_python() -> String {
+    "python3".to_string()
+}
+
+fn default_anyspeak_voice_tags() -> Vec<String> {
+    ["[RYAN]", "[VIVIAN]", "[AUTO]"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn join_display<T: fmt::Display>(values: &[T]) -> String {
@@ -342,13 +370,15 @@ pub fn prepare_dataset(out: &Path, config: &SpeechManifoldConfig) -> Result<()> 
         );
     }
     println!(
-        "  audio caps: per_backend={} espeak={} google_translate={} wiktionary={} styletts2={} piper={} mock={}",
+        "  audio caps: per_backend={} espeak={} google_translate={} wiktionary={} commons={} styletts2={} piper={} anyspeak={} mock={}",
         config.max_audio_examples_per_backend,
         config.max_espeak_examples,
         config.max_google_translate_examples,
         config.max_wiktionary_audio_examples,
+        config.max_wikimedia_commons_examples,
         config.max_styletts2_examples,
         config.max_piper_examples,
+        config.max_anyspeak_examples,
         config.max_mock_examples
     );
     println!("  network policy: checking robots.txt before every network audio fetch");
@@ -436,18 +466,25 @@ struct AudioSynthesisState<'a> {
     espeak_available: bool,
     google_enabled: bool,
     wiktionary_enabled: bool,
+    wikimedia_commons_enabled: bool,
     styletts2_enabled: bool,
     piper_enabled: bool,
+    anyspeak_enabled: bool,
     mock_enabled: bool,
     espeak_count: usize,
     google_count: usize,
     wiktionary_count: usize,
+    wikimedia_commons_count: usize,
+    wikimedia_commons_lookups: usize,
     styletts2_count: usize,
     piper_count: usize,
+    anyspeak_count: usize,
     mock_count: usize,
     espeak_failures: usize,
+    wikimedia_commons_skips: BTreeMap<String, usize>,
     styletts2_skips: BTreeMap<String, usize>,
     piper_skips: BTreeMap<String, usize>,
+    anyspeak_skips: BTreeMap<String, usize>,
     mock_failures: usize,
     google_skips: BTreeMap<String, usize>,
     wiktionary_skips: BTreeMap<String, usize>,
@@ -459,8 +496,10 @@ impl<'a> AudioSynthesisState<'a> {
     fn new(config: &'a SpeechManifoldConfig, audio_dir: &'a Path) -> Result<Self> {
         fs::create_dir_all(audio_dir.join("espeak-ng"))?;
         fs::create_dir_all(audio_dir.join("google-translate"))?;
+        fs::create_dir_all(audio_dir.join("wikimedia-commons"))?;
         fs::create_dir_all(audio_dir.join("styletts2"))?;
         fs::create_dir_all(audio_dir.join("piper"))?;
+        fs::create_dir_all(audio_dir.join("anyspeak"))?;
         fs::create_dir_all(audio_dir.join("mock"))?;
         Ok(Self {
             config,
@@ -469,18 +508,26 @@ impl<'a> AudioSynthesisState<'a> {
                 && Command::new("espeak-ng").arg("--version").output().is_ok(),
             google_enabled: config.backend_enabled("google-translate"),
             wiktionary_enabled: config.backend_enabled("wiktionary-audio"),
+            wikimedia_commons_enabled: config.backend_enabled("wikimedia-commons-audio"),
             styletts2_enabled: config.backend_enabled("styletts2"),
             piper_enabled: config.backend_enabled("piper"),
+            anyspeak_enabled: config.backend_enabled("anyspeak")
+                && anyspeak_run_local(config).is_some(),
             mock_enabled: config.backend_enabled("mock"),
             espeak_count: 0,
             google_count: 0,
             wiktionary_count: 0,
+            wikimedia_commons_count: 0,
+            wikimedia_commons_lookups: 0,
             styletts2_count: 0,
             piper_count: 0,
+            anyspeak_count: 0,
             mock_count: 0,
             espeak_failures: 0,
+            wikimedia_commons_skips: BTreeMap::new(),
             styletts2_skips: BTreeMap::new(),
             piper_skips: BTreeMap::new(),
+            anyspeak_skips: BTreeMap::new(),
             mock_failures: 0,
             google_skips: BTreeMap::new(),
             wiktionary_skips: BTreeMap::new(),
@@ -511,8 +558,10 @@ impl<'a> AudioSynthesisState<'a> {
                 "espeak-ng" => backends.push(AudioBackend::Espeak),
                 "google-translate" => backends.push(AudioBackend::GoogleTranslate),
                 "wiktionary-audio" => backends.push(AudioBackend::WiktionaryAudio),
+                "wikimedia-commons-audio" => backends.push(AudioBackend::WikimediaCommonsAudio),
                 "styletts2" => backends.push(AudioBackend::StyleTts2),
                 "piper" => backends.push(AudioBackend::Piper),
+                "anyspeak" => backends.push(AudioBackend::AnySpeak),
                 "mock" => backends.push(AudioBackend::Mock),
                 _ => {}
             }
@@ -525,8 +574,10 @@ impl<'a> AudioSynthesisState<'a> {
             AudioBackend::Espeak => self.try_espeak(example),
             AudioBackend::GoogleTranslate => self.try_google_translate(example),
             AudioBackend::WiktionaryAudio => self.try_wiktionary_audio(example),
+            AudioBackend::WikimediaCommonsAudio => self.try_wikimedia_commons_audio(example),
             AudioBackend::StyleTts2 => self.try_styletts2(example),
             AudioBackend::Piper => self.try_piper(example),
+            AudioBackend::AnySpeak => self.try_anyspeak(example),
             AudioBackend::Mock => self.try_mock(example),
         }
     }
@@ -626,6 +677,46 @@ impl<'a> AudioSynthesisState<'a> {
         example
             .provenance
             .push_str(" + native Piper WAV via `tongues speak`");
+        true
+    }
+
+    fn try_anyspeak(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_anyspeak_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.anyspeak_enabled || self.anyspeak_count >= cap {
+            return false;
+        }
+        let voice_tag = self
+            .config
+            .anyspeak_voice_tags
+            .get(self.anyspeak_count % self.config.anyspeak_voice_tags.len().max(1))
+            .map(String::as_str)
+            .unwrap_or("[AUTO]");
+        let mp3_path = self.audio_dir.join("anyspeak").join(format!(
+            "{}-{}.mp3",
+            safe_id(voice_tag),
+            example.id
+        ));
+        match synthesize_anyspeak(&example.spelling, voice_tag, self.config, &mp3_path) {
+            Ok(()) => {}
+            Err(error) => {
+                *self.anyspeak_skips.entry(error.to_string()).or_insert(0) += 1;
+                if self.anyspeak_skips.values().sum::<usize>() <= 3 {
+                    println!("  anyspeak skipped {}: {error}", example.spelling);
+                }
+                self.anyspeak_enabled = false;
+                return false;
+            }
+        }
+        self.anyspeak_count += 1;
+        example.audio_uri = Some(path_to_uri(&mp3_path));
+        example.sample_rate_hz = None;
+        example.source_backend = format!("anyspeak:{voice_tag}+placeholder-acoustics");
+        example
+            .provenance
+            .push_str(&format!(" + AnySpeak/Qwen3-TTS MP3 voice tag {voice_tag}"));
         true
     }
 
@@ -734,6 +825,63 @@ impl<'a> AudioSynthesisState<'a> {
         true
     }
 
+    fn try_wikimedia_commons_audio(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_wikimedia_commons_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.wikimedia_commons_enabled || self.wikimedia_commons_count >= cap {
+            return false;
+        }
+        if self.wikimedia_commons_lookups >= self.config.max_wikimedia_commons_lookup_attempts {
+            return false;
+        }
+        self.wikimedia_commons_lookups += 1;
+        let ogg_path = self
+            .audio_dir
+            .join("wikimedia-commons")
+            .join(format!("{}.ogg", example.id));
+        let source =
+            match fetch_wikimedia_commons_audio(&example.spelling, &ogg_path, &mut self.robots) {
+                Ok(Some(source)) => source,
+                Ok(None) => {
+                    *self
+                        .wikimedia_commons_skips
+                        .entry("no exact Commons pronunciation file found".to_string())
+                        .or_insert(0) += 1;
+                    return false;
+                }
+                Err(error) => {
+                    *self
+                        .wikimedia_commons_skips
+                        .entry(error.to_string())
+                        .or_insert(0) += 1;
+                    if self.wikimedia_commons_skips.values().sum::<usize>() <= 3 {
+                        println!(
+                            "  wikimedia-commons-audio skipped {}: {error}",
+                            example.spelling
+                        );
+                    }
+                    return false;
+                }
+            };
+        self.wikimedia_commons_count += 1;
+        example.audio_uri = Some(path_to_uri(&ogg_path));
+        example.sample_rate_hz = None;
+        example.source_backend = format!(
+            "wikimedia-commons-audio:{}+placeholder-acoustics",
+            source.license
+        );
+        example.provenance.push_str(&format!(
+            " + Wikimedia Commons human pronunciation `{}` license `{}` attribution `{}` media `{}`",
+            source.source_url, source.license, source.attribution, source.media_url
+        ));
+        example.reference_uris.push(source.source_url);
+        example.reference_uris.sort();
+        example.reference_uris.dedup();
+        true
+    }
+
     fn print_summary(&self) {
         println!("Audio synthesis summary:");
         println!(
@@ -759,6 +907,15 @@ impl<'a> AudioSynthesisState<'a> {
             println!("    skip: {count} x {reason}");
         }
         println!(
+            "  wikimedia-commons-audio: written={} skipped={} lookups={}",
+            self.wikimedia_commons_count,
+            self.wikimedia_commons_skips.values().sum::<usize>(),
+            self.wikimedia_commons_lookups
+        );
+        for (reason, count) in &self.wikimedia_commons_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        println!(
             "  styletts2: written={} skipped={}",
             self.styletts2_count,
             self.styletts2_skips.values().sum::<usize>()
@@ -775,6 +932,14 @@ impl<'a> AudioSynthesisState<'a> {
             println!("    skip: {count} x {reason}");
         }
         println!(
+            "  anyspeak: written={} skipped={}",
+            self.anyspeak_count,
+            self.anyspeak_skips.values().sum::<usize>()
+        );
+        for (reason, count) in &self.anyspeak_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        println!(
             "  mock: written={} failures={}",
             self.mock_count, self.mock_failures
         );
@@ -787,8 +952,10 @@ enum AudioBackend {
     Espeak,
     GoogleTranslate,
     WiktionaryAudio,
+    WikimediaCommonsAudio,
     StyleTts2,
     Piper,
+    AnySpeak,
     Mock,
 }
 
@@ -1048,16 +1215,58 @@ fn synthesize_with_tongues_speak(text: &str, backend: &str, wav_path: &Path) -> 
     let output = Command::new(current_exe)
         .args([
             "speak",
-            text,
             "--backend",
             backend,
             "--quality",
             "fast",
             "--output",
             wav_path.to_str().context("non-UTF-8 WAV path")?,
+            "--",
+            text,
         ])
         .output()
         .with_context(|| format!("running tongues speak --backend {backend}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
+}
+
+fn anyspeak_run_local(config: &SpeechManifoldConfig) -> Option<std::path::PathBuf> {
+    config
+        .anyspeak_dir
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("ANYSPEAK_DIR").map(std::path::PathBuf::from))
+        .map(|dir| dir.join("run_local.py"))
+        .filter(|path| path.exists())
+}
+
+fn synthesize_anyspeak(
+    text: &str,
+    voice_tag: &str,
+    config: &SpeechManifoldConfig,
+    mp3_path: &Path,
+) -> Result<()> {
+    if let Some(parent) = mp3_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let run_local = anyspeak_run_local(config)
+        .context("AnySpeak is not configured; set anyspeak_dir or ANYSPEAK_DIR")?;
+    let prompt = if voice_tag.trim().is_empty() || voice_tag == "[AUTO]" {
+        text.to_string()
+    } else {
+        format!("{} {}", voice_tag.trim(), text)
+    };
+    let output = Command::new(&config.anyspeak_python)
+        .arg(run_local)
+        .arg(prompt)
+        .arg("-o")
+        .arg(mp3_path)
+        .output()
+        .context("running AnySpeak local CLI")?;
     anyhow::ensure!(
         output.status.success(),
         "{}",
@@ -1150,6 +1359,124 @@ fn fetch_wiktionary_audio(
         }
     }
     Ok(None)
+}
+
+#[derive(Debug, Clone)]
+struct CommonsAudioSource {
+    media_url: String,
+    source_url: String,
+    license: String,
+    attribution: String,
+}
+
+fn fetch_wikimedia_commons_audio(
+    word: &str,
+    out_path: &Path,
+    robots: &mut RobotsCache,
+) -> Result<Option<CommonsAudioSource>> {
+    for file_name in wiktionary_audio_file_candidates(word) {
+        let page_url = format!(
+            "https://commons.wikimedia.org/wiki/File:{}",
+            simple_url_component(&file_name)
+        );
+        ensure_robots_allowed(&page_url, robots)?;
+        let response = match ureq::get(&page_url).header("User-Agent", USER_AGENT).call() {
+            Ok(response) => response,
+            Err(_) => continue,
+        };
+        let mut body = response.into_body();
+        let mut reader = body.as_reader();
+        let mut html = String::new();
+        reader.read_to_string(&mut html)?;
+        let Some(mut source) = parse_commons_audio_source(&html, &file_name, &page_url) else {
+            continue;
+        };
+        if download_to_file_checked(&source.media_url, out_path, robots).is_ok() {
+            source.source_url = page_url;
+            return Ok(Some(source));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_commons_audio_source(
+    html: &str,
+    file_name: &str,
+    page_url: &str,
+) -> Option<CommonsAudioSource> {
+    let encoded_file_name = file_name.replace(' ', "_");
+    let media_url = first_between(html, "contentUrl\":\"", "\"")
+        .or_else(|| first_between(html, "<source src=\"", "\""))
+        .or_else(|| {
+            first_between(html, "href=\"https://upload.wikimedia.org/", "\"")
+                .map(|path| format!("https://upload.wikimedia.org/{path}"))
+        })?;
+    let media_url = media_url.replace("\\/", "/");
+    if !media_url.contains(&encoded_file_name) && !media_url.contains(file_name) {
+        return None;
+    }
+    let license = first_between(
+        html,
+        "licensetpl&#95;short\" style=\"display:none;\">",
+        "</span>",
+    )
+    .or_else(|| {
+        first_between(
+            html,
+            "licensetpl_short\" style=\"display:none;\">",
+            "</span>",
+        )
+    })
+    .or_else(|| first_between(html, "\"license\":\"", "\""))
+    .map(|value| html_text(&value))
+    .unwrap_or_else(|| "Wikimedia Commons file license".to_string());
+    let attribution = first_between(html, "wbmi-snak-value--value'>", "<")
+        .or_else(|| {
+            first_between(html, "recorded by <a", "</a>")
+                .and_then(|link| link.rsplit('>').next().map(str::to_string))
+        })
+        .or_else(|| first_between(html, "title=\"User:", "\""))
+        .map(|value| html_text(&value))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Wikimedia Commons contributor".to_string());
+
+    Some(CommonsAudioSource {
+        media_url,
+        source_url: page_url.to_string(),
+        license,
+        attribution,
+    })
+}
+
+fn first_between(haystack: &str, start: &str, end: &str) -> Option<String> {
+    let (_, rest) = haystack.split_once(start)?;
+    let (value, _) = rest.split_once(end)?;
+    Some(value.to_string())
+}
+
+fn html_text(value: &str) -> String {
+    strip_html_tags(value)
+        .replace("&amp;", "&")
+        .replace("&#039;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .trim()
+        .to_string()
+}
+
+fn strip_html_tags(value: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn wiktionary_audio_file_candidates(word: &str) -> Vec<String> {
@@ -1733,6 +2060,8 @@ backend was available and allowed by robots.txt.
 | eSpeak NG | Optional local WAV samples with configured voices. | eSpeak NG is GPL-3-or-later; review eSpeak NG terms before redistributing generated audio. |
 | Google Translate TTS URL support (`tts-urls`) | Optional MP3 samples, only when robots.txt allows the TTS path. | The URL helper crate is MIT; access/output from Google's service is governed by Google's terms and robots policy. This project is not affiliated with Google. |
 | Wiktionary/Wikimedia audio | Optional OGG samples from public media URLs, only when robots.txt allows the requested paths. | Individual media files may have their own licenses; keep source URLs/provenance with redistributed audio. |
+| Wikimedia Commons pronunciation audio | Optional real-human OGG pronunciation samples from allowed Commons file pages and direct media URLs. | Individual files carry their own licenses and attribution; source URLs, license labels, and attribution are preserved in provenance. |
+| AnySpeak | Optional local MP3 samples via `python run_local.py` from an AnySpeak checkout. | AnySpeak is AGPL-3 and Qwen3-TTS-based; review AnySpeak and model/output terms before redistributing generated audio. |
 | StyleTTS2 | Optional local WAV samples via `tongues speak --backend styletts2` when the local model/backend is available. | Review the selected model license before redistributing generated audio. |
 | Piper | Optional local WAV samples via `tongues speak --backend piper` when the local model/backend is available. | Review the selected voice license before redistributing generated audio. |
 | Mock | Optional deterministic local WAV samples for smoke tests and backend diversity. | Project-local generated test audio. |
@@ -2365,8 +2694,33 @@ mod tests {
         assert!(readme.contains("eSpeak NG"));
         assert!(readme.contains("Google Translate"));
         assert!(readme.contains("robots.txt"));
+        assert!(readme.contains("Wikimedia Commons pronunciation audio"));
+        assert!(readme.contains("AnySpeak"));
         assert!(readme.contains("Dictionary.com"));
         assert!(readme.contains("External Audio Manifests"));
+    }
+
+    #[test]
+    fn commons_audio_parser_extracts_media_license_and_attribution() {
+        let html = r#"
+            <audio><source src="https://upload.wikimedia.org/wikipedia/commons/4/46/En-us-cat.ogg" type="audio/ogg"></audio>
+            <span class="licensetpl_short" style="display:none;">CC BY-SA 3.0</span>
+            <div class='wbmi-snak-value--value'>Dvortygirl</div>
+        "#;
+
+        let source = parse_commons_audio_source(
+            html,
+            "En-us-cat.ogg",
+            "https://commons.wikimedia.org/wiki/File:En-us-cat.ogg",
+        )
+        .unwrap();
+
+        assert_eq!(
+            source.media_url,
+            "https://upload.wikimedia.org/wikipedia/commons/4/46/En-us-cat.ogg"
+        );
+        assert_eq!(source.license, "CC BY-SA 3.0");
+        assert_eq!(source.attribution, "Dvortygirl");
     }
 
     #[test]

@@ -873,7 +873,13 @@ struct SpeechManifoldFileConfig {
     max_wiktionary_audio_examples: Option<usize>,
     max_styletts2_examples: Option<usize>,
     max_piper_examples: Option<usize>,
+    max_anyspeak_examples: Option<usize>,
     max_mock_examples: Option<usize>,
+    max_wikimedia_commons_examples: Option<usize>,
+    max_wikimedia_commons_lookup_attempts: Option<usize>,
+    anyspeak_dir: Option<String>,
+    anyspeak_python: Option<String>,
+    anyspeak_voice_tags: Option<Vec<String>>,
     include_reference_uris: Option<bool>,
     external_audio_manifests: Option<Vec<String>>,
     espeak_voices: Option<Vec<String>>,
@@ -943,7 +949,24 @@ fn speech_manifold_prepare_config(path: &Path) -> Result<SpeechManifoldConfig> {
         max_piper_examples: file
             .max_piper_examples
             .unwrap_or(default.max_piper_examples),
+        max_anyspeak_examples: file
+            .max_anyspeak_examples
+            .unwrap_or(default.max_anyspeak_examples),
         max_mock_examples: file.max_mock_examples.unwrap_or(default.max_mock_examples),
+        max_wikimedia_commons_examples: file
+            .max_wikimedia_commons_examples
+            .unwrap_or(default.max_wikimedia_commons_examples),
+        max_wikimedia_commons_lookup_attempts: file
+            .max_wikimedia_commons_lookup_attempts
+            .unwrap_or(default.max_wikimedia_commons_lookup_attempts),
+        anyspeak_dir: file
+            .anyspeak_dir
+            .filter(|value| !value.trim().is_empty())
+            .or(default.anyspeak_dir),
+        anyspeak_python: file.anyspeak_python.unwrap_or(default.anyspeak_python),
+        anyspeak_voice_tags: file
+            .anyspeak_voice_tags
+            .unwrap_or(default.anyspeak_voice_tags),
         include_reference_uris: file
             .include_reference_uris
             .unwrap_or(default.include_reference_uris),
