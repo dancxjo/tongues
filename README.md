@@ -32,6 +32,7 @@ Pronlex currently includes:
 - a REPL that keeps the model loaded for interactive use;
 - CMUdict-based data preparation;
 - OpenEPD-based discrepancy mining and refinement;
+- sight-word refinement using the built-in Dolch list;
 - a local `speech` crate for rule-based phonemicization/realization;
 - StyleTTS2/Piper-adjacent speech plumbing that is still experimental.
 
@@ -111,7 +112,9 @@ cargo run --release -- prepare \
     --out runs/cmudict-v0
 ```
 
-`prepare` writes:
+Optional. Builds `runs/cmudict-v0` without starting training. Use this when you want to refresh or inspect the generated data, or pass custom prepare arguments.
+
+`prepare` writes a prepared data directory containing:
 
 | File | Purpose |
 |------|---------|
@@ -137,6 +140,8 @@ Splits are deterministic by base word. Alternate source entries for the same bas
 just train
 ```
 
+Trains `models/cmudict-v0`. By default it trains `--task both`, with an even mix of grapheme-to-phoneme and phoneme-to-grapheme examples.
+
 Direct form:
 
 ```sh
@@ -152,6 +157,12 @@ cargo run --release -- train \
     --patience 5
 ```
 
+CUDA is used automatically when available. Pass global `--cpu` to force the CPU backend:
+
+```sh
+cargo run --release -- --cpu train --data runs/cmudict-v0
+```
+
 Tasks:
 
 | Task | Meaning |
@@ -160,14 +171,32 @@ Tasks:
 | `p2g` | broad IPA phonemes to spelling/graphemes |
 | `both` | train both directions |
 
-Training resumes automatically when a previous `train_state.json` and checkpoints are present.
+`both` is the default. In training, the default `both` path alternates task directions within each shuffled batch, giving an even mix for normal even-sized batches.
+
+The train command still accepts legacy masking flags such as `--mask-policy`, `--max-mask-rate`, and `--span-mask-prob`. They are currently ignored by the seq2seq training path.
+
+The model directory receives:
+
+| File | Purpose |
+|------|---------|
+| `model.bin` | Best model weights |
+| `model-epoch-N.bin` | Per-epoch checkpoints |
+| `model_config.json` | Architecture config |
+| `train_config.json` | Training config, including task direction |
+| `train_state.json` | Resume state |
+| `vocab.json` | Copied vocabulary for self-contained prediction |
+
+Training resumes automatically when `train_state.json` and checkpoint files are present in the output directory.
 
 ### Predict
 
 ```sh
 just infer "farkle"
+just infer --task p2g "ˈfɑɹ.kəl"
 just infer --cpu "ˈfɑɹ.kəl"
 ```
+
+Runs one translation prediction.
 
 Direct form:
 
@@ -201,6 +230,12 @@ Training copies `vocab.json` into the model directory, so ordinary prediction sh
 cargo run --release -- repl --cpu
 ```
 
+The REPL is also the default subcommand:
+
+```sh
+cargo run --release -- --cpu
+```
+
 The REPL loads vocabulary, device, config, and weights once, then accepts repeated inputs:
 
 ```text
@@ -232,6 +267,8 @@ cargo run --release -- eval \
     --task auto
 ```
 
+`--task auto` reads `train_config.json`. You can also force `g2p`, `p2g`, or `both`.
+
 Metrics currently include:
 
 - loss;
@@ -246,7 +283,9 @@ Use exact match for strict whole-output correctness and token accuracy for “mo
 just refine
 ```
 
-or:
+Mines validation/test pronunciation discrepancies and fine-tunes a copy of the model on those failed examples. The recipe enables verbose output, so each exceptional word is printed as it is found.
+
+Direct form:
 
 ```sh
 cargo run --release -- refine \
@@ -261,7 +300,7 @@ cargo run --release -- refine \
     --patience 2
 ```
 
-Refinement runs the model over held-out splits, looks up reference pronunciations in OpenEPD, normalizes them through the `speech` layer, compares predictions with gold targets, writes substantive mismatches to `discrepancies.jsonl`, and fine-tunes from the source model weights using those hard examples.
+Refinement runs the model over held-out splits, looks up reference pronunciations in OpenEPD (`open-english-pronouncing-dictionary`), normalizes them through the `speech` notation and syllabification layer, compares each prediction with that gold target using a broad comparison key, computes character-level edit distance on that key, writes every substantive mismatch to `discrepancies.jsonl`, and fine-tunes from the source model weights using only the mismatched lexemes.
 
 Example discrepancy:
 
@@ -271,17 +310,73 @@ gold : ˈzwaɪɡ
 pred : ˈzweɪɡ
 ```
 
+The default task is `g2p`, grapheme to phoneme. Use `--task p2g` for phoneme-to-grapheme refinement, or `--task both` to mine and train both directions. The source model directory is left untouched; refinement requires a separate `--out` directory.
+
+With `--verbose`, each discrepant word is printed with its split, task, edit distance, input, gold target, and prediction.
+
+Length marks, syllable dots, stress mark placement, and common rhotic spellings are ignored for discrepancy detection so refinement does not train on merely notational differences.
+
+OpenEPD entries containing IPA characters outside the existing model vocabulary are skipped, because the saved model cannot emit tokens that are not in its `vocab.json` without rebuilding the vocabulary and retraining.
+
 Some discrepancies are regular patterns worth training. Others are sight-word exceptions and probably belong in an override table rather than in the productive model.
+
+### Sight-word refinement
+
+```sh
+just sight-words
+```
+
+Fine-tunes a copy of the model on the built-in Dolch sight-word list using OpenEPD gold pronunciations. The default output is `models/cmudict-v0-sight-words`.
+
+Pass refinement flags after the recipe:
+
+```sh
+just sight-words --epochs 8 --learning-rate 5e-5
+```
+
+Direct form:
+
+```sh
+cargo run --release -- refine \
+    --model models/cmudict-v0 \
+    --data runs/cmudict-v0 \
+    --out models/cmudict-v0-sight-words \
+    --source sight-words \
+    --task both
+```
+
+Unlike the default discrepancy source, `--source sight-words` trains every usable sight-word lexeme after OpenEPD and vocabulary filtering. It still writes `discrepancies.jsonl` so current sight-word failures are visible before fine-tuning.
+
+#### Why sight words?
+
+Not every pronunciation pattern is productive.
+
+Some words are best treated as lexical exceptions and memorized directly:
+
+```text
+one
+two
+yacht
+colonel
+choir
+```
+
+The sight-word source gives the system a way to reinforce high-frequency irregular forms without requiring the productive model to contort itself around every historical spelling accident.
 
 ### Rule-based speech helpers
 
 ```sh
 just phonemes "hello world"
 just phones "hello world"
+```
+
+Runs the rule-based speech pipeline directly.
+
+```sh
 just speak "hello world"
 ```
 
-These commands exercise the local speech pipeline directly.
+Synthesizes speech through the configured backend.
 
 ---
 
@@ -380,4 +475,4 @@ cargo test -p pronlex-model
 
 ## License
 
-TBD
+MIT

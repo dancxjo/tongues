@@ -34,3 +34,7 @@ train *args:
 # Refine the model on validation/test pronunciation discrepancies
 refine *args:
     cargo run --bin pronlex -- refine --model models/cmudict-v0 --data runs/cmudict-v0 --out models/cmudict-v0-refined --verbose "$@"
+
+# Fine-tune the model on the built-in Dolch sight-word list
+sight-words *args:
+    cargo run --bin pronlex -- refine --model models/cmudict-v0 --data runs/cmudict-v0 --out models/cmudict-v0-sight-words --source sight-words --task both --verbose "$@"

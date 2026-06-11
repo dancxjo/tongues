@@ -194,6 +194,10 @@ enum Commands {
         #[arg(long, default_value = "valid,test")]
         splits: String,
 
+        /// Refinement source: held-out discrepancies or the built-in sight-word list
+        #[arg(long, value_enum, default_value = "discrepancies")]
+        source: RefinementSourceArg,
+
         /// Direction to refine: g2p, p2g, or both
         #[arg(long, default_value = "g2p")]
         task: String,
@@ -289,6 +293,14 @@ enum MaskPolicyArg {
     Variable,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RefinementSourceArg {
+    /// Mine held-out split examples where model predictions disagree with OpenEPD.
+    Discrepancies,
+    /// Fine-tune on the built-in Dolch sight-word list using OpenEPD gold pronunciations.
+    SightWords,
+}
+
 fn is_cuda_available() -> bool {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -322,6 +334,7 @@ fn main() -> Result<()> {
         match &command {
             Commands::Train { .. }
             | Commands::Eval { .. }
+            | Commands::Refine { .. }
             | Commands::Predict { .. }
             | Commands::Repl { .. } => {
                 println!("Warning: CUDA is not available. Falling back to CPU.");
@@ -381,6 +394,7 @@ fn main() -> Result<()> {
             data,
             out,
             splits,
+            source,
             task,
             learning_rate,
             weight_decay,
@@ -394,6 +408,7 @@ fn main() -> Result<()> {
             &data,
             &out,
             &splits,
+            source,
             &task,
             learning_rate,
             weight_decay,
@@ -1175,12 +1190,328 @@ struct DiscrepancyRecord {
     edit_distance: usize,
 }
 
+const SIGHT_WORDS: &[&str] = &[
+    "a",
+    "about",
+    "after",
+    "again",
+    "all",
+    "always",
+    "am",
+    "an",
+    "and",
+    "any",
+    "apple",
+    "are",
+    "around",
+    "as",
+    "ask",
+    "at",
+    "ate",
+    "away",
+    "baby",
+    "back",
+    "ball",
+    "be",
+    "bear",
+    "because",
+    "bed",
+    "been",
+    "before",
+    "bell",
+    "best",
+    "better",
+    "big",
+    "bird",
+    "birthday",
+    "black",
+    "blue",
+    "boat",
+    "both",
+    "box",
+    "boy",
+    "bread",
+    "bring",
+    "brown",
+    "but",
+    "buy",
+    "by",
+    "cake",
+    "call",
+    "came",
+    "can",
+    "car",
+    "carry",
+    "cat",
+    "chair",
+    "chicken",
+    "children",
+    "christmas",
+    "clean",
+    "coat",
+    "cold",
+    "come",
+    "corn",
+    "could",
+    "cow",
+    "cut",
+    "day",
+    "did",
+    "do",
+    "does",
+    "dog",
+    "doll",
+    "done",
+    "door",
+    "down",
+    "draw",
+    "drink",
+    "duck",
+    "eat",
+    "egg",
+    "eight",
+    "every",
+    "eye",
+    "fall",
+    "far",
+    "farm",
+    "farmer",
+    "fast",
+    "father",
+    "feet",
+    "find",
+    "fire",
+    "first",
+    "fish",
+    "five",
+    "floor",
+    "flower",
+    "fly",
+    "for",
+    "found",
+    "four",
+    "from",
+    "full",
+    "funny",
+    "game",
+    "garden",
+    "gave",
+    "get",
+    "girl",
+    "give",
+    "go",
+    "goes",
+    "going",
+    "good",
+    "goodbye",
+    "got",
+    "grass",
+    "green",
+    "ground",
+    "grow",
+    "had",
+    "hand",
+    "has",
+    "have",
+    "he",
+    "head",
+    "help",
+    "her",
+    "here",
+    "hill",
+    "him",
+    "his",
+    "hold",
+    "home",
+    "horse",
+    "hot",
+    "house",
+    "how",
+    "hurt",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "jump",
+    "just",
+    "keep",
+    "kind",
+    "kitty",
+    "know",
+    "laugh",
+    "leg",
+    "let",
+    "letter",
+    "light",
+    "like",
+    "little",
+    "live",
+    "long",
+    "look",
+    "made",
+    "make",
+    "man",
+    "many",
+    "may",
+    "me",
+    "men",
+    "milk",
+    "money",
+    "morning",
+    "mother",
+    "much",
+    "must",
+    "my",
+    "myself",
+    "name",
+    "nest",
+    "never",
+    "new",
+    "night",
+    "no",
+    "not",
+    "now",
+    "of",
+    "off",
+    "old",
+    "on",
+    "once",
+    "one",
+    "only",
+    "open",
+    "or",
+    "our",
+    "out",
+    "over",
+    "own",
+    "paper",
+    "party",
+    "picture",
+    "pick",
+    "pig",
+    "play",
+    "please",
+    "pretty",
+    "pull",
+    "put",
+    "rabbit",
+    "rain",
+    "ran",
+    "read",
+    "red",
+    "ride",
+    "right",
+    "ring",
+    "robin",
+    "round",
+    "run",
+    "said",
+    "santa",
+    "saw",
+    "say",
+    "school",
+    "see",
+    "seed",
+    "seven",
+    "shall",
+    "she",
+    "sheep",
+    "shoe",
+    "show",
+    "sing",
+    "sister",
+    "sit",
+    "six",
+    "sleep",
+    "small",
+    "snow",
+    "so",
+    "some",
+    "song",
+    "soon",
+    "squirrel",
+    "start",
+    "stick",
+    "stop",
+    "street",
+    "sun",
+    "table",
+    "take",
+    "tell",
+    "ten",
+    "thank",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "thing",
+    "think",
+    "this",
+    "those",
+    "three",
+    "time",
+    "to",
+    "today",
+    "together",
+    "too",
+    "top",
+    "toy",
+    "tree",
+    "try",
+    "two",
+    "under",
+    "up",
+    "upon",
+    "us",
+    "use",
+    "very",
+    "walk",
+    "warm",
+    "was",
+    "wash",
+    "watch",
+    "water",
+    "way",
+    "we",
+    "well",
+    "went",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "white",
+    "who",
+    "why",
+    "will",
+    "wind",
+    "window",
+    "wish",
+    "with",
+    "wood",
+    "work",
+    "would",
+    "write",
+    "yellow",
+    "yes",
+    "you",
+    "your",
+];
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_refine(
     model_dir: &Path,
     data: &Path,
     out: &Path,
     splits: &str,
+    source: RefinementSourceArg,
     task_str: &str,
     learning_rate: f64,
     weight_decay: f32,
@@ -1214,7 +1545,7 @@ fn cmd_refine(
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect();
-    if split_names.is_empty() {
+    if matches!(source, RefinementSourceArg::Discrepancies) && split_names.is_empty() {
         anyhow::bail!("At least one split is required");
     }
 
@@ -1234,10 +1565,12 @@ fn cmd_refine(
     }
 
     let mut split_lexemes = Vec::new();
-    for split in &split_names {
-        let path = data.join(format!("{}.jsonl", split));
-        let lexemes = read_jsonl(&path)?;
-        split_lexemes.push((split.clone(), lexemes));
+    if matches!(source, RefinementSourceArg::Discrepancies) {
+        for split in &split_names {
+            let path = data.join(format!("{}.jsonl", split));
+            let lexemes = read_jsonl(&path)?;
+            split_lexemes.push((split.clone(), lexemes));
+        }
     }
 
     fs::create_dir_all(out).context("creating refinement output directory")?;
@@ -1259,9 +1592,20 @@ fn cmd_refine(
 
     println!("Mining discrepancies from {}", model_dir.display());
     println!("  gold source: OpenEPD preferred IPA");
-    println!("  splits: {}", split_names.join(","));
-    for (split, lexemes) in &split_lexemes {
-        println!("  {}: {} lexemes", split, lexemes.len());
+    match source {
+        RefinementSourceArg::Discrepancies => {
+            println!("  source: held-out discrepancies");
+            println!("  splits: {}", split_names.join(","));
+            for (split, lexemes) in &split_lexemes {
+                println!("  {}: {} lexemes", split, lexemes.len());
+            }
+        }
+        RefinementSourceArg::SightWords => {
+            println!(
+                "  source: built-in Dolch sight words ({} words before OpenEPD/vocab filtering)",
+                SIGHT_WORDS.len()
+            );
+        }
     }
     if let Some(task) = task_filter {
         println!("  task: {:?}", task);
@@ -1278,28 +1622,52 @@ fn cmd_refine(
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
             println!("  device: CPU (ndarray)");
-            collect_discrepancies::<CpuInferBackend>(
-                &device,
-                &model_config,
-                model_dir,
-                &vocab,
-                task_filter,
-                &split_lexemes,
-                verbose,
-            )?
+            match source {
+                RefinementSourceArg::Discrepancies => collect_discrepancies::<CpuInferBackend>(
+                    &device,
+                    &model_config,
+                    model_dir,
+                    &vocab,
+                    task_filter,
+                    &split_lexemes,
+                    verbose,
+                )?,
+                RefinementSourceArg::SightWords => {
+                    collect_sight_word_refinement::<CpuInferBackend>(
+                        &device,
+                        &model_config,
+                        model_dir,
+                        &vocab,
+                        task_filter,
+                        verbose,
+                    )?
+                }
+            }
         }
         DeviceArg::Cuda => {
             let device = CudaDevice::default();
             println!("  device: CUDA GPU");
-            collect_discrepancies::<CudaInferBackend>(
-                &device,
-                &model_config,
-                model_dir,
-                &vocab,
-                task_filter,
-                &split_lexemes,
-                verbose,
-            )?
+            match source {
+                RefinementSourceArg::Discrepancies => collect_discrepancies::<CudaInferBackend>(
+                    &device,
+                    &model_config,
+                    model_dir,
+                    &vocab,
+                    task_filter,
+                    &split_lexemes,
+                    verbose,
+                )?,
+                RefinementSourceArg::SightWords => {
+                    collect_sight_word_refinement::<CudaInferBackend>(
+                        &device,
+                        &model_config,
+                        model_dir,
+                        &vocab,
+                        task_filter,
+                        verbose,
+                    )?
+                }
+            }
         }
     };
 
@@ -1313,12 +1681,16 @@ fn cmd_refine(
     print_discrepancy_summary(&records);
 
     if refine_lexemes.is_empty() {
-        println!("No discrepancies found. Refinement skipped.");
+        println!("No refinement examples found. Refinement skipped.");
         return Ok(());
     }
 
     let total_edit_distance: usize = records.iter().map(|r| r.edit_distance).sum();
-    let mean_edit_distance = total_edit_distance as f32 / records.len() as f32;
+    let mean_edit_distance = if records.is_empty() {
+        0.0
+    } else {
+        total_edit_distance as f32 / records.len() as f32
+    };
     println!(
         "Refinement set: {} lexemes, mean edit distance {:.2}",
         refine_lexemes.len(),
@@ -1519,6 +1891,134 @@ fn collect_discrepancies<B: Backend>(
             skipped_missing_openepd, skipped_parse_error, skipped_unknown_vocab
         );
     }
+
+    Ok((records, refine_lexemes))
+}
+
+fn collect_sight_word_refinement<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    task_filter: Option<Task>,
+    verbose: bool,
+) -> Result<(Vec<DiscrepancyRecord>, Vec<Lexeme>)> {
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!("Loading OpenEPD corpus...");
+    let openepd = open_english_pronouncing_dictionary::load()
+        .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
+    println!("  OpenEPD words: {}", openepd.word_count());
+
+    let tasks: Vec<Task> = match task_filter {
+        Some(task) => vec![task],
+        None => vec![Task::G2P, Task::P2G],
+    };
+
+    let mut sight_words = std::collections::BTreeSet::new();
+    for word in SIGHT_WORDS {
+        sight_words.insert((*word).to_string());
+    }
+
+    let pb = indicatif::ProgressBar::new((sight_words.len() * tasks.len()) as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
+            .progress_chars("#>-"),
+    );
+
+    let mut records = Vec::new();
+    let mut refine_lexemes = Vec::new();
+    let mut skipped_missing_openepd = 0usize;
+    let mut skipped_parse_error = 0usize;
+    let mut skipped_unknown_vocab = 0usize;
+    let mut checked = 0usize;
+
+    for base_word in sight_words {
+        let Some(raw_openepd_ipa) = openepd.preferred_ipa(&base_word) else {
+            skipped_missing_openepd += tasks.len();
+            if verbose {
+                pb.println(format!(
+                    "SKIP split=sight-words word={} reason=no-openepd-entry",
+                    base_word
+                ));
+            }
+            pb.inc(tasks.len() as u64);
+            continue;
+        };
+        let openepd_ipa = match normalize_openepd_ipa(raw_openepd_ipa) {
+            Ok(normalized) => normalized,
+            Err(err) => {
+                skipped_parse_error += tasks.len();
+                if verbose {
+                    pb.println(format!(
+                        "SKIP split=sight-words word={} reason=openepd-parse-error raw={} error={}",
+                        base_word, raw_openepd_ipa, err
+                    ));
+                }
+                pb.inc(tasks.len() as u64);
+                continue;
+            }
+        };
+
+        if has_unknown_vocab(vocab, &base_word) || has_unknown_vocab(vocab, &openepd_ipa) {
+            skipped_unknown_vocab += tasks.len();
+            if verbose {
+                pb.println(format!(
+                    "SKIP split=sight-words word={} reason=gold-not-in-vocab phonemes={}",
+                    base_word, openepd_ipa
+                ));
+            }
+            pb.inc(tasks.len() as u64);
+            continue;
+        }
+
+        refine_lexemes.push(Lexeme {
+            base_word: base_word.clone(),
+            phonemes: openepd_ipa.clone(),
+        });
+
+        for &task in &tasks {
+            let (input, gold, task_name) = match task {
+                Task::G2P => (base_word.clone(), openepd_ipa.clone(), "g2p".to_string()),
+                Task::P2G => (openepd_ipa.clone(), base_word.clone(), "p2g".to_string()),
+            };
+            pb.set_message(format!("sight-words {}", base_word));
+            let prediction = predict(&model, &input, task, vocab, device);
+            let gold_compare = comparison_key(&gold, task);
+            let prediction_compare = comparison_key(&prediction, task);
+            let edit_distance = edit_distance_chars(&prediction_compare, &gold_compare);
+            checked += 1;
+            if edit_distance > 0 {
+                let record = DiscrepancyRecord {
+                    split: "sight-words".to_string(),
+                    task: task_name,
+                    gold_source: "openepd-dolch".to_string(),
+                    base_word: base_word.clone(),
+                    input,
+                    gold,
+                    prediction,
+                    gold_compare,
+                    prediction_compare,
+                    edit_distance,
+                };
+                if verbose {
+                    pb.println(format_discrepancy(&record));
+                }
+                records.push(record);
+            }
+            pb.inc(1);
+        }
+    }
+    pb.println(format!(
+        "Completed sight-word source: checked {} examples, found {} discrepancies, selected {} training lexemes, skipped {} missing OpenEPD, skipped {} parse errors, skipped {} unknown-vocab forms",
+        checked,
+        records.len(),
+        refine_lexemes.len(),
+        skipped_missing_openepd,
+        skipped_parse_error,
+        skipped_unknown_vocab
+    ));
+    pb.finish_and_clear();
 
     Ok((records, refine_lexemes))
 }
