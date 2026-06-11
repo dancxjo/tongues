@@ -19,6 +19,10 @@ speak *args:
 phonemes *args:
     cargo run -- phonemes "$@"
 
+# Print narrow phonetic phones transcription
+phones *args:
+    cargo run -- phones "$@"
+
 # Train the pronlex masked-phone predictor model
 train *args:
     cargo run -- train --data runs/cmudict-v0 --out models/cmudict-v0 "$@"

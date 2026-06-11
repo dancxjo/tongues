@@ -284,14 +284,89 @@ fn cmd_phonemes(text: &str) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
 
-    println!("--- PHONEMES ---");
-    for p in &phonemicized.phonemes {
-        if let speech::Spec::Known(id) = &p.phoneme {
-            let symbol = speech::phoneme_default_phone_display_symbol(id, &phonemicized.variety);
-            println!("{:?} -> {}", id, symbol);
+    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    for syllable in phonemicized.syllables.iter() {
+        if let Some(first_phone) = syllable.phones.first() {
+            if let Some(word_idx) = token_word_index(&first_phone.features) {
+                if let Some(last_word) = words.last_mut() {
+                    if last_word.0 == word_idx {
+                        last_word.1.push(syllable.clone());
+                        continue;
+                    }
+                }
+                words.push((word_idx, vec![syllable.clone()]));
+            }
         }
     }
+
+    let mut ipa_words = Vec::new();
+    for (_, word_syllables) in words {
+        let ipa = syllables_to_phonemes_ipa(&word_syllables, &phonemicized.phonemes, &phonemicized.variety);
+        if !ipa.is_empty() {
+            ipa_words.push(ipa);
+        }
+    }
+
+    println!("/{}/", ipa_words.join(" "));
     Ok(())
+}
+
+fn cmd_phones(text: &str) -> Result<()> {
+    use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+
+    let phonemicizer = EnglishPhonemicizer;
+    let phonemicized = phonemicizer
+        .phonemicize(&PhonemicizeRequest {
+            text: text.to_string(),
+            variety: VarietyId("en-US".to_string()),
+            style: None,
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
+
+    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    for syllable in phonemicized.syllables.iter() {
+        if let Some(first_phone) = syllable.phones.first() {
+            if let Some(word_idx) = token_word_index(&first_phone.features) {
+                if let Some(last_word) = words.last_mut() {
+                    if last_word.0 == word_idx {
+                        last_word.1.push(syllable.clone());
+                        continue;
+                    }
+                }
+                words.push((word_idx, vec![syllable.clone()]));
+            }
+        }
+    }
+
+    let mut ipa_words = Vec::new();
+    for (_, word_syllables) in words {
+        let ipa = syllables_to_ipa_formatted(&word_syllables);
+        if !ipa.is_empty() {
+            ipa_words.push(ipa);
+        }
+    }
+
+    println!("[{}]", ipa_words.join(" "));
+    Ok(())
+}
+
+fn find_phoneme_for_phone(
+    phone: &speech::PhoneToken,
+    phonemes: &[speech::PhonemeToken],
+) -> Option<speech::PhonemeId> {
+    for phoneme_token in phonemes {
+        for realized_phone in &phoneme_token.realized_as {
+            if realized_phone.phone == phone.phone
+                && realized_phone.features == phone.features
+                && realized_phone.span == phone.span
+            {
+                if let speech::Spec::Known(ref id) = phoneme_token.phoneme {
+                    return Some(id.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn phone_ipa(phone: &speech::PhoneToken) -> &str {
@@ -302,6 +377,33 @@ fn phone_ipa(phone: &speech::PhoneToken) -> &str {
             .unwrap_or(id.as_str()),
         _ => "",
     }
+}
+
+fn syllables_to_phonemes_ipa(
+    syllables: &[speech::Syllable],
+    phonemes: &[speech::PhonemeToken],
+    variety: &speech::VarietyId,
+) -> String {
+    syllables
+        .iter()
+        .map(|syllable| {
+            let mut text = String::new();
+            match syllable.stress {
+                speech::Spec::Known(speech::Stress::Primary) => text.push('ˈ'),
+                speech::Spec::Known(speech::Stress::Secondary) => text.push('ˌ'),
+                _ => {}
+            }
+            for phone in &syllable.phones {
+                if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
+                    let symbol = speech::phoneme_default_phone_display_symbol(&phoneme_id, variety);
+                    text.push_str(&symbol);
+                } else {
+                    text.push_str(phone_ipa(phone));
+                }
+            }
+            text
+        })
+        .collect()
 }
 
 fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
