@@ -871,6 +871,9 @@ struct SpeechManifoldFileConfig {
     max_espeak_examples: Option<usize>,
     max_google_translate_examples: Option<usize>,
     max_wiktionary_audio_examples: Option<usize>,
+    max_styletts2_examples: Option<usize>,
+    max_piper_examples: Option<usize>,
+    max_mock_examples: Option<usize>,
     include_reference_uris: Option<bool>,
     external_audio_manifests: Option<Vec<String>>,
     espeak_voices: Option<Vec<String>>,
@@ -934,6 +937,13 @@ fn speech_manifold_prepare_config(path: &Path) -> Result<SpeechManifoldConfig> {
         max_wiktionary_audio_examples: file
             .max_wiktionary_audio_examples
             .unwrap_or(default.max_wiktionary_audio_examples),
+        max_styletts2_examples: file
+            .max_styletts2_examples
+            .unwrap_or(default.max_styletts2_examples),
+        max_piper_examples: file
+            .max_piper_examples
+            .unwrap_or(default.max_piper_examples),
+        max_mock_examples: file.max_mock_examples.unwrap_or(default.max_mock_examples),
         include_reference_uris: file
             .include_reference_uris
             .unwrap_or(default.include_reference_uris),

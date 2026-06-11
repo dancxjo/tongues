@@ -64,6 +64,9 @@ pub struct SpeechManifoldConfig {
     pub max_espeak_examples: usize,
     pub max_google_translate_examples: usize,
     pub max_wiktionary_audio_examples: usize,
+    pub max_styletts2_examples: usize,
+    pub max_piper_examples: usize,
+    pub max_mock_examples: usize,
     pub include_reference_uris: bool,
     #[serde(default)]
     pub external_audio_manifests: Vec<String>,
@@ -88,6 +91,9 @@ impl Default for SpeechManifoldConfig {
             max_espeak_examples: 64,
             max_google_translate_examples: 64,
             max_wiktionary_audio_examples: 32,
+            max_styletts2_examples: 16,
+            max_piper_examples: 32,
+            max_mock_examples: 64,
             include_reference_uris: true,
             external_audio_manifests: Vec::new(),
             espeak_voices: default_espeak_voices(),
@@ -336,11 +342,14 @@ pub fn prepare_dataset(out: &Path, config: &SpeechManifoldConfig) -> Result<()> 
         );
     }
     println!(
-        "  audio caps: per_backend={} espeak={} google_translate={} wiktionary={}",
+        "  audio caps: per_backend={} espeak={} google_translate={} wiktionary={} styletts2={} piper={} mock={}",
         config.max_audio_examples_per_backend,
         config.max_espeak_examples,
         config.max_google_translate_examples,
-        config.max_wiktionary_audio_examples
+        config.max_wiktionary_audio_examples,
+        config.max_styletts2_examples,
+        config.max_piper_examples,
+        config.max_mock_examples
     );
     println!("  network policy: checking robots.txt before every network audio fetch");
 
@@ -427,10 +436,19 @@ struct AudioSynthesisState<'a> {
     espeak_available: bool,
     google_enabled: bool,
     wiktionary_enabled: bool,
+    styletts2_enabled: bool,
+    piper_enabled: bool,
+    mock_enabled: bool,
     espeak_count: usize,
     google_count: usize,
     wiktionary_count: usize,
+    styletts2_count: usize,
+    piper_count: usize,
+    mock_count: usize,
     espeak_failures: usize,
+    styletts2_skips: BTreeMap<String, usize>,
+    piper_skips: BTreeMap<String, usize>,
+    mock_failures: usize,
     google_skips: BTreeMap<String, usize>,
     wiktionary_skips: BTreeMap<String, usize>,
     next_backend: usize,
@@ -441,6 +459,9 @@ impl<'a> AudioSynthesisState<'a> {
     fn new(config: &'a SpeechManifoldConfig, audio_dir: &'a Path) -> Result<Self> {
         fs::create_dir_all(audio_dir.join("espeak-ng"))?;
         fs::create_dir_all(audio_dir.join("google-translate"))?;
+        fs::create_dir_all(audio_dir.join("styletts2"))?;
+        fs::create_dir_all(audio_dir.join("piper"))?;
+        fs::create_dir_all(audio_dir.join("mock"))?;
         Ok(Self {
             config,
             audio_dir,
@@ -448,10 +469,19 @@ impl<'a> AudioSynthesisState<'a> {
                 && Command::new("espeak-ng").arg("--version").output().is_ok(),
             google_enabled: config.backend_enabled("google-translate"),
             wiktionary_enabled: config.backend_enabled("wiktionary-audio"),
+            styletts2_enabled: config.backend_enabled("styletts2"),
+            piper_enabled: config.backend_enabled("piper"),
+            mock_enabled: config.backend_enabled("mock"),
             espeak_count: 0,
             google_count: 0,
             wiktionary_count: 0,
+            styletts2_count: 0,
+            piper_count: 0,
+            mock_count: 0,
             espeak_failures: 0,
+            styletts2_skips: BTreeMap::new(),
+            piper_skips: BTreeMap::new(),
+            mock_failures: 0,
             google_skips: BTreeMap::new(),
             wiktionary_skips: BTreeMap::new(),
             next_backend: 0,
@@ -460,11 +490,10 @@ impl<'a> AudioSynthesisState<'a> {
     }
 
     fn try_attach_audio(&mut self, example: &mut SpeechManifoldExample) {
-        let backends = [
-            AudioBackend::Espeak,
-            AudioBackend::GoogleTranslate,
-            AudioBackend::WiktionaryAudio,
-        ];
+        let backends = self.enabled_backends();
+        if backends.is_empty() {
+            return;
+        }
         for offset in 0..backends.len() {
             let index = (self.next_backend + offset) % backends.len();
             let backend = backends[index];
@@ -475,11 +504,30 @@ impl<'a> AudioSynthesisState<'a> {
         }
     }
 
+    fn enabled_backends(&self) -> Vec<AudioBackend> {
+        let mut backends = Vec::new();
+        for name in &self.config.synthesis_backends {
+            match name.as_str() {
+                "espeak-ng" => backends.push(AudioBackend::Espeak),
+                "google-translate" => backends.push(AudioBackend::GoogleTranslate),
+                "wiktionary-audio" => backends.push(AudioBackend::WiktionaryAudio),
+                "styletts2" => backends.push(AudioBackend::StyleTts2),
+                "piper" => backends.push(AudioBackend::Piper),
+                "mock" => backends.push(AudioBackend::Mock),
+                _ => {}
+            }
+        }
+        backends
+    }
+
     fn try_backend(&mut self, example: &mut SpeechManifoldExample, backend: AudioBackend) -> bool {
         match backend {
             AudioBackend::Espeak => self.try_espeak(example),
             AudioBackend::GoogleTranslate => self.try_google_translate(example),
             AudioBackend::WiktionaryAudio => self.try_wiktionary_audio(example),
+            AudioBackend::StyleTts2 => self.try_styletts2(example),
+            AudioBackend::Piper => self.try_piper(example),
+            AudioBackend::Mock => self.try_mock(example),
         }
     }
 
@@ -512,6 +560,96 @@ impl<'a> AudioSynthesisState<'a> {
         example
             .provenance
             .push_str(&format!(" + espeak-ng voice {voice} WAV"));
+        true
+    }
+
+    fn try_styletts2(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_styletts2_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.styletts2_enabled || self.styletts2_count >= cap {
+            return false;
+        }
+        let wav_path = self
+            .audio_dir
+            .join("styletts2")
+            .join(format!("{}.wav", example.id));
+        match synthesize_with_tongues_speak(&example.spelling, "styletts2", &wav_path) {
+            Ok(()) => {}
+            Err(error) => {
+                *self.styletts2_skips.entry(error.to_string()).or_insert(0) += 1;
+                if self.styletts2_skips.values().sum::<usize>() <= 3 {
+                    println!("  styletts2 skipped {}: {error}", example.spelling);
+                }
+                self.styletts2_enabled = false;
+                return false;
+            }
+        }
+        self.styletts2_count += 1;
+        example.audio_uri = Some(path_to_uri(&wav_path));
+        example.sample_rate_hz = Some(24_000);
+        example.source_backend = "styletts2+placeholder-acoustics".to_string();
+        example
+            .provenance
+            .push_str(" + native StyleTTS2 WAV via `tongues speak`");
+        true
+    }
+
+    fn try_piper(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_piper_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.piper_enabled || self.piper_count >= cap {
+            return false;
+        }
+        let wav_path = self
+            .audio_dir
+            .join("piper")
+            .join(format!("{}.wav", example.id));
+        match synthesize_with_tongues_speak(&example.spelling, "piper", &wav_path) {
+            Ok(()) => {}
+            Err(error) => {
+                *self.piper_skips.entry(error.to_string()).or_insert(0) += 1;
+                if self.piper_skips.values().sum::<usize>() <= 3 {
+                    println!("  piper skipped {}: {error}", example.spelling);
+                }
+                self.piper_enabled = false;
+                return false;
+            }
+        }
+        self.piper_count += 1;
+        example.audio_uri = Some(path_to_uri(&wav_path));
+        example.sample_rate_hz = Some(22_050);
+        example.source_backend = "piper+placeholder-acoustics".to_string();
+        example
+            .provenance
+            .push_str(" + native Piper WAV via `tongues speak`");
+        true
+    }
+
+    fn try_mock(&mut self, example: &mut SpeechManifoldExample) -> bool {
+        let cap = self
+            .config
+            .max_mock_examples
+            .min(self.config.max_audio_examples_per_backend);
+        if !self.mock_enabled || self.mock_count >= cap {
+            return false;
+        }
+        let wav_path = self
+            .audio_dir
+            .join("mock")
+            .join(format!("{}.wav", example.id));
+        if synthesize_mock_wav(&example.spelling, &wav_path).is_err() {
+            self.mock_failures += 1;
+            return false;
+        }
+        self.mock_count += 1;
+        example.audio_uri = Some(path_to_uri(&wav_path));
+        example.sample_rate_hz = Some(24_000);
+        example.source_backend = "mock:deterministic-tone+placeholder-acoustics".to_string();
+        example.provenance.push_str(" + deterministic mock WAV");
         true
     }
 
@@ -620,6 +758,26 @@ impl<'a> AudioSynthesisState<'a> {
         for (reason, count) in &self.wiktionary_skips {
             println!("    skip: {count} x {reason}");
         }
+        println!(
+            "  styletts2: written={} skipped={}",
+            self.styletts2_count,
+            self.styletts2_skips.values().sum::<usize>()
+        );
+        for (reason, count) in &self.styletts2_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        println!(
+            "  piper: written={} skipped={}",
+            self.piper_count,
+            self.piper_skips.values().sum::<usize>()
+        );
+        for (reason, count) in &self.piper_skips {
+            println!("    skip: {count} x {reason}");
+        }
+        println!(
+            "  mock: written={} failures={}",
+            self.mock_count, self.mock_failures
+        );
         self.robots.print_summary();
     }
 }
@@ -629,6 +787,9 @@ enum AudioBackend {
     Espeak,
     GoogleTranslate,
     WiktionaryAudio,
+    StyleTts2,
+    Piper,
+    Mock,
 }
 
 impl SpeechManifoldConfig {
@@ -876,6 +1037,69 @@ fn synthesize_espeak(text: &str, voice: &str, wav_path: &Path) -> Result<()> {
         .status()
         .context("running espeak-ng")?;
     anyhow::ensure!(status.success(), "espeak-ng failed");
+    Ok(())
+}
+
+fn synthesize_with_tongues_speak(text: &str, backend: &str, wav_path: &Path) -> Result<()> {
+    if let Some(parent) = wav_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let current_exe = std::env::current_exe().context("resolving current tongues executable")?;
+    let output = Command::new(current_exe)
+        .args([
+            "speak",
+            text,
+            "--backend",
+            backend,
+            "--quality",
+            "fast",
+            "--output",
+            wav_path.to_str().context("non-UTF-8 WAV path")?,
+        ])
+        .output()
+        .with_context(|| format!("running tongues speak --backend {backend}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
+}
+
+fn synthesize_mock_wav(text: &str, wav_path: &Path) -> Result<()> {
+    if let Some(parent) = wav_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let sample_rate = 24_000u32;
+    let samples_per_char = sample_rate as usize / 14;
+    let silence = sample_rate as usize / 40;
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(wav_path, spec)
+        .with_context(|| format!("writing {}", wav_path.display()))?;
+    for byte in text.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        let freq = 220.0 + f32::from(byte % 48) * 11.0;
+        for index in 0..samples_per_char {
+            let t = index as f32 / sample_rate as f32;
+            let envelope = if index < 96 {
+                index as f32 / 96.0
+            } else if samples_per_char.saturating_sub(index) < 96 {
+                samples_per_char.saturating_sub(index) as f32 / 96.0
+            } else {
+                1.0
+            };
+            let sample = (t * freq * std::f32::consts::TAU).sin() * 0.18 * envelope;
+            writer.write_sample((sample * i16::MAX as f32) as i16)?;
+        }
+        for _ in 0..silence {
+            writer.write_sample(0i16)?;
+        }
+    }
+    writer.finalize()?;
     Ok(())
 }
 
@@ -1509,6 +1733,9 @@ backend was available and allowed by robots.txt.
 | eSpeak NG | Optional local WAV samples with configured voices. | eSpeak NG is GPL-3-or-later; review eSpeak NG terms before redistributing generated audio. |
 | Google Translate TTS URL support (`tts-urls`) | Optional MP3 samples, only when robots.txt allows the TTS path. | The URL helper crate is MIT; access/output from Google's service is governed by Google's terms and robots policy. This project is not affiliated with Google. |
 | Wiktionary/Wikimedia audio | Optional OGG samples from public media URLs, only when robots.txt allows the requested paths. | Individual media files may have their own licenses; keep source URLs/provenance with redistributed audio. |
+| StyleTTS2 | Optional local WAV samples via `tongues speak --backend styletts2` when the local model/backend is available. | Review the selected model license before redistributing generated audio. |
+| Piper | Optional local WAV samples via `tongues speak --backend piper` when the local model/backend is available. | Review the selected voice license before redistributing generated audio. |
+| Mock | Optional deterministic local WAV samples for smoke tests and backend diversity. | Project-local generated test audio. |
 | Dictionary.com | Reference URLs only. No Dictionary.com pages are fetched by prepare. | Respect Dictionary.com's terms if following or using those links manually. |
 
 ## External Audio Manifests

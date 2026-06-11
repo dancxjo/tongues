@@ -8,6 +8,7 @@ target/
 !/models/*/
 /models/*/*
 !/models/*/.gitkeep
+/datasets/speech-manifold/*/audio/
 /archive/
 *.bin.gz
 Cargo.lock

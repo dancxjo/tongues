@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 speech = { path = "../speech" }
 thiserror = { workspace = true }
 tts-urls = "1.0.0"
+hound = { workspace = true }
 tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }
 tongues-g2p2g = { path = "../tongues-g2p2g" }
