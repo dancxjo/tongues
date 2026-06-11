@@ -22,6 +22,8 @@ pub struct Lexeme {
     pub base_word: String,
     /// Broad IPA phoneme string.
     pub phonemes: String,
+    /// 0-indexed OpenEPD/wordfreq rarity rank; lower means more frequent.
+    pub rarity: f32,
 }
 
 // ── CMUdict parsing and parallel IPA generation ────────────────────────────
@@ -144,6 +146,7 @@ pub fn phonemicize_lexemes(base_words: Vec<String>) -> Vec<Lexeme> {
                     local_results.push(Lexeme {
                         base_word: word.clone(),
                         phonemes,
+                        rarity: 50_000.0,
                     });
                 }
             }
@@ -475,10 +478,12 @@ mod tests {
             Lexeme {
                 base_word: "cat".into(),
                 phonemes: "kæt".into(),
+                rarity: 2_000.0,
             },
             Lexeme {
                 base_word: "dog".into(),
                 phonemes: "dɔɡ".into(),
+                rarity: 1_000.0,
             },
         ];
         let mut rng = StdRng::seed_from_u64(42);
@@ -491,6 +496,7 @@ mod tests {
         let lex = Lexeme {
             base_word: "FARKLE".into(),
             phonemes: "ˈfɑɹ.kəl".into(),
+            rarity: 50_000.0,
         };
         let vocab = Vocab::build(&["farkle".to_string()], &["ˈfɑɹ.kəl".to_string()], &[]);
 
@@ -499,5 +505,13 @@ mod tests {
 
         assert_eq!(vocab.decode_ids(&g2p.src_ids[1..]), "farkle");
         assert_eq!(vocab.decode_ids(&p2g.tgt_out_ids), "farkle");
+    }
+
+    #[test]
+    fn lexeme_json_requires_rarity() {
+        let err = serde_json::from_str::<Lexeme>(r#"{"base_word":"cat","phonemes":"kæt"}"#)
+            .expect_err("rarity should be required");
+
+        assert!(err.to_string().contains("missing field `rarity`"));
     }
 }

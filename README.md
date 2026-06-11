@@ -128,8 +128,10 @@ Optional. Builds `runs/cmudict-v0` from the embedded OpenEPD corpus without star
 Each JSONL row looks like:
 
 ```json
-{"base_word":"farkle","phonemes":"ˈfɑɹ.kəl"}
+{"base_word":"farkle","phonemes":"ˈfɑɹ.kəl","rarity":50000.0}
 ```
+
+`rarity` is OpenEPD's 0-indexed wordfreq rank: lower means more frequent.
 
 Splits are deterministic by base word. Alternate source entries for the same base word are collapsed before splitting, so a word cannot leak across train/validation/test.
 
@@ -139,7 +141,7 @@ Splits are deterministic by base word. Alternate source entries for the same bas
 just train
 ```
 
-Trains `models/cmudict-v0`. By default it trains `--task both`, with an even mix of grapheme-to-phoneme and phoneme-to-grapheme examples.
+Trains `models/cmudict-v0`. By default it trains `--task both`, with an even mix of grapheme-to-phoneme and phoneme-to-grapheme examples. Training also applies frequency weighting from OpenEPD rarity ranks, repeating the most common words up to 8 times and leaving words at or beyond rank 50,000 unexpanded.
 
 Direct form:
 

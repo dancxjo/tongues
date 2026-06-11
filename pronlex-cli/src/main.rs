@@ -680,6 +680,7 @@ fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
 
 #[derive(Debug, Clone, Deserialize)]
 struct OpenEpdEntry {
+    rarity: f32,
     ipa: std::collections::BTreeMap<String, String>,
 }
 
@@ -718,6 +719,7 @@ fn load_openepd_prepare_lexemes() -> Result<(Vec<Lexeme>, usize)> {
         lexemes.push(Lexeme {
             base_word,
             phonemes,
+            rarity: entry.rarity,
         });
     }
 
@@ -897,6 +899,43 @@ fn read_jsonl(path: &Path) -> Result<Vec<Lexeme>> {
 }
 
 const SIGHT_WORD_TRAINING_REPEATS: usize = 24;
+const DEFAULT_MAX_FREQUENCY_REPEAT: usize = 8;
+const DEFAULT_FREQUENCY_RARITY_CAP: f32 = 50_000.0;
+
+fn frequency_repeat_count(rarity: f32, max_repeat: usize, rarity_cap: f32) -> usize {
+    if max_repeat <= 1 || !rarity.is_finite() || !rarity_cap.is_finite() || rarity_cap <= 0.0 {
+        return 1;
+    }
+    if rarity <= 0.0 {
+        return max_repeat;
+    }
+    if rarity >= rarity_cap {
+        return 1;
+    }
+
+    let scale = 1.0 - (rarity / rarity_cap);
+    1 + ((max_repeat - 1) as f32 * scale).round() as usize
+}
+
+fn expand_frequency_weighted_training(
+    lexemes: &[Lexeme],
+    max_repeat: usize,
+    rarity_cap: f32,
+) -> Vec<Lexeme> {
+    let expanded_len = lexemes
+        .iter()
+        .map(|lexeme| frequency_repeat_count(lexeme.rarity, max_repeat, rarity_cap))
+        .sum();
+    let mut expanded = Vec::with_capacity(expanded_len);
+
+    for lexeme in lexemes {
+        for _ in 0..frequency_repeat_count(lexeme.rarity, max_repeat, rarity_cap) {
+            expanded.push(lexeme.clone());
+        }
+    }
+
+    expanded
+}
 
 fn add_sight_word_training_examples(train_lexemes: &mut Vec<Lexeme>, data: &Path) -> Result<usize> {
     let sight_words: std::collections::BTreeSet<&str> = SIGHT_WORDS.iter().copied().collect();
@@ -960,21 +999,14 @@ fn cmd_train(
         serde_json::from_str(&s)?
     };
 
-    let mut train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
+    let base_train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
     let valid_lexemes = read_jsonl(&data.join("valid.jsonl"))?;
-    let added_sight_word_lexemes = add_sight_word_training_examples(&mut train_lexemes, data)?;
 
     println!(
         "Loaded {} train / {} valid lexemes",
-        train_lexemes.len(),
+        base_train_lexemes.len(),
         valid_lexemes.len()
     );
-    if added_sight_word_lexemes > 0 {
-        println!(
-            "  included {} extra sight-word training examples",
-            added_sight_word_lexemes
-        );
-    }
 
     let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
 
@@ -993,7 +1025,29 @@ fn cmd_train(
         epochs,
         early_stopping_patience: patience,
         task: task_opt,
+        max_frequency_repeat: DEFAULT_MAX_FREQUENCY_REPEAT,
+        frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
     };
+
+    let mut train_lexemes = expand_frequency_weighted_training(
+        &base_train_lexemes,
+        train_config.max_frequency_repeat,
+        train_config.frequency_rarity_cap,
+    );
+    println!(
+        "  frequency-weighted train examples: {} (max_repeat={} rarity_cap={})",
+        train_lexemes.len(),
+        train_config.max_frequency_repeat,
+        train_config.frequency_rarity_cap
+    );
+
+    let added_sight_word_lexemes = add_sight_word_training_examples(&mut train_lexemes, data)?;
+    if added_sight_word_lexemes > 0 {
+        println!(
+            "  included {} extra sight-word training examples",
+            added_sight_word_lexemes
+        );
+    }
 
     fs::create_dir_all(out).context("creating model directory")?;
 
@@ -1745,6 +1799,8 @@ fn cmd_refine(
         epochs,
         early_stopping_patience: patience,
         task: task_filter,
+        max_frequency_repeat: DEFAULT_MAX_FREQUENCY_REPEAT,
+        frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
     };
     fs::write(
         out.join("train_config.json"),
@@ -1859,6 +1915,7 @@ fn collect_discrepancies<B: Backend>(
             let openepd_lexeme = Lexeme {
                 base_word: base_word.clone(),
                 phonemes: openepd_ipa.clone(),
+                rarity: lex.rarity,
             };
 
             if has_unknown_vocab(vocab, &openepd_ipa) {
@@ -2011,6 +2068,7 @@ fn collect_sight_word_refinement<B: Backend>(
         refine_lexemes.push(Lexeme {
             base_word: base_word.clone(),
             phonemes: openepd_ipa.clone(),
+            rarity: DEFAULT_FREQUENCY_RARITY_CAP,
         });
 
         for &task in &tasks {
@@ -2586,5 +2644,58 @@ mod tests {
         assert_eq!(detect_task("ˈfɑɹ.kəl"), Task::P2G);
         assert_eq!(detect_task("kæt"), Task::P2G); // non-ASCII chars
         assert_eq!(detect_task(""), Task::P2G);
+    }
+
+    #[test]
+    fn frequency_repeat_count_uses_bounded_linear_rarity() {
+        assert_eq!(frequency_repeat_count(0.0, 8, 50_000.0), 8);
+        assert_eq!(frequency_repeat_count(23.0, 8, 50_000.0), 8);
+        assert_eq!(frequency_repeat_count(25_000.0, 8, 50_000.0), 5);
+        assert_eq!(frequency_repeat_count(50_000.0, 8, 50_000.0), 1);
+        assert_eq!(frequency_repeat_count(f32::NAN, 8, 50_000.0), 1);
+    }
+
+    #[test]
+    fn frequency_weighted_training_expands_common_words() {
+        let lexemes = vec![
+            Lexeme {
+                base_word: "the".to_string(),
+                phonemes: "ðə".to_string(),
+                rarity: 0.0,
+            },
+            Lexeme {
+                base_word: "tailword".to_string(),
+                phonemes: "teɪl.wɝd".to_string(),
+                rarity: 50_000.0,
+            },
+        ];
+
+        let expanded = expand_frequency_weighted_training(&lexemes, 8, 50_000.0);
+        assert_eq!(expanded.len(), 9);
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|lexeme| lexeme.base_word == "the")
+                .count(),
+            8
+        );
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|lexeme| lexeme.base_word == "tailword")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn openepd_prepare_lexemes_include_rarity_for_have() {
+        let (lexemes, _) = load_openepd_prepare_lexemes().expect("OpenEPD should load");
+        let have = lexemes
+            .iter()
+            .find(|lexeme| lexeme.base_word == "have")
+            .expect("have should be present");
+
+        assert_eq!(have.rarity, 23.0);
     }
 }

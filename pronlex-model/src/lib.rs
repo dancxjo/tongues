@@ -104,6 +104,10 @@ pub struct TrainConfig {
     /// Optional training direction task (None = Both).
     #[serde(default)]
     pub task: Option<Task>,
+    /// Maximum number of repeats for the most frequent words.
+    pub max_frequency_repeat: usize,
+    /// Rarity rank at or above which a word receives no extra repeats.
+    pub frequency_rarity_cap: f32,
 }
 
 impl Default for TrainConfig {
@@ -116,6 +120,8 @@ impl Default for TrainConfig {
             epochs: 20,
             early_stopping_patience: 5,
             task: None,
+            max_frequency_repeat: 8,
+            frequency_rarity_cap: 50_000.0,
         }
     }
 }
@@ -928,10 +934,12 @@ mod tests {
             Lexeme {
                 base_word: "cat".to_string(),
                 phonemes: "kæt".to_string(),
+                rarity: 2_000.0,
             },
             Lexeme {
                 base_word: "dog".to_string(),
                 phonemes: "dɔɡ".to_string(),
+                rarity: 1_000.0,
             },
         ];
 
@@ -945,6 +953,8 @@ mod tests {
             epochs: 2,
             early_stopping_patience: 5,
             task: None,
+            max_frequency_repeat: 8,
+            frequency_rarity_cap: 50_000.0,
         };
 
         let model_path = dir.join("model");
