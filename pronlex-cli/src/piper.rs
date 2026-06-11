@@ -543,6 +543,7 @@ fn punctuation_symbol(text: &str) -> Option<&'static str> {
 }
 
 impl PiperPhonemeSequence {
+    #[allow(dead_code)]
     pub fn to_symbols_compatible(&self, config: &PiperVoiceConfig) -> Result<Self> {
         let text_sequence = self.with_utterance_termination(config);
         validate_piper_plan_sequence(&text_sequence)?;
@@ -668,6 +669,7 @@ impl PiperOnnxBackend {
         self.config.sample_rate_hz
     }
 
+    #[allow(dead_code)]
     pub fn synthesize_plan(&mut self, plan: &UtterancePlan) -> Result<PiperSynthesisOutput> {
         let mut pcm_mono_f32 = Vec::new();
         self.synthesize_plan_streaming(plan, &mut |chunk: PiperAudioChunk| {
@@ -846,6 +848,7 @@ impl PiperOnnxBackend {
         0
     }
 
+    #[allow(dead_code)]
     pub fn synthesize_plan(&mut self, _plan: &UtterancePlan) -> Result<PiperSynthesisOutput> {
         bail!("Piper ONNX synthesis requires building with the `piper-onnx` feature")
     }
