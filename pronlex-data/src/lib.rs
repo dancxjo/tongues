@@ -290,10 +290,23 @@ pub fn build_vocab(lexemes: &[Lexeme]) -> Vocab {
 
     for lex in lexemes {
         words.push(lex.base_word.clone());
+        words.push(lex.base_word.to_uppercase());
+        words.push(initial_cap(&lex.base_word));
         phonemes.push(lex.phonemes.clone());
     }
 
     Vocab::build(&words, &phonemes, &[])
+}
+
+fn initial_cap(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect(),
+        None => String::new(),
+    }
 }
 
 // ── Data splitting ─────────────────────────────────────────────────────────
@@ -483,5 +496,25 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let (train, valid, test) = split_by_base_word(&lex, 0.5, 0.5, &mut rng);
         assert_eq!(train.len() + valid.len() + test.len(), 2);
+    }
+
+    #[test]
+    fn build_vocab_includes_spelling_case_variants() {
+        let lex = vec![Lexeme {
+            base_word: "farkle".into(),
+            phonemes: "ˈfɑɹ.kəl".into(),
+        }];
+
+        let vocab = build_vocab(&lex);
+
+        for spelling in ["farkle", "Farkle", "FARKLE"] {
+            assert!(
+                vocab
+                    .encode_string(spelling)
+                    .iter()
+                    .all(|&id| id != pronlex_core::UNK_ID),
+                "{spelling} should not encode to UNK"
+            );
+        }
     }
 }

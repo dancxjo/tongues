@@ -333,7 +333,8 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .map(|(position, &i)| {
                 let lex = &lexemes[i];
                 let task = config.task.unwrap_or_else(|| balanced_batch_task(position));
-                make_seq2seq_example(lex, task, vocab)
+                let lexeme = lexeme_with_random_spelling_case(lex, rng);
+                make_seq2seq_example(&lexeme, task, vocab)
             })
             .collect();
 
@@ -396,6 +397,32 @@ fn balanced_batch_task(position: usize) -> Task {
         Task::S2Pm
     } else {
         Task::Pm2S
+    }
+}
+
+fn lexeme_with_random_spelling_case<R: Rng>(lexeme: &Lexeme, rng: &mut R) -> Lexeme {
+    Lexeme {
+        base_word: spelling_case_variant(&lexeme.base_word, rng.gen_range(0..3)),
+        phonemes: lexeme.phonemes.clone(),
+    }
+}
+
+fn spelling_case_variant(word: &str, variant: usize) -> String {
+    match variant {
+        0 => word.to_lowercase(),
+        1 => initial_cap(word),
+        _ => word.to_uppercase(),
+    }
+}
+
+fn initial_cap(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect(),
+        None => String::new(),
     }
 }
 
@@ -851,6 +878,13 @@ mod tests {
                 Task::Pm2S,
             ]
         );
+    }
+
+    #[test]
+    fn spelling_case_variants_cover_requested_forms() {
+        assert_eq!(spelling_case_variant("farkle", 0), "farkle");
+        assert_eq!(spelling_case_variant("farkle", 1), "Farkle");
+        assert_eq!(spelling_case_variant("farkle", 2), "FARKLE");
     }
 
     #[test]
