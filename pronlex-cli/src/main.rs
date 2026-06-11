@@ -957,6 +957,7 @@ fn run_eval<B: Backend>(
     println!("\n── Evaluation Results ──");
     println!("  Loss          : {:.4}", report.val_loss);
     println!("  Exact match   : {:.3}", report.exact_match_accuracy);
+    println!("  Token accuracy: {:.3}", report.token_accuracy);
 
     Ok(())
 }

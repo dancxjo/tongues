@@ -374,14 +374,16 @@ pub fn evaluate<B: Backend, R: Rng>(
     vocab: &Vocab,
     device: &B::Device,
     _rng: &mut R,
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     if lexemes.is_empty() {
-        return (0.0, 0.0);
+        return (0.0, 0.0, 0.0);
     }
 
     let mut total_loss = 0f32;
     let mut exact_matches = 0usize;
     let mut n_batches = 0usize;
+    let mut total_tokens = 0usize;
+    let mut matched_tokens = 0usize;
 
     // Use a subset of up to 1000 items to keep validation fast
     let eval_lexemes = if lexemes.len() > 1000 {
@@ -435,6 +437,7 @@ pub fn evaluate<B: Backend, R: Rng>(
                 if tgt_id == PAD_ID {
                     break;
                 }
+                total_tokens += 1;
                 let pos_logits = logits
                     .clone()
                     .slice([i..i+1, j..j+1, 0..vocab_size])
@@ -446,9 +449,10 @@ pub fn evaluate<B: Backend, R: Rng>(
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(idx, _)| idx as u32)
                     .unwrap_or(0);
-                if pred != tgt_id {
+                if pred == tgt_id {
+                    matched_tokens += 1;
+                } else {
                     matched = false;
-                    break;
                 }
             }
             if matched {
@@ -467,8 +471,13 @@ pub fn evaluate<B: Backend, R: Rng>(
     } else {
         exact_matches as f32 / eval_lexemes.len() as f32
     };
+    let token_acc = if total_tokens > 0 {
+        matched_tokens as f32 / total_tokens as f32
+    } else {
+        0.0
+    };
 
-    (mean_loss, acc)
+    (mean_loss, acc, token_acc)
 }
 
 // ── Full training loop ─────────────────────────────────────────────────────
@@ -524,14 +533,33 @@ where
         .init::<B, Seq2SeqModel<B>>();
     let mut patience_counter = 0usize;
 
+    let mut last_train_loss = None;
+    let mut last_val_loss = None;
+    let mut last_val_acc = None;
+    let mut last_val_token_acc = None;
+
     for epoch in start_epoch..=train_config.epochs {
         let n_batches = (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
         let pb = indicatif::ProgressBar::new(n_batches as u64);
-        let template = format!(
-            "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}}",
-            epoch,
-            train_config.epochs
-        );
+        let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (last_train_loss, last_val_loss, last_val_acc, last_val_token_acc) {
+            format!(
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
+                epoch,
+                train_config.epochs,
+                tl,
+                vl,
+                va,
+                vt
+            )
+        } else {
+            format!(
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} ({} train / {} valid)",
+                epoch,
+                train_config.epochs,
+                train_lexemes.len(),
+                valid_lexemes.len()
+            )
+        };
         pb.set_style(
             indicatif::ProgressStyle::default_bar()
                 .template(&template)
@@ -554,14 +582,19 @@ where
 
         pb.set_message("evaluating...");
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
-        let (val_loss, val_acc) = evaluate(&eval_model, valid_lexemes, vocab, device, rng);
+        let (val_loss, val_acc, val_token_acc) = evaluate(&eval_model, valid_lexemes, vocab, device, rng);
 
         pb.finish_and_clear();
 
         println!(
-            "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}",
-            epoch, train_loss, val_loss, val_acc
+            "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
+            epoch, train_loss, val_loss, val_acc, val_token_acc
         );
+
+        last_train_loss = Some(train_loss);
+        last_val_loss = Some(val_loss);
+        last_val_acc = Some(val_acc);
+        last_val_token_acc = Some(val_token_acc);
 
         // Save progress for resume
         let current_state = TrainState {
@@ -610,6 +643,7 @@ where
 pub struct EvalReport {
     pub exact_match_accuracy: f32,
     pub val_loss: f32,
+    pub token_accuracy: f32,
 }
 
 /// Produce sequence-to-sequence evaluation metrics.
@@ -621,10 +655,11 @@ pub fn eval_report<B: Backend, R: Rng>(
     device: &B::Device,
     rng: &mut R,
 ) -> EvalReport {
-    let (loss, acc) = evaluate(model, test_lexemes, vocab, device, rng);
+    let (loss, acc, token_acc) = evaluate(model, test_lexemes, vocab, device, rng);
     EvalReport {
         exact_match_accuracy: acc,
         val_loss: loss,
+        token_accuracy: token_acc,
     }
 }
 
