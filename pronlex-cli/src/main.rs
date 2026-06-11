@@ -701,29 +701,26 @@ fn load_openepd_prepare_lexemes() -> Result<(Vec<Lexeme>, usize)> {
     let mut lexemes = Vec::with_capacity(raw.len());
     let mut skipped = 0usize;
     for (base_word, entry) in raw {
-        if !is_prepare_word(&base_word) {
-            skipped += 1;
-            continue;
+        match prepare_lexeme_from_openepd_entry(base_word, entry) {
+            Some(lexeme) => lexemes.push(lexeme),
+            None => skipped += 1,
         }
-        let Some(raw_ipa) = preferred_openepd_ipa(&entry.ipa) else {
-            skipped += 1;
-            continue;
-        };
-        let phonemes = match normalize_openepd_ipa(raw_ipa) {
-            Ok(phonemes) => phonemes,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
-        };
-        lexemes.push(Lexeme {
-            base_word,
-            phonemes,
-            rarity: entry.rarity,
-        });
     }
 
     Ok((lexemes, skipped))
+}
+
+fn prepare_lexeme_from_openepd_entry(base_word: String, entry: OpenEpdEntry) -> Option<Lexeme> {
+    if !is_prepare_word(&base_word) {
+        return None;
+    }
+    let raw_ipa = preferred_openepd_ipa(&entry.ipa)?;
+    let phonemes = normalize_openepd_ipa(raw_ipa).ok()?;
+    Some(Lexeme {
+        base_word,
+        phonemes,
+        rarity: entry.rarity,
+    })
 }
 
 fn preferred_openepd_ipa(ipa: &std::collections::BTreeMap<String, String>) -> Option<&str> {
@@ -2689,13 +2686,20 @@ mod tests {
     }
 
     #[test]
-    fn openepd_prepare_lexemes_include_rarity_for_have() {
-        let (lexemes, _) = load_openepd_prepare_lexemes().expect("OpenEPD should load");
-        let have = lexemes
-            .iter()
-            .find(|lexeme| lexeme.base_word == "have")
-            .expect("have should be present");
+    fn openepd_prepare_conversion_includes_rarity_for_have() {
+        let entry = OpenEpdEntry {
+            rarity: 23.0,
+            ipa: std::collections::BTreeMap::from([(
+                "misaki_gold".to_string(),
+                "hæv".to_string(),
+            )]),
+        };
 
+        let have = prepare_lexeme_from_openepd_entry("have".to_string(), entry)
+            .expect("have entry should prepare");
+
+        assert_eq!(have.base_word, "have");
+        assert_eq!(have.phonemes, "hæv");
         assert_eq!(have.rarity, 23.0);
     }
 }
