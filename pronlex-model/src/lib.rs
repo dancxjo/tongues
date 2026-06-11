@@ -309,6 +309,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
     _epoch: usize,
     device: &B::Device,
     rng: &mut R,
+    pb: &indicatif::ProgressBar,
 ) -> f32 {
     let mut indices: Vec<usize> = (0..lexemes.len()).collect();
     indices.shuffle(rng);
@@ -355,6 +356,8 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
         let loss_val: f32 = loss.into_scalar().elem();
         total_loss += loss_val;
         n_batches += 1;
+        pb.set_message(format!("{:.4}", total_loss / n_batches as f32));
+        pb.inc(1);
     }
 
     if n_batches == 0 {
@@ -522,6 +525,21 @@ where
     let mut patience_counter = 0usize;
 
     for epoch in start_epoch..=train_config.epochs {
+        let n_batches = (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
+        let pb = indicatif::ProgressBar::new(n_batches as u64);
+        let template = format!(
+            "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}}",
+            epoch,
+            train_config.epochs
+        );
+        pb.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template(&template)
+                .expect("valid template")
+                .progress_chars("#>-")
+        );
+        pb.set_message("...");
+
         let train_loss = train_epoch(
             &mut model,
             &mut optimizer,
@@ -531,10 +549,14 @@ where
             epoch,
             device,
             rng,
+            &pb,
         );
 
+        pb.set_message("evaluating...");
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
         let (val_loss, val_acc) = evaluate(&eval_model, valid_lexemes, vocab, device, rng);
+
+        pb.finish_and_clear();
 
         println!(
             "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}",
