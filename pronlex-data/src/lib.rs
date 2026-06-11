@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use pronlex_core::{Vocab, BOS_ID, EOS_ID, PAD_ID, PM2S_ID, S2PM_ID};
+use pronlex_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────
@@ -339,30 +339,30 @@ pub fn check_split_leakage(_train: &[Lexeme], _valid: &[Lexeme], _test: &[Lexeme
 /// Available translation directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Task {
-    S2Pm,
-    Pm2S,
+    G2P,
+    P2G,
 }
 
 impl Task {
     /// Get the vocabulary ID corresponding to this task's prefix token.
     pub fn get_prefix_id(&self) -> u32 {
         match self {
-            Task::S2Pm => S2PM_ID,
-            Task::Pm2S => PM2S_ID,
+            Task::G2P => G2P_ID,
+            Task::P2G => P2G_ID,
         }
     }
 
     /// Randomly sample a task from all available tasks.
     pub fn sample<R: Rng>(rng: &mut R) -> Self {
-        let tasks = [Task::S2Pm, Task::Pm2S];
+        let tasks = [Task::G2P, Task::P2G];
         *tasks.choose(rng).unwrap()
     }
 
     /// Parse a task direction from a string slice.
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "s2pm" => Some(Task::S2Pm),
-            "pm2s" => Some(Task::Pm2S),
+            "g2p" => Some(Task::G2P),
+            "p2g" => Some(Task::P2G),
             _ => None,
         }
     }
@@ -383,8 +383,8 @@ pub struct Seq2SeqExample {
 pub fn make_seq2seq_example(lexeme: &Lexeme, task: Task, vocab: &Vocab) -> Seq2SeqExample {
     let base_word = lexeme.base_word.to_lowercase();
     let (src_str, tgt_str) = match task {
-        Task::S2Pm => (base_word.as_str(), lexeme.phonemes.as_str()),
-        Task::Pm2S => (lexeme.phonemes.as_str(), base_word.as_str()),
+        Task::G2P => (base_word.as_str(), lexeme.phonemes.as_str()),
+        Task::P2G => (lexeme.phonemes.as_str(), base_word.as_str()),
     };
 
     let mut src_ids = vec![task.get_prefix_id()];
@@ -494,10 +494,10 @@ mod tests {
         };
         let vocab = Vocab::build(&["farkle".to_string()], &["ˈfɑɹ.kəl".to_string()], &[]);
 
-        let s2pm = make_seq2seq_example(&lex, Task::S2Pm, &vocab);
-        let pm2s = make_seq2seq_example(&lex, Task::Pm2S, &vocab);
+        let g2p = make_seq2seq_example(&lex, Task::G2P, &vocab);
+        let p2g = make_seq2seq_example(&lex, Task::P2G, &vocab);
 
-        assert_eq!(vocab.decode_ids(&s2pm.src_ids[1..]), "farkle");
-        assert_eq!(vocab.decode_ids(&pm2s.tgt_out_ids), "farkle");
+        assert_eq!(vocab.decode_ids(&g2p.src_ids[1..]), "farkle");
+        assert_eq!(vocab.decode_ids(&p2g.tgt_out_ids), "farkle");
     }
 }

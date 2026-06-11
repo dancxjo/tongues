@@ -393,9 +393,9 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
 
 fn balanced_batch_task(position: usize) -> Task {
     if position % 2 == 0 {
-        Task::S2Pm
+        Task::G2P
     } else {
-        Task::Pm2S
+        Task::P2G
     }
 }
 
@@ -433,9 +433,9 @@ pub fn evaluate<B: Backend, R: Rng>(
                 Some(t) => t,
                 None => {
                     let t = if total_examples % 2 == 0 {
-                        Task::S2Pm
+                        Task::G2P
                     } else {
-                        Task::Pm2S
+                        Task::P2G
                     };
                     total_examples += 1;
                     t
@@ -796,8 +796,8 @@ pub fn predict<B: Backend>(
 ) -> String {
     // 1. Format the source sequence with task token
     let input = match task {
-        Task::S2Pm => input_str.to_lowercase(),
-        Task::Pm2S => input_str.to_string(),
+        Task::G2P => input_str.to_lowercase(),
+        Task::P2G => input_str.to_string(),
     };
     let mut src_ids = vec![task.get_prefix_id()];
     src_ids.extend(vocab.encode_string(&input));
@@ -856,12 +856,12 @@ mod tests {
         assert_eq!(
             tasks,
             vec![
-                Task::S2Pm,
-                Task::Pm2S,
-                Task::S2Pm,
-                Task::Pm2S,
-                Task::S2Pm,
-                Task::Pm2S,
+                Task::G2P,
+                Task::P2G,
+                Task::G2P,
+                Task::P2G,
+                Task::G2P,
+                Task::P2G,
             ]
         );
     }

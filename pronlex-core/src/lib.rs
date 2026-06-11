@@ -18,8 +18,8 @@ pub const SEP_ID: u32 = 4;
 
 // ── Task prefix token IDs ──────────────────────────────────────────────────
 
-pub const S2PM_ID: u32 = 5;
-pub const PM2S_ID: u32 = 6;
+pub const G2P_ID: u32 = 5;
+pub const P2G_ID: u32 = 6;
 
 pub const SPECIAL_COUNT: u32 = 7;
 
@@ -43,8 +43,8 @@ impl Vocab {
             "<BOS>".into(),
             "<EOS>".into(),
             "<SEP>".into(),
-            "<S2Pm>".into(),
-            "<Pm2S>".into(),
+            "<G2P>".into(),
+            "<P2G>".into(),
         ];
 
         let mut seen = std::collections::BTreeSet::new();

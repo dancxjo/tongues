@@ -67,11 +67,11 @@ just train
 ```
 
 Trains `models/cmudict-v0`. By default it trains `--task both`, with an even
-mix of spelling-to-phonemes and phonemes-to-spelling examples.
+mix of grapheme-to-phoneme and phoneme-to-grapheme examples.
 
 ```sh
 just infer "farkle"
-just infer --task pm2s "ˈfɑɹ.kəl"
+just infer --task p2g "ˈfɑɹ.kəl"
 ```
 
 Runs one translation prediction.
@@ -153,8 +153,8 @@ cargo run --release -- --cpu train --data runs/cmudict-v0
 
 | Task | Meaning |
 |------|---------|
-| `s2pm` | spelling to phonemes |
-| `pm2s` | phonemes to spelling |
+| `g2p` | grapheme to phoneme |
+| `p2g` | phoneme to grapheme |
 | `both` | train both directions |
 
 `both` is the default. In training, the default `both` path alternates task
@@ -191,7 +191,7 @@ cargo run --release -- eval \
     --task auto
 ```
 
-`--task auto` reads `train_config.json`. You can also force `s2pm`, `pm2s`, or
+`--task auto` reads `train_config.json`. You can also force `g2p`, `p2g`, or
 `both`.
 
 Metrics currently reported:
@@ -218,15 +218,15 @@ cargo run --release -- refine \
     --data runs/cmudict-v0 \
     --out models/cmudict-v0-refined \
     --splits valid,test \
-    --task s2pm \
+    --task g2p \
     --verbose \
     --learning-rate 1e-4 \
     --epochs 5 \
     --patience 2
 ```
 
-The default task is `s2pm`, spelling to pronunciation. Use `--task pm2s` for
-pronunciation-to-spelling refinement, or `--task both` to mine and train both
+The default task is `g2p`, grapheme to phoneme. Use `--task p2g` for
+phoneme-to-grapheme refinement, or `--task both` to mine and train both
 directions. The source model directory is left untouched; refinement requires a
 separate `--out` directory. With `--verbose`, each discrepant word is printed
 with its split, task, edit distance, input, gold target, and prediction.
@@ -253,7 +253,7 @@ direction:
 ```sh
 cargo run --release -- predict \
     --model models/cmudict-v0 \
-    --task pm2s \
+    --task p2g \
     "ˈfɑɹ.kəl"
 ```
 
@@ -284,8 +284,8 @@ cargo run --release -- --cpu
 REPL commands:
 
 - `:quit`, `:q`, or `Ctrl-D` exits
-- `:task s2pm` forces spelling-to-phonemes
-- `:task pm2s` forces phonemes-to-spelling
+- `:task g2p` forces grapheme-to-phoneme
+- `:task p2g` forces phoneme-to-grapheme
 - `:auto` restores automatic task detection
 - `:timings` toggles timing output
 - `:help` prints available commands

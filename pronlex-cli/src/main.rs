@@ -152,7 +152,7 @@ enum Commands {
         #[arg(long, default_value_t = 0)]
         seed: u64,
 
-        /// Direction of translation to train: s2pm, pm2s, or both
+        /// Direction of translation to train: g2p, p2g, or both
         #[arg(long, default_value = "both")]
         task: String,
     },
@@ -171,7 +171,7 @@ enum Commands {
         #[arg(long)]
         data: PathBuf,
 
-        /// Direction of translation to evaluate: s2pm, pm2s, both, or auto (detect from train_config)
+        /// Direction of translation to evaluate: g2p, p2g, both, or auto (detect from train_config)
         #[arg(long, default_value = "auto")]
         task: String,
     },
@@ -194,8 +194,8 @@ enum Commands {
         #[arg(long, default_value = "valid,test")]
         splits: String,
 
-        /// Direction to refine: s2pm, pm2s, or both
-        #[arg(long, default_value = "s2pm")]
+        /// Direction to refine: g2p, p2g, or both
+        #[arg(long, default_value = "g2p")]
         task: String,
 
         /// AdamW learning rate for refinement
@@ -229,7 +229,7 @@ enum Commands {
 
     /// Interactive REPL for sequence translation
     Repl {
-        /// Direction of translation: s2pm, pm2s, auto
+        /// Direction of translation: g2p, p2g, auto
         #[arg(long, default_value = "auto")]
         task: String,
 
@@ -248,7 +248,7 @@ enum Commands {
         /// The input sequence to translate
         input: String,
 
-        /// Direction of translation: s2pm, pm2s, auto
+        /// Direction of translation: g2p, p2g, auto
         #[arg(long, default_value = "auto")]
         task: String,
 
@@ -928,10 +928,10 @@ fn cmd_train(
     let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
 
     let task_opt = match task_str.to_lowercase().as_str() {
-        "s2pm" => Some(Task::S2Pm),
-        "pm2s" => Some(Task::Pm2S),
+        "g2p" => Some(Task::G2P),
+        "p2g" => Some(Task::P2G),
         "both" => None,
-        _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both"),
+        _ => anyhow::bail!("Invalid task. Supported: g2p, p2g, both"),
     };
 
     let train_config = TrainConfig {
@@ -1077,10 +1077,10 @@ fn cmd_eval(
         }
     } else {
         match task_str.to_lowercase().as_str() {
-            "s2pm" => Some(Task::S2Pm),
-            "pm2s" => Some(Task::Pm2S),
+            "g2p" => Some(Task::G2P),
+            "p2g" => Some(Task::P2G),
             "both" => None,
-            _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both, auto"),
+            _ => anyhow::bail!("Invalid task. Supported: g2p, p2g, both, auto"),
         }
     };
 
@@ -1202,10 +1202,10 @@ fn cmd_refine(
     };
 
     let task_filter = match task_str.to_lowercase().as_str() {
-        "s2pm" => Some(Task::S2Pm),
-        "pm2s" => Some(Task::Pm2S),
+        "g2p" => Some(Task::G2P),
+        "p2g" => Some(Task::P2G),
         "both" => None,
-        _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both"),
+        _ => anyhow::bail!("Invalid task. Supported: g2p, p2g, both"),
     };
 
     let split_names: Vec<String> = splits
@@ -1393,7 +1393,7 @@ fn collect_discrepancies<B: Backend>(
 
     let tasks: Vec<Task> = match task_filter {
         Some(task) => vec![task],
-        None => vec![Task::S2Pm, Task::Pm2S],
+        None => vec![Task::G2P, Task::P2G],
     };
 
     let total: usize = split_lexemes
@@ -1468,8 +1468,8 @@ fn collect_discrepancies<B: Backend>(
 
             for &task in &tasks {
                 let (input, gold, task_name) = match task {
-                    Task::S2Pm => (base_word.clone(), openepd_ipa.clone(), "s2pm".to_string()),
-                    Task::Pm2S => (openepd_ipa.clone(), base_word.clone(), "pm2s".to_string()),
+                    Task::G2P => (base_word.clone(), openepd_ipa.clone(), "g2p".to_string()),
+                    Task::P2G => (openepd_ipa.clone(), base_word.clone(), "p2g".to_string()),
                 };
                 pb.set_message(format!("{} {}", split, base_word));
                 let prediction = predict(&model, &input, task, vocab, device);
@@ -1550,8 +1550,8 @@ fn has_unknown_vocab(vocab: &Vocab, text: &str) -> bool {
 
 fn comparison_key(value: &str, task: Task) -> String {
     match task {
-        Task::S2Pm => pronunciation_comparison_key(value),
-        Task::Pm2S => value.to_lowercase(),
+        Task::G2P => pronunciation_comparison_key(value),
+        Task::P2G => value.to_lowercase(),
     }
 }
 
@@ -1736,7 +1736,7 @@ fn cmd_predict(
         detect_task(input)
     } else {
         Task::from_str(task_str)
-            .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s, auto"))?
+            .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: g2p, p2g, auto"))?
     };
 
     let model_config: ModelConfig = {
@@ -1912,7 +1912,7 @@ fn run_repl<B: Backend>(
     } else {
         Some(
             Task::from_str(initial_task_str)
-                .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: s2pm, pm2s, auto"))?,
+                .ok_or_else(|| anyhow::anyhow!("Invalid task. Supported: g2p, p2g, auto"))?,
         )
     };
 
@@ -1950,19 +1950,19 @@ fn run_repl<B: Backend>(
                 }
                 ":task" => {
                     if parts.len() < 2 {
-                        println!("Error: specify task (s2pm or pm2s)");
+                        println!("Error: specify task (g2p or p2g)");
                     } else {
                         match parts[1].to_lowercase().as_str() {
-                            "s2pm" => {
-                                current_task = Some(Task::S2Pm);
-                                println!("Task forced to spelling-to-phonemes (S2Pm)");
+                            "g2p" => {
+                                current_task = Some(Task::G2P);
+                                println!("Task forced to grapheme-to-phoneme (G2P)");
                             }
-                            "pm2s" => {
-                                current_task = Some(Task::Pm2S);
-                                println!("Task forced to phonemes-to-spelling (Pm2S)");
+                            "p2g" => {
+                                current_task = Some(Task::P2G);
+                                println!("Task forced to phoneme-to-grapheme (P2G)");
                             }
                             _ => {
-                                println!("Error: invalid task. Supported: s2pm, pm2s");
+                                println!("Error: invalid task. Supported: g2p, p2g");
                             }
                         }
                     }
@@ -1982,8 +1982,8 @@ fn run_repl<B: Backend>(
                 ":help" => {
                     println!("Commands:");
                     println!("  :quit / :q / Ctrl-D   Exits the REPL");
-                    println!("  :task s2pm            Forces spelling-to-phonemes");
-                    println!("  :task pm2s            Forces phonemes-to-spelling");
+                    println!("  :task g2p            Forces grapheme-to-phoneme");
+                    println!("  :task p2g            Forces phoneme-to-grapheme");
                     println!("  :auto                 Returns to auto-detect task");
                     println!("  :timings              Toggles timing output");
                     println!("  :help                 Prints this help message");
@@ -2024,17 +2024,17 @@ fn run_repl<B: Backend>(
 }
 
 /// Auto-detect the task based on the input text.
-/// If all characters are ASCII alphabetic, apostrophes, or hyphens, we assume S2Pm.
-/// Otherwise, we assume Pm2S.
+/// If all characters are ASCII alphabetic, apostrophes, or hyphens, we assume G2P.
+/// Otherwise, we assume P2G.
 pub fn detect_task(input: &str) -> Task {
     let is_spelling = !input.is_empty()
         && input
             .chars()
             .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-');
     if is_spelling {
-        Task::S2Pm
+        Task::G2P
     } else {
-        Task::Pm2S
+        Task::P2G
     }
 }
 
@@ -2044,11 +2044,11 @@ mod tests {
 
     #[test]
     fn test_detect_task() {
-        assert_eq!(detect_task("farkle"), Task::S2Pm);
-        assert_eq!(detect_task("farkle's"), Task::S2Pm);
-        assert_eq!(detect_task("fark-le"), Task::S2Pm);
-        assert_eq!(detect_task("ˈfɑɹ.kəl"), Task::Pm2S);
-        assert_eq!(detect_task("kæt"), Task::Pm2S); // non-ASCII chars
-        assert_eq!(detect_task(""), Task::Pm2S);
+        assert_eq!(detect_task("farkle"), Task::G2P);
+        assert_eq!(detect_task("farkle's"), Task::G2P);
+        assert_eq!(detect_task("fark-le"), Task::G2P);
+        assert_eq!(detect_task("ˈfɑɹ.kəl"), Task::P2G);
+        assert_eq!(detect_task("kæt"), Task::P2G); // non-ASCII chars
+        assert_eq!(detect_task(""), Task::P2G);
     }
 }
