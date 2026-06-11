@@ -1,5 +1,5 @@
 [package]
-name = "tongues-model"
+name = "tongues-g2p2g"
 version = "0.1.0"
 edition = "2021"
 

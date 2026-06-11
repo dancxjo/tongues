@@ -1,19 +1,13 @@
-//! `tongues` CLI – masked-phone prediction with CMUdict ARPABET.
+//! `tongues` CLI – neural lexical and speech-front-end model families.
 //!
 //! # Commands
 //!
 //! ```text
-//! tongues fetch-cmudict --out data/cmudict.dict
-//! tongues prepare --out runs/cmudict-v0
-//! tongues train  --data runs/cmudict-v0 --out models/cmudict-v0
-//!                [--mask-policy variable] [--max-mask-rate 0.4]
-//!                [--span-mask-prob 0.15]
-//!                [--learning-rate 3e-4] [--weight-decay 1e-4]
-//!                [--dropout 0.1] [--epochs 20] [--patience 5]
-//! tongues eval   --model models/cmudict-v0 --split test
-//!                --data runs/cmudict-v0
-//! tongues predict --model models/cmudict-v0
-//!                 --word charlotte --phones "SH AA1 R L MASK T"
+//! tongues g2p2g prepare --out datasets/g2p2g/openepd-v0
+//! tongues g2p2g train --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0
+//! tongues g2p2g eval --model models/g2p2g/openepd-v0 --split test
+//! tongues g2p2g infer --model models/g2p2g/openepd-v0 "charlotte"
+//! tongues sentence-parser parse --model models/sentence-parser/v0 "The quick fox jumps."
 //! ```
 
 pub mod models;
@@ -35,12 +29,13 @@ use burn::backend::{Autodiff, NdArray};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
+use speech::data::notation::openepd::normalize_openepd_ipa;
 use tongues_core::{Vocab, UNK_ID};
 use tongues_data::{Lexeme, Task};
-use tongues_model::{
+use tongues_g2p2g::{
     eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
-use speech::data::notation::openepd::normalize_openepd_ipa;
+use tongues_neural::{write_manifest, ModelArtifactManifest};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -58,7 +53,7 @@ enum DeviceArg {
 
 // ── CLI definition ─────────────────────────────────────────────────────────
 
-/// tongues – ARPABET masked-phone predictor (v0, CMUdict)
+/// tongues – neural lexical and speech-front-end model families
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -72,6 +67,19 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Train and run the lexical grapheme/phoneme seq2seq model family
+    G2p2g {
+        #[command(subcommand)]
+        command: G2p2gCommands,
+    },
+
+    /// Prepare, train, and run sentence parser models
+    #[command(name = "sentence-parser")]
+    SentenceParser {
+        #[command(subcommand)]
+        command: SentenceParserCommands,
+    },
+
     /// Download CMUdict from GitHub
     FetchCmudict {
         /// Output path for the downloaded file
@@ -287,6 +295,253 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum G2p2gCommands {
+    /// Parse OpenEPD, build vocabulary, and create train/valid/test splits
+    Prepare {
+        /// TOML config file for the G2P2G pipeline
+        #[arg(long, default_value = "configs/g2p2g/default.toml")]
+        config: PathBuf,
+
+        /// Deprecated compatibility argument; prepare now uses embedded OpenEPD.
+        #[arg(long)]
+        input: Option<PathBuf>,
+
+        /// Output directory for splits and vocabulary
+        #[arg(long, default_value = "datasets/g2p2g/openepd-v0")]
+        out: PathBuf,
+
+        /// Fraction of base words for training
+        #[arg(long)]
+        train_frac: Option<f64>,
+
+        /// Fraction of base words for validation
+        #[arg(long)]
+        valid_frac: Option<f64>,
+
+        /// Random seed for reproducible splits
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Train the G2P2G seq2seq model
+    Train {
+        /// TOML config file for the G2P2G pipeline
+        #[arg(long, default_value = "configs/g2p2g/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/g2p2g/openepd-v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        out: PathBuf,
+
+        /// Masking policy: single (always one mask) or variable (curriculum)
+        #[arg(long, value_enum, default_value = "variable")]
+        mask_policy: MaskPolicyArg,
+
+        /// Max fraction of phones to mask in variable mode
+        #[arg(long, default_value_t = 0.4)]
+        max_mask_rate: f64,
+
+        /// Span mask probability weight
+        #[arg(long, default_value_t = 0.15)]
+        span_mask_prob: f64,
+
+        /// AdamW learning rate
+        #[arg(long)]
+        learning_rate: Option<f64>,
+
+        /// AdamW weight decay
+        #[arg(long)]
+        weight_decay: Option<f32>,
+
+        /// Dropout rate
+        #[arg(long)]
+        dropout: Option<f64>,
+
+        /// Maximum training epochs
+        #[arg(long)]
+        epochs: Option<usize>,
+
+        /// Early stopping patience
+        #[arg(long)]
+        patience: Option<usize>,
+
+        /// Mini-batch size
+        #[arg(long)]
+        batch_size: Option<usize>,
+
+        /// Random seed
+        #[arg(long)]
+        seed: Option<u64>,
+
+        /// Direction of translation to train: g2p, p2g, or both
+        #[arg(long)]
+        task: Option<String>,
+    },
+
+    /// Evaluate a trained G2P2G model
+    Eval {
+        /// Directory containing the trained model
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        model: PathBuf,
+
+        /// Split to evaluate on: train, valid, or test
+        #[arg(long, default_value = "test")]
+        split: String,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/g2p2g/openepd-v0")]
+        data: PathBuf,
+
+        /// Direction of translation to evaluate: g2p, p2g, both, or auto
+        #[arg(long, default_value = "auto")]
+        task: String,
+    },
+
+    /// Fine-tune a G2P2G model on validation/test discrepancies
+    Refine {
+        /// Directory containing the trained source model
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/g2p2g/openepd-v0")]
+        data: PathBuf,
+
+        /// Output directory for the refined model
+        #[arg(long)]
+        out: PathBuf,
+
+        /// Comma-separated splits to mine for discrepancies
+        #[arg(long, default_value = "valid,test")]
+        splits: String,
+
+        /// Refinement source: held-out discrepancies or the built-in sight-word list
+        #[arg(long, value_enum, default_value = "discrepancies")]
+        source: RefinementSourceArg,
+
+        /// Direction to refine: g2p, p2g, or both
+        #[arg(long, default_value = "g2p")]
+        task: String,
+
+        /// AdamW learning rate for refinement
+        #[arg(long, default_value_t = 1e-4)]
+        learning_rate: f64,
+
+        /// AdamW weight decay
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f32,
+
+        /// Maximum refinement epochs
+        #[arg(long, default_value_t = 5)]
+        epochs: usize,
+
+        /// Early stopping patience
+        #[arg(long, default_value_t = 2)]
+        patience: usize,
+
+        /// Mini-batch size
+        #[arg(long, default_value_t = 32)]
+        batch_size: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+
+        /// Print each discrepant word and detailed mining/training context
+        #[arg(long)]
+        verbose: bool,
+    },
+
+    /// Interactive REPL for G2P2G sequence translation
+    Repl {
+        /// Direction of translation: g2p, p2g, auto
+        #[arg(long, default_value = "auto")]
+        task: String,
+
+        /// Directory containing the trained model
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        model: PathBuf,
+
+        /// Optional path to the prepared data directory containing vocab.json
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+
+    /// Run G2P2G translation inference
+    #[command(alias = "predict")]
+    Infer {
+        /// The input sequence to translate
+        input: String,
+
+        /// Direction of translation: g2p, p2g, auto
+        #[arg(long, default_value = "auto")]
+        task: String,
+
+        /// Directory containing the trained model
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        model: PathBuf,
+
+        /// Optional path to the prepared data directory containing vocab.json
+        #[arg(long)]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SentenceParserCommands {
+    /// Prepare a sentence parser dataset scaffold
+    Prepare {
+        /// TOML config file for the sentence parser pipeline
+        #[arg(long, default_value = "configs/sentence-parser/default.toml")]
+        config: PathBuf,
+
+        /// Output directory for parser data
+        #[arg(long, default_value = "datasets/sentence-parser/v0")]
+        out: PathBuf,
+    },
+
+    /// Write a sentence parser model scaffold
+    Train {
+        /// TOML config file for the sentence parser pipeline
+        #[arg(long, default_value = "configs/sentence-parser/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/sentence-parser/v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/sentence-parser/v0")]
+        out: PathBuf,
+    },
+
+    /// Validate a sentence parser artifact scaffold
+    Eval {
+        /// Directory containing the parser model
+        #[arg(long, default_value = "models/sentence-parser/v0")]
+        model: PathBuf,
+
+        /// Split to evaluate on
+        #[arg(long, default_value = "test")]
+        split: String,
+    },
+
+    /// Parse a sentence into the speech syntax analysis shape
+    Parse {
+        /// Directory containing the parser model
+        #[arg(long, default_value = "models/sentence-parser/v0")]
+        model: PathBuf,
+
+        /// Sentence to parse
+        text: String,
+    },
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum MaskPolicyArg {
     Single,
@@ -318,10 +573,12 @@ fn is_cuda_available() -> bool {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let command = cli.command.unwrap_or_else(|| Commands::Repl {
-        task: "auto".to_string(),
-        model: PathBuf::from("models/cmudict-v0"),
-        data: None,
+    let command = cli.command.unwrap_or_else(|| Commands::G2p2g {
+        command: G2p2gCommands::Repl {
+            task: "auto".to_string(),
+            model: PathBuf::from("models/g2p2g/openepd-v0"),
+            data: None,
+        },
     });
 
     // Determine target device (CUDA with fallback to CPU, or forced CPU)
@@ -331,20 +588,15 @@ fn main() -> Result<()> {
         DeviceArg::Cuda
     } else {
         // Only warn for commands that actually run model computations on the device
-        match &command {
-            Commands::Train { .. }
-            | Commands::Eval { .. }
-            | Commands::Refine { .. }
-            | Commands::Predict { .. }
-            | Commands::Repl { .. } => {
-                println!("Warning: CUDA is not available. Falling back to CPU.");
-            }
-            _ => {}
+        if command_needs_device(&command) {
+            println!("Warning: CUDA is not available. Falling back to CPU.");
         }
         DeviceArg::Cpu
     };
 
     match command {
+        Commands::G2p2g { command } => run_g2p2g_command(command, device_arg),
+        Commands::SentenceParser { command } => run_sentence_parser_command(command),
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -352,7 +604,10 @@ fn main() -> Result<()> {
             train_frac,
             valid_frac,
             seed,
-        } => cmd_prepare(input.as_deref(), &out, train_frac, valid_frac, seed),
+        } => {
+            warn_legacy_command("prepare", "g2p2g prepare");
+            cmd_prepare(input.as_deref(), &out, train_frac, valid_frac, seed)
+        }
         Commands::Train {
             data,
             out,
@@ -367,9 +622,167 @@ fn main() -> Result<()> {
             batch_size,
             seed,
             task,
-        } => cmd_train(
-            &data,
-            &out,
+        } => {
+            warn_legacy_command("train", "g2p2g train");
+            cmd_train(
+                &data,
+                &out,
+                mask_policy,
+                max_mask_rate,
+                span_mask_prob,
+                learning_rate,
+                weight_decay,
+                dropout,
+                epochs,
+                patience,
+                batch_size,
+                seed,
+                task,
+                device_arg,
+            )
+        }
+        Commands::Eval {
+            model,
+            split,
+            data,
+            task,
+        } => {
+            warn_legacy_command("eval", "g2p2g eval");
+            cmd_eval(&model, &split, &data, &task, device_arg)
+        }
+        Commands::Refine {
+            model,
+            data,
+            out,
+            splits,
+            source,
+            task,
+            learning_rate,
+            weight_decay,
+            epochs,
+            patience,
+            batch_size,
+            seed,
+            verbose,
+        } => {
+            warn_legacy_command("refine", "g2p2g refine");
+            cmd_refine(
+                &model,
+                &data,
+                &out,
+                &splits,
+                source,
+                &task,
+                learning_rate,
+                weight_decay,
+                epochs,
+                patience,
+                batch_size,
+                seed,
+                verbose,
+                device_arg,
+            )
+        }
+        Commands::Predict {
+            model,
+            input,
+            task,
+            data,
+        } => {
+            warn_legacy_command("predict/infer", "g2p2g infer");
+            cmd_predict(&model, &task, &input, device_arg, data.as_deref())
+        }
+        Commands::Repl { model, task, data } => {
+            warn_legacy_command("repl", "g2p2g repl");
+            cmd_repl(&model, &task, device_arg, data.as_deref())
+        }
+        Commands::Speak(command) => speak::run_speak(command),
+        Commands::Phonemes { text } => cmd_phonemes(&text),
+        Commands::Phones { text } => cmd_phones(&text),
+        Commands::Models { command } => models::run(command),
+    }
+}
+
+fn command_needs_device(command: &Commands) -> bool {
+    match command {
+        Commands::G2p2g { command } => matches!(
+            command,
+            G2p2gCommands::Train { .. }
+                | G2p2gCommands::Eval { .. }
+                | G2p2gCommands::Refine { .. }
+                | G2p2gCommands::Infer { .. }
+                | G2p2gCommands::Repl { .. }
+        ),
+        Commands::Train { .. }
+        | Commands::Eval { .. }
+        | Commands::Refine { .. }
+        | Commands::Predict { .. }
+        | Commands::Repl { .. } => true,
+        _ => false,
+    }
+}
+
+fn warn_legacy_command(old: &str, new: &str) {
+    eprintln!("warning: `tongues {old}` is deprecated; use `tongues {new}` instead.");
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct G2p2gFileConfig {
+    prepare: Option<G2p2gPrepareConfig>,
+    train: Option<G2p2gTrainConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct G2p2gPrepareConfig {
+    train_frac: Option<f64>,
+    valid_frac: Option<f64>,
+    seed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct G2p2gTrainConfig {
+    learning_rate: Option<f64>,
+    weight_decay: Option<f32>,
+    dropout: Option<f64>,
+    epochs: Option<usize>,
+    patience: Option<usize>,
+    batch_size: Option<usize>,
+    seed: Option<u64>,
+    task: Option<String>,
+}
+
+fn read_g2p2g_config(path: &Path) -> Result<G2p2gFileConfig> {
+    if !path.exists() {
+        return Ok(G2p2gFileConfig::default());
+    }
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()> {
+    match command {
+        G2p2gCommands::Prepare {
+            config,
+            input,
+            out,
+            train_frac,
+            valid_frac,
+            seed,
+        } => {
+            let file_config = read_g2p2g_config(&config)?;
+            let prepare = file_config.prepare.unwrap_or_default();
+            cmd_prepare(
+                input.as_deref(),
+                &out,
+                train_frac.or(prepare.train_frac).unwrap_or(0.8),
+                valid_frac.or(prepare.valid_frac).unwrap_or(0.1),
+                seed.or(prepare.seed).unwrap_or(42),
+            )
+        }
+        G2p2gCommands::Train {
+            config,
+            data,
+            out,
             mask_policy,
             max_mask_rate,
             span_mask_prob,
@@ -381,15 +794,33 @@ fn main() -> Result<()> {
             batch_size,
             seed,
             task,
-            device_arg,
-        ),
-        Commands::Eval {
+        } => {
+            let file_config = read_g2p2g_config(&config)?;
+            let train = file_config.train.unwrap_or_default();
+            cmd_train(
+                &data,
+                &out,
+                mask_policy,
+                max_mask_rate,
+                span_mask_prob,
+                learning_rate.or(train.learning_rate).unwrap_or(3e-4),
+                weight_decay.or(train.weight_decay).unwrap_or(1e-4),
+                dropout.or(train.dropout).unwrap_or(0.1),
+                epochs.or(train.epochs).unwrap_or(20),
+                patience.or(train.patience).unwrap_or(5),
+                batch_size.or(train.batch_size).unwrap_or(64),
+                seed.or(train.seed).unwrap_or(0),
+                task.or(train.task).unwrap_or_else(|| "both".to_string()),
+                device_arg,
+            )
+        }
+        G2p2gCommands::Eval {
             model,
             split,
             data,
             task,
         } => cmd_eval(&model, &split, &data, &task, device_arg),
-        Commands::Refine {
+        G2p2gCommands::Refine {
             model,
             data,
             out,
@@ -419,19 +850,83 @@ fn main() -> Result<()> {
             verbose,
             device_arg,
         ),
-        Commands::Predict {
+        G2p2gCommands::Repl { model, task, data } => {
+            cmd_repl(&model, &task, device_arg, data.as_deref())
+        }
+        G2p2gCommands::Infer {
             model,
             input,
             task,
             data,
         } => cmd_predict(&model, &task, &input, device_arg, data.as_deref()),
-        Commands::Repl { model, task, data } => {
-            cmd_repl(&model, &task, device_arg, data.as_deref())
+    }
+}
+
+fn read_sentence_parser_config(
+    path: &Path,
+) -> Result<tongues_sentence_parser::SentenceParserConfig> {
+    if !path.exists() {
+        return Ok(tongues_sentence_parser::SentenceParserConfig::default());
+    }
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
+    match command {
+        SentenceParserCommands::Prepare { config, out } => {
+            let config = read_sentence_parser_config(&config)?;
+            tongues_sentence_parser::prepare_dataset(&out, &config)?;
+            println!(
+                "Sentence parser dataset scaffold written to {}",
+                out.display()
+            );
+            Ok(())
         }
-        Commands::Speak(command) => speak::run_speak(command),
-        Commands::Phonemes { text } => cmd_phonemes(&text),
-        Commands::Phones { text } => cmd_phones(&text),
-        Commands::Models { command } => models::run(command),
+        SentenceParserCommands::Train { config, data, out } => {
+            if !data.exists() {
+                let config_data = read_sentence_parser_config(&config)?;
+                tongues_sentence_parser::prepare_dataset(&data, &config_data)?;
+            }
+            let config = read_sentence_parser_config(&config)?;
+            tongues_sentence_parser::write_scaffold_model(&out, &config)?;
+            println!(
+                "Sentence parser model scaffold written to {}",
+                out.display()
+            );
+            Ok(())
+        }
+        SentenceParserCommands::Eval { model, split } => {
+            let manifest_path = model.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
+            let manifest = tongues_neural::read_manifest(&manifest_path)?;
+            anyhow::ensure!(
+                manifest.family == tongues_sentence_parser::FAMILY,
+                "expected sentence-parser manifest, found `{}`",
+                manifest.family
+            );
+            println!(
+                "Sentence parser artifact is valid for split `{}`: {}",
+                split,
+                model.display()
+            );
+            Ok(())
+        }
+        SentenceParserCommands::Parse { model, text } => {
+            let config_path = model.join("model_config.json");
+            let lowercase = if config_path.exists() {
+                let raw = fs::read_to_string(&config_path)
+                    .with_context(|| format!("reading {}", config_path.display()))?;
+                let config: tongues_sentence_parser::SentenceParserConfig =
+                    serde_json::from_str(&raw)
+                        .with_context(|| format!("parsing {}", config_path.display()))?;
+                config.lowercase
+            } else {
+                false
+            };
+            let analysis = tongues_sentence_parser::parse_sentence(&text, lowercase);
+            println!("{}", serde_json::to_string_pretty(&analysis)?);
+            Ok(())
+        }
     }
 }
 
@@ -1067,6 +1562,12 @@ fn cmd_train(
         fs::copy(&vocab_src, &vocab_dst).context("copying vocab.json to model directory")?;
     }
 
+    write_manifest(
+        out,
+        &ModelArtifactManifest::new("g2p2g", "seq2seq-transformer", data_id_from_path(data))
+            .with_task(task_str.to_lowercase()),
+    )?;
+
     let model_path = out.join("model");
 
     println!("Starting training...");
@@ -1144,6 +1645,13 @@ where
     );
     println!("Model saved to {}", model_path.display());
     Ok(())
+}
+
+fn data_id_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 // ── eval ───────────────────────────────────────────────────────────────────
@@ -1766,6 +2274,12 @@ fn cmd_refine(
         discrepancies_path.display()
     );
     print_discrepancy_summary(&records);
+
+    write_manifest(
+        out,
+        &ModelArtifactManifest::new("g2p2g", "seq2seq-transformer", data_id_from_path(data))
+            .with_task(task_str.to_lowercase()),
+    )?;
 
     if refine_lexemes.is_empty() {
         println!("No refinement examples found. Refinement skipped.");
@@ -2689,10 +3203,7 @@ mod tests {
     fn openepd_prepare_conversion_includes_rarity_for_have() {
         let entry = OpenEpdEntry {
             rarity: 23.0,
-            ipa: std::collections::BTreeMap::from([(
-                "misaki_gold".to_string(),
-                "hæv".to_string(),
-            )]),
+            ipa: std::collections::BTreeMap::from([("misaki_gold".to_string(), "hæv".to_string())]),
         };
 
         let have = prepare_lexeme_from_openepd_entry("have".to_string(), entry)
@@ -2701,5 +3212,53 @@ mod tests {
         assert_eq!(have.base_word, "have");
         assert_eq!(have.phonemes, "hæv");
         assert_eq!(have.rarity, 23.0);
+    }
+
+    #[test]
+    fn cli_accepts_g2p2g_family_commands() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "g2p2g",
+            "infer",
+            "--model",
+            "models/g2p2g/openepd-v0",
+            "farkle",
+        ])
+        .expect("g2p2g infer should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::G2p2g {
+                command: G2p2gCommands::Infer { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sentence_parser_commands() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "sentence-parser",
+            "parse",
+            "--model",
+            "models/sentence-parser/v0",
+            "The quick brown fox jumps.",
+        ])
+        .expect("sentence parser parse should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SentenceParser {
+                command: SentenceParserCommands::Parse { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_keeps_legacy_predict_alias() {
+        let cli = Cli::try_parse_from(["tongues", "infer", "farkle"])
+            .expect("legacy infer alias should parse");
+
+        assert!(matches!(cli.command, Some(Commands::Predict { .. })));
     }
 }

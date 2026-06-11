@@ -26,7 +26,8 @@ The longer-term goal is high-quality streaming TTS plumbing: text segmentation, 
 Tongues currently includes:
 
 - a Rust workspace using Burn 0.21;
-- a seq2seq pronunciation model;
+- a `g2p2g` seq2seq pronunciation model family;
+- a `sentence-parser` model-family scaffold that emits `speech::syntax::SentenceSyntaxAnalysis`;
 - spelling-to-phoneme (`g2p`) prediction;
 - phoneme-to-spelling (`p2g`) prediction;
 - a REPL that keeps the model loaded for interactive use;
@@ -36,19 +37,26 @@ Tongues currently includes:
 - a local `speech` crate for rule-based phonemicization/realization;
 - StyleTTS2/Piper-adjacent speech plumbing that is still experimental.
 
-This project is moving quickly. Some old command help may still refer to the earlier masked-phone prototype. The active model path is now sequence-to-sequence translation.
+This project is moving quickly. Legacy verb-first commands still work for now, but the active CLI shape is model-family first: `tongues g2p2g ...` and `tongues sentence-parser ...`.
 
 ---
 
 ## Workspace layout
 
 ```text
-tongues-core   shared vocabulary and special token IDs
-tongues-data   Lexicon parsing, IPA normalization, splits, collation
-tongues-model  Burn seq2seq model, training, evaluation, prediction
-tongues-cli    command-line interface and model/data wiring
-speech         rule-based phonemicization and realization pipeline
-styletts2      StyleTTS2 symbol lowering and backend experiments
+crates/tongues-core              shared vocabulary and special token IDs
+crates/tongues-data              Lexicon parsing, IPA normalization, splits, collation
+crates/tongues-neural            shared neural artifact metadata
+crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
+crates/tongues-sentence-parser   sentence parser artifact/output scaffold
+crates/tongues-cli               command-line routing and model/data wiring
+crates/speech                    rule-based phonemicization and realization pipeline
+crates/styletts2                 StyleTTS2 symbol lowering and backend experiments
+
+configs/                         default family config files
+datasets/                        prepared local datasets
+runs/                            run-local scratch/output artifacts
+models/                          trained local model artifacts
 ```
 
 The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/autodiff plus optional CUDA support.
@@ -63,14 +71,14 @@ The easiest path is through the `just` recipes:
 just train
 ```
 
-That trains the default model at `models/cmudict-v0` using data in `runs/cmudict-v0`. If the prepared data is missing, training prepares it from the embedded OpenEPD corpus first.
+That trains the default G2P2G model at `models/g2p2g/openepd-v0` using data in `datasets/g2p2g/openepd-v0`. If the prepared data is missing, training prepares it from the embedded OpenEPD corpus first.
 
 Direct form:
 
 ```sh
-cargo run --release -- train \
-    --data runs/cmudict-v0 \
-    --out models/cmudict-v0 \
+cargo run --release -- g2p2g train \
+    --data datasets/g2p2g/openepd-v0 \
+    --out models/g2p2g/openepd-v0 \
     --task both
 ```
 
@@ -107,11 +115,11 @@ just prepare
 or:
 
 ```sh
-cargo run --release -- prepare \
-    --out runs/cmudict-v0
+cargo run --release -- g2p2g prepare \
+    --out datasets/g2p2g/openepd-v0
 ```
 
-Optional. Builds `runs/cmudict-v0` from the embedded OpenEPD corpus without starting training. Use this when you want to refresh or inspect the generated data, or pass custom prepare arguments.
+Optional. Builds `datasets/g2p2g/openepd-v0` from the embedded OpenEPD corpus without starting training. Use this when you want to refresh or inspect the generated data, or pass custom prepare arguments.
 
 `prepare` writes a prepared data directory containing:
 
@@ -141,14 +149,14 @@ Splits are deterministic by base word. Alternate source entries for the same bas
 just train
 ```
 
-Trains `models/cmudict-v0`. By default it trains `--task both`, with an even mix of grapheme-to-phoneme and phoneme-to-grapheme examples. Training also applies frequency weighting from OpenEPD rarity ranks, repeating the most common words up to 8 times and leaving words at or beyond rank 50,000 unexpanded.
+Trains `models/g2p2g/openepd-v0`. By default it trains `--task both`, with an even mix of grapheme-to-phoneme and phoneme-to-grapheme examples. Training also applies frequency weighting from OpenEPD rarity ranks, repeating the most common words up to 8 times and leaving words at or beyond rank 50,000 unexpanded.
 
 Direct form:
 
 ```sh
-cargo run --release -- train \
-    --data runs/cmudict-v0 \
-    --out models/cmudict-v0 \
+cargo run --release -- g2p2g train \
+    --data datasets/g2p2g/openepd-v0 \
+    --out models/g2p2g/openepd-v0 \
     --task both \
     --learning-rate 3e-4 \
     --weight-decay 1e-4 \
@@ -161,7 +169,7 @@ cargo run --release -- train \
 CUDA is used automatically when available. Pass global `--cpu` to force the CPU backend:
 
 ```sh
-cargo run --release -- --cpu train --data runs/cmudict-v0
+cargo run --release -- --cpu g2p2g train --data datasets/g2p2g/openepd-v0
 ```
 
 Tasks:
@@ -186,6 +194,7 @@ The model directory receives:
 | `train_config.json` | Training config, including task direction |
 | `train_state.json` | Resume state |
 | `vocab.json` | Copied vocabulary for self-contained prediction |
+| `manifest.json` | Generic model-family artifact metadata |
 
 Training resumes automatically when `train_state.json` and checkpoint files are present in the output directory.
 
@@ -202,16 +211,16 @@ Runs one translation prediction.
 Direct form:
 
 ```sh
-cargo run --release -- predict \
-    --model models/cmudict-v0 \
+cargo run --release -- g2p2g infer \
+    --model models/g2p2g/openepd-v0 \
     "farkle"
 ```
 
 Task detection is automatic by default. You can force a direction:
 
 ```sh
-cargo run --release -- predict \
-    --model models/cmudict-v0 \
+cargo run --release -- g2p2g infer \
+    --model models/g2p2g/openepd-v0 \
     --task p2g \
     "ˈfɑɹ.kəl"
 ```
@@ -221,14 +230,14 @@ Prediction searches for `vocab.json` in:
 1. the explicit `--data` directory;
 2. the model directory;
 3. the model directory's parent;
-4. a sibling `runs/<model-name>/vocab.json`.
+4. a sibling `runs/<model-name>/vocab.json` for legacy layouts.
 
 Training copies `vocab.json` into the model directory, so ordinary prediction should not require `--data`.
 
 ### REPL
 
 ```sh
-cargo run --release -- repl --cpu
+cargo run --release -- g2p2g repl --cpu
 ```
 
 The REPL is also the default subcommand:
@@ -261,9 +270,9 @@ For these tiny models, CPU inference is often faster than CUDA for interactive u
 ### Evaluate
 
 ```sh
-cargo run --release -- eval \
-    --model models/cmudict-v0 \
-    --data runs/cmudict-v0 \
+cargo run --release -- g2p2g eval \
+    --model models/g2p2g/openepd-v0 \
+    --data datasets/g2p2g/openepd-v0 \
     --split test \
     --task auto
 ```
@@ -289,10 +298,10 @@ Mines validation/test pronunciation discrepancies and fine-tunes a copy of the m
 Direct form:
 
 ```sh
-cargo run --release -- refine \
-    --model models/cmudict-v0 \
-    --data runs/cmudict-v0 \
-    --out models/cmudict-v0-refined \
+cargo run --release -- g2p2g refine \
+    --model models/g2p2g/openepd-v0 \
+    --data datasets/g2p2g/openepd-v0 \
+    --out models/g2p2g/openepd-v0-refined \
     --splits valid,test \
     --task g2p \
     --verbose \
@@ -327,7 +336,7 @@ Some discrepancies are regular patterns worth training. Others are sight-word ex
 just sight-words
 ```
 
-Fine-tunes a copy of the model on the built-in Dolch sight-word list using OpenEPD gold pronunciations. The default output is `models/cmudict-v0-sight-words`.
+Fine-tunes a copy of the model on the built-in Dolch sight-word list using OpenEPD gold pronunciations. The default output is `models/g2p2g/openepd-v0-sight-words`.
 
 Pass refinement flags after the recipe:
 
@@ -338,10 +347,10 @@ just sight-words --epochs 8 --learning-rate 5e-5
 Direct form:
 
 ```sh
-cargo run --release -- refine \
-    --model models/cmudict-v0 \
-    --data runs/cmudict-v0 \
-    --out models/cmudict-v0-sight-words \
+cargo run --release -- g2p2g refine \
+    --model models/g2p2g/openepd-v0 \
+    --data datasets/g2p2g/openepd-v0 \
+    --out models/g2p2g/openepd-v0-sight-words \
     --source sight-words \
     --task both
 ```
@@ -378,6 +387,17 @@ just speak "hello world"
 ```
 
 Synthesizes speech through the configured backend.
+
+### Sentence parser scaffold
+
+```sh
+cargo run --release -- sentence-parser prepare
+cargo run --release -- sentence-parser train
+cargo run --release -- sentence-parser eval --model models/sentence-parser/v0
+cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
+```
+
+The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speech::syntax::SentenceSyntaxAnalysis`. Its current parser backend delegates to the existing heuristic parser until a neural architecture is implemented.
 
 ---
 
@@ -448,7 +468,7 @@ Future sibling models may handle:
 - surface realizations and allophony;
 - ASR-adjacent phone/phoneme representations.
 
-The CLI will likely be reshaped around multiple model families rather than one monolithic `tongues` model.
+The CLI is now shaped around model families rather than one monolithic `tongues` model, with legacy verb-first aliases kept temporarily.
 
 ---
 
@@ -461,7 +481,7 @@ cargo test
 For the model crate only:
 
 ```sh
-cargo test -p tongues-model
+cargo test -p tongues-g2p2g
 ```
 
 ---

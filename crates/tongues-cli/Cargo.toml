@@ -10,7 +10,9 @@ path = "src/main.rs"
 [dependencies]
 tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }
-tongues-model = { path = "../tongues-model" }
+tongues-g2p2g = { path = "../tongues-g2p2g" }
+tongues-neural = { path = "../tongues-neural" }
+tongues-sentence-parser = { path = "../tongues-sentence-parser" }
 burn = { workspace = true }
 burn-cuda = { workspace = true }
 serde = { workspace = true }
@@ -29,6 +31,7 @@ owo-colors = { workspace = true }
 speech = { path = "../speech" }
 styletts2 = { path = "../styletts2" }
 indicatif = { workspace = true }
+toml = { workspace = true }
 open-english-pronouncing-dictionary = "0.1.0"
 
 [dependencies.ort]

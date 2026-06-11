@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn rhotic_vowels_do_not_add_coda_r_in_syllables() {
         assert_eq!(syllables_to_ipa(&syllables_for("current")), "ˈkʰɝ.ənt");
-        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚ.ˈaɪvd");
+        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚˈaɪvd");
         assert_eq!(syllables_to_ipa(&syllables_for("surface")), "ˈsɝ.fəs");
 
         let current = syllables_for("current");

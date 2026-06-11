@@ -1,0 +1,14 @@
+[prepare]
+train_frac = 0.8
+valid_frac = 0.1
+seed = 42
+
+[train]
+learning_rate = 0.0003
+weight_decay = 0.0001
+dropout = 0.1
+epochs = 20
+patience = 5
+batch_size = 64
+seed = 0
+task = "both"

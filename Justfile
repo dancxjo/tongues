@@ -3,9 +3,13 @@ set positional-arguments
 default:
     @just --list
 
+# Create a new model-family crate/config/artifact scaffold
+new-family family:
+    bash scripts/new-model-family.sh "{{family}}"
+
 # Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:
-    cargo run --bin tongues -- prepare --out runs/cmudict-v0 "$@"
+    cargo run --bin tongues -- g2p2g prepare --out datasets/g2p2g/openepd-v0 "$@"
 
 # Fetch/Download the CMUdict lexicon data file
 fetch *args:
@@ -48,16 +52,16 @@ phones *args:
 
 # Run translation prediction (graphemes to phonemes or vice-versa)
 infer *args:
-    cargo run --bin tongues -- predict "$@"
+    cargo run --bin tongues -- g2p2g infer "$@"
 
 # Train the tongues translation model with an even mix of both directions
 train *args:
-    cargo run --bin tongues -- train --data runs/cmudict-v0 --out models/cmudict-v0 --task both "$@"
+    cargo run --bin tongues -- g2p2g train --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0 --task both "$@"
 
 # Refine the model on validation/test pronunciation discrepancies
 refine *args:
-    cargo run --bin tongues -- refine --model models/cmudict-v0 --data runs/cmudict-v0 --out models/cmudict-v0-refined --verbose "$@"
+    cargo run --bin tongues -- g2p2g refine --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0-refined --verbose "$@"
 
 # Fine-tune the model on the built-in Dolch sight-word list
 sight-words *args:
-    cargo run --bin tongues -- refine --model models/cmudict-v0 --data runs/cmudict-v0 --out models/cmudict-v0-sight-words --source sight-words --task both --verbose "$@"
+    cargo run --bin tongues -- g2p2g refine --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0-sight-words --source sight-words --task both --verbose "$@"

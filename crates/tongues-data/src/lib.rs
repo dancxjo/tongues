@@ -10,8 +10,8 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────
 
