@@ -201,13 +201,14 @@ fn tokens_to_phones(tokens: &[OpenEpdToken]) -> Vec<PhoneToken> {
             OpenEpdToken::SyllableBoundary => {}
             OpenEpdToken::Segment(symbol) => {
                 let broad = broad_symbol(symbol);
+                let is_vowel = is_vowelish(broad);
                 let mut features = FeatureBundle::default();
                 put(&mut features, "source_schema", "openepd");
                 put(&mut features, "notation", "ipa");
                 put(&mut features, "raw_symbol", symbol);
                 put(&mut features, "base_symbol", broad);
-                put_bool(&mut features, "syllabic", is_vowelish(broad));
-                if let Some(stress) = pending_stress.take() {
+                put_bool(&mut features, "syllabic", is_vowel);
+                if is_vowel && let Some(stress) = pending_stress.take() {
                     put(&mut features, "stress", stress);
                 }
 
@@ -343,6 +344,14 @@ mod tests {
     fn moves_openepd_vowel_stress_to_syllable_onset() {
         assert_eq!(normalize_openepd_ipa("zˈɪl").unwrap(), "ˈzɪl");
         assert_eq!(normalize_openepd_ipa("zˈɪɡ").unwrap(), "ˈzɪɡ");
+    }
+
+    #[test]
+    fn does_not_insert_syllable_dot_before_stress_mark() {
+        assert_eq!(
+            normalize_openepd_ipa("bɛ.ˈnɛ.kwə.ti").unwrap(),
+            "bɛˈnɛ.kwə.ti"
+        );
     }
 
     #[test]

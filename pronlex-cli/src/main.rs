@@ -28,7 +28,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -678,6 +678,148 @@ fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
 
 // ── prepare ────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PrepareGoldCacheRecord {
+    base_word: String,
+    phonemes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PrepareGoldException {
+    base_word: String,
+    gold_source: String,
+    gold: String,
+    generated: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeneratedCacheRecord {
+    base_word: String,
+    phonemes: Option<String>,
+}
+
+fn load_prepare_gold_cache(
+    base_words: &[String],
+    out: &Path,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let cache_path = out.join("openepd_gold_cache.jsonl");
+    let mut cache = std::collections::BTreeMap::<String, Option<String>>::new();
+    if cache_path.exists() {
+        let file = fs::File::open(&cache_path)
+            .with_context(|| format!("opening {}", cache_path.display()))?;
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: PrepareGoldCacheRecord = serde_json::from_str(&line)
+                .with_context(|| format!("parsing {}", cache_path.display()))?;
+            cache.insert(record.base_word, record.phonemes);
+        }
+    }
+
+    let missing_words: Vec<&String> = base_words
+        .iter()
+        .filter(|word| !cache.contains_key(*word))
+        .collect();
+
+    if !missing_words.is_empty() {
+        println!(
+            "Loading OpenEPD corpus for {} uncached prepare gold lookups...",
+            missing_words.len()
+        );
+        let openepd = open_english_pronouncing_dictionary::load()
+            .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
+        println!("  OpenEPD words: {}", openepd.word_count());
+
+        for word in missing_words {
+            let phonemes = openepd
+                .preferred_ipa(word)
+                .and_then(|raw| normalize_openepd_ipa(raw).ok());
+            cache.insert(word.clone(), phonemes);
+        }
+
+        write_prepare_gold_cache(&cache_path, &cache)?;
+    } else {
+        println!(
+            "Using cached OpenEPD prepare gold lookups from {}",
+            cache_path.display()
+        );
+    }
+
+    Ok(cache
+        .into_iter()
+        .filter_map(|(word, phonemes)| phonemes.map(|phonemes| (word, phonemes)))
+        .collect())
+}
+
+fn write_prepare_gold_cache(
+    path: &Path,
+    cache: &std::collections::BTreeMap<String, Option<String>>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let file = fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    for (base_word, phonemes) in cache {
+        let record = PrepareGoldCacheRecord {
+            base_word: base_word.clone(),
+            phonemes: phonemes.clone(),
+        };
+        writeln!(writer, "{}", serde_json::to_string(&record)?)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn load_generated_cache(out: &Path) -> Result<std::collections::BTreeMap<String, Option<String>>> {
+    let cache_path = out.join("generated_pronunciation_cache.jsonl");
+    let mut cache = std::collections::BTreeMap::new();
+    if !cache_path.exists() {
+        return Ok(cache);
+    }
+
+    let file =
+        fs::File::open(&cache_path).with_context(|| format!("opening {}", cache_path.display()))?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: GeneratedCacheRecord = serde_json::from_str(&line)
+            .with_context(|| format!("parsing {}", cache_path.display()))?;
+        cache.insert(record.base_word, record.phonemes);
+    }
+    println!(
+        "Using cached generated pronunciations from {}",
+        cache_path.display()
+    );
+    Ok(cache)
+}
+
+fn write_generated_cache(
+    out: &Path,
+    cache: &std::collections::BTreeMap<String, Option<String>>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let cache_path = out.join("generated_pronunciation_cache.jsonl");
+    let file = fs::File::create(&cache_path)
+        .with_context(|| format!("creating {}", cache_path.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    for (base_word, phonemes) in cache {
+        let record = GeneratedCacheRecord {
+            base_word: base_word.clone(),
+            phonemes: phonemes.clone(),
+        };
+        writeln!(writer, "{}", serde_json::to_string(&record)?)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
 fn cmd_prepare(
     input: &Path,
     out: &Path,
@@ -692,6 +834,11 @@ fn cmd_prepare(
     println!("  {} base words parsed", total_words);
 
     fs::create_dir_all(out).context("creating output directory")?;
+    let gold_pronunciations = load_prepare_gold_cache(&base_words, out)?;
+    println!(
+        "  {} OpenEPD gold pronunciations available before generated fallback",
+        gold_pronunciations.len()
+    );
 
     // Open output files
     let train_path = out.join("train.jsonl");
@@ -709,6 +856,9 @@ fn cmd_prepare(
     let train_writer = Arc::new(Mutex::new(std::io::BufWriter::new(train_file)));
     let valid_writer = Arc::new(Mutex::new(std::io::BufWriter::new(valid_file)));
     let test_writer = Arc::new(Mutex::new(std::io::BufWriter::new(test_file)));
+    let exception_path = out.join("gold_exceptions.jsonl");
+    let exception_file = fs::File::create(&exception_path)?;
+    let exception_writer = Arc::new(Mutex::new(std::io::BufWriter::new(exception_file)));
 
     // Track word lists for anti-leakage auditing
     let train_words = Arc::new(Mutex::new(Vec::new()));
@@ -718,6 +868,10 @@ fn cmd_prepare(
     // Vocab character/symbol accumulation
     let seen_word_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let seen_phoneme_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+
+    let gold_pronunciations = Arc::new(gold_pronunciations);
+    let generated_cache = Arc::new(Mutex::new(load_generated_cache(out)?));
+    let gold_exception_count = Arc::new(Mutex::new(0usize));
 
     // Shared thread-safe list of base words
     let base_words = Arc::new(Mutex::new(base_words));
@@ -757,6 +911,10 @@ fn cmd_prepare(
 
         let seen_word_chars = Arc::clone(&seen_word_chars);
         let seen_phoneme_chars = Arc::clone(&seen_phoneme_chars);
+        let gold_pronunciations = Arc::clone(&gold_pronunciations);
+        let generated_cache = Arc::clone(&generated_cache);
+        let exception_writer = Arc::clone(&exception_writer);
+        let gold_exception_count = Arc::clone(&gold_exception_count);
 
         let pb = pb.clone();
 
@@ -773,10 +931,52 @@ fn cmd_prepare(
                     None => break,
                 };
 
-                if let Some((phonemes, _phones)) = pronlex_data::phonemicize_word(&word) {
+                let gold = gold_pronunciations.get(&word).cloned();
+                let generated = {
+                    let cached = generated_cache.lock().unwrap().get(&word).cloned();
+                    match cached {
+                        Some(value) => value,
+                        None => {
+                            let value =
+                                pronlex_data::phonemicize_word(&word).map(|(phonemes, _)| phonemes);
+                            generated_cache
+                                .lock()
+                                .unwrap()
+                                .insert(word.clone(), value.clone());
+                            value
+                        }
+                    }
+                };
+
+                if let Some(gold_phonemes) = &gold {
+                    if generated.as_deref() != Some(gold_phonemes.as_str()) {
+                        let exception = PrepareGoldException {
+                            base_word: word.clone(),
+                            gold_source: "openepd".to_string(),
+                            gold: gold_phonemes.clone(),
+                            generated: generated.clone(),
+                        };
+                        if let Ok(line) = serde_json::to_string(&exception) {
+                            let mut w = exception_writer.lock().unwrap();
+                            let _ = writeln!(w, "{}", line);
+                        }
+                        let mut count = gold_exception_count.lock().unwrap();
+                        *count += 1;
+                        pb.println(format!(
+                            "EXCEPTION source=openepd word={} gold={} generated={}",
+                            word,
+                            gold_phonemes,
+                            generated.as_deref().unwrap_or("<missing>")
+                        ));
+                    }
+                }
+
+                let phonemes = gold.or(generated);
+
+                if let Some(phonemes) = phonemes {
                     let lex = Lexeme {
                         base_word: word.clone(),
-                        phonemes: phonemes.clone(),
+                        phonemes,
                     };
 
                     // Add to vocab sets
@@ -832,6 +1032,8 @@ fn cmd_prepare(
     train_writer.lock().unwrap().flush()?;
     valid_writer.lock().unwrap().flush()?;
     test_writer.lock().unwrap().flush()?;
+    exception_writer.lock().unwrap().flush()?;
+    write_generated_cache(out, &generated_cache.lock().unwrap())?;
 
     let t_words = train_words.lock().unwrap().clone();
     let v_words = valid_words.lock().unwrap().clone();
@@ -842,6 +1044,11 @@ fn cmd_prepare(
         t_words.len(),
         v_words.len(),
         te_words.len()
+    );
+    println!(
+        "Gold exceptions written: {} at {}",
+        *gold_exception_count.lock().unwrap(),
+        exception_path.display()
     );
 
     // Save word lists
@@ -891,6 +1098,35 @@ fn read_jsonl(path: &Path) -> Result<Vec<Lexeme>> {
     Ok(out)
 }
 
+const SIGHT_WORD_TRAINING_REPEATS: usize = 24;
+
+fn add_sight_word_training_examples(train_lexemes: &mut Vec<Lexeme>, data: &Path) -> Result<usize> {
+    let sight_words: std::collections::BTreeSet<&str> = SIGHT_WORDS.iter().copied().collect();
+    let mut selected = std::collections::BTreeMap::<String, Lexeme>::new();
+
+    for split in ["train", "valid", "test"] {
+        let path = data.join(format!("{}.jsonl", split));
+        if !path.exists() {
+            continue;
+        }
+        for lexeme in read_jsonl(&path)? {
+            if sight_words.contains(lexeme.base_word.as_str()) {
+                selected.entry(lexeme.base_word.clone()).or_insert(lexeme);
+            }
+        }
+    }
+
+    let mut added = 0usize;
+    for lexeme in selected.values() {
+        for _ in 0..SIGHT_WORD_TRAINING_REPEATS {
+            train_lexemes.push(lexeme.clone());
+            added += 1;
+        }
+    }
+
+    Ok(added)
+}
+
 // ── train ──────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -931,14 +1167,21 @@ fn cmd_train(
         serde_json::from_str(&s)?
     };
 
-    let train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
+    let mut train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
     let valid_lexemes = read_jsonl(&data.join("valid.jsonl"))?;
+    let added_sight_word_lexemes = add_sight_word_training_examples(&mut train_lexemes, data)?;
 
     println!(
         "Loaded {} train / {} valid lexemes",
         train_lexemes.len(),
         valid_lexemes.len()
     );
+    if added_sight_word_lexemes > 0 {
+        println!(
+            "  included {} extra sight-word training examples",
+            added_sight_word_lexemes
+        );
+    }
 
     let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
 

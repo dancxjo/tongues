@@ -11,6 +11,29 @@ prepare *args:
 fetch *args:
     cargo run --bin pronlex -- fetch-cmudict --out data/cmudict.dict "$@"
 
+# Move generated data, prepared runs, and model outputs aside for a fresh start
+archive:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    archive_dir="archive/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$archive_dir"
+
+    moved=0
+    for path in data runs models; do
+        if [ -e "$path" ]; then
+            mv "$path" "$archive_dir/"
+            moved=1
+        fi
+    done
+
+    if [ "$moved" -eq 0 ]; then
+        rmdir "$archive_dir"
+        echo "Nothing to archive."
+    else
+        echo "Archived generated data, runs, and models to $archive_dir"
+    fi
+
 # Synthesize speech using StyleTTS2 or Piper backends
 speak *args:
     cargo run --bin pronlex -- speak "$@"

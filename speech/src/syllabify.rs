@@ -278,13 +278,20 @@ pub fn syllables_to_ipa(syllables: &[Syllable]) -> String {
         .enumerate()
         .map(|(index, syllable)| {
             let mut text = String::new();
-            if index > 0 {
-                text.push('.');
-            }
+            let mut has_stress_mark = false;
             match syllable.stress {
-                Spec::Known(Stress::Primary) => text.push('ˈ'),
-                Spec::Known(Stress::Secondary) => text.push('ˌ'),
+                Spec::Known(Stress::Primary) => {
+                    has_stress_mark = true;
+                    text.push('ˈ');
+                }
+                Spec::Known(Stress::Secondary) => {
+                    has_stress_mark = true;
+                    text.push('ˌ');
+                }
                 _ => {}
+            }
+            if index > 0 && !has_stress_mark {
+                text.insert(0, '.');
             }
             for phone in &syllable.phones {
                 text.push_str(phone_ipa(phone));

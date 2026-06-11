@@ -1,5 +1,8 @@
 target/
 /data/
+/runs/
+/models/
+/archive/
 *.bin.gz
 Cargo.lock
 target_verify/
