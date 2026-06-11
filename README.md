@@ -30,7 +30,7 @@ Pronlex currently includes:
 - spelling-to-phoneme (`g2p`) prediction;
 - phoneme-to-spelling (`p2g`) prediction;
 - a REPL that keeps the model loaded for interactive use;
-- CMUdict-based data preparation;
+- OpenEPD-based data preparation;
 - OpenEPD-based discrepancy mining and refinement;
 - sight-word refinement using the built-in Dolch list;
 - a local `speech` crate for rule-based phonemicization/realization;
@@ -44,7 +44,7 @@ This project is moving quickly. Some old command help may still refer to the ear
 
 ```text
 pronlex-core   shared vocabulary and special token IDs
-pronlex-data   CMUdict parsing, IPA phonemicization, splits, collation
+pronlex-data   Lexicon parsing, IPA normalization, splits, collation
 pronlex-model  Burn seq2seq model, training, evaluation, prediction
 pronlex-cli    command-line interface and model/data wiring
 speech         rule-based phonemicization and realization pipeline
@@ -63,7 +63,7 @@ The easiest path is through the `just` recipes:
 just train
 ```
 
-That trains the default model at `models/cmudict-v0` using data in `runs/cmudict-v0`. If the prepared data is missing, training prepares it. If `data/cmudict.dict` is missing, training downloads CMUdict first.
+That trains the default model at `models/cmudict-v0` using data in `runs/cmudict-v0`. If the prepared data is missing, training prepares it from the embedded OpenEPD corpus first.
 
 Direct form:
 
@@ -108,11 +108,10 @@ or:
 
 ```sh
 cargo run --release -- prepare \
-    --input data/cmudict.dict \
     --out runs/cmudict-v0
 ```
 
-Optional. Builds `runs/cmudict-v0` without starting training. Use this when you want to refresh or inspect the generated data, or pass custom prepare arguments.
+Optional. Builds `runs/cmudict-v0` from the embedded OpenEPD corpus without starting training. Use this when you want to refresh or inspect the generated data, or pass custom prepare arguments.
 
 `prepare` writes a prepared data directory containing:
 

@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! pronlex fetch-cmudict --out data/cmudict.dict
-//! pronlex prepare --input data/cmudict.dict --out runs/cmudict-v0
+//! pronlex prepare --out runs/cmudict-v0
 //! pronlex train  --data runs/cmudict-v0 --out models/cmudict-v0
 //!                [--mask-policy variable] [--max-mask-rate 0.4]
 //!                [--span-mask-prob 0.15]
@@ -36,7 +36,7 @@ use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn_cuda::{Cuda, CudaDevice};
 
 use pronlex_core::{Vocab, UNK_ID};
-use pronlex_data::{parse_cmudict, Lexeme, Task};
+use pronlex_data::{Lexeme, Task};
 use pronlex_model::{
     eval_report, load_model, predict, train, ModelConfig, Seq2SeqModel, TrainConfig,
 };
@@ -79,11 +79,11 @@ enum Commands {
         out: PathBuf,
     },
 
-    /// Parse CMUdict, build vocabulary, and create train/valid/test splits
+    /// Parse OpenEPD, build vocabulary, and create train/valid/test splits
     Prepare {
-        /// Path to CMUdict .dict file (local or downloaded)
+        /// Deprecated compatibility argument; prepare now uses embedded OpenEPD.
         #[arg(long)]
-        input: PathBuf,
+        input: Option<PathBuf>,
 
         /// Output directory for splits and vocabulary
         #[arg(long, default_value = "runs/cmudict-v0")]
@@ -352,7 +352,7 @@ fn main() -> Result<()> {
             train_frac,
             valid_frac,
             seed,
-        } => cmd_prepare(&input, &out, train_frac, valid_frac, seed),
+        } => cmd_prepare(input.as_deref(), &out, train_frac, valid_frac, seed),
         Commands::Train {
             data,
             out,
@@ -678,167 +678,89 @@ fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
 
 // ── prepare ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PrepareGoldCacheRecord {
-    base_word: String,
-    phonemes: Option<String>,
+#[derive(Debug, Clone, Deserialize)]
+struct OpenEpdEntry {
+    ipa: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct PrepareGoldException {
-    base_word: String,
-    gold_source: String,
-    gold: String,
-    generated: Option<String>,
-}
+const OPENEPD_SOURCE_PREFERENCE: &[&str] = &[
+    "misaki_gold",
+    "cmu",
+    "misaki_silver",
+    "phonemicchart",
+    "wiktionary",
+    "wikipron",
+];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeneratedCacheRecord {
-    base_word: String,
-    phonemes: Option<String>,
-}
+fn load_openepd_prepare_lexemes() -> Result<(Vec<Lexeme>, usize)> {
+    let raw: std::collections::BTreeMap<String, OpenEpdEntry> =
+        serde_json::from_str(open_english_pronouncing_dictionary::CORPUS_JSON)
+            .context("parsing embedded OpenEPD JSON")?;
 
-fn load_prepare_gold_cache(
-    base_words: &[String],
-    out: &Path,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let cache_path = out.join("openepd_gold_cache.jsonl");
-    let mut cache = std::collections::BTreeMap::<String, Option<String>>::new();
-    if cache_path.exists() {
-        let file = fs::File::open(&cache_path)
-            .with_context(|| format!("opening {}", cache_path.display()))?;
-        let reader = std::io::BufReader::new(file);
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record: PrepareGoldCacheRecord = serde_json::from_str(&line)
-                .with_context(|| format!("parsing {}", cache_path.display()))?;
-            cache.insert(record.base_word, record.phonemes);
-        }
-    }
-
-    let missing_words: Vec<&String> = base_words
-        .iter()
-        .filter(|word| !cache.contains_key(*word))
-        .collect();
-
-    if !missing_words.is_empty() {
-        println!(
-            "Loading OpenEPD corpus for {} uncached prepare gold lookups...",
-            missing_words.len()
-        );
-        let openepd = open_english_pronouncing_dictionary::load()
-            .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
-        println!("  OpenEPD words: {}", openepd.word_count());
-
-        for word in missing_words {
-            let phonemes = openepd
-                .preferred_ipa(word)
-                .and_then(|raw| normalize_openepd_ipa(raw).ok());
-            cache.insert(word.clone(), phonemes);
-        }
-
-        write_prepare_gold_cache(&cache_path, &cache)?;
-    } else {
-        println!(
-            "Using cached OpenEPD prepare gold lookups from {}",
-            cache_path.display()
-        );
-    }
-
-    Ok(cache
-        .into_iter()
-        .filter_map(|(word, phonemes)| phonemes.map(|phonemes| (word, phonemes)))
-        .collect())
-}
-
-fn write_prepare_gold_cache(
-    path: &Path,
-    cache: &std::collections::BTreeMap<String, Option<String>>,
-) -> Result<()> {
-    use std::io::Write;
-
-    let file = fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut writer = std::io::BufWriter::new(file);
-    for (base_word, phonemes) in cache {
-        let record = PrepareGoldCacheRecord {
-            base_word: base_word.clone(),
-            phonemes: phonemes.clone(),
-        };
-        writeln!(writer, "{}", serde_json::to_string(&record)?)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
-fn load_generated_cache(out: &Path) -> Result<std::collections::BTreeMap<String, Option<String>>> {
-    let cache_path = out.join("generated_pronunciation_cache.jsonl");
-    let mut cache = std::collections::BTreeMap::new();
-    if !cache_path.exists() {
-        return Ok(cache);
-    }
-
-    let file =
-        fs::File::open(&cache_path).with_context(|| format!("opening {}", cache_path.display()))?;
-    let reader = std::io::BufReader::new(file);
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    let mut lexemes = Vec::with_capacity(raw.len());
+    let mut skipped = 0usize;
+    for (base_word, entry) in raw {
+        if !is_prepare_word(&base_word) {
+            skipped += 1;
             continue;
         }
-        let record: GeneratedCacheRecord = serde_json::from_str(&line)
-            .with_context(|| format!("parsing {}", cache_path.display()))?;
-        cache.insert(record.base_word, record.phonemes);
+        let Some(raw_ipa) = preferred_openepd_ipa(&entry.ipa) else {
+            skipped += 1;
+            continue;
+        };
+        let phonemes = match normalize_openepd_ipa(raw_ipa) {
+            Ok(phonemes) => phonemes,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        lexemes.push(Lexeme {
+            base_word,
+            phonemes,
+        });
     }
-    println!(
-        "Using cached generated pronunciations from {}",
-        cache_path.display()
-    );
-    Ok(cache)
+
+    Ok((lexemes, skipped))
 }
 
-fn write_generated_cache(
-    out: &Path,
-    cache: &std::collections::BTreeMap<String, Option<String>>,
-) -> Result<()> {
-    use std::io::Write;
-
-    let cache_path = out.join("generated_pronunciation_cache.jsonl");
-    let file = fs::File::create(&cache_path)
-        .with_context(|| format!("creating {}", cache_path.display()))?;
-    let mut writer = std::io::BufWriter::new(file);
-    for (base_word, phonemes) in cache {
-        let record = GeneratedCacheRecord {
-            base_word: base_word.clone(),
-            phonemes: phonemes.clone(),
-        };
-        writeln!(writer, "{}", serde_json::to_string(&record)?)?;
+fn preferred_openepd_ipa(ipa: &std::collections::BTreeMap<String, String>) -> Option<&str> {
+    for preferred_source in OPENEPD_SOURCE_PREFERENCE {
+        if let Some(value) = ipa.get(*preferred_source) {
+            return Some(value);
+        }
+        if let Some((_, value)) = ipa
+            .iter()
+            .find(|(source, _)| source.starts_with(preferred_source))
+        {
+            return Some(value);
+        }
     }
-    writer.flush()?;
-    Ok(())
+    ipa.values().next().map(String::as_str)
+}
+
+fn is_prepare_word(word: &str) -> bool {
+    !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_alphabetic() || c == '\'' || c == '-')
 }
 
 fn cmd_prepare(
-    input: &Path,
+    _input: Option<&Path>,
     out: &Path,
     train_frac: f64,
     valid_frac: f64,
     _seed: u64,
 ) -> Result<()> {
-    println!("Parsing CMUdict from {}", input.display());
-    let text = fs::read_to_string(input).context("reading CMUdict")?;
-    let base_words = parse_cmudict(&text);
-    let total_words = base_words.len();
-    println!("  {} base words parsed", total_words);
-
-    fs::create_dir_all(out).context("creating output directory")?;
-    let gold_pronunciations = load_prepare_gold_cache(&base_words, out)?;
+    println!("Loading OpenEPD as prepare source ...");
+    let (lexemes, skipped_openepd) = load_openepd_prepare_lexemes()?;
+    let total_words = lexemes.len();
     println!(
-        "  {} OpenEPD gold pronunciations available before generated fallback",
-        gold_pronunciations.len()
+        "  {} OpenEPD lexemes loaded ({} skipped by word/IPA filters)",
+        total_words, skipped_openepd
     );
+    fs::create_dir_all(out).context("creating output directory")?;
 
     // Open output files
     let train_path = out.join("train.jsonl");
@@ -851,32 +773,21 @@ fn cmd_prepare(
 
     use indicatif::{ProgressBar, ProgressStyle};
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
 
-    let train_writer = Arc::new(Mutex::new(std::io::BufWriter::new(train_file)));
-    let valid_writer = Arc::new(Mutex::new(std::io::BufWriter::new(valid_file)));
-    let test_writer = Arc::new(Mutex::new(std::io::BufWriter::new(test_file)));
-    let exception_path = out.join("gold_exceptions.jsonl");
-    let exception_file = fs::File::create(&exception_path)?;
-    let exception_writer = Arc::new(Mutex::new(std::io::BufWriter::new(exception_file)));
+    let mut train_writer = std::io::BufWriter::new(train_file);
+    let mut valid_writer = std::io::BufWriter::new(valid_file);
+    let mut test_writer = std::io::BufWriter::new(test_file);
 
     // Track word lists for anti-leakage auditing
-    let train_words = Arc::new(Mutex::new(Vec::new()));
-    let valid_words = Arc::new(Mutex::new(Vec::new()));
-    let test_words = Arc::new(Mutex::new(Vec::new()));
+    let mut train_words = Vec::new();
+    let mut valid_words = Vec::new();
+    let mut test_words = Vec::new();
 
     // Vocab character/symbol accumulation
-    let seen_word_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
-    let seen_phoneme_chars = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let mut seen_word_chars = std::collections::BTreeSet::new();
+    let mut seen_phoneme_chars = std::collections::BTreeSet::new();
 
-    let gold_pronunciations = Arc::new(gold_pronunciations);
-    let generated_cache = Arc::new(Mutex::new(load_generated_cache(out)?));
-    let gold_exception_count = Arc::new(Mutex::new(0usize));
-
-    // Shared thread-safe list of base words
-    let base_words = Arc::new(Mutex::new(base_words));
-
-    println!("Phonemicizing and writing data splits on-the-fly ...");
+    println!("Writing OpenEPD data splits ...");
 
     // Setup indicatif progress bar!
     let pb = ProgressBar::new(total_words as u64);
@@ -885,9 +796,6 @@ fn cmd_prepare(
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
             .progress_chars("#>-")
     );
-
-    let num_threads = 20;
-    let mut handles = Vec::new();
 
     // Deterministic FNV-1a hash function for thread-safe split assignment
     fn fnv1a_hash(s: &str) -> u64 {
@@ -899,165 +807,53 @@ fn cmd_prepare(
         hash
     }
 
-    for _ in 0..num_threads {
-        let base_words = Arc::clone(&base_words);
-        let train_writer = Arc::clone(&train_writer);
-        let valid_writer = Arc::clone(&valid_writer);
-        let test_writer = Arc::clone(&test_writer);
+    for lex in lexemes {
+        for c in lex.base_word.chars() {
+            seen_word_chars.insert(c.to_string());
+        }
+        for c in lex.phonemes.chars() {
+            seen_phoneme_chars.insert(c.to_string());
+        }
 
-        let train_words = Arc::clone(&train_words);
-        let valid_words = Arc::clone(&valid_words);
-        let test_words = Arc::clone(&test_words);
+        // Split deterministically via FNV-1a hash
+        let hash_val = fnv1a_hash(&lex.base_word);
+        let fraction = (hash_val as f64) / (std::u64::MAX as f64);
 
-        let seen_word_chars = Arc::clone(&seen_word_chars);
-        let seen_phoneme_chars = Arc::clone(&seen_phoneme_chars);
-        let gold_pronunciations = Arc::clone(&gold_pronunciations);
-        let generated_cache = Arc::clone(&generated_cache);
-        let exception_writer = Arc::clone(&exception_writer);
-        let gold_exception_count = Arc::clone(&gold_exception_count);
+        let line = serde_json::to_string(&lex)?;
 
-        let pb = pb.clone();
+        if fraction < train_frac {
+            writeln!(train_writer, "{}", line)?;
+            train_words.push(lex.base_word);
+        } else if fraction < train_frac + valid_frac {
+            writeln!(valid_writer, "{}", line)?;
+            valid_words.push(lex.base_word);
+        } else {
+            writeln!(test_writer, "{}", line)?;
+            test_words.push(lex.base_word);
+        }
 
-        let handle = std::thread::spawn(move || {
-            loop {
-                // Pop next base word
-                let word = {
-                    let mut guard = base_words.lock().unwrap();
-                    guard.pop()
-                };
-
-                let word = match word {
-                    Some(w) => w,
-                    None => break,
-                };
-
-                let gold = gold_pronunciations.get(&word).cloned();
-                let generated = {
-                    let cached = generated_cache.lock().unwrap().get(&word).cloned();
-                    match cached {
-                        Some(value) => value,
-                        None => {
-                            let value =
-                                pronlex_data::phonemicize_word(&word).map(|(phonemes, _)| phonemes);
-                            generated_cache
-                                .lock()
-                                .unwrap()
-                                .insert(word.clone(), value.clone());
-                            value
-                        }
-                    }
-                };
-
-                if let Some(gold_phonemes) = &gold {
-                    if generated.as_deref() != Some(gold_phonemes.as_str()) {
-                        let exception = PrepareGoldException {
-                            base_word: word.clone(),
-                            gold_source: "openepd".to_string(),
-                            gold: gold_phonemes.clone(),
-                            generated: generated.clone(),
-                        };
-                        if let Ok(line) = serde_json::to_string(&exception) {
-                            let mut w = exception_writer.lock().unwrap();
-                            let _ = writeln!(w, "{}", line);
-                        }
-                        let mut count = gold_exception_count.lock().unwrap();
-                        *count += 1;
-                        if *count <= 50 {
-                            pb.println(format!(
-                                "EXCEPTION source=openepd word={} gold={} generated={}",
-                                word,
-                                gold_phonemes,
-                                generated.as_deref().unwrap_or("<missing>")
-                            ));
-                        }
-                    }
-                }
-
-                let phonemes = gold.or(generated);
-
-                if let Some(phonemes) = phonemes {
-                    let lex = Lexeme {
-                        base_word: word.clone(),
-                        phonemes,
-                    };
-
-                    // Add to vocab sets
-                    {
-                        let mut w_chars = seen_word_chars.lock().unwrap();
-                        for c in lex.base_word.chars() {
-                            w_chars.insert(c.to_string());
-                        }
-                        let mut pm_chars = seen_phoneme_chars.lock().unwrap();
-                        for c in lex.phonemes.chars() {
-                            pm_chars.insert(c.to_string());
-                        }
-                    }
-
-                    // Split deterministically via FNV-1a hash
-                    let hash_val = fnv1a_hash(&lex.base_word);
-                    let fraction = (hash_val as f64) / (std::u64::MAX as f64);
-
-                    let line = serde_json::to_string(&lex).unwrap();
-
-                    if fraction < train_frac {
-                        let mut w = train_writer.lock().unwrap();
-                        let _ = writeln!(w, "{}", line);
-                        let mut words = train_words.lock().unwrap();
-                        words.push(lex.base_word);
-                    } else if fraction < train_frac + valid_frac {
-                        let mut w = valid_writer.lock().unwrap();
-                        let _ = writeln!(w, "{}", line);
-                        let mut words = valid_words.lock().unwrap();
-                        words.push(lex.base_word);
-                    } else {
-                        let mut w = test_writer.lock().unwrap();
-                        let _ = writeln!(w, "{}", line);
-                        let mut words = test_words.lock().unwrap();
-                        words.push(lex.base_word);
-                    }
-                }
-
-                pb.inc(1);
-            }
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all threads
-    for h in handles {
-        let _ = h.join();
+        pb.inc(1);
     }
 
     pb.finish_with_message("Done!");
 
     // Flush writers
-    train_writer.lock().unwrap().flush()?;
-    valid_writer.lock().unwrap().flush()?;
-    test_writer.lock().unwrap().flush()?;
-    exception_writer.lock().unwrap().flush()?;
-    write_generated_cache(out, &generated_cache.lock().unwrap())?;
-
-    let t_words = train_words.lock().unwrap().clone();
-    let v_words = valid_words.lock().unwrap().clone();
-    let te_words = test_words.lock().unwrap().clone();
+    train_writer.flush()?;
+    valid_writer.flush()?;
+    test_writer.flush()?;
 
     println!(
         "Data splits generated on-the-fly:\n  train={} valid={} test={}",
-        t_words.len(),
-        v_words.len(),
-        te_words.len()
-    );
-    println!(
-        "Gold exceptions written: {} at {}",
-        *gold_exception_count.lock().unwrap(),
-        exception_path.display()
+        train_words.len(),
+        valid_words.len(),
+        test_words.len()
     );
 
     // Save word lists
     for (name, words) in [
-        ("train", &t_words),
-        ("valid", &v_words),
-        ("test", &te_words),
+        ("train", &train_words),
+        ("valid", &valid_words),
+        ("test", &test_words),
     ] {
         let path = out.join(format!("{}_words.txt", name));
         let mut deduped = words.clone();
@@ -1069,8 +865,8 @@ fn cmd_prepare(
     // Build & save vocabulary
     println!("Building vocabulary from seen characters ...");
     let vocab = {
-        let w_list: Vec<String> = seen_word_chars.lock().unwrap().iter().cloned().collect();
-        let pm_list: Vec<String> = seen_phoneme_chars.lock().unwrap().iter().cloned().collect();
+        let w_list: Vec<String> = seen_word_chars.iter().cloned().collect();
+        let pm_list: Vec<String> = seen_phoneme_chars.iter().cloned().collect();
         Vocab::build(&w_list, &pm_list, &[])
     };
 
@@ -1156,12 +952,7 @@ fn cmd_train(
             "Data directory or required splits not found at {}. Automatically preparing...",
             data.display()
         );
-        let dict_path = Path::new("data/cmudict.dict");
-        if !dict_path.exists() {
-            println!("CMUdict file not found at data/cmudict.dict. Fetching...");
-            cmd_fetch_cmudict(dict_path)?;
-        }
-        cmd_prepare(dict_path, data, 0.8, 0.1, 42)?;
+        cmd_prepare(None, data, 0.8, 0.1, 42)?;
     }
 
     let vocab: Vocab = {

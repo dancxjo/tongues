@@ -3,9 +3,9 @@ set positional-arguments
 default:
     @just --list
 
-# Prepare CMUdict data splits and build vocabulary (runs prepare)
+# Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:
-    cargo run --bin pronlex -- prepare --input data/cmudict.dict --out runs/cmudict-v0 "$@"
+    cargo run --bin pronlex -- prepare --out runs/cmudict-v0 "$@"
 
 # Fetch/Download the CMUdict lexicon data file
 fetch *args:
