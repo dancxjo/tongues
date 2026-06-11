@@ -112,6 +112,9 @@ pub struct TrainConfig {
     /// Early stopping: stop if validation loss does not improve for this
     /// many consecutive epochs.
     pub early_stopping_patience: usize,
+    /// Optional training direction task (None = Both).
+    #[serde(default)]
+    pub task: Option<Task>,
 }
 
 impl Default for TrainConfig {
@@ -123,6 +126,7 @@ impl Default for TrainConfig {
             batch_size: 64,
             epochs: 20,
             early_stopping_patience: 5,
+            task: None,
         }
     }
 }
@@ -322,7 +326,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .iter()
             .map(|&i| {
                 let lex = &lexemes[i];
-                let task = Task::sample(rng);
+                let task = config.task.unwrap_or_else(|| Task::sample(rng));
                 make_seq2seq_example(lex, task, vocab)
             })
             .collect();
@@ -373,6 +377,7 @@ pub fn evaluate<B: Backend, R: Rng>(
     model: &Seq2SeqModel<B>,
     lexemes: &[Lexeme],
     vocab: &Vocab,
+    task_filter: Option<Task>,
     device: &B::Device,
     _rng: &mut R,
 ) -> (f32, f32, f32) {
@@ -397,12 +402,18 @@ pub fn evaluate<B: Backend, R: Rng>(
     let examples: Vec<Seq2SeqExample> = eval_lexemes
         .iter()
         .map(|lex| {
-            let task = if total_examples % 2 == 0 {
-                Task::S2Pm
-            } else {
-                Task::Pm2S
+            let task = match task_filter {
+                Some(t) => t,
+                None => {
+                    let t = if total_examples % 2 == 0 {
+                        Task::S2Pm
+                    } else {
+                        Task::Pm2S
+                    };
+                    total_examples += 1;
+                    t
+                }
             };
-            total_examples += 1;
             make_seq2seq_example(lex, task, vocab)
         })
         .collect();
@@ -583,7 +594,7 @@ where
 
         pb.set_message("evaluating...");
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
-        let (val_loss, val_acc, val_token_acc) = evaluate(&eval_model, valid_lexemes, vocab, device, rng);
+        let (val_loss, val_acc, val_token_acc) = evaluate(&eval_model, valid_lexemes, vocab, train_config.task, device, rng);
 
         pb.finish_and_clear();
 
@@ -653,10 +664,11 @@ pub fn eval_report<B: Backend, R: Rng>(
     test_lexemes: &[Lexeme],
     _train_lexemes: &[Lexeme],
     vocab: &Vocab,
+    task_filter: Option<Task>,
     device: &B::Device,
     rng: &mut R,
 ) -> EvalReport {
-    let (loss, acc, token_acc) = evaluate(model, test_lexemes, vocab, device, rng);
+    let (loss, acc, token_acc) = evaluate(model, test_lexemes, vocab, task_filter, device, rng);
     EvalReport {
         exact_match_accuracy: acc,
         val_loss: loss,

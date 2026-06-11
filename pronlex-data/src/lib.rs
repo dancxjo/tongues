@@ -330,7 +330,7 @@ pub fn check_split_leakage(
 // ── Seq2Seq Task Representation & Collation ────────────────────────────────
 
 /// Available translation directions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Task {
     S2Pm,
     Pm2S,

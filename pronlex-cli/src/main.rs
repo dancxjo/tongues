@@ -149,6 +149,10 @@ enum Commands {
         /// Random seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
+
+        /// Direction of translation to train: s2pm, pm2s, or both
+        #[arg(long, default_value = "both")]
+        task: String,
     },
 
     /// Evaluate a trained model
@@ -164,6 +168,10 @@ enum Commands {
         /// Prepared data directory
         #[arg(long)]
         data: PathBuf,
+
+        /// Direction of translation to evaluate: s2pm, pm2s, both, or auto (detect from train_config)
+        #[arg(long, default_value = "auto")]
+        task: String,
     },
 
     /// Run translation prediction (Seq2Seq)
@@ -268,6 +276,7 @@ fn main() -> Result<()> {
             patience,
             batch_size,
             seed,
+            task,
         } => cmd_train(
             &data,
             &out,
@@ -281,9 +290,15 @@ fn main() -> Result<()> {
             patience,
             batch_size,
             seed,
+            task,
             device_arg,
         ),
-        Commands::Eval { model, split, data } => cmd_eval(&model, &split, &data, device_arg),
+        Commands::Eval {
+            model,
+            split,
+            data,
+            task,
+        } => cmd_eval(&model, &split, &data, &task, device_arg),
         Commands::Predict {
             model,
             input,
@@ -760,6 +775,7 @@ fn cmd_train(
     patience: usize,
     batch_size: usize,
     seed: u64,
+    task_str: String,
     device_arg: DeviceArg,
 ) -> Result<()> {
     let vocab: Vocab = {
@@ -779,6 +795,13 @@ fn cmd_train(
     let model_config = ModelConfig::new(vocab.size())
         .with_dropout(dropout);
 
+    let task_opt = match task_str.to_lowercase().as_str() {
+        "s2pm" => Some(Task::S2Pm),
+        "pm2s" => Some(Task::Pm2S),
+        "both" => None,
+        _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both"),
+    };
+
     let train_config = TrainConfig {
         learning_rate,
         weight_decay,
@@ -786,6 +809,7 @@ fn cmd_train(
         batch_size,
         epochs,
         early_stopping_patience: patience,
+        task: task_opt,
     };
 
     fs::create_dir_all(out).context("creating model directory")?;
@@ -882,7 +906,13 @@ where
 
 // ── eval ───────────────────────────────────────────────────────────────────
 
-fn cmd_eval(model_dir: &Path, split: &str, data: &Path, device_arg: DeviceArg) -> Result<()> {
+fn cmd_eval(
+    model_dir: &Path,
+    split: &str,
+    data: &Path,
+    task_str: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
     let vocab: Vocab = {
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
         serde_json::from_str(&s)?
@@ -896,11 +926,34 @@ fn cmd_eval(model_dir: &Path, split: &str, data: &Path, device_arg: DeviceArg) -
     let test_lexemes = read_jsonl(&data.join(format!("{}.jsonl", split)))?;
     let train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
 
+    let resolved_task = if task_str.to_lowercase() == "auto" {
+        let config_path = model_dir.join("train_config.json");
+        if config_path.exists() {
+            let s = fs::read_to_string(&config_path).context("reading train_config.json")?;
+            let train_config: TrainConfig = serde_json::from_str(&s)?;
+            train_config.task
+        } else {
+            None
+        }
+    } else {
+        match task_str.to_lowercase().as_str() {
+            "s2pm" => Some(Task::S2Pm),
+            "pm2s" => Some(Task::Pm2S),
+            "both" => None,
+            _ => anyhow::bail!("Invalid task. Supported: s2pm, pm2s, both, auto"),
+        }
+    };
+
     println!(
         "Evaluating on {} split ({} lexemes) ...",
         split,
         test_lexemes.len()
     );
+    if let Some(task) = resolved_task {
+        println!("  task: {:?}", task);
+    } else {
+        println!("  task: both");
+    }
 
     match device_arg {
         DeviceArg::Cpu => {
@@ -912,6 +965,7 @@ fn cmd_eval(model_dir: &Path, split: &str, data: &Path, device_arg: DeviceArg) -
                 model_dir,
                 split,
                 &vocab,
+                resolved_task,
                 &test_lexemes,
                 &train_lexemes,
             )?;
@@ -925,6 +979,7 @@ fn cmd_eval(model_dir: &Path, split: &str, data: &Path, device_arg: DeviceArg) -
                 model_dir,
                 split,
                 &vocab,
+                resolved_task,
                 &test_lexemes,
                 &train_lexemes,
             )?;
@@ -939,6 +994,7 @@ fn run_eval<B: Backend>(
     model_dir: &Path,
     _split: &str,
     vocab: &Vocab,
+    task_filter: Option<Task>,
     test_lexemes: &[Lexeme],
     train_lexemes: &[Lexeme],
 ) -> Result<()> {
@@ -950,6 +1006,7 @@ fn run_eval<B: Backend>(
         test_lexemes,
         train_lexemes,
         vocab,
+        task_filter,
         device,
         &mut rng,
     );
