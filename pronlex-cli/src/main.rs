@@ -689,9 +689,6 @@ fn cmd_prepare(
                         for c in lex.base_word.chars() {
                             w_chars.insert(c.to_string());
                         }
-                        for c in lex.base_word.to_uppercase().chars() {
-                            w_chars.insert(c.to_string());
-                        }
                         let mut pm_chars = seen_phoneme_chars.lock().unwrap();
                         for c in lex.phonemes.chars() {
                             pm_chars.insert(c.to_string());
@@ -833,14 +830,13 @@ fn cmd_train(
         cmd_prepare(dict_path, data, 0.8, 0.1, 42)?;
     }
 
-    let mut vocab: Vocab = {
+    let vocab: Vocab = {
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
         serde_json::from_str(&s)?
     };
 
     let train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
     let valid_lexemes = read_jsonl(&data.join("valid.jsonl"))?;
-    ensure_spelling_case_tokens(&mut vocab, [&train_lexemes[..], &valid_lexemes[..]]);
 
     println!(
         "Loaded {} train / {} valid lexemes",
@@ -885,8 +881,7 @@ fn cmd_train(
     let vocab_src = data.join("vocab.json");
     let vocab_dst = out.join("vocab.json");
     if vocab_src.exists() {
-        fs::write(&vocab_dst, serde_json::to_string_pretty(&vocab)?)
-            .context("writing vocab.json to model directory")?;
+        fs::copy(&vocab_src, &vocab_dst).context("copying vocab.json to model directory")?;
     }
 
     let model_path = out.join("model");
@@ -932,31 +927,6 @@ fn cmd_train(
         }
     }
     Ok(())
-}
-
-fn ensure_spelling_case_tokens<'a>(
-    vocab: &mut Vocab,
-    lexeme_sets: impl IntoIterator<Item = &'a [Lexeme]>,
-) {
-    let mut seen = std::collections::BTreeSet::new();
-    for lexemes in lexeme_sets {
-        for lexeme in lexemes {
-            for character in lexeme.base_word.chars() {
-                seen.insert(character.to_string());
-            }
-            for character in lexeme.base_word.to_uppercase().chars() {
-                seen.insert(character.to_string());
-            }
-        }
-    }
-
-    for token in seen {
-        if !vocab.token_to_id.contains_key(&token) {
-            let id = vocab.tokens.len() as u32;
-            vocab.tokens.push(token.clone());
-            vocab.token_to_id.insert(token, id);
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

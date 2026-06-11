@@ -290,23 +290,10 @@ pub fn build_vocab(lexemes: &[Lexeme]) -> Vocab {
 
     for lex in lexemes {
         words.push(lex.base_word.clone());
-        words.push(lex.base_word.to_uppercase());
-        words.push(initial_cap(&lex.base_word));
         phonemes.push(lex.phonemes.clone());
     }
 
     Vocab::build(&words, &phonemes, &[])
-}
-
-fn initial_cap(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(first) => first
-            .to_uppercase()
-            .chain(chars.flat_map(char::to_lowercase))
-            .collect(),
-        None => String::new(),
-    }
 }
 
 // ── Data splitting ─────────────────────────────────────────────────────────
@@ -394,9 +381,10 @@ pub struct Seq2SeqExample {
 
 /// Convert a Lexeme to a translation example.
 pub fn make_seq2seq_example(lexeme: &Lexeme, task: Task, vocab: &Vocab) -> Seq2SeqExample {
+    let base_word = lexeme.base_word.to_lowercase();
     let (src_str, tgt_str) = match task {
-        Task::S2Pm => (&lexeme.base_word, &lexeme.phonemes),
-        Task::Pm2S => (&lexeme.phonemes, &lexeme.base_word),
+        Task::S2Pm => (base_word.as_str(), lexeme.phonemes.as_str()),
+        Task::Pm2S => (lexeme.phonemes.as_str(), base_word.as_str()),
     };
 
     let mut src_ids = vec![task.get_prefix_id()];
@@ -499,22 +487,17 @@ mod tests {
     }
 
     #[test]
-    fn build_vocab_includes_spelling_case_variants() {
-        let lex = vec![Lexeme {
-            base_word: "farkle".into(),
+    fn seq2seq_examples_normalize_spelling_to_lowercase() {
+        let lex = Lexeme {
+            base_word: "FARKLE".into(),
             phonemes: "ˈfɑɹ.kəl".into(),
-        }];
+        };
+        let vocab = Vocab::build(&["farkle".to_string()], &["ˈfɑɹ.kəl".to_string()], &[]);
 
-        let vocab = build_vocab(&lex);
+        let s2pm = make_seq2seq_example(&lex, Task::S2Pm, &vocab);
+        let pm2s = make_seq2seq_example(&lex, Task::Pm2S, &vocab);
 
-        for spelling in ["farkle", "Farkle", "FARKLE"] {
-            assert!(
-                vocab
-                    .encode_string(spelling)
-                    .iter()
-                    .all(|&id| id != pronlex_core::UNK_ID),
-                "{spelling} should not encode to UNK"
-            );
-        }
+        assert_eq!(vocab.decode_ids(&s2pm.src_ids[1..]), "farkle");
+        assert_eq!(vocab.decode_ids(&pm2s.tgt_out_ids), "farkle");
     }
 }
