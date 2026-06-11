@@ -962,12 +962,14 @@ fn cmd_prepare(
                         }
                         let mut count = gold_exception_count.lock().unwrap();
                         *count += 1;
-                        pb.println(format!(
-                            "EXCEPTION source=openepd word={} gold={} generated={}",
-                            word,
-                            gold_phonemes,
-                            generated.as_deref().unwrap_or("<missing>")
-                        ));
+                        if *count <= 50 {
+                            pb.println(format!(
+                                "EXCEPTION source=openepd word={} gold={} generated={}",
+                                word,
+                                gold_phonemes,
+                                generated.as_deref().unwrap_or("<missing>")
+                            ));
+                        }
                     }
                 }
 
