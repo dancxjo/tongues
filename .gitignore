@@ -8,6 +8,16 @@ target/
 !/models/*/
 /models/*/*
 !/models/*/.gitkeep
+!/models/g2p2g/
+!/models/g2p2g/openepd-v0/
+!/models/g2p2g/openepd-v0/manifest.json
+!/models/g2p2g/openepd-v0/model.bin
+/models/g2p2g/openepd-v0/model-epoch-*.bin
+!/models/g2p2g/openepd-v0/model-epoch-17.bin
+!/models/g2p2g/openepd-v0/model_config.json
+!/models/g2p2g/openepd-v0/train_config.json
+!/models/g2p2g/openepd-v0/train_state.json
+!/models/g2p2g/openepd-v0/vocab.json
 !/models/wiktionary/
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/manifest.json

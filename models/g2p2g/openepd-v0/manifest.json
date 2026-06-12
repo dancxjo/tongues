@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "family": "g2p2g",
+  "architecture": "seq2seq-transformer",
+  "created_by": "tongues",
+  "data_id": "openepd-v0",
+  "task": "both"
+}
