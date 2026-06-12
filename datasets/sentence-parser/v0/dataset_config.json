@@ -1,0 +1,13 @@
+{
+  "dataset_id": "v0",
+  "lowercase": false,
+  "source_paths": [],
+  "train_frac": 0.8,
+  "valid_frac": 0.1,
+  "seed": 42,
+  "min_sentence_chars": 8,
+  "max_sentence_chars": 512,
+  "max_examples_per_sentence": 4,
+  "include_naive_discrepancies": true,
+  "max_naive_discrepancies_per_file": 1024
+}
