@@ -1,7 +1,7 @@
 //! Wiktionary pronunciation model-family data preparation.
 //!
 //! This family downloads the English Wiktionary MediaWiki XML dump and expands
-//! extracted spelling/IPA pairs into multilingual seq2seq-style training rows.
+//! extracted orthography/pronunciation pairs into multilingual seq2seq-style training rows.
 //! The XML/wikitext extraction itself is intentionally stubbed until the parser
 //! policy for Wiktionary pronunciation templates is implemented.
 
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use speech::data::spanish;
 use tongues_core::Vocab;
 use tongues_neural::{write_manifest, ModelArtifactManifest};
+use unicode_normalization::UnicodeNormalization;
 
 pub const FAMILY: &str = "wiktionary";
 pub const ARCHITECTURE: &str = "wiktionary-pronunciation-seq2seq-scaffold";
@@ -211,33 +212,37 @@ pub struct TrainingExample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WiktionaryTask {
-    SpellingToIpa,
-    IpaToSpelling,
+    OrthographyToPhonology,
+    PhonologyToOrthography,
+    PhoneticRealization,
     EtymologyTranslation,
     PieToDescendant,
     DescendantToPie,
     DescendantToDescendant,
     AlignAudioText,
     NormalizeText,
-    GuessLangFromSpelling,
-    GuessLangFromIpa,
-    GuessLangFromSpellingAndIpa,
+    GuessLangFromOrthography,
+    GuessLangFromPhonology,
+    GuessLangFromOrthographyAndPhonology,
 }
 
 impl WiktionaryTask {
     pub fn token(self) -> &'static str {
         match self {
-            Self::SpellingToIpa => "<task:g2p>",
-            Self::IpaToSpelling => "<task:p2g>",
+            Self::OrthographyToPhonology => "<task:orthography_to_phonology>",
+            Self::PhonologyToOrthography => "<task:phonology_to_orthography>",
+            Self::PhoneticRealization => "<task:phonetic_realization>",
             Self::EtymologyTranslation => "<task:etymology_translate>",
             Self::PieToDescendant => "<task:pie_to_descendant>",
             Self::DescendantToPie => "<task:descendant_to_pie>",
             Self::DescendantToDescendant => "<task:descendant_to_descendant>",
             Self::AlignAudioText => "<task:align>",
             Self::NormalizeText => "<task:normalize>",
-            Self::GuessLangFromSpelling => "<task:guess_lang_from_spelling>",
-            Self::GuessLangFromIpa => "<task:guess_lang_from_ipa>",
-            Self::GuessLangFromSpellingAndIpa => "<task:guess_lang_from_spelling_and_ipa>",
+            Self::GuessLangFromOrthography => "<task:guess_lang_from_orthography>",
+            Self::GuessLangFromPhonology => "<task:guess_lang_from_phonology>",
+            Self::GuessLangFromOrthographyAndPhonology => {
+                "<task:guess_lang_from_orthography_and_phonology>"
+            }
         }
     }
 }
@@ -2002,46 +2007,48 @@ pub fn expand_training_examples(
     let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
     let mut examples = Vec::new();
     let mut seen_normalize = HashSet::new();
-    for entry in entries {
-        if !allowed.contains(entry.lang.as_str()) {
-            continue;
-        }
-        let ipa = normalize_ipa_for_training(&entry.ipa);
-        let accent = entry.accent.as_deref().map(canonicalize_training_tag_value);
+    let normalized_entries = entries
+        .iter()
+        .filter(|entry| allowed.contains(entry.lang.as_str()))
+        .map(NormalizedPronunciationEntry::from)
+        .collect::<Vec<_>>();
+
+    for row in &normalized_entries {
+        let entry = row.entry;
         let controls = wiktionary_training_controls(
-            WiktionaryTask::SpellingToIpa,
+            WiktionaryTask::OrthographyToPhonology,
             &entry.lang,
-            Some(&entry.notation),
-            accent.as_deref(),
+            Some(row.representation),
+            row.variety.as_deref(),
         );
         let source = pronunciation_entry_source(entry);
         examples.push(TrainingExample {
-            task: WiktionaryTask::SpellingToIpa,
+            task: WiktionaryTask::OrthographyToPhonology,
             lang: Some(entry.lang.clone()),
             notation: Some(entry.notation.clone()),
-            accent: accent.clone(),
-            input: format!("{controls} {}", entry.spelling),
-            output: ipa.clone(),
+            accent: row.variety.clone(),
+            input: format!("{controls} {}", row.orthography),
+            output: row.pronunciation.clone(),
             source: source.clone(),
         });
         if config.include_reverse {
             let controls = wiktionary_training_controls(
-                WiktionaryTask::IpaToSpelling,
+                WiktionaryTask::PhonologyToOrthography,
                 &entry.lang,
-                None,
-                None,
+                Some(row.representation),
+                row.variety.as_deref(),
             );
             examples.push(TrainingExample {
-                task: WiktionaryTask::IpaToSpelling,
+                task: WiktionaryTask::PhonologyToOrthography,
                 lang: Some(entry.lang.clone()),
                 notation: Some(entry.notation.clone()),
-                accent: accent.clone(),
-                input: format!("{controls} {ipa}"),
-                output: entry.spelling.clone(),
+                accent: row.variety.clone(),
+                input: format!("{controls} {}", row.pronunciation),
+                output: row.orthography.clone(),
                 source: source.clone(),
             });
         }
-        if seen_normalize.insert(format!("{}\t{}", entry.lang, entry.spelling)) {
+        if seen_normalize.insert(format!("{}\t{}", entry.lang, row.orthography)) {
             examples.push(TrainingExample {
                 task: WiktionaryTask::NormalizeText,
                 lang: Some(entry.lang.clone()),
@@ -2051,59 +2058,146 @@ pub fn expand_training_examples(
                     "{} <lang:{}> {}",
                     WiktionaryTask::NormalizeText.token(),
                     entry.lang,
-                    entry.spelling
+                    row.orthography
                 ),
-                output: normalize_spelling_for_training(&entry.spelling),
+                output: normalize_spelling_for_training(&row.orthography),
                 source: source.clone(),
             });
         }
         if config.include_language_guessing {
             examples.push(TrainingExample {
-                task: WiktionaryTask::GuessLangFromSpelling,
+                task: WiktionaryTask::GuessLangFromOrthography,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: accent.clone(),
+                accent: row.variety.clone(),
                 input: format!(
                     "{} {} {}",
-                    WiktionaryTask::GuessLangFromSpelling.token(),
-                    wiktionary_notation_token(&entry.notation),
-                    entry.spelling
+                    WiktionaryTask::GuessLangFromOrthography.token(),
+                    row.representation,
+                    row.orthography
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
             });
             examples.push(TrainingExample {
-                task: WiktionaryTask::GuessLangFromIpa,
+                task: WiktionaryTask::GuessLangFromPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: accent.clone(),
+                accent: row.variety.clone(),
                 input: format!(
                     "{} {} {}",
-                    WiktionaryTask::GuessLangFromIpa.token(),
-                    wiktionary_notation_token(&entry.notation),
-                    ipa
+                    WiktionaryTask::GuessLangFromPhonology.token(),
+                    row.representation,
+                    row.pronunciation
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
             });
             examples.push(TrainingExample {
-                task: WiktionaryTask::GuessLangFromSpellingAndIpa,
+                task: WiktionaryTask::GuessLangFromOrthographyAndPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: accent.clone(),
+                accent: row.variety.clone(),
                 input: format!(
                     "{} {} {} => {}",
-                    WiktionaryTask::GuessLangFromSpellingAndIpa.token(),
-                    wiktionary_notation_token(&entry.notation),
-                    entry.spelling,
-                    ipa
+                    WiktionaryTask::GuessLangFromOrthographyAndPhonology.token(),
+                    row.representation,
+                    row.orthography,
+                    row.pronunciation
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
             });
         }
     }
+
+    let mut seen_realization = HashSet::new();
+    for phonemes in normalized_entries
+        .iter()
+        .filter(|entry| entry.representation == "<repr:phonemes>")
+    {
+        for phones in normalized_entries.iter().filter(|entry| {
+            entry.representation == "<repr:phones>"
+                && entry.entry.lang == phonemes.entry.lang
+                && entry.orthography == phonemes.orthography
+        }) {
+            let Some(variety) = compatible_realization_variety(
+                phonemes.variety.as_deref(),
+                phones.variety.as_deref(),
+            ) else {
+                continue;
+            };
+            let key = format!(
+                "{}\t{}\t{}\t{}\t{}",
+                phonemes.entry.lang,
+                phonemes.orthography,
+                variety.unwrap_or(""),
+                phonemes.pronunciation,
+                phones.pronunciation
+            );
+            if !seen_realization.insert(key) {
+                continue;
+            }
+            let controls = wiktionary_training_controls(
+                WiktionaryTask::PhoneticRealization,
+                &phonemes.entry.lang,
+                Some("<repr:phonemes>"),
+                variety,
+            );
+            examples.push(TrainingExample {
+                task: WiktionaryTask::PhoneticRealization,
+                lang: Some(phonemes.entry.lang.clone()),
+                notation: Some("phonetic-realization".to_string()),
+                accent: variety.map(str::to_string),
+                input: format!("{controls} {}", phonemes.pronunciation),
+                output: phones.pronunciation.clone(),
+                source: format!(
+                    "{}+{}",
+                    pronunciation_entry_source(phonemes.entry),
+                    pronunciation_entry_source(phones.entry)
+                ),
+            });
+        }
+    }
+
     examples
+}
+
+struct NormalizedPronunciationEntry<'a> {
+    entry: &'a PronunciationEntry,
+    orthography: String,
+    pronunciation: String,
+    representation: &'static str,
+    variety: Option<String>,
+}
+
+impl<'a> From<&'a PronunciationEntry> for NormalizedPronunciationEntry<'a> {
+    fn from(entry: &'a PronunciationEntry) -> Self {
+        Self {
+            entry,
+            orthography: normalize_orthography_for_training(&entry.spelling),
+            pronunciation: normalize_ipa_for_training(&entry.ipa),
+            representation: wiktionary_representation_token(&entry.notation),
+            variety: entry
+                .accent
+                .as_deref()
+                .map(|accent| canonicalize_accent(&entry.lang, accent))
+                .filter(|accent| !accent.is_empty()),
+        }
+    }
+}
+
+fn compatible_realization_variety<'a>(
+    phonemes: Option<&'a str>,
+    phones: Option<&'a str>,
+) -> Option<Option<&'a str>> {
+    match (phonemes, phones) {
+        (Some(phonemes), Some(phones)) if phonemes == phones => Some(Some(phones)),
+        (Some(_), Some(_)) => None,
+        (Some(phonemes), None) => Some(Some(phonemes)),
+        (None, Some(phones)) => Some(Some(phones)),
+        (None, None) => Some(None),
+    }
 }
 
 fn pronunciation_entry_source(entry: &PronunciationEntry) -> String {
@@ -2205,13 +2299,18 @@ fn etymology_translation_input(source_lang: &str, target_lang: &str, word: &str)
 
 pub fn normalize_ipa_for_training(ipa: &str) -> String {
     let trimmed = ipa.trim();
-    if (trimmed.starts_with('/') && trimmed.ends_with('/'))
+    let payload = if (trimmed.starts_with('/') && trimmed.ends_with('/'))
         || (trimmed.starts_with('[') && trimmed.ends_with(']'))
     {
-        trimmed[1..trimmed.len() - 1].trim().to_string()
+        trimmed[1..trimmed.len() - 1].trim()
     } else {
-        trimmed.to_string()
-    }
+        trimmed
+    };
+    payload.nfc().collect()
+}
+
+pub fn normalize_orthography_for_training(orthography: &str) -> String {
+    orthography.trim().nfc().collect()
 }
 
 pub fn canonicalize_accent(lang: &str, accent: &str) -> String {
@@ -2250,7 +2349,10 @@ pub fn canonicalize_training_tag_value(value: &str) -> String {
 }
 
 pub fn normalize_spelling_for_training(spelling: &str) -> String {
-    spelling.trim().to_lowercase()
+    normalize_orthography_for_training(spelling)
+        .to_lowercase()
+        .nfc()
+        .collect()
 }
 
 fn canonical_tag_fragment(value: &str) -> String {
@@ -2264,37 +2366,33 @@ fn canonical_tag_fragment(value: &str) -> String {
 fn wiktionary_training_controls(
     task: WiktionaryTask,
     lang: &str,
-    notation: Option<&str>,
-    accent: Option<&str>,
+    representation: Option<&str>,
+    variety: Option<&str>,
 ) -> String {
     let mut controls = format!("{} <lang:{lang}>", task.token());
-    if let Some(accent) = accent.filter(|accent| !accent.is_empty()) {
+    if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
         controls.push(' ');
-        controls.push_str(&format!("<accent:{accent}>"));
+        controls.push_str(&format!("<variety:{variety}>"));
     }
-    if let Some(notation) = notation.filter(|notation| !notation.is_empty()) {
+    if let Some(representation) = representation.filter(|representation| !representation.is_empty())
+    {
         controls.push(' ');
-        controls.push_str(wiktionary_notation_token(notation));
+        controls.push_str(wiktionary_representation_token(representation));
     }
     controls
 }
 
-pub fn wiktionary_notation_token(notation: &str) -> &'static str {
+pub fn wiktionary_representation_token(notation: &str) -> &'static str {
     match notation {
-        "phonemic" | "phoneme" | "phonemes" => "<N_PHONEME>",
-        "phonetic" | "phone" | "phones" => "<N_PHONE>",
-        _ => "<N_UNKNOWN>",
+        "<repr:phonemes>" | "phonemic" | "phoneme" | "phonemes" => "<repr:phonemes>",
+        "<repr:phones>" | "phonetic" | "phone" | "phones" => "<repr:phones>",
+        "<repr:diaphonemes>" | "diaphonemic" | "diaphoneme" | "diaphonemes" => "<repr:diaphonemes>",
+        _ => "<repr:unknown>",
     }
 }
 
 pub fn normalize_wiktionary_control_tokens(input: &str) -> String {
-    input
-        .replace("<notation:phonemic>", "<N_PHONEME>")
-        .replace("<notation:phoneme>", "<N_PHONEME>")
-        .replace("<notation:phonemes>", "<N_PHONEME>")
-        .replace("<notation:phonetic>", "<N_PHONE>")
-        .replace("<notation:phone>", "<N_PHONE>")
-        .replace("<notation:phones>", "<N_PHONE>")
+    input.to_string()
 }
 
 fn split_examples(
@@ -2356,7 +2454,7 @@ fn write_vocab(out: &Path, examples: &[TrainingExample]) -> Result<()> {
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     format!(
-        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve language, spelling, IPA text, notation, accent metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand phonemic and phonetic rows into normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:g2p> <lang:eng> <N_PHONEME> disease => dəˈziːz\n<task:g2p> <lang:eng> <accent:RP> <N_PHONE> Ireland => ˈɑɪələnd\n<task:g2p> <lang:deu> <N_PHONE> Honduras => hɔnˈduːʁas\n<task:p2g> <lang:eng> ˈɑɪələnd => Ireland\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nThe opaque notation token preserves the phonemic `/.../` vs phonetic `[...]` distinction while targets omit only the outer visual delimiters. Accent tags are compact token-safe labels such as `RP`, `GenAm`, and `weak_vowel`. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
+        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve raw orthography, IPA text, notation, accent/variety metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those rows into NFC-normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease => dəˈziːz\n<task:orthography_to_phonology> <lang:eng> <variety:en-GB.RP> <repr:phones> Ireland => ˈɑɪələnd\n<task:orthography_to_phonology> <lang:deu> <repr:phones> Honduras => hɔnˈduːʁas\n<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz => disease\n<task:phonetic_realization> <lang:eng> <variety:en-GB.RP> <repr:phonemes> ˈaɪələnd => ˈɑɪələnd\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nRepresentation tokens preserve the phonemes/phones distinction while targets omit only the outer visual delimiters. Variety tags are compact token-safe labels such as `en-US.GenAm`, `en-GB.RP`, and `Castilian`. Phonetic-realization rows are emitted only when matched phonemic and phonetic source rows exist for the same normalized orthography, language, and compatible variety metadata. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
         dump_path.display(),
         config.languages.join(", ")
     )
@@ -2416,7 +2514,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_forward_reverse_and_language_guessing_tasks() {
+    fn expands_orthography_phonology_and_language_guessing_tasks() {
         let config = WiktionaryConfig::default();
         let examples = expand_training_examples(
             &[PronunciationEntry {
@@ -2432,13 +2530,15 @@ mod tests {
         );
         assert_eq!(examples.len(), 6);
         assert!(examples.iter().any(|example| {
-            example.task == WiktionaryTask::SpellingToIpa
-                && example.input == "<task:g2p> <lang:deu> <N_PHONEME> schief"
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example.input
+                    == "<task:orthography_to_phonology> <lang:deu> <repr:phonemes> schief"
                 && example.output == "ʃiːf"
         }));
         assert!(examples.iter().any(|example| {
-            example.task == WiktionaryTask::IpaToSpelling
-                && example.input == "<task:p2g> <lang:deu> ʃiːf"
+            example.task == WiktionaryTask::PhonologyToOrthography
+                && example.input
+                    == "<task:phonology_to_orthography> <lang:deu> <repr:phonemes> ʃiːf"
                 && example.output == "schief"
         }));
         assert!(examples.iter().any(|example| {
@@ -2627,7 +2727,15 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
     }
 
     #[test]
-    fn formats_notation_accent_reverse_and_normalize_training_controls() {
+    fn normalizes_pronunciation_payloads_and_orthography_with_nfc() {
+        assert_eq!(normalize_ipa_for_training("/e\u{301}/"), "é");
+        assert_eq!(normalize_ipa_for_training("[i\u{308}]"), "ï");
+        assert_eq!(normalize_orthography_for_training(" cafe\u{301} "), "café");
+        assert_eq!(normalize_spelling_for_training(" Cafe\u{301} "), "café");
+    }
+
+    #[test]
+    fn formats_representation_variety_reverse_and_normalize_training_controls() {
         let config = WiktionaryConfig::default();
         let examples = expand_training_examples(
             &[PronunciationEntry {
@@ -2644,21 +2752,24 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
 
         let forward = examples
             .iter()
-            .find(|example| example.task == WiktionaryTask::SpellingToIpa)
+            .find(|example| example.task == WiktionaryTask::OrthographyToPhonology)
             .expect("forward example");
         assert_eq!(
             forward.input,
-            "<task:g2p> <lang:eng> <accent:GenAm> <N_PHONE> Ireland"
+            "<task:orthography_to_phonology> <lang:eng> <variety:en-US.GenAm> <repr:phones> Ireland"
         );
         assert_eq!(forward.output, "ˈäɪɚɫɪ̈nd");
         assert_eq!(forward.notation.as_deref(), Some("phonetic"));
-        assert_eq!(forward.accent.as_deref(), Some("GenAm"));
+        assert_eq!(forward.accent.as_deref(), Some("en-US.GenAm"));
 
         let reverse = examples
             .iter()
-            .find(|example| example.task == WiktionaryTask::IpaToSpelling)
+            .find(|example| example.task == WiktionaryTask::PhonologyToOrthography)
             .expect("reverse example");
-        assert_eq!(reverse.input, "<task:p2g> <lang:eng> ˈäɪɚɫɪ̈nd");
+        assert_eq!(
+            reverse.input,
+            "<task:phonology_to_orthography> <lang:eng> <variety:en-US.GenAm> <repr:phones> ˈäɪɚɫɪ̈nd"
+        );
         assert_eq!(reverse.output, "Ireland");
 
         let normalize = examples
@@ -2673,6 +2784,48 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             canonicalize_training_tag_value("Dublin / East"),
             "Dublin_East"
         );
+    }
+
+    #[test]
+    fn emits_phonetic_realization_for_matched_phoneme_and_phone_rows() {
+        let config = WiktionaryConfig {
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+        let examples = expand_training_examples(
+            &[
+                PronunciationEntry {
+                    lang: "eng".to_string(),
+                    wiktionary_lang: "en".to_string(),
+                    spelling: "Ireland".to_string(),
+                    ipa: "/ˈaɪərlənd/".to_string(),
+                    notation: "phonemic".to_string(),
+                    accent: Some("GenAm".to_string()),
+                    raw_template: "{{IPA|en|/ˈaɪərlənd/|a=GenAm}}".to_string(),
+                },
+                PronunciationEntry {
+                    lang: "eng".to_string(),
+                    wiktionary_lang: "en".to_string(),
+                    spelling: "Ireland".to_string(),
+                    ipa: "[ˈäɪɚɫɪ̈nd]".to_string(),
+                    notation: "phonetic".to_string(),
+                    accent: Some("GenAm".to_string()),
+                    raw_template: "{{IPA|en|[ˈäɪɚɫɪ̈nd]|a=GenAm}}".to_string(),
+                },
+            ],
+            &config,
+        );
+
+        let realization = examples
+            .iter()
+            .find(|example| example.task == WiktionaryTask::PhoneticRealization)
+            .expect("phonetic realization example");
+        assert_eq!(
+            realization.input,
+            "<task:phonetic_realization> <lang:eng> <variety:en-US.GenAm> <repr:phonemes> ˈaɪərlənd"
+        );
+        assert_eq!(realization.output, "ˈäɪɚɫɪ̈nd");
+        assert_eq!(realization.accent.as_deref(), Some("en-US.GenAm"));
     }
 
     #[test]
@@ -2758,8 +2911,9 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
 
         let examples = expand_training_examples(&data.phonemes, &config);
         assert!(examples.iter().any(|example| {
-            example.task == WiktionaryTask::SpellingToIpa
-                && example.input == "<task:g2p> <lang:spa> <accent:Castilian> <N_PHONEME> zapato"
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example.input
+                    == "<task:orthography_to_phonology> <lang:spa> <variety:Castilian> <repr:phonemes> zapato"
                 && example.output == "θaˈpato"
                 && example.source == "synthetic-spanish-orthography+enwiktionary-title"
         }));

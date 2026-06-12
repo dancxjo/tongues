@@ -210,11 +210,11 @@ This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configur
 https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/
 ```
 
-The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `lat`, `ell`, `grc`, and `san`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
+The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `lat`, `ell`, `grc`, and `san`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Model-facing Wiktionary rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, and language-guessing tasks.
 
 Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
 
-Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching IPA rows with domain accents for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without an IPA row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.
+Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching pronunciation rows with domain variety tags for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without a pronunciation row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.
 
 Focused Spanish/French preparation and training can be run in place with language overrides:
 
@@ -238,7 +238,7 @@ The default Wiktionary inference command is:
 ```sh
 cargo run --release -- wiktionary infer \
     --model models/wiktionary/enwiktionary-2026-06-01-v0-phones \
-    --task spelling-to-ipa \
+    --task orthography-to-phones \
     --lang eng \
     --notation phones \
     "cat"
@@ -249,66 +249,54 @@ Inference options:
 | Option | Default | Notes |
 |--------|---------|-------|
 | `--model` | `models/wiktionary/enwiktionary-2026-06-01-v0-phones` | model directory |
-| `--task` | `spelling-to-ipa` | task selector |
+| `--task` | `orthography-to-phones` | task selector |
 | `--lang` | `eng` | Wiktionary language code for tagged tasks |
 | `--notation` | `phones` | `phones` or `phonemes`; inference rejects `all` |
-| `--accent` | unset | optional accent control for spelling-to-IPA |
+| `--variety` | unset | optional pronunciation variety control |
 | `--raw` | unset | treat input as the exact tagged model source |
-| positional `INPUT` | required | spelling, IPA, combined language-guessing input, or raw source |
+| positional `INPUT` | required | orthography, phoneme/phone sequence, combined language-guessing input, or raw source |
 
 Supported `--task` values for inference:
 
 | Task | Example |
 |------|---------|
-| `spelling-to-ipa` | `cargo run --release -- wiktionary infer --task spelling-to-ipa --lang eng --notation phones "cat"` |
-| `ipa-to-spelling` | `cargo run --release -- wiktionary infer --task ipa-to-spelling --lang eng --notation phones "ˈkʰæt"` |
+| `orthography-to-phonemes` | `cargo run --release -- wiktionary infer --task orthography-to-phonemes --lang eng --notation phonemes "cat"` |
+| `orthography-to-phones` | `cargo run --release -- wiktionary infer --task orthography-to-phones --lang eng --notation phones "cat"` |
+| `phonemes-to-orthography` | `cargo run --release -- wiktionary infer --task phonemes-to-orthography --lang eng --notation phonemes "kæt"` |
+| `phones-to-orthography` | `cargo run --release -- wiktionary infer --task phones-to-orthography --lang eng --notation phones "ˈkʰæt"` |
+| `phonetic-realization` | `cargo run --release -- wiktionary infer --task phonetic-realization --lang eng --variety en-US.GenAm --notation phonemes "kæt"` |
 | `normalize` | `cargo run --release -- wiktionary infer --task normalize --lang eng "Cat!"` |
-| `guess-lang-from-spelling` | `cargo run --release -- wiktionary infer --task guess-lang-from-spelling --notation phones "cat"` |
-| `guess-lang-from-ipa` | `cargo run --release -- wiktionary infer --task guess-lang-from-ipa --notation phones "ˈkʰæt"` |
-| `guess-lang-from-spelling-and-ipa` | `cargo run --release -- wiktionary infer --task guess-lang-from-spelling-and-ipa --notation phones "cat => ˈkʰæt"` |
+| `guess-lang-from-orthography` | `cargo run --release -- wiktionary infer --task guess-lang-from-orthography --notation phones "cat"` |
+| `guess-lang-from-phonology` | `cargo run --release -- wiktionary infer --task guess-lang-from-phonology --notation phones "ˈkʰæt"` |
+| `guess-lang-from-orthography-and-phonology` | `cargo run --release -- wiktionary infer --task guess-lang-from-orthography-and-phonology --notation phones "cat => ˈkʰæt"` |
 
-Accent and raw-source examples:
+Variety and raw-source examples:
 
 ```sh
 cargo run --release -- wiktionary infer \
-    --task spelling-to-ipa \
+    --task orthography-to-phones \
     --lang eng \
     --notation phones \
-    --accent RP \
+    --variety en-GB.RP \
     "cat"
 
 cargo run --release -- wiktionary infer \
     --raw \
-    "<task:g2p> <lang:eng> <N_PHONE> cat"
+    "<task:orthography_to_phonology> <lang:eng> <repr:phones> cat"
 ```
 
-Task aliases accepted by inference include `g2p`, `s2ipa`, and `forward` for `spelling-to-ipa`; `p2g`, `ipa2s`, and `reverse` for `ipa-to-spelling`; `normalise` for `normalize`; `lang-from-spelling`; `lang-from-ipa`; and `lang`, `language`, or `language-guessing` for the combined spelling-and-IPA language guesser.
-
-`just race` demonstrates these defaults and task types. It runs G2P2G round trips, Wiktionary spelling-to-IPA and IPA-to-spelling round trips for every configured language with both `phones` and `phonemes`, then a Wiktionary task-demo block covering `--accent`, normalization, all language-guessing tasks, and `--raw` tagged input:
+`just race` demonstrates these defaults and task types without trying every word against every language. It runs a compact G2P2G stress sample, a curated Wiktionary orthography/phonology round-trip matrix, then a task-demo block covering orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic realization, normalization, all language-guessing tasks, and `--raw` tagged input:
 
 ```sh
 just race --cpu
-just race --skip-build cat
+just race --skip-build Archaeopteryx Quetzalcoatlus mañana brötchen
 ```
 
 #### Race notes
 
-A recent `just race` run covered 54 words across the OpenEPD G2P2G model plus Wiktionary `eng`, `fra`, `deu`, and `spa` round trips for both `phones` and `phonemes`. The complete run reported 492 successful inference demos, 0 command failures, and 654.1s wall time. "Successful" here means the inference command completed; it is not an exact-match score.
+The default list is deliberately short and jagged: common English irregulars, dinosaur and taxonomic names, and Unicode-heavy forms such as `mañana`, `brötchen`, `Łódź`, `Dvořák`, `ἄνθρωπος`, and `कर्म`. The race output prints abbreviated counts up front, for example `g2p2g=23 rt`, `wiktionary=11 rt`, and `wiktionary task demos=9 + raw`. "Successful" means the inference command completed; it is not an exact-match score.
 
-The run is useful mostly as a smoke test and a vibe check. Ordinary English examples round-trip cleanly or into expected homophones: `through -> ˈθɹu -> thru`, `tough -> ˈtʌf -> tuff`, `queue -> ˈkju -> cue`, and `knight -> ˈnaɪt -> night`. Longer nonsense words usually stay pronounceable while drifting into plausible alternate spellings: `wugglification -> wuglification`, `chronoflammatory -> chronoflamatory`, and `draughtwright -> draft-write`.
-
-Some of the mistakes are more entertaining than useful:
-
-| Input/context | Round trip |
-|---|---|
-| G2P2G `lead` | `lead -> ˈlid -> leed` |
-| G2P2G `knoughteigh` | `knoughteigh -> ˈnɔfˌteɪ -> nofftay` |
-| Wiktionary English `children` | `children -> ˈt͡ʃɪldɹən -> childran` |
-| Wiktionary French `eunoeoia` | `eunoeoia -> œ.nɔ.wɛ.jɑ -> eunowaillas` |
-| Wiktionary German `pfknoll` | `pfknoll -> p͡f- -> Pfrachen` |
-| Wiktionary Spanish `eunoeoia` | `eunoeoia -> ɔ̃.noʊˈjɔɪ.jə -> enoyoyoia` |
-
-The Spanish model is basically a data-coverage failure in this dataset, not a serious result. The local Wiktionary extraction has only 6 Spanish `phones` rows and 14 Spanish `phonemes` rows, which expand to just 90 train, 8 validation, and 10 test task rows after reverse and language-guessing expansion. That is far below English and German and even below the small French slice. This is expected for a transparently spelled language in an English Wiktionary pronunciation-template scrape: Spanish entries often do not need explicit IPA templates, so the parser sees almost no supervised pronunciation data. The `spa` rows in `just race` are therefore best read as failure demos.
+The run is useful mostly as a smoke test and a terminology check. It makes the model exercise phonemes and phones as distinct representations, runs phonetic realization from phonemes to phones, and keeps the raw-control example visible so vocabulary/control-token regressions are easy to spot.
 
 ### Train
 

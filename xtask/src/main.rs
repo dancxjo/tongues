@@ -82,9 +82,15 @@ struct WiktionaryInferDemo<'a> {
     task: &'a str,
     lang: &'a str,
     notation: &'a str,
-    accent: Option<&'a str>,
+    variety: Option<&'a str>,
     raw: bool,
     input: String,
+}
+
+struct WiktionaryRoundTripCase {
+    word: String,
+    lang: String,
+    notation: &'static str,
 }
 
 impl RaceStats {
@@ -129,7 +135,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     println!(
-        "race: {} words, {} Wiktionary languages, phones+phonemes",
+        "race: {} forms, {} configured Wiktionary languages, compact task coverage",
         words.len(),
         languages.len()
     );
@@ -141,9 +147,15 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
 
     let total_start = Instant::now();
     let mut stats = RaceStats::new();
+    let wiktionary_cases = wiktionary_round_trip_cases(&words, &languages);
+    println!(
+        "race plan: g2p2g={} rt, wiktionary={} rt, wiktionary task demos=9 + raw",
+        words.len(),
+        wiktionary_cases.len()
+    );
 
     println!();
-    println!("G2P2G round trips");
+    println!("G2P2G round trips (compact stress sample)");
     for word in &words {
         match round_trip_g2p2g(&tongues, &config, word) {
             Ok((forward, reverse)) => {
@@ -165,56 +177,56 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     println!();
-    println!("Wiktionary round trips");
-    for word in &words {
-        for lang in &languages {
-            for notation in ["phones", "phonemes"] {
-                match round_trip_wiktionary(&tongues, &config, word, lang, notation) {
-                    Ok((forward, reverse)) => {
-                        stats.record(forward.elapsed + reverse.elapsed);
-                        println!(
-                            "  ok {:>6} + {:>6}  {:<3}/{:<8} {:<14} -> {:<18} -> {}",
-                            fmt_ms(forward.elapsed),
-                            fmt_ms(reverse.elapsed),
-                            lang,
-                            notation,
-                            clip(word, 14),
-                            clip(&forward.output, 18),
-                            clip(&reverse.output, 18)
-                        );
-                    }
-                    Err(error) => {
-                        stats.fail();
-                        println!(
-                            "  fail {:<3}/{:<8} {:<14} {}",
-                            lang,
-                            notation,
-                            clip(word, 14),
-                            error
-                        );
-                    }
-                }
+    println!(
+        "Wiktionary orthography/phonology round trips ({} curated cases)",
+        wiktionary_cases.len()
+    );
+    for case in &wiktionary_cases {
+        match round_trip_wiktionary(&tongues, &config, &case.word, &case.lang, case.notation) {
+            Ok((forward, reverse)) => {
+                stats.record(forward.elapsed + reverse.elapsed);
+                println!(
+                    "  ok {:>6} + {:>6}  {:<3}/{:<8} {:<18} -> {:<20} -> {}",
+                    fmt_ms(forward.elapsed),
+                    fmt_ms(reverse.elapsed),
+                    case.lang,
+                    case.notation,
+                    clip(&case.word, 18),
+                    clip(&forward.output, 20),
+                    clip(&reverse.output, 20)
+                );
+            }
+            Err(error) => {
+                stats.fail();
+                println!(
+                    "  fail {:<3}/{:<8} {:<18} {}",
+                    case.lang,
+                    case.notation,
+                    clip(&case.word, 18),
+                    error
+                );
             }
         }
     }
 
     println!();
     println!("Wiktionary task demos");
-    let demo_word = words
-        .iter()
-        .find(|word| word.as_str() == "cat")
-        .unwrap_or(&words[0]);
     let demo_lang = languages
         .iter()
         .find(|lang| lang.as_str() == "eng")
         .unwrap_or(&languages[0]);
+    let demo_word = words
+        .iter()
+        .find(|word| word.as_str() == "Archaeopteryx")
+        .or_else(|| words.iter().find(|word| word.as_str() == "Tyrannosaurus"))
+        .unwrap_or(&words[0]);
     match run_wiktionary_infer(
         &tongues,
         &config,
-        "spelling-to-ipa",
+        "orthography-to-phones",
         demo_lang,
         "phones",
-        Some("RP"),
+        Some("en-GB.RP"),
         false,
         demo_word,
     ) {
@@ -223,56 +235,114 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
             println!(
                 "  ok {:>6}  {:<38} {} -> {}",
                 fmt_ms(pronunciation.elapsed),
-                "spelling-to-ipa --accent RP",
+                "orthography-to-phones --variety en-GB.RP",
                 clip(demo_word, 14),
                 clip(&pronunciation.output, 28)
             );
 
+            let phonemes = match run_wiktionary_infer(
+                &tongues,
+                &config,
+                "orthography-to-phonemes",
+                demo_lang,
+                "phonemes",
+                None,
+                false,
+                demo_word,
+            ) {
+                Ok(result) => {
+                    stats.record(result.elapsed);
+                    println!(
+                        "  ok {:>6}  {:<38} {} -> {}",
+                        fmt_ms(result.elapsed),
+                        "orthography-to-phonemes",
+                        clip(demo_word, 28),
+                        clip(&result.output, 28)
+                    );
+                    Some(result.output)
+                }
+                Err(error) => {
+                    stats.fail();
+                    println!("  fail {:<38} {}", "orthography-to-phonemes", error);
+                    None
+                }
+            };
+            let phonemic_input = phonemes.as_deref().unwrap_or(&pronunciation.output);
+
             for demo in [
+                WiktionaryInferDemo {
+                    label: "phonemes-to-orthography",
+                    task: "phonemes-to-orthography",
+                    lang: demo_lang,
+                    notation: "phonemes",
+                    variety: None,
+                    raw: false,
+                    input: phonemic_input.to_string(),
+                },
+                WiktionaryInferDemo {
+                    label: "phones-to-orthography",
+                    task: "phones-to-orthography",
+                    lang: demo_lang,
+                    notation: "phones",
+                    variety: Some("en-GB.RP"),
+                    raw: false,
+                    input: pronunciation.output.clone(),
+                },
+                WiktionaryInferDemo {
+                    label: "phonetic-realization",
+                    task: "phonetic-realization",
+                    lang: demo_lang,
+                    notation: "phonemes",
+                    variety: Some("en-GB.RP"),
+                    raw: false,
+                    input: phonemic_input.to_string(),
+                },
                 WiktionaryInferDemo {
                     label: "normalize",
                     task: "normalize",
                     lang: demo_lang,
                     notation: "phones",
-                    accent: None,
+                    variety: None,
+                    raw: false,
+                    input: format!("{demo_word}!"),
+                },
+                WiktionaryInferDemo {
+                    label: "guess-lang-from-orthography",
+                    task: "guess-lang-from-orthography",
+                    lang: demo_lang,
+                    notation: "phones",
+                    variety: None,
                     raw: false,
                     input: demo_word.to_string(),
                 },
                 WiktionaryInferDemo {
-                    label: "guess-lang-from-spelling",
-                    task: "guess-lang-from-spelling",
+                    label: "guess-lang-from-phonology",
+                    task: "guess-lang-from-phonology",
                     lang: demo_lang,
                     notation: "phones",
-                    accent: None,
-                    raw: false,
-                    input: demo_word.to_string(),
-                },
-                WiktionaryInferDemo {
-                    label: "guess-lang-from-ipa",
-                    task: "guess-lang-from-ipa",
-                    lang: demo_lang,
-                    notation: "phones",
-                    accent: None,
+                    variety: None,
                     raw: false,
                     input: pronunciation.output.clone(),
                 },
                 WiktionaryInferDemo {
-                    label: "guess-lang-from-spelling-and-ipa",
-                    task: "guess-lang-from-spelling-and-ipa",
+                    label: "guess-lang-from-orthography-and-phonology",
+                    task: "guess-lang-from-orthography-and-phonology",
                     lang: demo_lang,
                     notation: "phones",
-                    accent: None,
+                    variety: None,
                     raw: false,
                     input: format!("{demo_word} => {}", pronunciation.output),
                 },
                 WiktionaryInferDemo {
                     label: "--raw tagged source",
-                    task: "spelling-to-ipa",
+                    task: "orthography-to-phones",
                     lang: demo_lang,
                     notation: "phones",
-                    accent: None,
+                    variety: None,
                     raw: true,
-                    input: format!("<task:g2p> <lang:{demo_lang}> <N_PHONE> {demo_word}"),
+                    input: format!(
+                        "<task:orthography_to_phonology> <lang:{demo_lang}> <repr:phones> {demo_word}"
+                    ),
                 },
             ] {
                 match run_wiktionary_infer(
@@ -281,7 +351,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     demo.task,
                     demo.lang,
                     demo.notation,
-                    demo.accent,
+                    demo.variety,
                     demo.raw,
                     &demo.input,
                 ) {
@@ -304,7 +374,10 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
         }
         Err(error) => {
             stats.fail();
-            println!("  fail {:<38} {}", "spelling-to-ipa --accent RP", error);
+            println!(
+                "  fail {:<38} {}",
+                "orthography-to-phones --variety en-GB.RP", error
+            );
         }
     }
 
@@ -318,6 +391,66 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+fn wiktionary_round_trip_cases(
+    words: &[String],
+    languages: &[String],
+) -> Vec<WiktionaryRoundTripCase> {
+    let mut cases = Vec::new();
+    let english = preferred_lang(languages, "eng");
+    let spanish = preferred_lang(languages, "spa");
+    let french = preferred_lang(languages, "fra");
+    let german = preferred_lang(languages, "deu");
+    let latin = preferred_lang(languages, "lat");
+    let greek = preferred_lang(languages, "grc").or_else(|| preferred_lang(languages, "ell"));
+    let sanskrit = preferred_lang(languages, "san");
+
+    for (word, lang, notation) in [
+        ("Tyrannosaurus", english.as_deref(), "phonemes"),
+        ("Archaeopteryx", english.as_deref(), "phones"),
+        (
+            "Velociraptor",
+            latin.as_deref().or(english.as_deref()),
+            "phonemes",
+        ),
+        ("Quetzalcoatlus", english.as_deref(), "phones"),
+        (
+            "Parasaurolophus",
+            latin.as_deref().or(english.as_deref()),
+            "phonemes",
+        ),
+        ("mañana", spanish.as_deref(), "phonemes"),
+        ("jalapeño", spanish.as_deref(), "phones"),
+        ("rendezvous", french.as_deref(), "phones"),
+        ("brötchen", german.as_deref(), "phonemes"),
+        ("ἄνθρωπος", greek.as_deref(), "phonemes"),
+        ("कर्म", sanskrit.as_deref(), "phonemes"),
+    ] {
+        if let Some(lang) = lang {
+            cases.push(WiktionaryRoundTripCase {
+                word: pick_word(words, word).to_string(),
+                lang: lang.to_string(),
+                notation,
+            });
+        }
+    }
+    cases
+}
+
+fn preferred_lang(languages: &[String], target: &str) -> Option<String> {
+    languages
+        .iter()
+        .find(|lang| lang.as_str() == target)
+        .cloned()
+}
+
+fn pick_word<'a>(words: &'a [String], fallback: &'a str) -> &'a str {
+    words
+        .iter()
+        .find(|word| word.as_str() == fallback)
+        .map(String::as_str)
+        .unwrap_or(fallback)
 }
 
 fn parse_race_args(args: Vec<String>) -> Result<RaceConfig, String> {
@@ -423,7 +556,7 @@ fn round_trip_wiktionary(
         "--model".to_string(),
         config.wiktionary_model.display().to_string(),
         "--task".to_string(),
-        "spelling-to-ipa".to_string(),
+        wiktionary_orthography_to_phonology_task(notation).to_string(),
         "--lang".to_string(),
         lang.to_string(),
         "--notation".to_string(),
@@ -440,7 +573,7 @@ fn round_trip_wiktionary(
         "--model".to_string(),
         config.wiktionary_model.display().to_string(),
         "--task".to_string(),
-        "ipa-to-spelling".to_string(),
+        wiktionary_phonology_to_orthography_task(notation).to_string(),
         "--lang".to_string(),
         lang.to_string(),
         "--notation".to_string(),
@@ -452,6 +585,22 @@ fn round_trip_wiktionary(
     Ok((forward, reverse))
 }
 
+fn wiktionary_orthography_to_phonology_task(notation: &str) -> &'static str {
+    match notation {
+        "phonemes" => "orthography-to-phonemes",
+        "phones" => "orthography-to-phones",
+        _ => "orthography-to-phonology",
+    }
+}
+
+fn wiktionary_phonology_to_orthography_task(notation: &str) -> &'static str {
+    match notation {
+        "phonemes" => "phonemes-to-orthography",
+        "phones" => "phones-to-orthography",
+        _ => "phonology-to-orthography",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_wiktionary_infer(
     tongues: &Path,
@@ -459,7 +608,7 @@ fn run_wiktionary_infer(
     task: &str,
     lang: &str,
     notation: &str,
-    accent: Option<&str>,
+    variety: Option<&str>,
     raw: bool,
     input: &str,
 ) -> Result<RaceResult, String> {
@@ -476,8 +625,8 @@ fn run_wiktionary_infer(
         "--notation".to_string(),
         notation.to_string(),
     ]);
-    if let Some(accent) = accent {
-        args.extend(["--accent".to_string(), accent.to_string()]);
+    if let Some(variety) = variety {
+        args.extend(["--variety".to_string(), variety.to_string()]);
     }
     if raw {
         args.push("--raw".to_string());
@@ -568,59 +717,28 @@ fn parse_toml_string_array(value: &str) -> Option<Vec<String>> {
 fn default_race_words() -> Vec<String> {
     [
         "have",
-        "cat",
-        "cats",
-        "walked",
-        "running",
         "children",
-        "read",
-        "lead",
-        "wind",
-        "record",
         "through",
-        "tough",
         "queue",
-        "knight",
-        "psychology",
-        "xylophone",
-        "wug",
-        "wuggle",
-        "wugglification",
-        "blork",
-        "blorking",
-        "snarp",
-        "snarpology",
-        "drindle",
-        "drindlification",
-        "wuggenblatter",
-        "schnorkelsprachgefuhl",
-        "kleiphrasthanes",
-        "chronoflammatory",
-        "xylopharyngobronchitis",
-        "hypercryptolinguistics",
-        "anthropophonoscopy",
-        "brouillomagnifique",
-        "lumifloraison",
-        "maravillacion",
-        "throughoughborough",
-        "worcestershiresaucefulness",
-        "knoughteigh",
-        "draughtwright",
-        "tskvra",
-        "pfknoll",
-        "dzgweth",
-        "aeiouaria",
-        "eunoeoia",
-        "strmptk",
-        "splndrkt",
-        "crispinograph",
-        "tralaluminiferousness",
-        "velocirhetorical",
-        "astrolinguarium",
-        "phthisioblargenstein",
-        "quesadillafreudigkeit",
-        "mananabrotchen",
-        "rendezvouskraftwerk",
+        "Tyrannosaurus",
+        "Archaeopteryx",
+        "Velociraptor",
+        "Quetzalcoatlus",
+        "Parasaurolophus",
+        "Pachycephalosaurus",
+        "Micropachycephalosaurus",
+        "Coelophysis",
+        "Yi",
+        "mañana",
+        "jalapeño",
+        "brötchen",
+        "Kraftwerk",
+        "Pteranodon",
+        "Łódź",
+        "Dvořák",
+        "São Paulo",
+        "ἄνθρωπος",
+        "कर्म",
     ]
     .into_iter()
     .map(str::to_string)

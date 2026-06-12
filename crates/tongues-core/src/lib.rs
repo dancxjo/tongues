@@ -1,7 +1,7 @@
 //! Unified vocabulary for tongues sequence translation.
 //!
-//! Provides a single character-level `Vocab` that maps graphemes, broad IPA
-//! phonemes, narrow IPA phones, and task/control tokens to shared IDs.
+//! Provides a single character-level `Vocab` that maps orthographic forms,
+//! phonemic/phonetic forms, and task/control tokens to shared IDs.
 
 use std::collections::HashMap;
 
@@ -45,13 +45,14 @@ impl Vocab {
             "<SEP>".into(),
             "<G2P>".into(),
             "<P2G>".into(),
-            "<task:g2p>".into(),
-            "<task:p2g>".into(),
+            "<task:orthography_to_phonology>".into(),
+            "<task:phonology_to_orthography>".into(),
+            "<task:phonetic_realization>".into(),
             "<task:align>".into(),
             "<task:normalize>".into(),
-            "<task:guess_lang_from_spelling>".into(),
-            "<task:guess_lang_from_ipa>".into(),
-            "<task:guess_lang_from_spelling_and_ipa>".into(),
+            "<task:guess_lang_from_orthography>".into(),
+            "<task:guess_lang_from_phonology>".into(),
+            "<task:guess_lang_from_orthography_and_phonology>".into(),
         ];
 
         let mut control_tokens = std::collections::BTreeSet::new();
@@ -178,16 +179,15 @@ fn seed_broad_linguistic_vocab(
         "<lang:ell>",
         "<lang:grc>",
         "<lang:san>",
-        "<N_PHONEME>",
-        "<N_PHONE>",
-        "<notation:phonemic>",
-        "<notation:phonetic>",
-        "<accent:Castilian>",
-        "<accent:LatAm>",
-        "<accent:GreekName>",
-        "<accent:Latin>",
-        "<accent:NeoLatinScientific>",
-        "<accent:LegalLatin>",
+        "<repr:phonemes>",
+        "<repr:phones>",
+        "<repr:diaphonemes>",
+        "<variety:Castilian>",
+        "<variety:LatAm>",
+        "<variety:GreekName>",
+        "<variety:Latin>",
+        "<variety:NeoLatinScientific>",
+        "<variety:LegalLatin>",
     ] {
         control_tokens.insert(token.to_string());
     }
@@ -263,26 +263,40 @@ mod tests {
 
     #[test]
     fn vocab_encodes_angle_bracket_controls_as_atomic_tokens() {
-        let words = vec!["<task:g2p> <lang:eng> disease".to_string()];
+        let words =
+            vec!["<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease".to_string()];
         let phonemes = vec!["dəˈziːz".to_string()];
         let v = Vocab::build(&words, &phonemes, &[]);
 
-        let task_id = v.get_id("<task:g2p>");
+        let task_id = v.get_id("<task:orthography_to_phonology>");
         let lang_id = v.get_id("<lang:eng>");
+        let repr_id = v.get_id("<repr:phonemes>");
         let align_id = v.get_id("<task:align>");
         assert_ne!(task_id, UNK_ID);
         assert_ne!(lang_id, UNK_ID);
+        assert_ne!(repr_id, UNK_ID);
         assert_ne!(align_id, UNK_ID);
 
-        let encoded = v.encode_string("<task:g2p> <lang:eng> disease");
+        let encoded =
+            v.encode_string("<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease");
         assert_eq!(encoded[0], task_id);
         assert_eq!(encoded[2], lang_id);
+        assert_eq!(encoded[4], repr_id);
     }
 
     #[test]
     fn vocab_seeds_broad_linguistic_ranges() {
         let v = Vocab::build(&[], &[], &[]);
-        for token in ["<lang:lat>", "<lang:ell>", "<lang:grc>", "<lang:san>"] {
+        for token in [
+            "<lang:lat>",
+            "<lang:ell>",
+            "<lang:grc>",
+            "<lang:san>",
+            "<repr:phonemes>",
+            "<repr:phones>",
+            "<repr:diaphonemes>",
+            "<task:phonetic_realization>",
+        ] {
             assert_ne!(v.get_id(token), UNK_ID, "{token} should be seeded");
         }
         for c in ['θ', 'ɲ', '͡', 'ᵻ', '᷄', 'ᾱ', 'क', 'ā'] {

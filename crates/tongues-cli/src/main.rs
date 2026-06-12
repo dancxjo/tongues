@@ -702,7 +702,7 @@ enum WiktionaryCommands {
         #[arg(long, value_enum)]
         notation: Option<WiktionaryNotationArg>,
 
-        /// Wiktionary task mix: spelling-to-ipa, ipa-to-spelling, lang, or all.
+        /// Wiktionary task mix: orthography-to-phonemes, orthography-to-phones, phonetic-realization, lang, or all.
         /// Defaults to train_task in the Wiktionary config.
         #[arg(long)]
         task: Option<String>,
@@ -760,27 +760,27 @@ enum WiktionaryCommands {
         )]
         model: PathBuf,
 
-        /// Wiktionary task: spelling-to-ipa, ipa-to-spelling, normalize, or a language guessing task
-        #[arg(long, default_value = "spelling-to-ipa")]
+        /// Wiktionary task: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, normalize, or a language guessing task
+        #[arg(long, default_value = "orthography-to-phones")]
         task: String,
 
         /// Wiktionary language code used for tagged tasks
         #[arg(long, default_value = "eng")]
         lang: String,
 
-        /// Pronunciation notation tag used for spelling-to-IPA and language guessing
+        /// Pronunciation representation used for orthography/phonology tasks
         #[arg(long, value_enum, default_value = "phones")]
         notation: WiktionaryNotationArg,
 
-        /// Optional accent tag to include for spelling-to-IPA
+        /// Optional target pronunciation variety tag
         #[arg(long)]
-        accent: Option<String>,
+        variety: Option<String>,
 
         /// Treat input as the exact model source string, including all control tags
         #[arg(long)]
         raw: bool,
 
-        /// Input spelling, IPA, or raw tagged source string
+        /// Input orthography, phoneme/phone sequence, or raw tagged source string
         input: String,
     },
 }
@@ -1539,7 +1539,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             task,
             lang,
             notation,
-            accent,
+            variety,
             raw,
             input,
         } => cmd_wiktionary_infer(
@@ -1547,7 +1547,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             &task,
             &lang,
             notation,
-            accent.as_deref(),
+            variety.as_deref(),
             raw,
             &input,
             device_arg,
@@ -1586,7 +1586,7 @@ fn cmd_wiktionary_train(
     device_arg: DeviceArg,
 ) -> Result<()> {
     if config.source_kind == tongues_wiktionary::WiktionarySourceKind::PieEtymology {
-        let task = if task == "spelling-to-ipa" {
+        let task = if matches!(task, "orthography-to-phones" | "orthography-to-phonemes") {
             "etymology-translation"
         } else {
             task
@@ -1917,9 +1917,26 @@ fn filter_wiktionary_examples(
     use tongues_wiktionary::WiktionaryTask;
 
     let normalized = task.to_ascii_lowercase();
-    let keep = |task: WiktionaryTask| match normalized.as_str() {
-        "spelling-to-ipa" | "g2p" | "s2ipa" | "forward" => task == WiktionaryTask::SpellingToIpa,
-        "ipa-to-spelling" | "p2g" | "ipa2s" | "reverse" => task == WiktionaryTask::IpaToSpelling,
+    let keep = |example: &tongues_wiktionary::TrainingExample| match normalized.as_str() {
+        "orthography-to-phonology" => example.task == WiktionaryTask::OrthographyToPhonology,
+        "orthography-to-phonemes" => {
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example.notation.as_deref() == Some("phonemic")
+        }
+        "orthography-to-phones" => {
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example.notation.as_deref() == Some("phonetic")
+        }
+        "phonology-to-orthography" => example.task == WiktionaryTask::PhonologyToOrthography,
+        "phonemes-to-orthography" => {
+            example.task == WiktionaryTask::PhonologyToOrthography
+                && example.notation.as_deref() == Some("phonemic")
+        }
+        "phones-to-orthography" => {
+            example.task == WiktionaryTask::PhonologyToOrthography
+                && example.notation.as_deref() == Some("phonetic")
+        }
+        "phonetic-realization" => example.task == WiktionaryTask::PhoneticRealization,
         "etymology"
         | "etymology-translation"
         | "translate-etymology"
@@ -1932,28 +1949,27 @@ fn filter_wiktionary_examples(
         | "descendant-to-descendant"
         | "daughter-to-daughter"
         | "daughter2daughter"
-        | "cognate" => task == WiktionaryTask::EtymologyTranslation,
-        "normalize" | "normalise" => task == WiktionaryTask::NormalizeText,
-        "align" => task == WiktionaryTask::AlignAudioText,
+        | "cognate" => example.task == WiktionaryTask::EtymologyTranslation,
+        "normalize" | "normalise" => example.task == WiktionaryTask::NormalizeText,
+        "align" => example.task == WiktionaryTask::AlignAudioText,
         "lang" | "language" | "language-guessing" => matches!(
-            task,
-            WiktionaryTask::GuessLangFromSpelling
-                | WiktionaryTask::GuessLangFromIpa
-                | WiktionaryTask::GuessLangFromSpellingAndIpa
+            example.task,
+            WiktionaryTask::GuessLangFromOrthography
+                | WiktionaryTask::GuessLangFromPhonology
+                | WiktionaryTask::GuessLangFromOrthographyAndPhonology
         ),
         "all" => true,
         _ => false,
     };
     if !matches!(
         normalized.as_str(),
-        "spelling-to-ipa"
-            | "s2ipa"
-            | "g2p"
-            | "forward"
-            | "ipa-to-spelling"
-            | "ipa2s"
-            | "p2g"
-            | "reverse"
+        "orthography-to-phonology"
+            | "orthography-to-phonemes"
+            | "orthography-to-phones"
+            | "phonology-to-orthography"
+            | "phonemes-to-orthography"
+            | "phones-to-orthography"
+            | "phonetic-realization"
             | "etymology"
             | "etymology-translation"
             | "translate-etymology"
@@ -1975,12 +1991,12 @@ fn filter_wiktionary_examples(
             | "language-guessing"
             | "all"
     ) {
-        anyhow::bail!("Invalid Wiktionary task. Supported: g2p, p2g, etymology-translation, normalize, align, lang, all");
+        anyhow::bail!("Invalid Wiktionary task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, etymology-translation, normalize, align, lang, all");
     }
 
     Ok(examples
         .into_iter()
-        .filter(|example| keep(example.task))
+        .filter(|example| keep(example))
         .collect())
 }
 
@@ -2161,7 +2177,7 @@ fn cmd_wiktionary_infer(
     task: &str,
     lang: &str,
     notation: WiktionaryNotationArg,
-    accent: Option<&str>,
+    variety: Option<&str>,
     raw: bool,
     input: &str,
     device_arg: DeviceArg,
@@ -2179,7 +2195,7 @@ fn cmd_wiktionary_infer(
     let source = if raw {
         input.to_string()
     } else {
-        wiktionary_infer_source(task, lang, notation, accent, input, &vocab)?
+        wiktionary_infer_source(task, lang, notation, variety, input)?
     };
 
     match device_arg {
@@ -2210,9 +2226,8 @@ fn wiktionary_infer_source(
     task: &str,
     lang: &str,
     notation: WiktionaryNotationArg,
-    accent: Option<&str>,
+    variety: Option<&str>,
     input: &str,
-    vocab: &Vocab,
 ) -> Result<String> {
     match notation {
         WiktionaryNotationArg::All => {
@@ -2220,71 +2235,96 @@ fn wiktionary_infer_source(
         }
         WiktionaryNotationArg::Phones | WiktionaryNotationArg::Phonemes => {}
     };
-    let notation_token = wiktionary_infer_notation_token(notation, vocab)?;
     let normalized = task.to_ascii_lowercase();
     let source = match normalized.as_str() {
-        "spelling-to-ipa" | "s2ipa" | "g2p" | "forward" => {
-            let mut controls = format!("<task:g2p> <lang:{lang}>");
-            if let Some(accent) = accent.filter(|accent| !accent.is_empty()) {
-                controls.push_str(&format!(" <accent:{accent}>"));
+        "orthography-to-phonemes" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
             }
-            controls.push_str(&format!(" {notation_token}"));
+            controls.push_str(" <repr:phonemes>");
             format!("{controls} {input}")
         }
-        "ipa-to-spelling" | "ipa2s" | "p2g" | "reverse" => {
-            format!("<task:p2g> <lang:{lang}> {input}")
+        "orthography-to-phones" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phones>");
+            format!("{controls} {input}")
+        }
+        "orthography-to-phonology" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(&format!(" {}", wiktionary_infer_representation_token(notation)?));
+            format!("{controls} {input}")
+        }
+        "phonemes-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phonemes>");
+            format!("{controls} {input}")
+        }
+        "phones-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phones>");
+            format!("{controls} {input}")
+        }
+        "phonology-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(&format!(" {}", wiktionary_infer_representation_token(notation)?));
+            format!("{controls} {input}")
+        }
+        "phonetic-realization" => {
+            let mut controls = format!("<task:phonetic_realization> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phonemes>");
+            format!("{controls} {input}")
         }
         "normalize" | "normalise" => {
             format!("<task:normalize> <lang:{lang}> {input}")
         }
-        "guess-lang-from-spelling" | "lang-from-spelling" => {
-            format!("<task:guess_lang_from_spelling> {notation_token} {input}")
+        "guess-lang-from-orthography" | "lang-from-orthography" => {
+            let representation_token = wiktionary_infer_representation_token(notation)?;
+            format!("<task:guess_lang_from_orthography> {representation_token} {input}")
         }
-        "guess-lang-from-ipa" | "lang-from-ipa" => {
-            format!("<task:guess_lang_from_ipa> {notation_token} {input}")
+        "guess-lang-from-phonology" | "lang-from-phonology" => {
+            let representation_token = wiktionary_infer_representation_token(notation)?;
+            format!("<task:guess_lang_from_phonology> {representation_token} {input}")
         }
-        "guess-lang-from-spelling-and-ipa" | "lang" | "language" | "language-guessing" => {
+        "guess-lang-from-orthography-and-phonology" | "lang" | "language" | "language-guessing" => {
+            let representation_token = wiktionary_infer_representation_token(notation)?;
             format!(
-                "<task:guess_lang_from_spelling_and_ipa> {notation_token} {input}"
+                "<task:guess_lang_from_orthography_and_phonology> {representation_token} {input}"
             )
         }
         _ => anyhow::bail!(
-            "Invalid Wiktionary inference task. Supported: spelling-to-ipa, ipa-to-spelling, normalize, guess-lang-from-spelling, guess-lang-from-ipa, guess-lang-from-spelling-and-ipa"
+            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
         ),
     };
     Ok(source)
 }
 
-fn wiktionary_infer_notation_token(
-    notation: WiktionaryNotationArg,
-    vocab: &Vocab,
-) -> Result<&'static str> {
-    let (opaque, legacy) = match notation {
+fn wiktionary_infer_representation_token(notation: WiktionaryNotationArg) -> Result<&'static str> {
+    match notation {
         WiktionaryNotationArg::All => {
             anyhow::bail!("Wiktionary inference requires one notation: phones or phonemes")
         }
-        WiktionaryNotationArg::Phones => ("<N_PHONE>", "<notation:phonetic>"),
-        WiktionaryNotationArg::Phonemes => ("<N_PHONEME>", "<notation:phonemic>"),
-    };
-    if vocab.get_id(opaque) != UNK_ID {
-        return Ok(opaque);
+        WiktionaryNotationArg::Phones => Ok("<repr:phones>"),
+        WiktionaryNotationArg::Phonemes => Ok("<repr:phonemes>"),
     }
-    if vocab.get_id(legacy) != UNK_ID {
-        return Ok(legacy);
-    }
-    anyhow::bail!(
-        "model vocabulary does not contain a control token for {}; train or select a model with --notation {}",
-        match notation {
-            WiktionaryNotationArg::Phones => "phones",
-            WiktionaryNotationArg::Phonemes => "phonemes",
-            WiktionaryNotationArg::All => unreachable!(),
-        },
-        match notation {
-            WiktionaryNotationArg::Phones => "phones",
-            WiktionaryNotationArg::Phonemes => "phonemes",
-            WiktionaryNotationArg::All => unreachable!(),
-        }
-    )
 }
 
 fn run_wiktionary_infer<B: Backend>(
@@ -4990,7 +5030,7 @@ mod tests {
             "--model",
             "models/wiktionary/enwiktionary-2026-06-01-v0-phones",
             "--task",
-            "spelling-to-ipa",
+            "orthography-to-phones",
             "hello",
         ])
         .expect("wiktionary infer should parse");
