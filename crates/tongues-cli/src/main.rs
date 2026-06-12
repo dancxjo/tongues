@@ -690,13 +690,14 @@ enum WiktionaryCommands {
         #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
         data: PathBuf,
 
-        /// Pronunciation notation to train from
-        #[arg(long, value_enum, default_value = "phones")]
-        notation: WiktionaryNotationArg,
+        /// Pronunciation notation to train from. Defaults to train_notations in the Wiktionary config.
+        #[arg(long, value_enum)]
+        notation: Option<WiktionaryNotationArg>,
 
-        /// Wiktionary task mix: spelling-to-ipa, ipa-to-spelling, lang, or all
-        #[arg(long, default_value = "spelling-to-ipa")]
-        task: String,
+        /// Wiktionary task mix: spelling-to-ipa, ipa-to-spelling, lang, or all.
+        /// Defaults to train_task in the Wiktionary config.
+        #[arg(long)]
+        task: Option<String>,
 
         /// Output directory for the model
         #[arg(
@@ -708,6 +709,10 @@ enum WiktionaryCommands {
         /// Cache directory for downloaded Wikimedia dumps if data is missing
         #[arg(long, default_value = "data/wiktionary")]
         cache_dir: PathBuf,
+
+        /// Rebuild prepared split files before training
+        #[arg(long)]
+        prepare: bool,
 
         /// AdamW learning rate
         #[arg(long, default_value_t = 3e-4)]
@@ -772,8 +777,10 @@ enum WiktionaryCommands {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum WiktionaryNotationArg {
+    /// Train from both phonemes.jsonl and phones.jsonl.
+    All,
     /// Train from bracket-delimited phonetic rows in phones.jsonl.
     Phones,
     /// Train from slash-delimited phonemic rows in phonemes.jsonl.
@@ -1449,6 +1456,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             task,
             out,
             cache_dir,
+            prepare,
             learning_rate,
             weight_decay,
             dropout,
@@ -1463,7 +1471,8 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             }
             let data = effective_wiktionary_data_path(data, &config);
             let out = effective_wiktionary_model_path(out, &config);
-            if !data.join("train.jsonl").exists()
+            if prepare
+                || !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
                 || !data.join("test.jsonl").exists()
             {
@@ -1493,11 +1502,15 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
                     ),
                 );
             }
+            let task = task
+                .as_deref()
+                .unwrap_or(config.train_task.as_str())
+                .to_string();
             cmd_wiktionary_train(
                 &data,
                 &out,
                 &config,
-                notation,
+                notation.as_ref(),
                 &task,
                 learning_rate,
                 weight_decay,
@@ -1535,7 +1548,7 @@ fn cmd_wiktionary_train(
     data: &Path,
     out: &Path,
     config: &tongues_wiktionary::WiktionaryConfig,
-    notation: WiktionaryNotationArg,
+    notation: Option<&WiktionaryNotationArg>,
     task: &str,
     learning_rate: f64,
     weight_decay: f32,
@@ -1568,16 +1581,25 @@ fn cmd_wiktionary_train(
         );
     }
 
-    let source_file = match notation {
-        WiktionaryNotationArg::Phones => data.join("phones.jsonl"),
-        WiktionaryNotationArg::Phonemes => data.join("phonemes.jsonl"),
-    };
+    let notations = resolve_wiktionary_train_notations(notation, config)?;
     let pb = status_spinner(format!(
-        "Loading Wiktionary rows from {}",
-        source_file.display()
+        "Loading Wiktionary rows for {}",
+        wiktionary_notation_label(&notations)
     ));
-    let entries: Vec<tongues_wiktionary::PronunciationEntry> = read_jsonl_as(&source_file)?;
-    finish_status(pb, format!("Loaded {} {:?} rows", entries.len(), notation));
+    let mut entries = Vec::new();
+    for notation in &notations {
+        let source_file = wiktionary_notation_source_file(data, *notation);
+        let mut rows: Vec<tongues_wiktionary::PronunciationEntry> = read_jsonl_as(&source_file)?;
+        entries.append(&mut rows);
+    }
+    finish_status(
+        pb,
+        format!(
+            "Loaded {} rows for {}",
+            entries.len(),
+            wiktionary_notation_label(&notations)
+        ),
+    );
 
     let pb = status_spinner("Expanding and filtering Wiktionary training examples");
     let expanded = tongues_wiktionary::expand_training_examples(&entries, config);
@@ -1591,14 +1613,22 @@ fn cmd_wiktionary_train(
     );
     anyhow::ensure!(
         !examples.is_empty(),
-        "no Wiktionary examples found for notation={:?} task={task}",
-        notation
+        "no Wiktionary examples found for notations={} task={task}",
+        wiktionary_notation_label(&notations)
     );
 
     let pb = status_spinner("Splitting rows, building vocabulary, and encoding examples");
     let (train_rows, valid_rows, _test_rows) =
         split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
-    let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
+    let vocab = if out.join("vocab.json").exists() {
+        println!(
+            "Reusing existing vocabulary from {}",
+            out.join("vocab.json").display()
+        );
+        read_json_file(&out.join("vocab.json"))?
+    } else {
+        build_wiktionary_vocab(&train_rows, &valid_rows)
+    };
     let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
     finish_status(
@@ -1612,9 +1642,9 @@ fn cmd_wiktionary_train(
     );
 
     println!(
-        "Loaded {} {:?} rows -> {} train / {} valid examples for task={}",
+        "Loaded {} {} rows -> {} train / {} valid examples for task={}",
         entries.len(),
-        notation,
+        wiktionary_notation_label(&notations),
         train_examples.len(),
         valid_examples.len(),
         task
@@ -1624,7 +1654,7 @@ fn cmd_wiktionary_train(
         data,
         out,
         config,
-        &format!("{:?}:{task}", notation).to_lowercase(),
+        &format!("{}:{task}", wiktionary_notation_label(&notations)),
         learning_rate,
         weight_decay,
         dropout,
@@ -1750,7 +1780,18 @@ fn write_and_train_wiktionary_seq2seq(
     valid_examples: Vec<Seq2SeqExample>,
 ) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
+    let model_config = if out.join("model_config.json").exists() {
+        let existing: ModelConfig = read_json_file(&out.join("model_config.json"))?;
+        anyhow::ensure!(
+            existing.vocab_size == vocab.size(),
+            "existing model_config.json vocab_size={} does not match vocab size {}; remove or update the model directory to train from a rebuilt vocabulary",
+            existing.vocab_size,
+            vocab.size()
+        );
+        existing
+    } else {
+        ModelConfig::new(vocab.size()).with_dropout(dropout)
+    };
     let train_config = TrainConfig {
         learning_rate,
         weight_decay,
@@ -1896,6 +1937,71 @@ fn filter_wiktionary_examples(
         .collect())
 }
 
+fn resolve_wiktionary_train_notations(
+    notation: Option<&WiktionaryNotationArg>,
+    config: &tongues_wiktionary::WiktionaryConfig,
+) -> Result<Vec<WiktionaryNotationArg>> {
+    let mut notations = Vec::new();
+    match notation {
+        Some(WiktionaryNotationArg::All) => {
+            notations.push(WiktionaryNotationArg::Phonemes);
+            notations.push(WiktionaryNotationArg::Phones);
+        }
+        Some(notation) => notations.push(*notation),
+        None => {
+            for notation in &config.train_notations {
+                match notation.to_ascii_lowercase().as_str() {
+                    "all" | "both" => {
+                        notations.push(WiktionaryNotationArg::Phonemes);
+                        notations.push(WiktionaryNotationArg::Phones);
+                    }
+                    "phonemic" | "phoneme" | "phonemes" => {
+                        notations.push(WiktionaryNotationArg::Phonemes);
+                    }
+                    "phonetic" | "phone" | "phones" => {
+                        notations.push(WiktionaryNotationArg::Phones);
+                    }
+                    other => anyhow::bail!(
+                        "Invalid Wiktionary train_notations entry `{other}`. Supported: phonemic, phonetic, all"
+                    ),
+                }
+            }
+        }
+    }
+
+    notations.sort_by_key(|notation| match notation {
+        WiktionaryNotationArg::All => 0,
+        WiktionaryNotationArg::Phonemes => 1,
+        WiktionaryNotationArg::Phones => 2,
+    });
+    notations.dedup();
+    anyhow::ensure!(
+        !notations.is_empty(),
+        "no Wiktionary training notations configured"
+    );
+    Ok(notations)
+}
+
+fn wiktionary_notation_source_file(data: &Path, notation: WiktionaryNotationArg) -> PathBuf {
+    match notation {
+        WiktionaryNotationArg::All => unreachable!("all should be expanded before loading files"),
+        WiktionaryNotationArg::Phones => data.join("phones.jsonl"),
+        WiktionaryNotationArg::Phonemes => data.join("phonemes.jsonl"),
+    }
+}
+
+fn wiktionary_notation_label(notations: &[WiktionaryNotationArg]) -> String {
+    notations
+        .iter()
+        .map(|notation| match notation {
+            WiktionaryNotationArg::All => "all",
+            WiktionaryNotationArg::Phones => "phonetic",
+            WiktionaryNotationArg::Phonemes => "phonemic",
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 fn split_wiktionary_examples(
     mut examples: Vec<tongues_wiktionary::TrainingExample>,
     train_frac: f64,
@@ -1955,7 +2061,7 @@ fn wiktionary_seq2seq_examples(
 }
 
 fn wiktionary_source_text(example: &tongues_wiktionary::TrainingExample) -> String {
-    example.input.clone()
+    tongues_wiktionary::normalize_wiktionary_control_tokens(&example.input)
 }
 
 fn run_wiktionary_train<B: AutodiffBackend>(
@@ -1999,12 +2105,6 @@ fn cmd_wiktionary_infer(
     input: &str,
     device_arg: DeviceArg,
 ) -> Result<()> {
-    let source = if raw {
-        input.to_string()
-    } else {
-        wiktionary_infer_source(task, lang, notation, accent, input)?
-    };
-
     let vocab: Vocab = {
         let path = model_dir.join("vocab.json");
         let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
@@ -2014,6 +2114,11 @@ fn cmd_wiktionary_infer(
         let path = model_dir.join("model_config.json");
         let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&s)?
+    };
+    let source = if raw {
+        input.to_string()
+    } else {
+        wiktionary_infer_source(task, lang, notation, accent, input, &vocab)?
     };
 
     match device_arg {
@@ -2046,11 +2151,15 @@ fn wiktionary_infer_source(
     notation: WiktionaryNotationArg,
     accent: Option<&str>,
     input: &str,
+    vocab: &Vocab,
 ) -> Result<String> {
-    let notation_tag = match notation {
-        WiktionaryNotationArg::Phones => "phonetic",
-        WiktionaryNotationArg::Phonemes => "phonemic",
+    match notation {
+        WiktionaryNotationArg::All => {
+            anyhow::bail!("Wiktionary inference requires one notation: phones or phonemes")
+        }
+        WiktionaryNotationArg::Phones | WiktionaryNotationArg::Phonemes => {}
     };
+    let notation_token = wiktionary_infer_notation_token(notation, vocab)?;
     let normalized = task.to_ascii_lowercase();
     let source = match normalized.as_str() {
         "spelling-to-ipa" | "s2ipa" | "g2p" | "forward" => {
@@ -2058,7 +2167,7 @@ fn wiktionary_infer_source(
             if let Some(accent) = accent.filter(|accent| !accent.is_empty()) {
                 controls.push_str(&format!(" <accent:{accent}>"));
             }
-            controls.push_str(&format!(" <notation:{notation_tag}>"));
+            controls.push_str(&format!(" {notation_token}"));
             format!("{controls} {input}")
         }
         "ipa-to-spelling" | "ipa2s" | "p2g" | "reverse" => {
@@ -2068,14 +2177,14 @@ fn wiktionary_infer_source(
             format!("<task:normalize> <lang:{lang}> {input}")
         }
         "guess-lang-from-spelling" | "lang-from-spelling" => {
-            format!("<task:guess_lang_from_spelling> <notation:{notation_tag}> {input}")
+            format!("<task:guess_lang_from_spelling> {notation_token} {input}")
         }
         "guess-lang-from-ipa" | "lang-from-ipa" => {
-            format!("<task:guess_lang_from_ipa> <notation:{notation_tag}> {input}")
+            format!("<task:guess_lang_from_ipa> {notation_token} {input}")
         }
         "guess-lang-from-spelling-and-ipa" | "lang" | "language" | "language-guessing" => {
             format!(
-                "<task:guess_lang_from_spelling_and_ipa> <notation:{notation_tag}> {input}"
+                "<task:guess_lang_from_spelling_and_ipa> {notation_token} {input}"
             )
         }
         _ => anyhow::bail!(
@@ -2083,6 +2192,38 @@ fn wiktionary_infer_source(
         ),
     };
     Ok(source)
+}
+
+fn wiktionary_infer_notation_token(
+    notation: WiktionaryNotationArg,
+    vocab: &Vocab,
+) -> Result<&'static str> {
+    let (opaque, legacy) = match notation {
+        WiktionaryNotationArg::All => {
+            anyhow::bail!("Wiktionary inference requires one notation: phones or phonemes")
+        }
+        WiktionaryNotationArg::Phones => ("<N_PHONE>", "<notation:phonetic>"),
+        WiktionaryNotationArg::Phonemes => ("<N_PHONEME>", "<notation:phonemic>"),
+    };
+    if vocab.get_id(opaque) != UNK_ID {
+        return Ok(opaque);
+    }
+    if vocab.get_id(legacy) != UNK_ID {
+        return Ok(legacy);
+    }
+    anyhow::bail!(
+        "model vocabulary does not contain a control token for {}; train or select a model with --notation {}",
+        match notation {
+            WiktionaryNotationArg::Phones => "phones",
+            WiktionaryNotationArg::Phonemes => "phonemes",
+            WiktionaryNotationArg::All => unreachable!(),
+        },
+        match notation {
+            WiktionaryNotationArg::Phones => "phones",
+            WiktionaryNotationArg::Phonemes => "phonemes",
+            WiktionaryNotationArg::All => unreachable!(),
+        }
+    )
 }
 
 fn run_wiktionary_infer<B: Backend>(

@@ -1,7 +1,8 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
+use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
     match run() {
@@ -28,6 +29,15 @@ fn run() -> Result<(), String> {
             }
             new_family(&family)
         }
+        Some("race") => {
+            let args = args.collect::<Vec<_>>();
+            if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+                print!("{}", race_usage());
+                Ok(())
+            } else {
+                race(args)
+            }
+        }
         Some("-h") | Some("--help") | None => {
             print!("{}", usage());
             Ok(())
@@ -37,7 +47,568 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n"
+    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n"
+}
+
+fn race_usage() -> &'static str {
+    "Usage: cargo xtask race [options] [words...]\n\nOptions:\n  --cpu                         Force CPU inference\n  --skip-build                  Do not build the tongues binary first\n  --g2p2g-model <path>          G2P2G model dir (default: models/g2p2g/openepd-v0)\n  --wiktionary-model <path>     Wiktionary model dir (default: models/wiktionary/enwiktionary-2026-06-01-v0-phones)\n  --wiktionary-config <path>    Wiktionary config (default: configs/wiktionary/default.toml)\n"
+}
+
+#[derive(Debug)]
+struct RaceConfig {
+    cpu: bool,
+    skip_build: bool,
+    g2p2g_model: PathBuf,
+    wiktionary_model: PathBuf,
+    wiktionary_config: PathBuf,
+    words: Vec<String>,
+}
+
+#[derive(Debug)]
+struct RaceResult {
+    output: String,
+    elapsed: Duration,
+}
+
+#[derive(Debug)]
+struct RaceStats {
+    runs: usize,
+    failures: usize,
+    total: Duration,
+}
+
+struct WiktionaryInferDemo<'a> {
+    label: &'a str,
+    task: &'a str,
+    lang: &'a str,
+    notation: &'a str,
+    accent: Option<&'a str>,
+    raw: bool,
+    input: String,
+}
+
+impl RaceStats {
+    fn new() -> Self {
+        Self {
+            runs: 0,
+            failures: 0,
+            total: Duration::ZERO,
+        }
+    }
+
+    fn record(&mut self, elapsed: Duration) {
+        self.runs += 1;
+        self.total += elapsed;
+    }
+
+    fn fail(&mut self) {
+        self.failures += 1;
+    }
+}
+
+fn race(raw_args: Vec<String>) -> Result<(), String> {
+    let config = parse_race_args(raw_args)?;
+    let languages = read_wiktionary_languages(&config.wiktionary_config)?;
+    let words = if config.words.is_empty() {
+        default_race_words()
+    } else {
+        config.words.clone()
+    };
+
+    if !config.skip_build {
+        println!("race: building tongues binary");
+        run_build()?;
+    }
+
+    let tongues = tongues_bin_path();
+    if !tongues.exists() {
+        return Err(format!(
+            "{} does not exist; run without --skip-build first",
+            tongues.display()
+        ));
+    }
+
+    println!(
+        "race: {} words, {} Wiktionary languages, phones+phonemes",
+        words.len(),
+        languages.len()
+    );
+    println!(
+        "race: g2p2g={}, wiktionary={}",
+        config.g2p2g_model.display(),
+        config.wiktionary_model.display()
+    );
+
+    let total_start = Instant::now();
+    let mut stats = RaceStats::new();
+
+    println!();
+    println!("G2P2G round trips");
+    for word in &words {
+        match round_trip_g2p2g(&tongues, &config, word) {
+            Ok((forward, reverse)) => {
+                stats.record(forward.elapsed + reverse.elapsed);
+                println!(
+                    "  ok {:>6} + {:>6}  {:<14} -> {:<18} -> {}",
+                    fmt_ms(forward.elapsed),
+                    fmt_ms(reverse.elapsed),
+                    clip(word, 14),
+                    clip(&forward.output, 18),
+                    clip(&reverse.output, 18)
+                );
+            }
+            Err(error) => {
+                stats.fail();
+                println!("  fail {:<14} {}", clip(word, 14), error);
+            }
+        }
+    }
+
+    println!();
+    println!("Wiktionary round trips");
+    for word in &words {
+        for lang in &languages {
+            for notation in ["phones", "phonemes"] {
+                match round_trip_wiktionary(&tongues, &config, word, lang, notation) {
+                    Ok((forward, reverse)) => {
+                        stats.record(forward.elapsed + reverse.elapsed);
+                        println!(
+                            "  ok {:>6} + {:>6}  {:<3}/{:<8} {:<14} -> {:<18} -> {}",
+                            fmt_ms(forward.elapsed),
+                            fmt_ms(reverse.elapsed),
+                            lang,
+                            notation,
+                            clip(word, 14),
+                            clip(&forward.output, 18),
+                            clip(&reverse.output, 18)
+                        );
+                    }
+                    Err(error) => {
+                        stats.fail();
+                        println!(
+                            "  fail {:<3}/{:<8} {:<14} {}",
+                            lang,
+                            notation,
+                            clip(word, 14),
+                            error
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("Wiktionary task demos");
+    let demo_word = words
+        .iter()
+        .find(|word| word.as_str() == "cat")
+        .unwrap_or(&words[0]);
+    let demo_lang = languages
+        .iter()
+        .find(|lang| lang.as_str() == "eng")
+        .unwrap_or(&languages[0]);
+    match run_wiktionary_infer(
+        &tongues,
+        &config,
+        "spelling-to-ipa",
+        demo_lang,
+        "phones",
+        Some("RP"),
+        false,
+        demo_word,
+    ) {
+        Ok(pronunciation) => {
+            stats.record(pronunciation.elapsed);
+            println!(
+                "  ok {:>6}  {:<38} {} -> {}",
+                fmt_ms(pronunciation.elapsed),
+                "spelling-to-ipa --accent RP",
+                clip(demo_word, 14),
+                clip(&pronunciation.output, 28)
+            );
+
+            for demo in [
+                WiktionaryInferDemo {
+                    label: "normalize",
+                    task: "normalize",
+                    lang: demo_lang,
+                    notation: "phones",
+                    accent: None,
+                    raw: false,
+                    input: demo_word.to_string(),
+                },
+                WiktionaryInferDemo {
+                    label: "guess-lang-from-spelling",
+                    task: "guess-lang-from-spelling",
+                    lang: demo_lang,
+                    notation: "phones",
+                    accent: None,
+                    raw: false,
+                    input: demo_word.to_string(),
+                },
+                WiktionaryInferDemo {
+                    label: "guess-lang-from-ipa",
+                    task: "guess-lang-from-ipa",
+                    lang: demo_lang,
+                    notation: "phones",
+                    accent: None,
+                    raw: false,
+                    input: pronunciation.output.clone(),
+                },
+                WiktionaryInferDemo {
+                    label: "guess-lang-from-spelling-and-ipa",
+                    task: "guess-lang-from-spelling-and-ipa",
+                    lang: demo_lang,
+                    notation: "phones",
+                    accent: None,
+                    raw: false,
+                    input: format!("{demo_word} => {}", pronunciation.output),
+                },
+                WiktionaryInferDemo {
+                    label: "--raw tagged source",
+                    task: "spelling-to-ipa",
+                    lang: demo_lang,
+                    notation: "phones",
+                    accent: None,
+                    raw: true,
+                    input: format!("<task:g2p> <lang:{demo_lang}> <N_PHONE> {demo_word}"),
+                },
+            ] {
+                match run_wiktionary_infer(
+                    &tongues,
+                    &config,
+                    demo.task,
+                    demo.lang,
+                    demo.notation,
+                    demo.accent,
+                    demo.raw,
+                    &demo.input,
+                ) {
+                    Ok(result) => {
+                        stats.record(result.elapsed);
+                        println!(
+                            "  ok {:>6}  {:<38} {} -> {}",
+                            fmt_ms(result.elapsed),
+                            demo.label,
+                            clip(&demo.input, 28),
+                            clip(&result.output, 28)
+                        );
+                    }
+                    Err(error) => {
+                        stats.fail();
+                        println!("  fail {:<38} {}", demo.label, error);
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            stats.fail();
+            println!("  fail {:<38} {}", "spelling-to-ipa --accent RP", error);
+        }
+    }
+
+    println!();
+    println!(
+        "race: done in {} wall; {} successful inference demos, {} failures, {} summed inference time",
+        fmt_ms(total_start.elapsed()),
+        stats.runs,
+        stats.failures,
+        fmt_ms(stats.total)
+    );
+
+    Ok(())
+}
+
+fn parse_race_args(args: Vec<String>) -> Result<RaceConfig, String> {
+    let mut config = RaceConfig {
+        cpu: false,
+        skip_build: false,
+        g2p2g_model: PathBuf::from("models/g2p2g/openepd-v0"),
+        wiktionary_model: PathBuf::from("models/wiktionary/enwiktionary-2026-06-01-v0-phones"),
+        wiktionary_config: PathBuf::from("configs/wiktionary/default.toml"),
+        words: Vec::new(),
+    };
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--cpu" => config.cpu = true,
+            "--skip-build" => config.skip_build = true,
+            "--g2p2g-model" => {
+                config.g2p2g_model = PathBuf::from(next_race_value(&mut iter, "--g2p2g-model")?);
+            }
+            "--wiktionary-model" => {
+                config.wiktionary_model =
+                    PathBuf::from(next_race_value(&mut iter, "--wiktionary-model")?);
+            }
+            "--wiktionary-config" => {
+                config.wiktionary_config =
+                    PathBuf::from(next_race_value(&mut iter, "--wiktionary-config")?);
+            }
+            _ if arg.starts_with("--") => {
+                return Err(format!("unknown race option `{arg}`\n\n{}", race_usage()));
+            }
+            _ => config.words.push(arg),
+        }
+    }
+
+    Ok(config)
+}
+
+fn next_race_value(
+    iter: &mut impl Iterator<Item = String>,
+    option: &str,
+) -> Result<String, String> {
+    iter.next()
+        .ok_or_else(|| format!("{option} requires a value\n\n{}", race_usage()))
+}
+
+fn run_build() -> Result<(), String> {
+    let status = Command::new("cargo")
+        .args(["build", "--quiet", "--bin", "tongues"])
+        .status()
+        .map_err(|error| format!("starting cargo build: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("cargo build failed with {status}"))
+    }
+}
+
+fn round_trip_g2p2g(
+    tongues: &Path,
+    config: &RaceConfig,
+    word: &str,
+) -> Result<(RaceResult, RaceResult), String> {
+    let mut args = base_tongues_args(config);
+    args.extend([
+        "g2p2g".to_string(),
+        "infer".to_string(),
+        "--task".to_string(),
+        "g2p".to_string(),
+        "--model".to_string(),
+        config.g2p2g_model.display().to_string(),
+        "--".to_string(),
+        word.to_string(),
+    ]);
+    let forward = run_infer(tongues, &args)?;
+
+    let mut reverse_args = base_tongues_args(config);
+    reverse_args.extend([
+        "g2p2g".to_string(),
+        "infer".to_string(),
+        "--task".to_string(),
+        "p2g".to_string(),
+        "--model".to_string(),
+        config.g2p2g_model.display().to_string(),
+        "--".to_string(),
+        forward.output.clone(),
+    ]);
+    let reverse = run_infer(tongues, &reverse_args)?;
+    Ok((forward, reverse))
+}
+
+fn round_trip_wiktionary(
+    tongues: &Path,
+    config: &RaceConfig,
+    word: &str,
+    lang: &str,
+    notation: &str,
+) -> Result<(RaceResult, RaceResult), String> {
+    let mut args = base_tongues_args(config);
+    args.extend([
+        "wiktionary".to_string(),
+        "infer".to_string(),
+        "--model".to_string(),
+        config.wiktionary_model.display().to_string(),
+        "--task".to_string(),
+        "spelling-to-ipa".to_string(),
+        "--lang".to_string(),
+        lang.to_string(),
+        "--notation".to_string(),
+        notation.to_string(),
+        "--".to_string(),
+        word.to_string(),
+    ]);
+    let forward = run_infer(tongues, &args)?;
+
+    let mut reverse_args = base_tongues_args(config);
+    reverse_args.extend([
+        "wiktionary".to_string(),
+        "infer".to_string(),
+        "--model".to_string(),
+        config.wiktionary_model.display().to_string(),
+        "--task".to_string(),
+        "ipa-to-spelling".to_string(),
+        "--lang".to_string(),
+        lang.to_string(),
+        "--notation".to_string(),
+        notation.to_string(),
+        "--".to_string(),
+        forward.output.clone(),
+    ]);
+    let reverse = run_infer(tongues, &reverse_args)?;
+    Ok((forward, reverse))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_wiktionary_infer(
+    tongues: &Path,
+    config: &RaceConfig,
+    task: &str,
+    lang: &str,
+    notation: &str,
+    accent: Option<&str>,
+    raw: bool,
+    input: &str,
+) -> Result<RaceResult, String> {
+    let mut args = base_tongues_args(config);
+    args.extend([
+        "wiktionary".to_string(),
+        "infer".to_string(),
+        "--model".to_string(),
+        config.wiktionary_model.display().to_string(),
+        "--task".to_string(),
+        task.to_string(),
+        "--lang".to_string(),
+        lang.to_string(),
+        "--notation".to_string(),
+        notation.to_string(),
+    ]);
+    if let Some(accent) = accent {
+        args.extend(["--accent".to_string(), accent.to_string()]);
+    }
+    if raw {
+        args.push("--raw".to_string());
+    }
+    args.extend(["--".to_string(), input.to_string()]);
+    run_infer(tongues, &args)
+}
+
+fn base_tongues_args(config: &RaceConfig) -> Vec<String> {
+    if config.cpu {
+        vec!["--cpu".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn run_infer(tongues: &Path, args: &[String]) -> Result<RaceResult, String> {
+    let start = Instant::now();
+    let output = Command::new(tongues)
+        .args(args)
+        .output()
+        .map_err(|error| format!("starting {}: {error}", tongues.display()))?;
+    let elapsed = start.elapsed();
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "exited {}: {}",
+            output.status,
+            clip(stderr.trim(), 80)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let prediction = extract_prediction(&stdout)
+        .ok_or_else(|| format!("prediction output not found: {}", clip(stdout.trim(), 80)))?;
+    Ok(RaceResult {
+        output: prediction,
+        elapsed,
+    })
+}
+
+fn extract_prediction(stdout: &str) -> Option<String> {
+    let mut lines = stdout.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == "Prediction output:" {
+            return lines.next().map(|value| value.trim().to_string());
+        }
+    }
+    None
+}
+
+fn read_wiktionary_languages(path: &Path) -> Result<Vec<String>, String> {
+    let raw =
+        fs::read_to_string(path).map_err(|error| format!("reading {}: {error}", path.display()))?;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("languages") {
+            let Some((_, value)) = rest.split_once('=') else {
+                continue;
+            };
+            return parse_toml_string_array(value)
+                .ok_or_else(|| format!("could not parse languages in {}", path.display()));
+        }
+    }
+    Ok(vec!["eng".to_string()])
+}
+
+fn parse_toml_string_array(value: &str) -> Option<Vec<String>> {
+    let start = value.find('[')?;
+    let end = value.rfind(']')?;
+    let inner = &value[start + 1..end];
+    let mut out = Vec::new();
+    for item in inner.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        out.push(item.trim_matches('"').to_string());
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn default_race_words() -> Vec<String> {
+    [
+        "have",
+        "cat",
+        "cats",
+        "walked",
+        "running",
+        "children",
+        "read",
+        "lead",
+        "wind",
+        "record",
+        "through",
+        "tough",
+        "queue",
+        "knight",
+        "psychology",
+        "xylophone",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn tongues_bin_path() -> PathBuf {
+    PathBuf::from("target")
+        .join("debug")
+        .join(format!("tongues{}", env::consts::EXE_SUFFIX))
+}
+
+fn fmt_ms(duration: Duration) -> String {
+    format!("{}ms", duration.as_millis())
+}
+
+fn clip(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if index >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn new_family_usage() -> &'static str {

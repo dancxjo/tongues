@@ -212,6 +212,66 @@ https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06
 
 The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, and `spa`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
 
+### Wiktionary inference
+
+The default Wiktionary inference command is:
+
+```sh
+cargo run --release -- wiktionary infer \
+    --model models/wiktionary/enwiktionary-2026-06-01-v0-phones \
+    --task spelling-to-ipa \
+    --lang eng \
+    --notation phones \
+    "cat"
+```
+
+Inference options:
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `--model` | `models/wiktionary/enwiktionary-2026-06-01-v0-phones` | model directory |
+| `--task` | `spelling-to-ipa` | task selector |
+| `--lang` | `eng` | Wiktionary language code for tagged tasks |
+| `--notation` | `phones` | `phones` or `phonemes`; inference rejects `all` |
+| `--accent` | unset | optional accent control for spelling-to-IPA |
+| `--raw` | unset | treat input as the exact tagged model source |
+| positional `INPUT` | required | spelling, IPA, combined language-guessing input, or raw source |
+
+Supported `--task` values for inference:
+
+| Task | Example |
+|------|---------|
+| `spelling-to-ipa` | `cargo run --release -- wiktionary infer --task spelling-to-ipa --lang eng --notation phones "cat"` |
+| `ipa-to-spelling` | `cargo run --release -- wiktionary infer --task ipa-to-spelling --lang eng --notation phones "ˈkʰæt"` |
+| `normalize` | `cargo run --release -- wiktionary infer --task normalize --lang eng "Cat!"` |
+| `guess-lang-from-spelling` | `cargo run --release -- wiktionary infer --task guess-lang-from-spelling --notation phones "cat"` |
+| `guess-lang-from-ipa` | `cargo run --release -- wiktionary infer --task guess-lang-from-ipa --notation phones "ˈkʰæt"` |
+| `guess-lang-from-spelling-and-ipa` | `cargo run --release -- wiktionary infer --task guess-lang-from-spelling-and-ipa --notation phones "cat => ˈkʰæt"` |
+
+Accent and raw-source examples:
+
+```sh
+cargo run --release -- wiktionary infer \
+    --task spelling-to-ipa \
+    --lang eng \
+    --notation phones \
+    --accent RP \
+    "cat"
+
+cargo run --release -- wiktionary infer \
+    --raw \
+    "<task:g2p> <lang:eng> <N_PHONE> cat"
+```
+
+Task aliases accepted by inference include `g2p`, `s2ipa`, and `forward` for `spelling-to-ipa`; `p2g`, `ipa2s`, and `reverse` for `ipa-to-spelling`; `normalise` for `normalize`; `lang-from-spelling`; `lang-from-ipa`; and `lang`, `language`, or `language-guessing` for the combined spelling-and-IPA language guesser.
+
+`just race` demonstrates these defaults and task types. It runs G2P2G round trips, Wiktionary spelling-to-IPA and IPA-to-spelling round trips for every configured language with both `phones` and `phonemes`, then a Wiktionary task-demo block covering `--accent`, normalization, all language-guessing tasks, and `--raw` tagged input:
+
+```sh
+just race --cpu
+just race --skip-build cat
+```
+
 ### Train
 
 ```sh

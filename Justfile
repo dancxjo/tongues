@@ -7,6 +7,10 @@ default:
 new-family family:
     cargo run -q -p xtask -- new-family "{{family}}"
 
+# Run a compact round-trip inference benchmark across G2P2G and Wiktionary models
+race *args:
+    @cargo run -q -p xtask -- race "$@"
+
 # Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:
     cargo run --bin tongues -- g2p2g prepare --out datasets/g2p2g/openepd-v0 "$@"

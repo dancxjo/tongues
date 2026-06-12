@@ -45,6 +45,10 @@ pub struct WiktionaryConfig {
     pub valid_frac: f64,
     pub seed: u64,
     pub languages: Vec<String>,
+    #[serde(default = "default_train_task")]
+    pub train_task: String,
+    #[serde(default = "default_train_notations")]
+    pub train_notations: Vec<String>,
     pub include_reverse: bool,
     pub include_language_guessing: bool,
     #[serde(default)]
@@ -82,6 +86,8 @@ impl Default for WiktionaryConfig {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            train_task: "all".to_string(),
+            train_notations: default_train_notations(),
             include_reverse: true,
             include_language_guessing: true,
             include_descendant_pairs: false,
@@ -106,12 +112,25 @@ impl WiktionaryConfig {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            train_task: "etymology-translation".to_string(),
+            train_notations: Vec::new(),
             include_reverse: true,
             include_language_guessing: false,
             include_descendant_pairs: false,
             max_pages: None,
         }
     }
+}
+
+fn default_train_task() -> String {
+    "all".to_string()
+}
+
+fn default_train_notations() -> Vec<String> {
+    ["phonemic", "phonetic"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1746,9 +1765,9 @@ pub fn expand_training_examples(
                 notation: Some(entry.notation.clone()),
                 accent: accent.clone(),
                 input: format!(
-                    "{} <notation:{}> {}",
+                    "{} {} {}",
                     WiktionaryTask::GuessLangFromSpelling.token(),
-                    entry.notation,
+                    wiktionary_notation_token(&entry.notation),
                     entry.spelling
                 ),
                 output: entry.lang.clone(),
@@ -1760,9 +1779,9 @@ pub fn expand_training_examples(
                 notation: Some(entry.notation.clone()),
                 accent: accent.clone(),
                 input: format!(
-                    "{} <notation:{}> {}",
+                    "{} {} {}",
                     WiktionaryTask::GuessLangFromIpa.token(),
-                    entry.notation,
+                    wiktionary_notation_token(&entry.notation),
                     ipa
                 ),
                 output: entry.lang.clone(),
@@ -1774,9 +1793,9 @@ pub fn expand_training_examples(
                 notation: Some(entry.notation.clone()),
                 accent: accent.clone(),
                 input: format!(
-                    "{} <notation:{}> {} => {}",
+                    "{} {} {} => {}",
                     WiktionaryTask::GuessLangFromSpellingAndIpa.token(),
-                    entry.notation,
+                    wiktionary_notation_token(&entry.notation),
                     entry.spelling,
                     ipa
                 ),
@@ -1946,9 +1965,27 @@ fn wiktionary_training_controls(
     }
     if let Some(notation) = notation.filter(|notation| !notation.is_empty()) {
         controls.push(' ');
-        controls.push_str(&format!("<notation:{notation}>"));
+        controls.push_str(wiktionary_notation_token(notation));
     }
     controls
+}
+
+pub fn wiktionary_notation_token(notation: &str) -> &'static str {
+    match notation {
+        "phonemic" | "phoneme" | "phonemes" => "<N_PHONEME>",
+        "phonetic" | "phone" | "phones" => "<N_PHONE>",
+        _ => "<N_UNKNOWN>",
+    }
+}
+
+pub fn normalize_wiktionary_control_tokens(input: &str) -> String {
+    input
+        .replace("<notation:phonemic>", "<N_PHONEME>")
+        .replace("<notation:phoneme>", "<N_PHONEME>")
+        .replace("<notation:phonemes>", "<N_PHONEME>")
+        .replace("<notation:phonetic>", "<N_PHONE>")
+        .replace("<notation:phone>", "<N_PHONE>")
+        .replace("<notation:phones>", "<N_PHONE>")
 }
 
 fn split_examples(
@@ -2010,7 +2047,7 @@ fn write_vocab(out: &Path, examples: &[TrainingExample]) -> Result<()> {
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     format!(
-        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve language, spelling, IPA text, notation, accent metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand phonemic and phonetic rows into normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:g2p> <lang:eng> <notation:phonemic> disease => dəˈziːz\n<task:g2p> <lang:eng> <accent:RP> <notation:phonetic> Ireland => ˈɑɪələnd\n<task:g2p> <lang:deu> <notation:phonetic> Honduras => hɔnˈduːʁas\n<task:p2g> <lang:eng> ˈɑɪələnd => Ireland\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nThe `notation` token preserves the phonemic `/.../` vs phonetic `[...]` distinction while targets omit only the outer visual delimiters. Accent tags are compact token-safe labels such as `RP`, `GenAm`, and `weak_vowel`. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
+        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve language, spelling, IPA text, notation, accent metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand phonemic and phonetic rows into normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:g2p> <lang:eng> <N_PHONEME> disease => dəˈziːz\n<task:g2p> <lang:eng> <accent:RP> <N_PHONE> Ireland => ˈɑɪələnd\n<task:g2p> <lang:deu> <N_PHONE> Honduras => hɔnˈduːʁas\n<task:p2g> <lang:eng> ˈɑɪələnd => Ireland\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nThe opaque notation token preserves the phonemic `/.../` vs phonetic `[...]` distinction while targets omit only the outer visual delimiters. Accent tags are compact token-safe labels such as `RP`, `GenAm`, and `weak_vowel`. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
         dump_path.display(),
         config.languages.join(", ")
     )
@@ -2062,6 +2099,8 @@ mod tests {
         assert_eq!(config.dataset_id, DEFAULT_DATASET_ID);
         assert_eq!(config.dump_index_url, DEFAULT_DUMP_INDEX_URL);
         assert_eq!(config.languages, ["eng", "fra", "deu", "spa"]);
+        assert_eq!(config.train_task, "all");
+        assert_eq!(config.train_notations, ["phonemic", "phonetic"]);
     }
 
     #[test]
@@ -2082,7 +2121,7 @@ mod tests {
         assert_eq!(examples.len(), 6);
         assert!(examples.iter().any(|example| {
             example.task == WiktionaryTask::SpellingToIpa
-                && example.input == "<task:g2p> <lang:deu> <notation:phonemic> schief"
+                && example.input == "<task:g2p> <lang:deu> <N_PHONEME> schief"
                 && example.output == "ʃiːf"
         }));
         assert!(examples.iter().any(|example| {
@@ -2297,7 +2336,7 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .expect("forward example");
         assert_eq!(
             forward.input,
-            "<task:g2p> <lang:eng> <accent:GenAm> <notation:phonetic> Ireland"
+            "<task:g2p> <lang:eng> <accent:GenAm> <N_PHONE> Ireland"
         );
         assert_eq!(forward.output, "ˈäɪɚɫɪ̈nd");
         assert_eq!(forward.notation.as_deref(), Some("phonetic"));
