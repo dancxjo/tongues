@@ -303,6 +303,52 @@ Prediction searches for `vocab.json` in:
 
 Training copies `vocab.json` into the model directory, so ordinary prediction should not require `--data`.
 
+#### Invented word round trips
+
+The model is trained from lexicon rows, but prediction is generative. These fake, real-sounding words were run through forced spelling-to-phoneme prediction and then back through forced phoneme-to-spelling prediction:
+
+```sh
+just infer --cpu --task g2p "quadract"
+just infer --cpu --task p2g "ˈkwɑˌdɹækt"
+```
+
+| Invented spelling | G2P prediction | P2G from predicted IPA |
+|-------------------|----------------|------------------------|
+| `quadract` | `ˈkwɑˌdɹækt` | `quadract` |
+| `listotheria` | `ˌlɪ.stəˈθɪɹ.iə` | `listotheria` |
+| `velliptor` | `ˈvɛ.ləp.təɹ` | `velopter` |
+| `morvane` | `ˈmɔɹˌveɪn` | `morvane` |
+| `glastifer` | `ˈɡlæ.stɪ.fɚ` | `glastifer` |
+| `perulance` | `ˈpɛɹ.jə.ləns` | `parulance` |
+| `dravoline` | `ˈdɹæ.vəˌlaɪn` | `dravaline` |
+| `selquorin` | `ˈsɛl.kəɹ.ən` | `selkeren` |
+| `brenthic` | `ˈbɹɛn.θɪk` | `brenthic` |
+| `caldovar` | `ˈkæl.dəˌvɑɹ` | `caldavar` |
+| `threnomy` | `θɹɛˈnɑ.mi` | `threnami` |
+| `pluvaster` | `ˈpluˌvæ.stəɹ` | `pluvaster` |
+| `nordelith` | `ˈnɔɹ.də.lɪθ` | `nordalith` |
+| `cormivane` | `ˈkɔɹ.məˌveɪn` | `cormivane` |
+| `astralon` | `ˈæ.stɹəˌlɑn` | `astralon` |
+| `velquatic` | `vɛlˈkwɑ.tɪk` | `velquatic` |
+| `grendolith` | `ˈɡɹɛn.dəˌlɪθ` | `grendalith` |
+| `marispen` | `ˈmɛɹ.ə.spən` | `maraspen` |
+| `torvellan` | `tɔɹˈvɛ.lən` | `torvellan` |
+| `quoridance` | `ˈkwɔɹ.ə.dəns` | `quaridence` |
+| `splinterax` | `ˈsplɪn.təɹˌæks` | `splinterax` |
+| `avirenth` | `ˈæ.vəɹ.ənθ` | `averanth` |
+| `clastoria` | `klæˈstɔɹ.iə` | `clastoria` |
+| `mendriful` | `ˈmɛn.dɹə.fəl` | `mendriful` |
+| `opterane` | `ˈɑp.təɹˌeɪn` | `opterain` |
+| `zenthoria` | `zɛnˈθɔɹ.iə` | `zenthoria` |
+| `draluvian` | `dɹəˈlu.viən` | `dralluvian` |
+| `kestavorn` | `ˈkɛ.stəˌvɔɹn` | `kestivorn` |
+| `florithium` | `flɔɹ.ɪ.θiəm` | `florithium` |
+| `praxaline` | `ˈpɹæk.səˌlaɪn` | `praxoline` |
+| `morthelion` | `mɔɹˈθi.liən` | `morthelian` |
+| `vundricate` | `ˈvʌn.dɹəˌkeɪt` | `vundricate` |
+
+Some strings survive the round trip exactly; others come back as plausible alternate spellings. That is expected for P2G because a phoneme string usually has several credible English spellings.
+
 ### REPL
 
 ```sh
