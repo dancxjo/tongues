@@ -272,6 +272,25 @@ just race --cpu
 just race --skip-build cat
 ```
 
+#### Race notes
+
+A recent `just race` run covered 54 words across the OpenEPD G2P2G model plus Wiktionary `eng`, `fra`, `deu`, and `spa` round trips for both `phones` and `phonemes`. The complete run reported 492 successful inference demos, 0 command failures, and 654.1s wall time. "Successful" here means the inference command completed; it is not an exact-match score.
+
+The run is useful mostly as a smoke test and a vibe check. Ordinary English examples round-trip cleanly or into expected homophones: `through -> ˈθɹu -> thru`, `tough -> ˈtʌf -> tuff`, `queue -> ˈkju -> cue`, and `knight -> ˈnaɪt -> night`. Longer nonsense words usually stay pronounceable while drifting into plausible alternate spellings: `wugglification -> wuglification`, `chronoflammatory -> chronoflamatory`, and `draughtwright -> draft-write`.
+
+Some of the mistakes are more entertaining than useful:
+
+| Input/context | Round trip |
+|---|---|
+| G2P2G `lead` | `lead -> ˈlid -> leed` |
+| G2P2G `knoughteigh` | `knoughteigh -> ˈnɔfˌteɪ -> nofftay` |
+| Wiktionary English `children` | `children -> ˈt͡ʃɪldɹən -> childran` |
+| Wiktionary French `eunoeoia` | `eunoeoia -> œ.nɔ.wɛ.jɑ -> eunowaillas` |
+| Wiktionary German `pfknoll` | `pfknoll -> p͡f- -> Pfrachen` |
+| Wiktionary Spanish `eunoeoia` | `eunoeoia -> ɔ̃.noʊˈjɔɪ.jə -> enoyoyoia` |
+
+The Spanish model is basically a data-coverage failure in this dataset, not a serious result. The local Wiktionary extraction has only 6 Spanish `phones` rows and 14 Spanish `phonemes` rows, which expand to just 90 train, 8 validation, and 10 test task rows after reverse and language-guessing expansion. That is far below English and German and even below the small French slice. This is expected for a transparently spelled language in an English Wiktionary pronunciation-template scrape: Spanish entries often do not need explicit IPA templates, so the parser sees almost no supervised pronunciation data. The `spa` rows in `just race` are therefore best read as failure demos.
+
 ### Train
 
 ```sh
