@@ -82,7 +82,7 @@ The current checked-in model was trained before the later default-language expan
 }
 ```
 
-The next `cargo run --bin tongues -- wiktionary train --prepare` will rebuild the prepared dataset from the current config and include the expanded language/supplement data before training.
+The next `cargo run --bin tongues -- wiktionary train --prepare` will rebuild the prepared dataset from the current config and include the expanded language/supplement data before training. Because this checked-in model has the older `vocab_size=2733`, in-place continuation filters out prepared examples containing tokens outside the existing vocab and reports the skipped counts. To train every expanded Latin/Greek/Sanskrit/script row, use a fresh `--out` directory so the trainer can build a new vocabulary and initialize a compatible model.
 
 ## Training history
 

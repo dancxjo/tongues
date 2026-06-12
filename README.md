@@ -367,6 +367,8 @@ Training resumes automatically when `train_state.json` and checkpoint files are 
 
 The default Wiktionary pronunciation model has a tracked minimal artifact set and training notes in [`docs/models/wiktionary-default.md`](docs/models/wiktionary-default.md). Only the best weights, latest resume checkpoint, vocab, and metadata are versioned; older epoch checkpoints remain local artifacts.
 
+When continuing an existing Wiktionary model, training reuses the saved `vocab.json`. Newly prepared examples containing tokens outside that vocabulary are skipped with a count instead of being silently encoded as `<UNK>`. Use a fresh `--out` directory when you want to train the full expanded language set with a rebuilt vocabulary.
+
 ### Predict
 
 ```sh

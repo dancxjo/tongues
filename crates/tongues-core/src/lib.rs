@@ -56,6 +56,7 @@ impl Vocab {
 
         let mut control_tokens = std::collections::BTreeSet::new();
         let mut seen = std::collections::BTreeSet::new();
+        seed_broad_linguistic_vocab(&mut control_tokens, &mut seen);
 
         // Collect all unique characters
         for word in words {
@@ -164,6 +165,69 @@ fn collect_angle_bracket_tokens(value: &str, out: &mut std::collections::BTreeSe
     }
 }
 
+fn seed_broad_linguistic_vocab(
+    control_tokens: &mut std::collections::BTreeSet<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+) {
+    for token in [
+        "<lang:eng>",
+        "<lang:fra>",
+        "<lang:deu>",
+        "<lang:spa>",
+        "<lang:lat>",
+        "<lang:ell>",
+        "<lang:grc>",
+        "<lang:san>",
+        "<N_PHONEME>",
+        "<N_PHONE>",
+        "<notation:phonemic>",
+        "<notation:phonetic>",
+        "<accent:Castilian>",
+        "<accent:LatAm>",
+        "<accent:GreekName>",
+        "<accent:Latin>",
+        "<accent:NeoLatinScientific>",
+        "<accent:LegalLatin>",
+    ] {
+        control_tokens.insert(token.to_string());
+    }
+
+    for c in " \t\n-_'’.,;:!?/[](){}+*=~·ˈˌ.|‿͜͡".chars() {
+        seen.insert(c.to_string());
+    }
+
+    for (start, end) in [
+        (0x00A0, 0x024F), // Latin-1, Latin Extended-A/B, IPA-adjacent letters.
+        (0x0250, 0x02AF), // IPA Extensions.
+        (0x02B0, 0x02FF), // Spacing Modifier Letters.
+        (0x0300, 0x036F), // Combining Diacritical Marks.
+        (0x0370, 0x03FF), // Greek and Coptic.
+        (0x0400, 0x04FF), // Cyrillic.
+        (0x0590, 0x05FF), // Hebrew.
+        (0x0900, 0x097F), // Devanagari.
+        (0x1D00, 0x1D7F), // Phonetic Extensions.
+        (0x1D80, 0x1DBF), // Phonetic Extensions Supplement.
+        (0x1DC0, 0x1DFF), // Combining Diacritical Marks Supplement.
+        (0x1E00, 0x1EFF), // Latin Extended Additional.
+        (0x1F00, 0x1FFF), // Greek Extended.
+        (0xA700, 0xA71F), // Modifier Tone Letters.
+        (0xAB30, 0xAB6F), // Latin Extended-E.
+        (0xFE20, 0xFE2F), // Combining Half Marks.
+    ] {
+        seed_char_range(seen, start, end);
+    }
+}
+
+fn seed_char_range(seen: &mut std::collections::BTreeSet<String>, start: u32, end: u32) {
+    for codepoint in start..=end {
+        if let Some(c) = char::from_u32(codepoint) {
+            if !c.is_control() {
+                seen.insert(c.to_string());
+            }
+        }
+    }
+}
+
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -213,5 +277,16 @@ mod tests {
         let encoded = v.encode_string("<task:g2p> <lang:eng> disease");
         assert_eq!(encoded[0], task_id);
         assert_eq!(encoded[2], lang_id);
+    }
+
+    #[test]
+    fn vocab_seeds_broad_linguistic_ranges() {
+        let v = Vocab::build(&[], &[], &[]);
+        for token in ["<lang:lat>", "<lang:ell>", "<lang:grc>", "<lang:san>"] {
+            assert_ne!(v.get_id(token), UNK_ID, "{token} should be seeded");
+        }
+        for c in ['θ', 'ɲ', '͡', 'ᵻ', '᷄', 'ᾱ', 'क', 'ā'] {
+            assert_ne!(v.get_id(&c.to_string()), UNK_ID, "{c} should be seeded");
+        }
     }
 }

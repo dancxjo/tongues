@@ -1644,17 +1644,38 @@ fn cmd_wiktionary_train(
     );
 
     let pb = status_spinner("Splitting rows, building vocabulary, and encoding examples");
-    let (train_rows, valid_rows, _test_rows) =
+    let (mut train_rows, mut valid_rows, _test_rows) =
         split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
     let vocab = if out.join("vocab.json").exists() {
         println!(
             "Reusing existing vocabulary from {}",
             out.join("vocab.json").display()
         );
-        read_json_file(&out.join("vocab.json"))?
+        let vocab: Vocab = read_json_file(&out.join("vocab.json"))?;
+        let before_train = train_rows.len();
+        let before_valid = valid_rows.len();
+        train_rows.retain(|row| wiktionary_example_fits_vocab(row, &vocab));
+        valid_rows.retain(|row| wiktionary_example_fits_vocab(row, &vocab));
+        let skipped_train = before_train.saturating_sub(train_rows.len());
+        let skipped_valid = before_valid.saturating_sub(valid_rows.len());
+        if skipped_train > 0 || skipped_valid > 0 {
+            println!(
+                "Skipped {} train / {} valid Wiktionary examples containing tokens outside the existing model vocabulary. Use a new --out directory to train the full expanded language set from a rebuilt vocabulary.",
+                skipped_train, skipped_valid
+            );
+        }
+        vocab
     } else {
         build_wiktionary_vocab(&train_rows, &valid_rows)
     };
+    anyhow::ensure!(
+        !train_rows.is_empty(),
+        "no Wiktionary training examples remain after vocabulary filtering"
+    );
+    anyhow::ensure!(
+        !valid_rows.is_empty(),
+        "no Wiktionary validation examples remain after vocabulary filtering"
+    );
     let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
     finish_status(
@@ -2062,6 +2083,20 @@ fn build_wiktionary_vocab(
         .map(|example| example.output.clone())
         .collect::<Vec<_>>();
     Vocab::build(&inputs, &outputs, &[])
+}
+
+fn wiktionary_example_fits_vocab(
+    example: &tongues_wiktionary::TrainingExample,
+    vocab: &Vocab,
+) -> bool {
+    vocab
+        .encode_string(&wiktionary_source_text(example))
+        .into_iter()
+        .all(|id| id != UNK_ID)
+        && vocab
+            .encode_string(&example.output)
+            .into_iter()
+            .all(|id| id != UNK_ID)
 }
 
 fn wiktionary_seq2seq_examples(
