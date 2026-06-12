@@ -212,6 +212,23 @@ https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06
 
 The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, and `spa`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
 
+Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
+
+Focused Spanish/French preparation and training can be run in place with language overrides:
+
+```sh
+cargo run --release -- wiktionary prepare \
+    --lang spa,fra \
+    --out datasets/wiktionary/es-fr-focused-v0
+
+cargo run --release -- wiktionary train \
+    --data datasets/wiktionary/es-fr-focused-v0 \
+    --out models/wiktionary/es-fr-focused-v0 \
+    --lang spa,fra \
+    --notation phonemes \
+    --task all
+```
+
 ### Wiktionary inference
 
 The default Wiktionary inference command is:

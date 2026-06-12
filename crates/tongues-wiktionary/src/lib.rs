@@ -16,6 +16,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
+use speech::data::spanish;
 use tongues_core::Vocab;
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 
@@ -51,6 +52,8 @@ pub struct WiktionaryConfig {
     pub train_notations: Vec<String>,
     pub include_reverse: bool,
     pub include_language_guessing: bool,
+    #[serde(default = "default_synthesize_spanish")]
+    pub synthesize_spanish: bool,
     #[serde(default)]
     pub include_descendant_pairs: bool,
     #[serde(default)]
@@ -90,6 +93,7 @@ impl Default for WiktionaryConfig {
             train_notations: default_train_notations(),
             include_reverse: true,
             include_language_guessing: true,
+            synthesize_spanish: true,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -116,6 +120,7 @@ impl WiktionaryConfig {
             train_notations: Vec::new(),
             include_reverse: true,
             include_language_guessing: false,
+            synthesize_spanish: false,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -131,6 +136,10 @@ fn default_train_notations() -> Vec<String> {
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+fn default_synthesize_spanish() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -834,7 +843,39 @@ pub fn extract_page_data(
             }
         }
     }
+    if config.synthesize_spanish
+        && allowed.contains("es")
+        && has_language_section(wikitext, "Spanish")
+    {
+        for (variety, ipa) in spanish::synthetic_pronunciations(spelling) {
+            let key = format!("spa\t{spelling}\t{ipa}");
+            if seen.insert(key) {
+                data.phonemes.push(PronunciationEntry {
+                    lang: "spa".to_string(),
+                    wiktionary_lang: "es".to_string(),
+                    spelling: spelling.to_string(),
+                    ipa,
+                    notation: "phonemic".to_string(),
+                    accent: Some(variety.accent_tag().to_string()),
+                    raw_template: format!(
+                        "{{{{synthetic-spanish|{}|{}}}}}",
+                        variety.id(),
+                        spelling
+                    ),
+                });
+            }
+        }
+    }
     data
+}
+
+fn has_language_section(wikitext: &str, language: &str) -> bool {
+    wikitext.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("==")
+            && trimmed.ends_with("==")
+            && trimmed.trim_matches('=').trim() == language
+    })
 }
 
 pub fn extract_pie_etymology_entries(
@@ -1716,6 +1757,7 @@ pub fn expand_training_examples(
             Some(&entry.notation),
             accent.as_deref(),
         );
+        let source = pronunciation_entry_source(entry);
         examples.push(TrainingExample {
             task: WiktionaryTask::SpellingToIpa,
             lang: Some(entry.lang.clone()),
@@ -1723,7 +1765,7 @@ pub fn expand_training_examples(
             accent: accent.clone(),
             input: format!("{controls} {}", entry.spelling),
             output: ipa.clone(),
-            source: "enwiktionary".to_string(),
+            source: source.clone(),
         });
         if config.include_reverse {
             let controls = wiktionary_training_controls(
@@ -1739,7 +1781,7 @@ pub fn expand_training_examples(
                 accent: accent.clone(),
                 input: format!("{controls} {ipa}"),
                 output: entry.spelling.clone(),
-                source: "enwiktionary".to_string(),
+                source: source.clone(),
             });
         }
         if seen_normalize.insert(format!("{}\t{}", entry.lang, entry.spelling)) {
@@ -1755,7 +1797,7 @@ pub fn expand_training_examples(
                     entry.spelling
                 ),
                 output: normalize_spelling_for_training(&entry.spelling),
-                source: "enwiktionary".to_string(),
+                source: source.clone(),
             });
         }
         if config.include_language_guessing {
@@ -1771,7 +1813,7 @@ pub fn expand_training_examples(
                     entry.spelling
                 ),
                 output: entry.lang.clone(),
-                source: "enwiktionary".to_string(),
+                source: source.clone(),
             });
             examples.push(TrainingExample {
                 task: WiktionaryTask::GuessLangFromIpa,
@@ -1785,7 +1827,7 @@ pub fn expand_training_examples(
                     ipa
                 ),
                 output: entry.lang.clone(),
-                source: "enwiktionary".to_string(),
+                source: source.clone(),
             });
             examples.push(TrainingExample {
                 task: WiktionaryTask::GuessLangFromSpellingAndIpa,
@@ -1800,11 +1842,19 @@ pub fn expand_training_examples(
                     ipa
                 ),
                 output: entry.lang.clone(),
-                source: "enwiktionary".to_string(),
+                source: source.clone(),
             });
         }
     }
     examples
+}
+
+fn pronunciation_entry_source(entry: &PronunciationEntry) -> String {
+    if entry.raw_template.starts_with("{{synthetic-spanish|") {
+        "synthetic-spanish-orthography+enwiktionary-title".to_string()
+    } else {
+        "enwiktionary".to_string()
+    }
 }
 
 pub fn expand_pie_training_examples(
@@ -2415,6 +2465,42 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .patterns
             .iter()
             .any(|pattern| pattern.kind == "rhymes" && pattern.values == ["iː"]));
+    }
+
+    #[test]
+    fn synthesizes_spanish_pronunciations_from_page_titles() {
+        let config = WiktionaryConfig {
+            languages: vec!["spa".to_string()],
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+        let text = r#"==Spanish==
+===Noun===
+{{es-noun|m}}
+"#;
+
+        let data = extract_page_data("zapato", text, &config);
+
+        assert_eq!(data.phonemes.len(), 2);
+        assert!(data.phonemes.iter().any(|entry| {
+            entry.lang == "spa"
+                && entry.accent.as_deref() == Some("Castilian")
+                && entry.ipa == "/θaˈpato/"
+                && entry.raw_template.starts_with("{{synthetic-spanish|")
+        }));
+        assert!(data.phonemes.iter().any(|entry| {
+            entry.lang == "spa"
+                && entry.accent.as_deref() == Some("LatAm")
+                && entry.ipa == "/saˈpato/"
+        }));
+
+        let examples = expand_training_examples(&data.phonemes, &config);
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::SpellingToIpa
+                && example.input == "<task:g2p> <lang:spa> <accent:Castilian> <N_PHONEME> zapato"
+                && example.output == "θaˈpato"
+                && example.source == "synthetic-spanish-orthography+enwiktionary-title"
+        }));
     }
 
     #[test]

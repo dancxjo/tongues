@@ -19,6 +19,10 @@ train_notations = ["phonemic", "phonetic"]
 include_reverse = true
 include_language_guessing = true
 
+# Add Castilian and standard Latin American Spanish rows from Spanish page titles
+# by applying regular Spanish orthography-to-IPA rules.
+synthesize_spanish = true
+
 # Set this to avoid scanning the dump index, or to pin a specific dump file.
 # dump_file_url = "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/enwiktionary-2026-06-01-p6p11719661.xml.bz2"
 

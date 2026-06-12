@@ -674,6 +674,10 @@ enum WiktionaryCommands {
         /// Cache directory for downloaded Wikimedia dumps
         #[arg(long, default_value = "data/wiktionary")]
         cache_dir: PathBuf,
+
+        /// Override configured languages, e.g. --lang spa --lang fra or --lang spa,fra
+        #[arg(long = "lang", value_delimiter = ',')]
+        langs: Vec<String>,
     },
 
     /// Train a Wiktionary pronunciation seq2seq model
@@ -689,6 +693,10 @@ enum WiktionaryCommands {
         /// Prepared data directory
         #[arg(long, default_value = "datasets/wiktionary/enwiktionary-2026-06-01-v0")]
         data: PathBuf,
+
+        /// Override configured languages, e.g. --lang spa --lang fra or --lang spa,fra
+        #[arg(long = "lang", value_delimiter = ',')]
+        langs: Vec<String>,
 
         /// Pronunciation notation to train from. Defaults to train_notations in the Wiktionary config.
         #[arg(long, value_enum)]
@@ -1410,11 +1418,13 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             dump,
             out,
             cache_dir,
+            langs,
         } => {
             let mut config = tongues_wiktionary::read_config(&config)?;
             if let Some(dump) = dump {
                 config.dump_path = Some(dump.display().to_string());
             }
+            apply_wiktionary_language_override(&mut config, langs);
             let out = effective_wiktionary_data_path(out, &config);
             let pb = status_spinner(format!("Preparing Wiktionary dataset at {}", out.display()));
             let report =
@@ -1452,6 +1462,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             config,
             dump,
             data,
+            langs,
             notation,
             task,
             out,
@@ -1469,6 +1480,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             if let Some(dump) = dump {
                 config.dump_path = Some(dump.display().to_string());
             }
+            apply_wiktionary_language_override(&mut config, langs);
             let data = effective_wiktionary_data_path(data, &config);
             let out = effective_wiktionary_model_path(out, &config);
             if prepare
@@ -1540,6 +1552,20 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             &input,
             device_arg,
         ),
+    }
+}
+
+fn apply_wiktionary_language_override(
+    config: &mut tongues_wiktionary::WiktionaryConfig,
+    langs: Vec<String>,
+) {
+    let langs = langs
+        .into_iter()
+        .map(|lang| lang.trim().to_string())
+        .filter(|lang| !lang.is_empty())
+        .collect::<Vec<_>>();
+    if !langs.is_empty() {
+        config.languages = langs;
     }
 }
 
