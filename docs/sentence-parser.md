@@ -61,6 +61,14 @@ just sentence-parser infer \
   "Kennedy?"
 ```
 
+Stream stdin into newline-delimited sentences:
+
+```sh
+printf 'Who shot John F.\nKennedy? Another sentence.\n' | just parse --model models/sentence-parser/v0
+```
+
+`just parse` uses `sentence-parser stream`. On `<boundary:repair>`, it writes the configured repair control sequence before the repaired sentence; the default is ANSI cursor-up plus erase-line (`ESC[1A ESC[2K`) so terminal consumers can replace the prior emitted line.
+
 The model sees only:
 
 ```text

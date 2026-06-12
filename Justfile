@@ -11,6 +11,10 @@ new-family family:
 race *args:
     @cargo run -q -p xtask -- race "$@"
 
+# Stream stdin through the sentence parser and emit one sentence per line
+parse *args:
+    @cargo run -q --bin tongues -- sentence-parser stream "$@"
+
 # Forward a model-family command to the tongues CLI
 g2p2g *args:
     cargo run --bin tongues -- g2p2g "$@"

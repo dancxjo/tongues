@@ -15,7 +15,7 @@ mod piper;
 mod speak;
 
 use std::fs;
-use std::io::BufRead;
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -666,6 +666,17 @@ enum SentenceParserCommands {
         /// Current cursor prefix
         cursor: String,
     },
+
+    /// Stream stdin through the cursor-time sentence parser
+    Stream {
+        /// Directory containing the parser model
+        #[arg(long, default_value = "models/sentence-parser/v0")]
+        model: PathBuf,
+
+        /// ANSI control sequence emitted before a repaired sentence
+        #[arg(long, default_value = "\u{1b}[1A\u{1b}[2K")]
+        repair_control: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1147,7 +1158,9 @@ fn command_needs_device(command: &Commands) -> bool {
         ),
         Commands::SentenceParser { command } => matches!(
             command,
-            SentenceParserCommands::Train { .. } | SentenceParserCommands::Infer { .. }
+            SentenceParserCommands::Train { .. }
+                | SentenceParserCommands::Infer { .. }
+                | SentenceParserCommands::Stream { .. }
         ),
         Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
         Commands::Train { .. }
@@ -1169,6 +1182,9 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Infer { .. },
+        }
+        | Commands::SentenceParser {
+            command: SentenceParserCommands::Stream { .. },
         }
         | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
@@ -1927,6 +1943,10 @@ fn run_sentence_parser_command(
             previous,
             cursor,
         } => cmd_sentence_parser_infer(&model, &previous, &cursor, device_arg),
+        SentenceParserCommands::Stream {
+            model,
+            repair_control,
+        } => cmd_sentence_parser_stream(&model, &repair_control, device_arg),
     }
 }
 
@@ -2147,6 +2167,305 @@ fn cmd_sentence_parser_infer(
         }))?
     );
     Ok(())
+}
+
+fn cmd_sentence_parser_stream(
+    model_dir: &Path,
+    repair_control: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let manifest =
+        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
+    anyhow::ensure!(
+        manifest.family == tongues_sentence_parser::FAMILY,
+        "expected sentence-parser manifest, found `{}`",
+        manifest.family
+    );
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let lowercase = read_json_file::<tongues_sentence_parser::SentenceParserConfig>(
+        &model_dir.join("sentence_parser_config.json"),
+    )
+    .map(|config| config.lowercase)
+    .unwrap_or(false);
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model =
+                load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            run_sentence_parser_stream_with_model(
+                &model,
+                &vocab,
+                lowercase,
+                model_config.max_seq_len,
+                repair_control,
+                &device,
+            )
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model =
+                load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            run_sentence_parser_stream_with_model(
+                &model,
+                &vocab,
+                lowercase,
+                model_config.max_seq_len,
+                repair_control,
+                &device,
+            )
+        }
+    }
+}
+
+fn run_sentence_parser_stream_with_model<B: Backend>(
+    _model: &Seq2SeqModel<B>,
+    _vocab: &Vocab,
+    _lowercase: bool,
+    _max_seq_len: usize,
+    _repair_control: &str,
+    _device: &B::Device,
+) -> Result<()> {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    run_sentence_parser_stream_io(stdin.lock(), stdout.lock())
+}
+
+fn run_sentence_parser_stream_io(mut reader: impl Read, mut stdout: impl Write) -> Result<()> {
+    let mut previous = String::new();
+    let mut cursor = String::new();
+    let mut pending_utf8 = Vec::new();
+    let mut byte = [0_u8; 1];
+
+    loop {
+        let bytes = reader.read(&mut byte).context("reading stdin")?;
+        if bytes == 0 {
+            break;
+        }
+        append_utf8_chunk(&mut pending_utf8, &byte[..bytes], &mut cursor);
+        drain_completed_sentence_parser_prefixes(&mut cursor, &mut previous, &mut stdout)?;
+    }
+
+    if !pending_utf8.is_empty() {
+        cursor.push_str(&String::from_utf8_lossy(&pending_utf8));
+    }
+    drain_completed_sentence_parser_prefixes(&mut cursor, &mut previous, &mut stdout)?;
+
+    let tail = cursor.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !tail.is_empty() {
+        writeln!(stdout, "{tail}").context("writing final sentence-parser tail")?;
+    }
+    stdout.flush().context("flushing sentence-parser output")?;
+    Ok(())
+}
+
+fn append_utf8_chunk(pending: &mut Vec<u8>, chunk: &[u8], output: &mut String) {
+    pending.extend_from_slice(chunk);
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                output.push_str(valid);
+                pending.clear();
+                break;
+            }
+            Err(err) => {
+                let valid_up_to = err.valid_up_to();
+                if valid_up_to > 0 {
+                    output.push_str(
+                        std::str::from_utf8(&pending[..valid_up_to]).expect("valid UTF-8 prefix"),
+                    );
+                    pending.drain(..valid_up_to);
+                }
+
+                if let Some(error_len) = err.error_len() {
+                    output.push('\u{fffd}');
+                    pending.drain(..error_len);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn drain_completed_sentence_parser_prefixes(
+    cursor: &mut String,
+    previous: &mut String,
+    stdout: &mut impl Write,
+) -> Result<usize> {
+    let mut emitted = 0usize;
+    loop {
+        let sentence_end = completed_sentence_prefix_end(cursor);
+        let paragraph_fragment = leading_paragraph_fragment_end(cursor);
+        let end = match (sentence_end, paragraph_fragment) {
+            (Some(sentence_end), Some((_, paragraph_end))) if paragraph_end < sentence_end => {
+                paragraph_end
+            }
+            (Some(sentence_end), _) => sentence_end,
+            (None, Some((_, paragraph_end))) => paragraph_end,
+            (None, None) => break,
+        };
+
+        let sentence = cursor[..end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        *cursor = cursor[end..].to_string();
+        if !sentence.is_empty() {
+            writeln!(stdout, "{sentence}").context("writing emitted sentence")?;
+            *previous = sentence;
+            emitted += 1;
+        }
+    }
+    if emitted > 0 {
+        stdout.flush().context("flushing sentence-parser output")?;
+    }
+    Ok(emitted)
+}
+
+fn leading_paragraph_fragment_end(cursor: &str) -> Option<(usize, usize)> {
+    let boundary = cursor.find("\n\n")?;
+    let mut paragraph_end = boundary + 2;
+    while let Some(ch) = cursor[paragraph_end..].chars().next() {
+        if ch == '\n' || ch == '\r' || ch == ' ' || ch == '\t' {
+            paragraph_end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Some((boundary, paragraph_end))
+}
+
+fn completed_sentence_prefix_end(cursor: &str) -> Option<usize> {
+    let mut search_start = 0usize;
+    while let Some((relative_index, terminal)) = cursor[search_start..]
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '.' | '?' | '!'))
+    {
+        let terminal_index = search_start + relative_index;
+        let after_terminal = terminal_index + terminal.len_utf8();
+        if terminal == '.' && sentence_parser_dot_is_abbreviation(cursor, terminal_index) {
+            search_start = after_terminal;
+            continue;
+        }
+
+        let end = sentence_parser_closing_punctuation_end(cursor, after_terminal);
+        if cursor[end..].trim_start().is_empty() || cursor[end..].starts_with(char::is_whitespace) {
+            return Some(end);
+        }
+        search_start = after_terminal;
+    }
+    None
+}
+
+fn sentence_parser_closing_punctuation_end(cursor: &str, mut index: usize) -> usize {
+    while let Some(ch) = cursor[index..].chars().next() {
+        if matches!(ch, '"' | '\'' | ')' | ']' | '}') {
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    index
+}
+
+fn sentence_parser_dot_is_abbreviation(cursor: &str, dot_index: usize) -> bool {
+    let prefix = cursor[..dot_index].trim_end();
+    let token = prefix
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\'' | '(' | '[' | '{' | ',' | ':' | ';' | '_' | '*'
+            )
+        });
+    if token.is_empty() {
+        return false;
+    }
+
+    let lower = token.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "mr" | "mrs"
+            | "ms"
+            | "dr"
+            | "prof"
+            | "sr"
+            | "jr"
+            | "st"
+            | "mt"
+            | "vs"
+            | "etc"
+            | "e.g"
+            | "i.e"
+            | "fig"
+            | "no"
+            | "dept"
+            | "inc"
+            | "ltd"
+            | "co"
+    ) || (token.chars().count() == 1 && token.chars().all(|ch| ch.is_ascii_uppercase()))
+}
+
+#[cfg(test)]
+fn emit_oversize_sentence_parser_prefix(
+    cursor: &mut String,
+    previous: &mut String,
+    stdout: &mut impl Write,
+) -> Result<bool> {
+    let Some((end, _)) = cursor
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '.' | '?' | '!'))
+    else {
+        return Ok(false);
+    };
+
+    let sentence = cursor[..end + 1]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let rest = cursor[end + 1..].to_string();
+    if sentence.is_empty() {
+        *cursor = rest;
+        return Ok(true);
+    }
+
+    writeln!(stdout, "{sentence}").context("writing oversize sentence-parser sentence")?;
+    *previous = sentence;
+    *cursor = rest;
+    Ok(true)
+}
+
+#[cfg(test)]
+fn cursor_after_emitted_sentence(cursor: &str, sentence: &str) -> String {
+    let cursor = cursor.trim_start();
+    let sentence = sentence.trim();
+    if sentence.is_empty() {
+        return cursor.to_string();
+    }
+    if let Some(rest) = cursor.strip_prefix(sentence) {
+        return rest.to_string();
+    }
+
+    let lower_cursor = cursor.to_lowercase();
+    let lower_sentence = sentence.to_lowercase();
+    if lower_cursor.starts_with(&lower_sentence) {
+        let len = sentence.len();
+        if cursor.is_char_boundary(len) {
+            return cursor[len..].to_string();
+        }
+    }
+
+    for (index, ch) in cursor.char_indices() {
+        if matches!(ch, '.' | '?' | '!') {
+            return cursor[index + ch.len_utf8()..].to_string();
+        }
+    }
+
+    String::new()
 }
 
 fn effective_wiktionary_data_path(
@@ -5834,6 +6153,108 @@ mod tests {
                 command: SentenceParserCommands::Parse { .. }
             })
         ));
+
+        let cli = Cli::try_parse_from(["tongues", "sentence-parser", "stream"])
+            .expect("sentence parser stream should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SentenceParser {
+                command: SentenceParserCommands::Stream { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn emitted_sentence_consumption_preserves_following_cursor() {
+        assert_eq!(
+            cursor_after_emitted_sentence("First sentence. Second starts", "First sentence."),
+            " Second starts"
+        );
+        assert_eq!(
+            cursor_after_emitted_sentence("First sentence. Second starts", "first sentence."),
+            " Second starts"
+        );
+        assert_eq!(
+            cursor_after_emitted_sentence("Unexpected output. Second starts", "Other output."),
+            " Second starts"
+        );
+    }
+
+    #[test]
+    fn oversize_sentence_parser_fallback_emits_first_terminal_prefix() {
+        let mut cursor = "Long sentence. Next sentence.".to_string();
+        let mut previous = String::new();
+        let mut output = Vec::new();
+
+        let emitted =
+            emit_oversize_sentence_parser_prefix(&mut cursor, &mut previous, &mut output).unwrap();
+
+        assert!(emitted);
+        assert_eq!(previous, "Long sentence.");
+        assert_eq!(cursor, " Next sentence.");
+        assert_eq!(String::from_utf8(output).unwrap(), "Long sentence.\n");
+    }
+
+    #[test]
+    fn sentence_parser_stream_emits_completed_sentences_from_continuous_input() {
+        let mut output = Vec::new();
+
+        run_sentence_parser_stream_io(
+            "This is a test. Testing test.\nA judge denied. A living memorial".as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "This is a test.\nTesting test.\nA judge denied.\nA living memorial\n"
+        );
+    }
+
+    #[test]
+    fn sentence_parser_stream_does_not_join_paragraph_fragments_to_later_sentences() {
+        let mut output = Vec::new();
+
+        run_sentence_parser_stream_io(
+            "A judge denied. A living memorial\n\n\nA jduge denied.\n".as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "A judge denied.\nA living memorial\nA jduge denied.\n"
+        );
+    }
+
+    #[test]
+    fn sentence_parser_stream_keeps_common_abbreviations_with_sentence() {
+        let mut output = Vec::new();
+
+        run_sentence_parser_stream_io(
+            "Dr. Lanyon met Henry at Mt. Vernon. Next.".as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Dr. Lanyon met Henry at Mt. Vernon.\nNext.\n"
+        );
+    }
+
+    #[test]
+    fn sentence_parser_stream_preserves_utf8_across_chunks() {
+        let mut pending = Vec::new();
+        let mut output = String::new();
+        let bytes = "café. ".as_bytes();
+
+        append_utf8_chunk(&mut pending, &bytes[..4], &mut output);
+        append_utf8_chunk(&mut pending, &bytes[4..], &mut output);
+
+        assert_eq!(output, "café. ");
+        assert!(pending.is_empty());
     }
 
     #[test]
