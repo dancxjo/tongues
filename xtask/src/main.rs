@@ -676,7 +676,34 @@ fn extract_prediction(stdout: &str) -> Option<String> {
             return lines.next().map(|value| value.trim().to_string());
         }
     }
-    None
+    let mut non_empty = stdout.lines().map(str::trim).filter(|line| !line.is_empty());
+    let prediction = non_empty.next()?;
+    if non_empty.next().is_none() {
+        Some(prediction.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_prediction;
+
+    #[test]
+    fn extracts_prediction_from_verbose_output() {
+        let stdout = "Source:\n  have\n\nPrediction output:\n  hæv\nTotal time elapsed: 1ms\n";
+        assert_eq!(extract_prediction(stdout), Some("hæv".to_string()));
+    }
+
+    #[test]
+    fn extracts_prediction_from_quiet_output() {
+        assert_eq!(extract_prediction("hæv\n"), Some("hæv".to_string()));
+    }
+
+    #[test]
+    fn rejects_unlabeled_multi_line_output() {
+        assert_eq!(extract_prediction("one\ntwo\n"), None);
+    }
 }
 
 fn read_wiktionary_languages(path: &Path) -> Result<Vec<String>, String> {
