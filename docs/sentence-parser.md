@@ -2,7 +2,14 @@
 
 `sentence-parser` is a seq2seq cursor-boundary model family. It is trained from Project Gutenberg-style plain text using the `seams` sentence detector as the teacher.
 
-Prepare data:
+Prepare data with the default sources:
+
+```sh
+cargo run --bin tongues -- sentence-parser prepare \
+  --out datasets/sentence-parser/v0
+```
+
+With the default config, preparation downloads a small Project Gutenberg cache and generates deterministic synthetic sentence-boundary cases. Local text files or directories can still override those defaults:
 
 ```sh
 cargo run --bin tongues -- sentence-parser prepare \
@@ -14,6 +21,15 @@ Train:
 
 ```sh
 cargo run --bin tongues -- sentence-parser train \
+  --data datasets/sentence-parser/v0 \
+  --out models/sentence-parser/v0
+```
+
+Prepare and train in one command:
+
+```sh
+cargo run --bin tongues -- sentence-parser train --prepare \
+  --input /path/to/gutenberg_texts \
   --data datasets/sentence-parser/v0 \
   --out models/sentence-parser/v0
 ```

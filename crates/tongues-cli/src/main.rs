@@ -575,6 +575,10 @@ enum SentenceParserCommands {
         #[arg(long, default_value = "datasets/sentence-parser/v0")]
         data: PathBuf,
 
+        /// Project Gutenberg text file or directory to use when --prepare is set; may be passed more than once
+        #[arg(long = "input")]
+        inputs: Vec<PathBuf>,
+
         /// Output directory for the model
         #[arg(long, default_value = "models/sentence-parser/v0")]
         out: PathBuf,
@@ -1492,6 +1496,12 @@ fn sentence_parser_prepare_progress_message(
         tongues_sentence_parser::PrepareProgress::Discover { files } => {
             format!("Discovered {files} sentence-parser source files")
         }
+        tongues_sentence_parser::PrepareProgress::Download { url, path, bytes } => {
+            format!("Downloaded {} from {} -> {}", format_bytes(bytes), url, path)
+        }
+        tongues_sentence_parser::PrepareProgress::Synthesize { path, sentences } => {
+            format!("Synthesized {sentences} sentence-boundary cases -> {path}")
+        }
         tongues_sentence_parser::PrepareProgress::Detect {
             path,
             files_done,
@@ -1539,21 +1549,14 @@ fn run_sentence_parser_command(
             finish_status(
                 pb,
                 format!(
-                    "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples",
+                    "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
                     out.display(),
                     report.train_examples,
                     report.valid_examples,
-                    report.test_examples
+                    report.test_examples,
+                    report.detected_sentences,
+                    report.source_files
                 ),
-            );
-            println!(
-                "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
-                out.display(),
-                report.train_examples,
-                report.valid_examples,
-                report.test_examples,
-                report.detected_sentences,
-                report.source_files
             );
             if report.naive_discrepancy_examples > 0 {
                 println!(
@@ -1566,6 +1569,7 @@ fn run_sentence_parser_command(
         SentenceParserCommands::Train {
             config,
             data,
+            inputs,
             out,
             prepare,
             learning_rate,
@@ -1582,7 +1586,10 @@ fn run_sentence_parser_command(
                 || !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
             {
-                let config_data = read_sentence_parser_config(&config)?;
+                let mut config_data = read_sentence_parser_config(&config)?;
+                if !inputs.is_empty() {
+                    config_data.source_paths = inputs;
+                }
                 let pb = status_spinner(format!(
                     "Preparing sentence-parser dataset at {}",
                     data.display()
@@ -1597,19 +1604,14 @@ fn run_sentence_parser_command(
                 finish_status(
                     pb,
                     format!(
-                        "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples",
+                        "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
                         data.display(),
                         report.train_examples,
                         report.valid_examples,
-                        report.test_examples
+                        report.test_examples,
+                        report.detected_sentences,
+                        report.source_files
                     ),
-                );
-                println!(
-                    "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples",
-                    data.display(),
-                    report.train_examples,
-                    report.valid_examples,
-                    report.test_examples
                 );
                 if report.naive_discrepancy_examples > 0 {
                     println!(
@@ -1700,11 +1702,13 @@ fn cmd_sentence_parser_train(
     let valid_rows = tongues_sentence_parser::filter_examples_by_source(valid_rows, source_filter);
     anyhow::ensure!(
         !train_rows.is_empty(),
-        "sentence-parser train split is empty"
+        "sentence-parser train split is empty after applying training_set={}. Rebuild data with `sentence-parser train --prepare --input <file-or-dir>` or set source_paths in the config",
+        sentence_parser_training_set_label(training_set)
     );
     anyhow::ensure!(
         !valid_rows.is_empty(),
-        "sentence-parser valid split is empty"
+        "sentence-parser valid split is empty after applying training_set={}. Rebuild data with `sentence-parser train --prepare --input <file-or-dir>` or set source_paths in the config",
+        sentence_parser_training_set_label(training_set)
     );
 
     let train_examples = tongues_sentence_parser::make_seq2seq_examples(&train_rows, &vocab);

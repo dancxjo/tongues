@@ -14,3 +14,4 @@ thiserror = { workspace = true }
 tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }
 tongues-neural = { path = "../tongues-neural" }
+ureq = { workspace = true }

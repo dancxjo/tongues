@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use rand::SeedableRng;
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,11 @@ pub const EMIT_TOKEN: &str = "<boundary:emit>";
 pub const CONTINUE_TOKEN: &str = "<boundary:continue>";
 pub const MISSING_HEAD_TOKEN: &str = "<boundary:missing_head>";
 pub const REPAIR_TOKEN: &str = "<boundary:repair>";
+const USER_AGENT: &str = "tongues-sentence-parser/0.1";
+const DEFAULT_GUTENBERG_URLS: &[&str] = &[
+    "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+    "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SentenceParserConfig {
@@ -36,6 +42,14 @@ pub struct SentenceParserConfig {
     pub lowercase: bool,
     #[serde(default)]
     pub source_paths: Vec<PathBuf>,
+    #[serde(default = "default_include_default_gutenberg")]
+    pub include_default_gutenberg: bool,
+    #[serde(default = "default_gutenberg_urls")]
+    pub gutenberg_urls: Vec<String>,
+    #[serde(default = "default_include_synthetic")]
+    pub include_synthetic: bool,
+    #[serde(default = "default_synthetic_sentences")]
+    pub synthetic_sentences: usize,
     #[serde(default = "default_train_frac")]
     pub train_frac: f64,
     #[serde(default = "default_valid_frac")]
@@ -60,6 +74,10 @@ impl Default for SentenceParserConfig {
             dataset_id: "v0".to_string(),
             lowercase: false,
             source_paths: Vec::new(),
+            include_default_gutenberg: default_include_default_gutenberg(),
+            gutenberg_urls: default_gutenberg_urls(),
+            include_synthetic: default_include_synthetic(),
+            synthetic_sentences: default_synthetic_sentences(),
             train_frac: default_train_frac(),
             valid_frac: default_valid_frac(),
             seed: default_seed(),
@@ -70,6 +88,25 @@ impl Default for SentenceParserConfig {
             max_naive_discrepancies_per_file: default_max_naive_discrepancies_per_file(),
         }
     }
+}
+
+fn default_include_default_gutenberg() -> bool {
+    true
+}
+
+fn default_gutenberg_urls() -> Vec<String> {
+    DEFAULT_GUTENBERG_URLS
+        .iter()
+        .map(|url| (*url).to_string())
+        .collect()
+}
+
+fn default_include_synthetic() -> bool {
+    true
+}
+
+fn default_synthetic_sentences() -> usize {
+    512
 }
 
 fn default_train_frac() -> f64 {
@@ -202,6 +239,15 @@ pub enum PrepareProgress {
     Discover {
         files: usize,
     },
+    Download {
+        url: String,
+        path: String,
+        bytes: u64,
+    },
+    Synthesize {
+        path: String,
+        sentences: usize,
+    },
     Detect {
         path: String,
         files_done: usize,
@@ -228,8 +274,12 @@ pub fn prepare_dataset_with_progress(
         message: format!("Creating sentence-parser output directory {}", out.display()),
     });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    let files = discover_source_files(&config.source_paths)?;
+    let files = resolve_source_files_with_progress(out, config, &mut progress)?;
     progress(PrepareProgress::Discover { files: files.len() });
+    anyhow::ensure!(
+        !files.is_empty(),
+        "no sentence-parser source files found. Pass one or more `--input` files/directories to `sentence-parser prepare` or `sentence-parser train --prepare`, or set source_paths in the config"
+    );
     let mut sentences = Vec::new();
     let mut correction_examples = Vec::new();
     let sentences_part_path = out.join("sentences.jsonl.part");
@@ -307,6 +357,13 @@ pub fn prepare_dataset_with_progress(
     drop(discrepancies_part);
 
     let naive_discrepancy_examples = correction_examples.len();
+    anyhow::ensure!(
+        !sentences.is_empty(),
+        "no sentence-parser sentences remained after filtering {} source files with min_sentence_chars={} and max_sentence_chars={}",
+        files.len(),
+        config.min_sentence_chars,
+        config.max_sentence_chars
+    );
     progress(PrepareProgress::Stage {
         message: format!(
             "Building boundary examples from {} detected sentences",
@@ -319,6 +376,11 @@ pub fn prepare_dataset_with_progress(
         sentences: sentences.len(),
         examples: examples.len(),
     });
+    anyhow::ensure!(
+        !examples.is_empty(),
+        "no sentence-parser training examples were built from {} detected sentences",
+        sentences.len()
+    );
     write_jsonl_with_progress(&examples_part_path, &examples, &mut progress)?;
     let mut shuffled = examples;
     shuffled.shuffle(&mut StdRng::seed_from_u64(config.seed));
@@ -714,6 +776,145 @@ fn normalize_sentence(text: &str, lowercase: bool) -> String {
     } else {
         normalized
     }
+}
+
+fn resolve_source_files_with_progress(
+    out: &Path,
+    config: &SentenceParserConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<Vec<PathBuf>> {
+    let configured = discover_source_files(&config.source_paths)?;
+    if !configured.is_empty() {
+        return Ok(configured);
+    }
+
+    let default_dir = out.join("sources");
+    fs::create_dir_all(&default_dir)
+        .with_context(|| format!("creating {}", default_dir.display()))?;
+    let mut generated_paths = Vec::new();
+
+    if config.include_default_gutenberg {
+        let urls = if config.gutenberg_urls.is_empty() {
+            default_gutenberg_urls()
+        } else {
+            config.gutenberg_urls.clone()
+        };
+        for (index, url) in urls.iter().enumerate() {
+            match download_gutenberg_source(&default_dir, index, url, progress) {
+                Ok(path) => generated_paths.push(path),
+                Err(error) => {
+                    progress(PrepareProgress::Stage {
+                        message: format!("Skipping default Gutenberg source {url}: {error}"),
+                    });
+                }
+            }
+        }
+    }
+
+    if config.include_synthetic && config.synthetic_sentences > 0 {
+        let path = default_dir.join("synthetic-boundary-cases.txt");
+        let text = synthesize_boundary_text(config.synthetic_sentences, config.seed);
+        fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        progress(PrepareProgress::Synthesize {
+            path: path.display().to_string(),
+            sentences: config.synthetic_sentences,
+        });
+        generated_paths.push(path);
+    }
+
+    generated_paths.sort();
+    Ok(generated_paths)
+}
+
+fn download_gutenberg_source(
+    dir: &Path,
+    index: usize,
+    url: &str,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<PathBuf> {
+    let path = dir.join(format!("{index:02}-{}", gutenberg_filename(url)));
+    if path.exists() && path.metadata()?.len() > 0 {
+        progress(PrepareProgress::Stage {
+            message: format!("Using cached Gutenberg source {}", path.display()),
+        });
+        return Ok(path);
+    }
+
+    let part_path = path.with_extension("txt.part");
+    progress(PrepareProgress::Stage {
+        message: format!("Downloading default Gutenberg source {url}"),
+    });
+    let response = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("GET {url}"))?;
+    let raw = response
+        .into_body()
+        .read_to_string()
+        .with_context(|| format!("reading {url}"))?;
+    progress(PrepareProgress::Download {
+        url: url.to_string(),
+        path: path.display().to_string(),
+        bytes: raw.len() as u64,
+    });
+    let stripped = strip_gutenberg_boilerplate(&raw);
+    fs::write(&part_path, stripped).with_context(|| format!("writing {}", part_path.display()))?;
+    fs::rename(&part_path, &path).with_context(|| {
+        format!("moving {} to {}", part_path.display(), path.display())
+    })?;
+    Ok(path)
+}
+
+fn gutenberg_filename(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("gutenberg.txt")
+        .replace(['/', '\\', ':', '?', '&', '='], "_")
+}
+
+fn strip_gutenberg_boilerplate(raw: &str) -> String {
+    let start = raw
+        .find("*** START OF")
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .unwrap_or(0);
+    let after_start = &raw[start..];
+    let end = after_start.find("*** END OF").unwrap_or(after_start.len());
+    after_start[..end].trim().to_string()
+}
+
+fn synthesize_boundary_text(sentences: usize, seed: u64) -> String {
+    let first_names = ["Ada", "Mina", "Clara", "Henry", "Elias", "Nora"];
+    let last_names = ["Bennet", "Weston", "Lanyon", "Murray", "Price", "Harker"];
+    let places = ["St. Ives", "Washington, D.C.", "No. 4 station", "Mt. Vernon"];
+    let objects = ["the ledger", "a sealed note", "the timetable", "a small map"];
+    let verbs = ["examined", "carried", "misplaced", "copied", "folded", "delivered"];
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut lines = Vec::new();
+
+    for index in 0..sentences {
+        let first = first_names[rng.gen_range(0..first_names.len())];
+        let last = last_names[rng.gen_range(0..last_names.len())];
+        let other = last_names[rng.gen_range(0..last_names.len())];
+        let place = places[rng.gen_range(0..places.len())];
+        let object = objects[rng.gen_range(0..objects.len())];
+        let verb = verbs[rng.gen_range(0..verbs.len())];
+        let text = match index % 6 {
+            0 => format!("Mr. {last} {verb} {object} before noon."),
+            1 => format!("Dr. {last} met {first} at {place}, and they compared notes."),
+            2 => format!("{first} J. {last} asked whether Prof. {other} had arrived."),
+            3 => format!("The parcel reached {place} at {hour}:15 p.m. without a label.", hour = 1 + index % 11),
+            4 => format!("No. {number} was missing, but Mrs. {last} found it later.", number = 10 + index % 90),
+            _ => format!("Who told {first} F. {last} that the train had stopped?"),
+        };
+        lines.push(text);
+        if lines.len() % 5 == 0 {
+            lines.push(String::new());
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn discover_source_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
