@@ -17,6 +17,7 @@ mod speak;
 use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -55,11 +56,42 @@ type CudaTrainBackend = Autodiff<CudaInferBackend>;
 const DEFAULT_WIKTIONARY_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
 const DEFAULT_WIKTIONARY_DATA_DIR: &str = "datasets/wiktionary/enwiktionary-2026-06-01-v0";
 const DEFAULT_WIKTIONARY_MODEL_DIR: &str = "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
+static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 enum DeviceArg {
     Cpu,
     Cuda,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OutputMode {
+    quiet: bool,
+}
+
+impl OutputMode {
+    fn for_command(command: &Commands, quiet: bool, verbose: bool) -> Self {
+        let quiet = if quiet {
+            true
+        } else if verbose {
+            false
+        } else {
+            command_defaults_to_quiet(command)
+        };
+        Self { quiet }
+    }
+
+    fn verbose(self) -> bool {
+        !self.quiet
+    }
+}
+
+fn set_quiet_output(quiet: bool) {
+    QUIET_OUTPUT.store(quiet, Ordering::Relaxed);
+}
+
+fn quiet_output() -> bool {
+    QUIET_OUTPUT.load(Ordering::Relaxed)
 }
 
 // ── CLI definition ─────────────────────────────────────────────────────────
@@ -71,6 +103,14 @@ struct Cli {
     /// Use CPU instead of CUDA GPU
     #[arg(long, global = true)]
     cpu: bool,
+
+    /// Silence status bars and diagnostic progress output
+    #[arg(long, global = true, conflicts_with = "verbose")]
+    quiet: bool,
+
+    /// Show status bars and diagnostic progress output
+    #[arg(long, global = true, conflicts_with = "quiet")]
+    verbose: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -257,10 +297,6 @@ enum Commands {
         /// Random seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
-
-        /// Print each discrepant word and detailed mining/training context
-        #[arg(long)]
-        verbose: bool,
     },
 
     /// Interactive REPL for sequence translation
@@ -475,10 +511,6 @@ enum G2p2gCommands {
         /// Random seed
         #[arg(long, default_value_t = 0)]
         seed: u64,
-
-        /// Print each discrepant word and detailed mining/training context
-        #[arg(long)]
-        verbose: bool,
     },
 
     /// Interactive REPL for G2P2G sequence translation
@@ -833,6 +865,8 @@ fn main() -> Result<()> {
             data: None,
         },
     });
+    let output_mode = OutputMode::for_command(&command, cli.quiet, cli.verbose);
+    set_quiet_output(output_mode.quiet);
 
     // Determine target device (CUDA with fallback to CPU, or forced CPU)
     let device_arg = if cli.cpu {
@@ -841,17 +875,21 @@ fn main() -> Result<()> {
         DeviceArg::Cuda
     } else {
         // Only warn for commands that actually run model computations on the device
-        if command_needs_device(&command) {
+        if command_needs_device(&command) && output_mode.verbose() {
             println!("Warning: CUDA is not available. Falling back to CPU.");
         }
         DeviceArg::Cpu
     };
 
     match command {
-        Commands::G2p2g { command } => run_g2p2g_command(command, device_arg),
+        Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command),
-        Commands::SpeechManifold { command } => run_speech_manifold_command(command, device_arg),
-        Commands::Wiktionary { command } => run_wiktionary_command(command, device_arg),
+        Commands::SpeechManifold { command } => {
+            run_speech_manifold_command(command, device_arg, output_mode)
+        }
+        Commands::Wiktionary { command } => {
+            run_wiktionary_command(command, device_arg, output_mode)
+        }
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
         Commands::Prepare {
             input,
@@ -918,7 +956,6 @@ fn main() -> Result<()> {
             patience,
             batch_size,
             seed,
-            verbose,
         } => {
             warn_legacy_command("refine", "g2p2g refine");
             cmd_refine(
@@ -934,7 +971,7 @@ fn main() -> Result<()> {
                 patience,
                 batch_size,
                 seed,
-                verbose,
+                output_mode.verbose(),
                 device_arg,
             )
         }
@@ -945,7 +982,14 @@ fn main() -> Result<()> {
             data,
         } => {
             warn_legacy_command("predict/infer", "g2p2g infer");
-            cmd_predict(&model, &task, &input, device_arg, data.as_deref())
+            cmd_predict(
+                &model,
+                &task,
+                &input,
+                device_arg,
+                data.as_deref(),
+                output_mode,
+            )
         }
         Commands::Repl { model, task, data } => {
             warn_legacy_command("repl", "g2p2g repl");
@@ -984,11 +1028,33 @@ fn command_needs_device(command: &Commands) -> bool {
     }
 }
 
+fn command_defaults_to_quiet(command: &Commands) -> bool {
+    match command {
+        Commands::G2p2g {
+            command: G2p2gCommands::Infer { .. },
+        }
+        | Commands::SpeechManifold {
+            command: SpeechManifoldCommands::Infer { .. },
+        }
+        | Commands::Wiktionary {
+            command: WiktionaryCommands::Infer { .. },
+        }
+        | Commands::Predict { .. } => true,
+        _ => false,
+    }
+}
+
 fn warn_legacy_command(old: &str, new: &str) {
+    if quiet_output() {
+        return;
+    }
     eprintln!("warning: `tongues {old}` is deprecated; use `tongues {new}` instead.");
 }
 
 fn status_spinner(message: impl Into<String>) -> indicatif::ProgressBar {
+    if quiet_output() {
+        return indicatif::ProgressBar::hidden();
+    }
     let pb = indicatif::ProgressBar::new_spinner();
     pb.set_style(
         indicatif::ProgressStyle::with_template("{spinner:.green} {msg}")
@@ -1001,7 +1067,9 @@ fn status_spinner(message: impl Into<String>) -> indicatif::ProgressBar {
 
 fn finish_status(pb: indicatif::ProgressBar, message: impl AsRef<str>) {
     pb.finish_and_clear();
-    println!("{}", message.as_ref());
+    if !quiet_output() {
+        println!("{}", message.as_ref());
+    }
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -1214,7 +1282,11 @@ fn speech_manifold_train_config(
     })
 }
 
-fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()> {
+fn run_g2p2g_command(
+    command: G2p2gCommands,
+    device_arg: DeviceArg,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         G2p2gCommands::Prepare {
             config,
@@ -1288,7 +1360,6 @@ fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()
             patience,
             batch_size,
             seed,
-            verbose,
         } => cmd_refine(
             &model,
             &data,
@@ -1302,7 +1373,7 @@ fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()
             patience,
             batch_size,
             seed,
-            verbose,
+            output_mode.verbose(),
             device_arg,
         ),
         G2p2gCommands::Repl { model, task, data } => {
@@ -1313,7 +1384,14 @@ fn run_g2p2g_command(command: G2p2gCommands, device_arg: DeviceArg) -> Result<()
             input,
             task,
             data,
-        } => cmd_predict(&model, &task, &input, device_arg, data.as_deref()),
+        } => cmd_predict(
+            &model,
+            &task,
+            &input,
+            device_arg,
+            data.as_deref(),
+            output_mode,
+        ),
     }
 }
 
@@ -1411,7 +1489,11 @@ fn effective_wiktionary_model_path(
     }
 }
 
-fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) -> Result<()> {
+fn run_wiktionary_command(
+    command: WiktionaryCommands,
+    device_arg: DeviceArg,
+    output_mode: OutputMode,
+) -> Result<()> {
     match command {
         WiktionaryCommands::Prepare {
             config,
@@ -1551,6 +1633,7 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             raw,
             &input,
             device_arg,
+            output_mode,
         ),
     }
 }
@@ -2181,6 +2264,7 @@ fn cmd_wiktionary_infer(
     raw: bool,
     input: &str,
     device_arg: DeviceArg,
+    output_mode: OutputMode,
 ) -> Result<()> {
     let vocab: Vocab = {
         let path = model_dir.join("vocab.json");
@@ -2207,6 +2291,7 @@ fn cmd_wiktionary_infer(
                 model_dir,
                 &vocab,
                 &source,
+                output_mode,
             )
         }
         DeviceArg::Cuda => {
@@ -2217,6 +2302,7 @@ fn cmd_wiktionary_infer(
                 model_dir,
                 &vocab,
                 &source,
+                output_mode,
             )
         }
     }
@@ -2333,11 +2419,12 @@ fn run_wiktionary_infer<B: Backend>(
     model_dir: &Path,
     vocab: &Vocab,
     source: &str,
+    output_mode: OutputMode,
 ) -> Result<()> {
     let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
     let src_ids = vocab.encode_string(source);
     let unknown_count = src_ids.iter().filter(|&&id| id == UNK_ID).count();
-    if unknown_count > 0 {
+    if unknown_count > 0 && output_mode.verbose() {
         eprintln!("warning: source encoded with {unknown_count} <UNK> token(s)");
     }
 
@@ -2352,14 +2439,19 @@ fn run_wiktionary_infer<B: Backend>(
     let pred_ids = model.generate(src_tensor, 128);
     let output = vocab.decode_ids(&pred_ids);
 
-    println!("Source:\n  {source}");
-    println!("\nPrediction output:\n  {output}");
+    if output_mode.verbose() {
+        println!("Source:\n  {source}");
+        println!("\nPrediction output:\n  {output}");
+    } else {
+        println!("{output}");
+    }
     Ok(())
 }
 
 fn run_speech_manifold_command(
     command: SpeechManifoldCommands,
     device_arg: DeviceArg,
+    output_mode: OutputMode,
 ) -> Result<()> {
     match command {
         SpeechManifoldCommands::Prepare { config, out } => {
@@ -2405,7 +2497,7 @@ fn run_speech_manifold_command(
         }
         SpeechManifoldCommands::Infer { model, task, input } => {
             let task = parse_speech_manifold_task(&task)?;
-            cmd_speech_manifold_infer(&model, task, &input, device_arg)
+            cmd_speech_manifold_infer(&model, task, &input, device_arg, output_mode)
         }
         SpeechManifoldCommands::Probe { model, data, split } => {
             let _manifest =
@@ -2552,6 +2644,7 @@ fn cmd_speech_manifold_infer(
     task: SpeechManifoldTask,
     input: &str,
     device_arg: DeviceArg,
+    _output_mode: OutputMode,
 ) -> Result<()> {
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
@@ -4492,10 +4585,13 @@ fn cmd_predict(
     input: &str,
     device_arg: DeviceArg,
     data_arg: Option<&Path>,
+    output_mode: OutputMode,
 ) -> Result<()> {
     let start_total = std::time::Instant::now();
 
-    println!("Loading vocabulary...");
+    if output_mode.verbose() {
+        println!("Loading vocabulary...");
+    }
     let start_vocab = std::time::Instant::now();
     // Load vocab
     let vocab: Vocab = {
@@ -4546,7 +4642,9 @@ fn cmd_predict(
         let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&s)?
     };
-    println!("  ✓ Loaded vocabulary in {:?}", start_vocab.elapsed());
+    if output_mode.verbose() {
+        println!("  ✓ Loaded vocabulary in {:?}", start_vocab.elapsed());
+    }
 
     let task = if task_str.to_lowercase() == "auto" {
         detect_task(input)
@@ -4563,10 +4661,14 @@ fn cmd_predict(
 
     match device_arg {
         DeviceArg::Cpu => {
-            println!("Initializing CPU device (ndarray)...");
+            if output_mode.verbose() {
+                println!("Initializing CPU device (ndarray)...");
+            }
             let start_dev = std::time::Instant::now();
             let device = NdArrayDevice::Cpu;
-            println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
+            if output_mode.verbose() {
+                println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
+            }
             run_predict::<CpuInferBackend>(
                 &device,
                 &model_config,
@@ -4575,16 +4677,21 @@ fn cmd_predict(
                 task,
                 input,
                 start_total,
+                output_mode,
             )?;
         }
         DeviceArg::Cuda => {
-            println!("Initializing CUDA GPU device...");
+            if output_mode.verbose() {
+                println!("Initializing CUDA GPU device...");
+            }
             let start_dev = std::time::Instant::now();
             let device = CudaDevice::default();
-            println!(
-                "  ✓ Initialized CUDA GPU device in {:?}",
-                start_dev.elapsed()
-            );
+            if output_mode.verbose() {
+                println!(
+                    "  ✓ Initialized CUDA GPU device in {:?}",
+                    start_dev.elapsed()
+                );
+            }
             run_predict::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -4593,6 +4700,7 @@ fn cmd_predict(
                 task,
                 input,
                 start_total,
+                output_mode,
             )?;
         }
     }
@@ -4607,19 +4715,30 @@ fn run_predict<B: Backend>(
     task: Task,
     input: &str,
     start_total: std::time::Instant,
+    output_mode: OutputMode,
 ) -> Result<()> {
-    println!("Loading model config & weights...");
+    if output_mode.verbose() {
+        println!("Loading model config & weights...");
+    }
     let start_load = std::time::Instant::now();
     let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
-    println!("  ✓ Loaded model weights in {:?}", start_load.elapsed());
+    if output_mode.verbose() {
+        println!("  ✓ Loaded model weights in {:?}", start_load.elapsed());
+    }
 
-    println!("Translating input='{}' with task={:?}...", input, task);
+    if output_mode.verbose() {
+        println!("Translating input='{}' with task={:?}...", input, task);
+    }
     let start_pred = std::time::Instant::now();
     let output = predict(&model, input, task, vocab, device);
-    println!("  ✓ Finished prediction in {:?}", start_pred.elapsed());
+    if output_mode.verbose() {
+        println!("  ✓ Finished prediction in {:?}", start_pred.elapsed());
 
-    println!("\nPrediction output:\n  {}", output);
-    println!("Total time elapsed: {:?}", start_total.elapsed());
+        println!("\nPrediction output:\n  {}", output);
+        println!("Total time elapsed: {:?}", start_total.elapsed());
+    } else {
+        println!("{output}");
+    }
 
     Ok(())
 }
