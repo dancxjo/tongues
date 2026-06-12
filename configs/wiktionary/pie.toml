@@ -6,7 +6,7 @@ valid_frac = 0.1
 seed = 42
 include_reverse = true
 include_language_guessing = false
-include_descendant_pairs = true
+include_descendant_pairs = false
 
 # PIE itself plus major Indo-European branches, proto-languages, historical
 # witnesses, and common modern descendants using Wiktionary language codes.
@@ -29,7 +29,6 @@ languages = [
   "albanian", "sqj-pro", "sq",
   "tocharian", "txh", "txb", "xto",
   "anatolian", "hit", "luw", "xlu", "xlc", "lyd", "xld",
-  "proto-indo-european-descendant", "indo-european-descendant",
 ]
 
 # Optional supplemental Wikipedia table source. Leave empty to train only from

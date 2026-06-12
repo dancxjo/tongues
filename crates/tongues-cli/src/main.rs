@@ -17,6 +17,7 @@ mod speak;
 use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -49,6 +50,10 @@ type CpuTrainBackend = Autodiff<CpuInferBackend>;
 
 type CudaInferBackend = Cuda<f32, i32>;
 type CudaTrainBackend = Autodiff<CudaInferBackend>;
+
+const DEFAULT_WIKTIONARY_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
+const DEFAULT_WIKTIONARY_DATA_DIR: &str = "datasets/wiktionary/enwiktionary-2026-06-01-v0";
+const DEFAULT_WIKTIONARY_MODEL_DIR: &str = "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 enum DeviceArg {
@@ -920,6 +925,7 @@ fn command_needs_device(command: &Commands) -> bool {
                 | SpeechManifoldCommands::Eval { .. }
                 | SpeechManifoldCommands::Infer { .. }
         ),
+        Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
         Commands::Train { .. }
         | Commands::Eval { .. }
         | Commands::Refine { .. }
@@ -931,6 +937,22 @@ fn command_needs_device(command: &Commands) -> bool {
 
 fn warn_legacy_command(old: &str, new: &str) {
     eprintln!("warning: `tongues {old}` is deprecated; use `tongues {new}` instead.");
+}
+
+fn status_spinner(message: impl Into<String>) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("{spinner:.green} {msg}")
+            .expect("valid spinner template"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb.set_message(message.into());
+    pb
+}
+
+fn finish_status(pb: indicatif::ProgressBar, message: impl AsRef<str>) {
+    pb.finish_and_clear();
+    println!("{}", message.as_ref());
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1277,6 +1299,32 @@ fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
     }
 }
 
+fn effective_wiktionary_data_path(
+    path: PathBuf,
+    config: &tongues_wiktionary::WiktionaryConfig,
+) -> PathBuf {
+    if path == PathBuf::from(DEFAULT_WIKTIONARY_DATA_DIR)
+        && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID
+    {
+        PathBuf::from("datasets/wiktionary").join(&config.dataset_id)
+    } else {
+        path
+    }
+}
+
+fn effective_wiktionary_model_path(
+    path: PathBuf,
+    config: &tongues_wiktionary::WiktionaryConfig,
+) -> PathBuf {
+    if path == PathBuf::from(DEFAULT_WIKTIONARY_MODEL_DIR)
+        && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID
+    {
+        PathBuf::from("models/wiktionary").join(&config.dataset_id)
+    } else {
+        path
+    }
+}
+
 fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) -> Result<()> {
     match command {
         WiktionaryCommands::Prepare {
@@ -1289,7 +1337,17 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             if let Some(dump) = dump {
                 config.dump_path = Some(dump.display().to_string());
             }
+            let out = effective_wiktionary_data_path(out, &config);
+            let pb = status_spinner(format!("Preparing Wiktionary dataset at {}", out.display()));
             let report = tongues_wiktionary::prepare_dataset(&out, &cache_dir, &config)?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared Wiktionary dataset at {} from {}",
+                    out.display(),
+                    report.dump_path
+                ),
+            );
             println!(
                 "Wiktionary dataset written to {} from {}",
                 out.display(),
@@ -1326,11 +1384,27 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             if let Some(dump) = dump {
                 config.dump_path = Some(dump.display().to_string());
             }
+            let data = effective_wiktionary_data_path(data, &config);
+            let out = effective_wiktionary_model_path(out, &config);
             if !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
                 || !data.join("test.jsonl").exists()
             {
-                tongues_wiktionary::prepare_dataset(&data, &cache_dir, &config)?;
+                let pb = status_spinner(format!(
+                    "Training data missing; preparing Wiktionary dataset at {}",
+                    data.display()
+                ));
+                let report = tongues_wiktionary::prepare_dataset(&data, &cache_dir, &config)?;
+                finish_status(
+                    pb,
+                    format!(
+                        "Prepared {} train / {} valid / {} test examples from {}",
+                        report.train_examples,
+                        report.valid_examples,
+                        report.test_examples,
+                        report.dump_path
+                    ),
+                );
             }
             cmd_wiktionary_train(
                 &data,
@@ -1393,20 +1467,44 @@ fn cmd_wiktionary_train(
         WiktionaryNotationArg::Phones => data.join("phones.jsonl"),
         WiktionaryNotationArg::Phonemes => data.join("phonemes.jsonl"),
     };
+    let pb = status_spinner(format!(
+        "Loading Wiktionary rows from {}",
+        source_file.display()
+    ));
     let entries: Vec<tongues_wiktionary::PronunciationEntry> = read_jsonl_as(&source_file)?;
+    finish_status(pb, format!("Loaded {} {:?} rows", entries.len(), notation));
+
+    let pb = status_spinner("Expanding and filtering Wiktionary training examples");
     let expanded = tongues_wiktionary::expand_training_examples(&entries, config);
     let examples = filter_wiktionary_examples(expanded, task)?;
+    finish_status(
+        pb,
+        format!(
+            "Selected {} Wiktionary examples for task={task}",
+            examples.len()
+        ),
+    );
     anyhow::ensure!(
         !examples.is_empty(),
         "no Wiktionary examples found for notation={:?} task={task}",
         notation
     );
 
+    let pb = status_spinner("Splitting rows, building vocabulary, and encoding examples");
     let (train_rows, valid_rows, _test_rows) =
         split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
     let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
     let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+    finish_status(
+        pb,
+        format!(
+            "Encoded {} train / {} valid examples with vocab size {}",
+            train_examples.len(),
+            valid_examples.len(),
+            vocab.size()
+        ),
+    );
 
     println!(
         "Loaded {} {:?} rows -> {} train / {} valid examples for task={}",
@@ -1451,8 +1549,34 @@ fn cmd_wiktionary_train_prepared_rows(
     seed: u64,
     device_arg: DeviceArg,
 ) -> Result<()> {
-    let train_rows = filter_wiktionary_examples(read_jsonl_as(&data.join("train.jsonl"))?, task)?;
-    let valid_rows = filter_wiktionary_examples(read_jsonl_as(&data.join("valid.jsonl"))?, task)?;
+    let pb = status_spinner(format!(
+        "Loading prepared Wiktionary rows from {}",
+        data.display()
+    ));
+    let train_rows_raw: Vec<tongues_wiktionary::TrainingExample> =
+        read_jsonl_as(&data.join("train.jsonl"))?;
+    let valid_rows_raw: Vec<tongues_wiktionary::TrainingExample> =
+        read_jsonl_as(&data.join("valid.jsonl"))?;
+    finish_status(
+        pb,
+        format!(
+            "Loaded {} train / {} valid prepared rows",
+            train_rows_raw.len(),
+            valid_rows_raw.len()
+        ),
+    );
+
+    let pb = status_spinner(format!("Filtering prepared rows for task={task}"));
+    let train_rows = filter_wiktionary_examples(train_rows_raw, task)?;
+    let valid_rows = filter_wiktionary_examples(valid_rows_raw, task)?;
+    finish_status(
+        pb,
+        format!(
+            "Selected {} train / {} valid rows for task={task}",
+            train_rows.len(),
+            valid_rows.len()
+        ),
+    );
     anyhow::ensure!(
         !train_rows.is_empty(),
         "no prepared Wiktionary examples found for task={task}"
@@ -1462,9 +1586,19 @@ fn cmd_wiktionary_train_prepared_rows(
         "no prepared Wiktionary validation examples found for task={task}"
     );
 
+    let pb = status_spinner("Building Wiktionary vocabulary and encoding seq2seq examples");
     let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
     let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+    finish_status(
+        pb,
+        format!(
+            "Encoded {} train / {} valid examples with vocab size {}",
+            train_examples.len(),
+            valid_examples.len(),
+            vocab.size()
+        ),
+    );
 
     println!(
         "Loaded prepared rows -> {} train / {} valid examples for task={}",
@@ -1774,7 +1908,15 @@ fn run_speech_manifold_command(
                 || !data.join("valid.jsonl").exists()
             {
                 let prepare = speech_manifold_prepare_config(&config)?;
+                let pb = status_spinner(format!(
+                    "Training data missing; preparing speech-manifold dataset at {}",
+                    data.display()
+                ));
                 tongues_speech_manifold::prepare_dataset(&data, &prepare)?;
+                finish_status(
+                    pb,
+                    format!("Prepared speech-manifold dataset at {}", data.display()),
+                );
             }
             let train_config = speech_manifold_train_config(&config, epochs, batch_size, seed)?;
             cmd_speech_manifold_train(&data, &out, &train_config, device_arg)
@@ -1822,12 +1964,30 @@ fn cmd_speech_manifold_train(
     train_config: &SpeechManifoldTrainConfig,
     device_arg: DeviceArg,
 ) -> Result<()> {
+    let pb = status_spinner(format!(
+        "Loading speech-manifold data from {}",
+        data.display()
+    ));
     let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
     let train_examples = tongues_speech_manifold::read_examples(&data.join("train.jsonl"))?;
     let valid_examples = tongues_speech_manifold::read_examples(&data.join("valid.jsonl"))?;
+    finish_status(
+        pb,
+        format!(
+            "Loaded {} train / {} valid examples with vocab size {}",
+            train_examples.len(),
+            valid_examples.len(),
+            vocab.size()
+        ),
+    );
     fs::create_dir_all(out).context("creating speech-manifold model directory")?;
     let model_config = ModelConfig::new(vocab.size()).with_dropout(train_config.dropout);
+    let pb = status_spinner(format!(
+        "Writing speech-manifold artifact files to {}",
+        out.display()
+    ));
     tongues_speech_manifold::save_artifact_files(out, data, &model_config, train_config)?;
+    finish_status(pb, format!("Wrote artifact files to {}", out.display()));
     let model_path = out.join("model");
     match device_arg {
         DeviceArg::Cpu => {
@@ -2539,12 +2699,30 @@ fn cmd_train(
     }
 
     let vocab: Vocab = {
+        let pb = status_spinner(format!("Loading vocabulary from {}", data.display()));
         let s = fs::read_to_string(data.join("vocab.json")).context("reading vocab.json")?;
-        serde_json::from_str(&s)?
+        let vocab: Vocab = serde_json::from_str(&s)?;
+        finish_status(
+            pb,
+            format!("Loaded vocabulary with {} tokens", vocab.size()),
+        );
+        vocab
     };
 
+    let pb = status_spinner(format!(
+        "Loading train/valid lexemes from {}",
+        data.display()
+    ));
     let base_train_lexemes = read_jsonl(&data.join("train.jsonl"))?;
     let valid_lexemes = read_jsonl(&data.join("valid.jsonl"))?;
+    finish_status(
+        pb,
+        format!(
+            "Loaded {} train / {} valid lexemes",
+            base_train_lexemes.len(),
+            valid_lexemes.len()
+        ),
+    );
 
     println!(
         "Loaded {} train / {} valid lexemes",
@@ -2573,10 +2751,18 @@ fn cmd_train(
         frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
     };
 
+    let pb = status_spinner("Expanding frequency-weighted training examples");
     let mut train_lexemes = expand_frequency_weighted_training(
         &base_train_lexemes,
         train_config.max_frequency_repeat,
         train_config.frequency_rarity_cap,
+    );
+    finish_status(
+        pb,
+        format!(
+            "Expanded to {} frequency-weighted train examples",
+            train_lexemes.len()
+        ),
     );
     println!(
         "  frequency-weighted train examples: {} (max_repeat={} rarity_cap={})",

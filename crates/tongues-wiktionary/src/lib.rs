@@ -108,7 +108,7 @@ impl WiktionaryConfig {
                 .collect(),
             include_reverse: true,
             include_language_guessing: false,
-            include_descendant_pairs: true,
+            include_descendant_pairs: false,
             max_pages: None,
         }
     }
@@ -680,7 +680,7 @@ pub fn extract_pie_etymology_entries(
                     continue;
                 }
                 let descendant = clean_wikitext_cell(cell);
-                if descendant.is_empty() {
+                if !is_valid_pie_form(&pie) || !is_valid_descendant_form(&descendant) {
                     continue;
                 }
                 entries.push(PieEtymologyEntry {
@@ -702,14 +702,14 @@ pub fn extract_wiktionary_pie_etymology_entries(
     wikitext: &str,
     config: &WiktionaryConfig,
 ) -> Vec<PieEtymologyEntry> {
-    if spelling.is_empty() {
+    if !is_pie_etymology_page_title(spelling) {
         return Vec::new();
     }
     let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
     let page_form = wiktionary_page_form(spelling);
     let mut entries = Vec::new();
-    let mut current_lang = wiktionary_lang_from_heading(wikitext.lines().next().unwrap_or(""));
-    let mut current_pie = if current_lang.as_deref() == Some("ine-pro") {
+    let initial_lang = wiktionary_lang_from_heading(wikitext.lines().next().unwrap_or(""));
+    let mut current_pie = if initial_lang.as_deref() == Some("ine-pro") {
         Some(page_form.clone())
     } else {
         None
@@ -718,15 +718,11 @@ pub fn extract_wiktionary_pie_etymology_entries(
     for line in wikitext.lines() {
         if let Some(lang) = wiktionary_lang_from_heading(line) {
             current_pie = (lang == "ine-pro").then(|| page_form.clone());
-            current_lang = Some(lang);
         }
 
-        for template in find_named_templates(
-            line,
-            &[
-                "root", "der", "inh", "bor", "lbor", "cog", "m", "l", "desc", "desctree", "etymon",
-            ],
-        ) {
+        for template in
+            find_named_templates(line, &["root", "der", "inh", "desc", "desctree", "etymon"])
+        {
             let params = split_template_params(template);
             if params.is_empty() {
                 continue;
@@ -748,7 +744,7 @@ pub fn extract_wiktionary_pie_etymology_entries(
                         }
                     }
                 }
-                "der" | "inh" | "bor" | "lbor" => {
+                "der" | "inh" => {
                     if params.get(2).is_some_and(|lang| lang.trim() == "ine-pro") {
                         if let (Some(lang), Some(pie)) = (params.get(1), params.get(3)) {
                             push_pie_entry(
@@ -760,42 +756,6 @@ pub fn extract_wiktionary_pie_etymology_entries(
                                 template_named_param(&params, "t"),
                                 "enwiktionary:etymology-template",
                             );
-                        }
-                    }
-                }
-                "cog" => {
-                    if let Some(lang) = params.get(1) {
-                        if lang.trim() == "ine-pro" {
-                            if let Some(pie) = params.get(2) {
-                                if let Some(desc_lang) = current_lang.as_deref() {
-                                    push_pie_entry(
-                                        &mut entries,
-                                        &allowed,
-                                        clean_template_form(pie),
-                                        desc_lang,
-                                        &page_form,
-                                        template_named_param(&params, "t"),
-                                        "enwiktionary:cognate-template",
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                "m" | "l" => {
-                    if params.get(1).is_some_and(|lang| lang.trim() == "ine-pro") {
-                        if let Some(pie) = template_form_param(&params) {
-                            if let Some(desc_lang) = current_lang.as_deref() {
-                                push_pie_entry(
-                                    &mut entries,
-                                    &allowed,
-                                    clean_template_form(&pie),
-                                    desc_lang,
-                                    &page_form,
-                                    template_named_param(&params, "t"),
-                                    "enwiktionary:mention-template",
-                                );
-                            }
                         }
                     }
                 }
@@ -844,6 +804,13 @@ pub fn extract_wiktionary_pie_etymology_entries(
     entries
 }
 
+fn is_pie_etymology_page_title(title: &str) -> bool {
+    if title.trim().is_empty() {
+        return false;
+    }
+    !title.contains(':') || title.starts_with("Reconstruction:Proto-Indo-European/")
+}
+
 fn push_pie_entry(
     entries: &mut Vec<PieEtymologyEntry>,
     allowed: &BTreeSet<&str>,
@@ -855,7 +822,11 @@ fn push_pie_entry(
 ) {
     let pie = clean_template_form(&pie);
     let descendant = clean_template_form(descendant);
-    if pie.is_empty() || descendant.is_empty() || lang.is_empty() || lang == "ine-pro" {
+    if !is_valid_pie_form(&pie)
+        || !is_valid_descendant_form(&descendant)
+        || lang.is_empty()
+        || lang == "ine-pro"
+    {
         return;
     }
     let branch = pie_branch_for_wiktionary_lang(lang);
@@ -870,6 +841,32 @@ fn push_pie_entry(
         gloss: gloss.map(|value| clean_template_form(&value)),
         source: source.to_string(),
     });
+}
+
+fn is_valid_pie_form(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed != "*"
+        && trimmed != "-"
+        && trimmed.starts_with('*')
+        && !trimmed.contains(':')
+}
+
+fn is_valid_descendant_form(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "-" || trimmed == "*" {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    !matches!(
+        lowered.as_str(),
+        "inherited from pie root"
+            | "derived from pie root"
+            | "borrowed from pie root"
+            | "see desc"
+            | "derived terms"
+    ) && !trimmed.contains("Category:")
+        && !trimmed.contains("User:")
 }
 
 fn template_form_param(params: &[String]) -> Option<String> {
@@ -1062,17 +1059,17 @@ fn descendant_column(header: &str) -> Option<(&'static str, &'static str)> {
         .collect::<String>()
         .to_ascii_lowercase();
     match normalized.trim() {
-        "english" => Some(("eng", "germanic")),
+        "english" => Some(("en", "germanic")),
         "gothic" => Some(("got", "germanic")),
-        "latin" => Some(("lat", "italic")),
+        "latin" => Some(("la", "italic")),
         "ancient greek" | "greek" => Some(("grc", "hellenic")),
-        "sanskrit" => Some(("san", "indo-aryan")),
+        "sanskrit" => Some(("sa", "indo-aryan")),
         "iranian" => Some(("ira", "iranian")),
         "slavic" => Some(("sla", "slavic")),
         "baltic" => Some(("bat", "baltic")),
         "celtic" => Some(("cel", "celtic")),
-        "armenian" => Some(("hye", "armenian")),
-        "albanian" => Some(("sqi", "albanian")),
+        "armenian" => Some(("hy", "armenian")),
+        "albanian" => Some(("sq", "albanian")),
         "tocharian" => Some(("txh", "tocharian")),
         "hittite" => Some(("hit", "anatolian")),
         _ => None,
@@ -1182,8 +1179,6 @@ fn pie_descendant_language_codes() -> Vec<&'static str> {
         "xlc",
         "lyd",
         "xld",
-        "proto-indo-european-descendant",
-        "indo-european-descendant",
     ]
 }
 
@@ -1974,8 +1969,56 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
     }
 
     #[test]
-    fn expands_pie_pairs_in_both_directions() {
+    fn ignores_weak_pie_mentions_and_meta_pages() {
         let config = WiktionaryConfig::pie_etymology();
+        let entries = extract_wiktionary_pie_etymology_entries(
+            "thing",
+            r#"
+==English==
+{{bor|en|ine-pro|*bʰer-}}
+{{cog|ine-pro|*bʰer-}}
+{{m|ine-pro|*bʰer-|t=carry}}
+{{l|ine-pro|*bʰer-}}
+{{inh|en|ine-pro|*dʰeh₁-}}
+"#,
+            &config,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].pie, "*dʰeh₁-");
+        assert_eq!(entries[0].descendant, "thing");
+
+        let meta_entries = extract_wiktionary_pie_etymology_entries(
+            "Category:Icelandic terms inherited from PIE root",
+            "==Icelandic==\n{{inh|is|ine-pro|*h₁es-}}",
+            &config,
+        );
+        assert!(meta_entries.is_empty());
+    }
+
+    #[test]
+    fn rejects_placeholder_pie_descendants() {
+        let config = WiktionaryConfig::pie_etymology();
+        let entries = extract_wiktionary_pie_etymology_entries(
+            "Reconstruction:Proto-Indo-European/h₁es-",
+            r#"
+==Proto-Indo-European==
+{{etymon|ine-pro|pos=root}}
+* {{desc|gem-pro|-}}
+* {{desc|grc|inherited from PIE root}}
+* {{desc|la|est}}
+"#,
+            &config,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].descendant, "est");
+    }
+
+    #[test]
+    fn expands_pie_pairs_in_both_directions() {
+        let mut config = WiktionaryConfig::pie_etymology();
+        config.include_descendant_pairs = true;
         let examples = expand_pie_training_examples(
             &[
                 PieEtymologyEntry {
@@ -2012,6 +2055,36 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             example.task == WiktionaryTask::EtymologyTranslation
                 && example.input == "<task:etymology_translate> <from:en> <to:de> thorp"
                 && example.output == "Dorf"
+        }));
+    }
+
+    #[test]
+    fn pie_config_does_not_expand_descendant_pairs_by_default() {
+        let config = WiktionaryConfig::pie_etymology();
+        let examples = expand_pie_training_examples(
+            &[
+                PieEtymologyEntry {
+                    pie: "*treb-".to_string(),
+                    lang: "en".to_string(),
+                    branch: "germanic".to_string(),
+                    descendant: "thorp".to_string(),
+                    gloss: None,
+                    source: "test".to_string(),
+                },
+                PieEtymologyEntry {
+                    pie: "*treb-".to_string(),
+                    lang: "de".to_string(),
+                    branch: "germanic".to_string(),
+                    descendant: "Dorf".to_string(),
+                    gloss: None,
+                    source: "test".to_string(),
+                },
+            ],
+            &config,
+        );
+
+        assert!(!examples.iter().any(|example| {
+            example.input == "<task:etymology_translate> <from:en> <to:de> thorp"
         }));
     }
 

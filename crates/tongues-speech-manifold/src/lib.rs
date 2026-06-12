@@ -2278,9 +2278,20 @@ where
             train_examples,
             vocab,
             train_config,
+            epoch,
             device,
             rng,
         );
+        let eval_pb = indicatif::ProgressBar::new_spinner();
+        eval_pb.set_style(
+            indicatif::ProgressStyle::with_template("{spinner:.green} {msg}")
+                .expect("valid spinner template"),
+        );
+        eval_pb.enable_steady_tick(std::time::Duration::from_millis(120));
+        eval_pb.set_message(format!(
+            "Evaluating speech-manifold epoch {epoch}/{}",
+            train_config.epochs
+        ));
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
         let val_loss = evaluate_loss(
             &eval_model,
@@ -2294,6 +2305,7 @@ where
             train_config.allow_placeholder_acoustics,
             device,
         );
+        eval_pb.finish_and_clear();
         println!("Epoch {epoch:3} | train_loss={train_loss:.4} val_loss={val_loss:.4}");
 
         fs::write(
@@ -2333,6 +2345,7 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     examples: &[SpeechManifoldExample],
     vocab: &Vocab,
     config: &SpeechManifoldTrainConfig,
+    epoch: usize,
     device: &B::Device,
     rng: &mut R,
 ) -> f32 {
@@ -2340,6 +2353,19 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     indices.shuffle(rng);
     let mut total_loss = 0.0;
     let mut batches = 0usize;
+    let n_batches = (examples.len() + config.batch_size - 1) / config.batch_size;
+    let pb = indicatif::ProgressBar::new(n_batches as u64);
+    let template = format!(
+        "{{spinner:.green}} Speech epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}}",
+        epoch, config.epochs
+    );
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template(&template)
+            .expect("valid template")
+            .progress_chars("#>-"),
+    );
+    pb.set_message("...");
 
     for chunk in indices.chunks(config.batch_size) {
         let seq_examples = chunk
@@ -2388,7 +2414,10 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
         *model = optimizer.step(config.learning_rate, model.clone(), grads);
         total_loss += loss.into_scalar().elem::<f32>();
         batches += 1;
+        pb.set_message(format!("{:.4}", total_loss / batches as f32));
+        pb.inc(1);
     }
+    pb.finish_and_clear();
     if batches == 0 {
         0.0
     } else {

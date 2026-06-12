@@ -493,6 +493,18 @@ pub fn evaluate<B: Backend, R: Rng>(
         })
         .collect();
 
+    let eval_batches = (examples.len() + 63) / 64;
+    let pb = indicatif::ProgressBar::new(eval_batches as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+            )
+            .expect("valid template")
+            .progress_chars("#>-"),
+    );
+    pb.set_message("loss=...");
+
     for chunk in examples.chunks(64) {
         let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
         let max_tgt = chunk
@@ -521,6 +533,8 @@ pub fn evaluate<B: Backend, R: Rng>(
         let loss = seq2seq_loss(logits.clone(), batch.tgt_out_ids.clone());
         total_loss += loss.into_scalar().elem::<f32>();
         n_batches += 1;
+        pb.set_message(format!("loss={:.4}", total_loss / n_batches as f32));
+        pb.inc(1);
 
         let [_, tgt_len, vocab_size] = logits.dims();
         for i in 0..b {
@@ -553,6 +567,7 @@ pub fn evaluate<B: Backend, R: Rng>(
             }
         }
     }
+    pb.finish_and_clear();
 
     let mean_loss = if n_batches > 0 {
         total_loss / n_batches as f32
@@ -596,6 +611,18 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
         examples
     };
 
+    let eval_batches = (eval_examples.len() + 63) / 64;
+    let pb = indicatif::ProgressBar::new(eval_batches as u64);
+    pb.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+            )
+            .expect("valid template")
+            .progress_chars("#>-"),
+    );
+    pb.set_message("loss=...");
+
     for chunk in eval_examples.chunks(64) {
         let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
         let max_tgt = chunk
@@ -624,6 +651,8 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
         let loss = seq2seq_loss(logits.clone(), batch.tgt_out_ids.clone());
         total_loss += loss.into_scalar().elem::<f32>();
         n_batches += 1;
+        pb.set_message(format!("loss={:.4}", total_loss / n_batches as f32));
+        pb.inc(1);
 
         let [_, tgt_len, vocab_size] = logits.dims();
         for i in 0..b {
@@ -656,6 +685,7 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
             }
         }
     }
+    pb.finish_and_clear();
 
     let mean_loss = if n_batches > 0 {
         total_loss / n_batches as f32
