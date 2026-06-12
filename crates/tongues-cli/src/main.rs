@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
 use burn::tensor::backend::{AutodiffBackend, Backend};
+use burn::tensor::{Int, Tensor};
 use burn_cuda::{Cuda, CudaDevice};
 
 use speech::data::notation::openepd::normalize_openepd_ipa;
@@ -736,6 +737,39 @@ enum WiktionaryCommands {
         #[arg(long, default_value_t = 0)]
         seed: u64,
     },
+
+    /// Run inference with a trained Wiktionary seq2seq model
+    Infer {
+        /// Directory containing the model
+        #[arg(
+            long,
+            default_value = "models/wiktionary/enwiktionary-2026-06-01-v0-phones"
+        )]
+        model: PathBuf,
+
+        /// Wiktionary task: spelling-to-ipa, ipa-to-spelling, normalize, or a language guessing task
+        #[arg(long, default_value = "spelling-to-ipa")]
+        task: String,
+
+        /// Wiktionary language code used for tagged tasks
+        #[arg(long, default_value = "eng")]
+        lang: String,
+
+        /// Pronunciation notation tag used for spelling-to-IPA and language guessing
+        #[arg(long, value_enum, default_value = "phones")]
+        notation: WiktionaryNotationArg,
+
+        /// Optional accent tag to include for spelling-to-IPA
+        #[arg(long)]
+        accent: Option<String>,
+
+        /// Treat input as the exact model source string, including all control tags
+        #[arg(long)]
+        raw: bool,
+
+        /// Input spelling, IPA, or raw tagged source string
+        input: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -953,6 +987,43 @@ fn status_spinner(message: impl Into<String>) -> indicatif::ProgressBar {
 fn finish_status(pb: indicatif::ProgressBar, message: impl AsRef<str>) {
     pb.finish_and_clear();
     println!("{}", message.as_ref());
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GIB {
+        format!("{:.1} GiB", bytes_f / GIB)
+    } else if bytes_f >= MIB {
+        format!("{:.1} MiB", bytes_f / MIB)
+    } else if bytes_f >= KIB {
+        format!("{:.1} KiB", bytes_f / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProgress) -> String {
+    match progress {
+        tongues_wiktionary::PrepareProgress::Stage { message } => message,
+        tongues_wiktionary::PrepareProgress::Download { path, bytes, .. } => {
+            format!("Downloading {} ({})", path, format_bytes(bytes))
+        }
+        tongues_wiktionary::PrepareProgress::Parse {
+            pages,
+            patterns,
+            phonemes,
+            phones,
+            pie_roots,
+        } => format!(
+            "Parsing dump: {pages} pages, {patterns} patterns, {phonemes} phonemes, {phones} phones, {pie_roots} PIE roots"
+        ),
+        tongues_wiktionary::PrepareProgress::Write { path, rows } => {
+            format!("Wrote {rows} rows to {path}")
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1339,7 +1410,13 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
             }
             let out = effective_wiktionary_data_path(out, &config);
             let pb = status_spinner(format!("Preparing Wiktionary dataset at {}", out.display()));
-            let report = tongues_wiktionary::prepare_dataset(&out, &cache_dir, &config)?;
+            let report =
+                tongues_wiktionary::prepare_dataset_with_progress(&out, &cache_dir, &config, {
+                    let pb = pb.clone();
+                    move |progress| {
+                        pb.set_message(wiktionary_prepare_progress_message(progress));
+                    }
+                })?;
             finish_status(
                 pb,
                 format!(
@@ -1394,7 +1471,17 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
                     "Training data missing; preparing Wiktionary dataset at {}",
                     data.display()
                 ));
-                let report = tongues_wiktionary::prepare_dataset(&data, &cache_dir, &config)?;
+                let report = tongues_wiktionary::prepare_dataset_with_progress(
+                    &data,
+                    &cache_dir,
+                    &config,
+                    {
+                        let pb = pb.clone();
+                        move |progress| {
+                            pb.set_message(wiktionary_prepare_progress_message(progress));
+                        }
+                    },
+                )?;
                 finish_status(
                     pb,
                     format!(
@@ -1422,6 +1509,24 @@ fn run_wiktionary_command(command: WiktionaryCommands, device_arg: DeviceArg) ->
                 device_arg,
             )
         }
+        WiktionaryCommands::Infer {
+            model,
+            task,
+            lang,
+            notation,
+            accent,
+            raw,
+            input,
+        } => cmd_wiktionary_infer(
+            &model,
+            &task,
+            &lang,
+            notation,
+            accent.as_deref(),
+            raw,
+            &input,
+            device_arg,
+        ),
     }
 }
 
@@ -1881,6 +1986,132 @@ where
         best_loss
     );
     println!("Model saved to {}", model_path.display());
+    Ok(())
+}
+
+fn cmd_wiktionary_infer(
+    model_dir: &Path,
+    task: &str,
+    lang: &str,
+    notation: WiktionaryNotationArg,
+    accent: Option<&str>,
+    raw: bool,
+    input: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let source = if raw {
+        input.to_string()
+    } else {
+        wiktionary_infer_source(task, lang, notation, accent, input)?
+    };
+
+    let vocab: Vocab = {
+        let path = model_dir.join("vocab.json");
+        let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_str(&s)?
+    };
+    let model_config: ModelConfig = {
+        let path = model_dir.join("model_config.json");
+        let s = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_str(&s)?
+    };
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            run_wiktionary_infer::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &source,
+            )
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            run_wiktionary_infer::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &source,
+            )
+        }
+    }
+}
+
+fn wiktionary_infer_source(
+    task: &str,
+    lang: &str,
+    notation: WiktionaryNotationArg,
+    accent: Option<&str>,
+    input: &str,
+) -> Result<String> {
+    let notation_tag = match notation {
+        WiktionaryNotationArg::Phones => "phonetic",
+        WiktionaryNotationArg::Phonemes => "phonemic",
+    };
+    let normalized = task.to_ascii_lowercase();
+    let source = match normalized.as_str() {
+        "spelling-to-ipa" | "s2ipa" | "g2p" | "forward" => {
+            let mut controls = format!("<task:g2p> <lang:{lang}>");
+            if let Some(accent) = accent.filter(|accent| !accent.is_empty()) {
+                controls.push_str(&format!(" <accent:{accent}>"));
+            }
+            controls.push_str(&format!(" <notation:{notation_tag}>"));
+            format!("{controls} {input}")
+        }
+        "ipa-to-spelling" | "ipa2s" | "p2g" | "reverse" => {
+            format!("<task:p2g> <lang:{lang}> {input}")
+        }
+        "normalize" | "normalise" => {
+            format!("<task:normalize> <lang:{lang}> {input}")
+        }
+        "guess-lang-from-spelling" | "lang-from-spelling" => {
+            format!("<task:guess_lang_from_spelling> <notation:{notation_tag}> {input}")
+        }
+        "guess-lang-from-ipa" | "lang-from-ipa" => {
+            format!("<task:guess_lang_from_ipa> <notation:{notation_tag}> {input}")
+        }
+        "guess-lang-from-spelling-and-ipa" | "lang" | "language" | "language-guessing" => {
+            format!(
+                "<task:guess_lang_from_spelling_and_ipa> <notation:{notation_tag}> {input}"
+            )
+        }
+        _ => anyhow::bail!(
+            "Invalid Wiktionary inference task. Supported: spelling-to-ipa, ipa-to-spelling, normalize, guess-lang-from-spelling, guess-lang-from-ipa, guess-lang-from-spelling-and-ipa"
+        ),
+    };
+    Ok(source)
+}
+
+fn run_wiktionary_infer<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    source: &str,
+) -> Result<()> {
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    let src_ids = vocab.encode_string(source);
+    let unknown_count = src_ids.iter().filter(|&&id| id == UNK_ID).count();
+    if unknown_count > 0 {
+        eprintln!("warning: source encoded with {unknown_count} <UNK> token(s)");
+    }
+
+    let src_len = src_ids.len();
+    let src_tensor = Tensor::<B, 2, Int>::from_data(
+        burn::tensor::TensorData::new(
+            src_ids.iter().map(|&x| x as i32).collect::<Vec<_>>(),
+            [1, src_len],
+        ),
+        device,
+    );
+    let pred_ids = model.generate(src_tensor, 128);
+    let output = vocab.decode_ids(&pred_ids);
+
+    println!("Source:\n  {source}");
+    println!("\nPrediction output:\n  {output}");
     Ok(())
 }
 
@@ -4547,6 +4778,25 @@ mod tests {
             cli.command,
             Some(Commands::Wiktionary {
                 command: WiktionaryCommands::Prepare { .. }
+            })
+        ));
+
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "wiktionary",
+            "infer",
+            "--model",
+            "models/wiktionary/enwiktionary-2026-06-01-v0-phones",
+            "--task",
+            "spelling-to-ipa",
+            "hello",
+        ])
+        .expect("wiktionary infer should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Wiktionary {
+                command: WiktionaryCommands::Infer { .. }
             })
         ));
     }

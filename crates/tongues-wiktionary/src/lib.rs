@@ -208,6 +208,29 @@ pub struct PrepareReport {
     pub test_examples: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareProgress {
+    Stage {
+        message: String,
+    },
+    Download {
+        url: String,
+        path: String,
+        bytes: u64,
+    },
+    Parse {
+        pages: usize,
+        patterns: usize,
+        phonemes: usize,
+        phones: usize,
+        pie_roots: usize,
+    },
+    Write {
+        path: String,
+        rows: usize,
+    },
+}
+
 pub fn read_config(path: &Path) -> Result<WiktionaryConfig> {
     if !path.exists() {
         return Ok(WiktionaryConfig::default());
@@ -221,17 +244,36 @@ pub fn prepare_dataset(
     cache_dir: &Path,
     config: &WiktionaryConfig,
 ) -> Result<PrepareReport> {
+    prepare_dataset_with_progress(out, cache_dir, config, |_| {})
+}
+
+pub fn prepare_dataset_with_progress(
+    out: &Path,
+    cache_dir: &Path,
+    config: &WiktionaryConfig,
+    mut progress: impl FnMut(PrepareProgress),
+) -> Result<PrepareReport> {
+    progress(PrepareProgress::Stage {
+        message: format!("Creating output/cache directories: {}", out.display()),
+    });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(cache_dir).with_context(|| format!("creating {}", cache_dir.display()))?;
 
     if config.source_kind == WiktionarySourceKind::PieEtymology {
-        return prepare_pie_dataset(out, cache_dir, config);
+        return prepare_pie_dataset(out, cache_dir, config, &mut progress);
     }
 
-    let dump_path = resolve_dump_path(cache_dir, config)?;
-    let extracted = parse_dump(&dump_path, config)?;
+    let dump_path = resolve_dump_path_with_progress(cache_dir, config, &mut progress)?;
+    let extracted = parse_dump_with_progress(&dump_path, config, &mut progress)?;
     let phonemes = extracted.phonemes;
     let phones = extracted.phones;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Expanding {} phoneme and {} phone rows into training examples",
+            phonemes.len(),
+            phones.len()
+        ),
+    });
     let examples = expand_training_examples(
         &phonemes
             .iter()
@@ -240,16 +282,33 @@ pub fn prepare_dataset(
             .collect::<Vec<_>>(),
         config,
     );
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Splitting {} examples into train/valid/test",
+            examples.len()
+        ),
+    });
     let (train, valid, test) =
         split_examples(examples, config.train_frac, config.valid_frac, config.seed);
 
-    write_jsonl(&out.join("train.jsonl"), &train)?;
-    write_jsonl(&out.join("valid.jsonl"), &valid)?;
-    write_jsonl(&out.join("test.jsonl"), &test)?;
-    write_jsonl(&out.join("patterns.jsonl"), &extracted.patterns)?;
-    write_jsonl(&out.join("phonemes.jsonl"), &phonemes)?;
-    write_jsonl(&out.join("phones.jsonl"), &phones)?;
+    write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
+    write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
+    write_jsonl_with_progress(&out.join("test.jsonl"), &test, &mut progress)?;
+    write_jsonl_with_progress(
+        &out.join("patterns.jsonl"),
+        &extracted.patterns,
+        &mut progress,
+    )?;
+    write_jsonl_with_progress(&out.join("phonemes.jsonl"), &phonemes, &mut progress)?;
+    write_jsonl_with_progress(&out.join("phones.jsonl"), &phones, &mut progress)?;
+    progress(PrepareProgress::Stage {
+        message: "Building vocabulary".to_string(),
+    });
     write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
+    progress(PrepareProgress::Write {
+        path: out.join("vocab.json").display().to_string(),
+        rows: train.len() + valid.len() + test.len(),
+    });
     fs::write(
         out.join("dataset_config.json"),
         serde_json::to_string_pretty(config)?,
@@ -272,18 +331,26 @@ fn prepare_pie_dataset(
     out: &Path,
     cache_dir: &Path,
     config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
-    let dump_path = resolve_dump_path(cache_dir, config)?;
-    let extracted = parse_dump(&dump_path, config)?;
+    let dump_path = resolve_dump_path_with_progress(cache_dir, config, progress)?;
+    let extracted = parse_dump_with_progress(&dump_path, config, progress)?;
     let mut roots = extracted.pie_roots;
     let mut source_paths = vec![dump_path];
-    let wikipedia_paths = resolve_wikipedia_source_paths(cache_dir, config)?;
+    let wikipedia_paths =
+        resolve_wikipedia_source_paths_with_progress(cache_dir, config, progress)?;
     source_paths.extend(wikipedia_paths.iter().cloned());
     for path in &wikipedia_paths {
+        progress(PrepareProgress::Stage {
+            message: format!("Reading supplemental source {}", path.display()),
+        });
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         roots.extend(extract_pie_etymology_entries(&raw, config));
     }
+    progress(PrepareProgress::Stage {
+        message: format!("Sorting and deduplicating {} PIE root rows", roots.len()),
+    });
     roots.sort_by(|a, b| {
         (&a.pie, &a.lang, &a.branch, &a.descendant).cmp(&(
             &b.pie,
@@ -296,15 +363,34 @@ fn prepare_pie_dataset(
         a.pie == b.pie && a.lang == b.lang && a.branch == b.branch && a.descendant == b.descendant
     });
 
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Expanding {} PIE root rows into etymology examples",
+            roots.len()
+        ),
+    });
     let examples = expand_pie_training_examples(&roots, config);
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Splitting {} examples into train/valid/test",
+            examples.len()
+        ),
+    });
     let (train, valid, test) =
         split_examples(examples, config.train_frac, config.valid_frac, config.seed);
 
-    write_jsonl(&out.join("train.jsonl"), &train)?;
-    write_jsonl(&out.join("valid.jsonl"), &valid)?;
-    write_jsonl(&out.join("test.jsonl"), &test)?;
-    write_jsonl(&out.join("pie_roots.jsonl"), &roots)?;
+    write_jsonl_with_progress(&out.join("train.jsonl"), &train, progress)?;
+    write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, progress)?;
+    write_jsonl_with_progress(&out.join("test.jsonl"), &test, progress)?;
+    write_jsonl_with_progress(&out.join("pie_roots.jsonl"), &roots, progress)?;
+    progress(PrepareProgress::Stage {
+        message: "Building vocabulary".to_string(),
+    });
     write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
+    progress(PrepareProgress::Write {
+        path: out.join("vocab.json").display().to_string(),
+        rows: train.len() + valid.len() + test.len(),
+    });
     fs::write(
         out.join("dataset_config.json"),
         serde_json::to_string_pretty(config)?,
@@ -330,9 +416,10 @@ fn prepare_pie_dataset(
     })
 }
 
-fn resolve_wikipedia_source_paths(
+fn resolve_wikipedia_source_paths_with_progress(
     cache_dir: &Path,
     config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<Vec<PathBuf>> {
     if let Some(path) = &config.dump_path {
         return Ok(vec![PathBuf::from(path)]);
@@ -343,7 +430,11 @@ fn resolve_wikipedia_source_paths(
         let filename = wikipedia_cache_filename(url, index);
         let path = cache_dir.join(filename);
         if !path.exists() || path.metadata()?.len() == 0 {
-            download_to_file(url, &path)?;
+            download_to_file_with_progress(url, &path, progress)?;
+        } else {
+            progress(PrepareProgress::Stage {
+                message: format!("Using cached supplemental source {}", path.display()),
+            });
         }
         paths.push(path);
     }
@@ -362,13 +453,35 @@ fn wikipedia_cache_filename(url: &str, index: usize) -> String {
 }
 
 pub fn resolve_dump_path(cache_dir: &Path, config: &WiktionaryConfig) -> Result<PathBuf> {
+    resolve_dump_path_with_progress(cache_dir, config, &mut |_| {})
+}
+
+fn resolve_dump_path_with_progress(
+    cache_dir: &Path,
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<PathBuf> {
     if let Some(path) = &config.dump_path {
+        progress(PrepareProgress::Stage {
+            message: format!("Using configured dump {}", path),
+        });
         return Ok(PathBuf::from(path));
     }
-    download_dump(cache_dir, config)
+    download_dump_with_progress(cache_dir, config, progress)
 }
 
 pub fn download_dump(cache_dir: &Path, config: &WiktionaryConfig) -> Result<PathBuf> {
+    download_dump_with_progress(cache_dir, config, &mut |_| {})
+}
+
+fn download_dump_with_progress(
+    cache_dir: &Path,
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<PathBuf> {
+    progress(PrepareProgress::Stage {
+        message: "Resolving Wiktionary dump URL".to_string(),
+    });
     let dump_url = match &config.dump_file_url {
         Some(url) => url.clone(),
         None => resolve_dump_file_url(&config.dump_index_url)?,
@@ -380,9 +493,12 @@ pub fn download_dump(cache_dir: &Path, config: &WiktionaryConfig) -> Result<Path
         .context("dump URL has no filename")?;
     let path = cache_dir.join(filename);
     if path.exists() && path.metadata()?.len() > 0 {
+        progress(PrepareProgress::Stage {
+            message: format!("Using cached dump {}", path.display()),
+        });
         return Ok(path);
     }
-    download_to_file(&dump_url, &path)?;
+    download_to_file_with_progress(&dump_url, &path, progress)?;
     Ok(path)
 }
 
@@ -428,8 +544,15 @@ fn join_url(base: &str, href: &str) -> String {
     }
 }
 
-fn download_to_file(url: &str, path: &Path) -> Result<()> {
+fn download_to_file_with_progress(
+    url: &str,
+    path: &Path,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
     let part_path = path.with_extension("part");
+    progress(PrepareProgress::Stage {
+        message: format!("Downloading {url}"),
+    });
     let response = ureq::get(url)
         .header("User-Agent", USER_AGENT)
         .call()
@@ -439,12 +562,21 @@ fn download_to_file(url: &str, path: &Path) -> Result<()> {
     let mut file =
         File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?;
     let mut buffer = [0_u8; 1024 * 64];
+    let mut downloaded = 0_u64;
     loop {
         let n = reader.read(&mut buffer)?;
         if n == 0 {
             break;
         }
         file.write_all(&buffer[..n])?;
+        downloaded += n as u64;
+        if downloaded < 1024 * 1024 || downloaded % (8 * 1024 * 1024) < n as u64 {
+            progress(PrepareProgress::Download {
+                url: url.to_string(),
+                path: path.display().to_string(),
+                bytes: downloaded,
+            });
+        }
     }
     file.flush()?;
     anyhow::ensure!(part_path.metadata()?.len() > 0, "empty dump response");
@@ -466,24 +598,42 @@ pub struct ExtractedWiktionaryData {
 }
 
 pub fn parse_dump(dump_path: &Path, config: &WiktionaryConfig) -> Result<ExtractedWiktionaryData> {
+    parse_dump_with_progress(dump_path, config, &mut |_| {})
+}
+
+fn parse_dump_with_progress(
+    dump_path: &Path,
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<ExtractedWiktionaryData> {
+    progress(PrepareProgress::Stage {
+        message: format!("Opening dump {}", dump_path.display()),
+    });
     let file = File::open(dump_path).with_context(|| format!("opening {}", dump_path.display()))?;
     if dump_path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension == "bz2")
     {
+        progress(PrepareProgress::Stage {
+            message: format!("Decompressing and parsing {}", dump_path.display()),
+        });
         let decoder = BzDecoder::new(file);
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
-        parse_xml_pages(reader, config)
+        parse_xml_pages_with_progress(reader, config, progress)
     } else {
+        progress(PrepareProgress::Stage {
+            message: format!("Parsing {}", dump_path.display()),
+        });
         let reader = BufReader::with_capacity(1024 * 1024, file);
-        parse_xml_pages(reader, config)
+        parse_xml_pages_with_progress(reader, config, progress)
     }
 }
 
-fn parse_xml_pages<R: BufRead>(
+fn parse_xml_pages_with_progress<R: BufRead>(
     reader: R,
     config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<ExtractedWiktionaryData> {
     let mut data = ExtractedWiktionaryData::default();
     let mut title = String::new();
@@ -507,6 +657,7 @@ fn parse_xml_pages<R: BufRead>(
                         text.clear();
                         in_text = false;
                         pages_seen += 1;
+                        maybe_report_parse_progress(progress, pages_seen, &data);
                         if config.max_pages.is_some_and(|max| pages_seen >= max) {
                             break;
                         }
@@ -522,6 +673,7 @@ fn parse_xml_pages<R: BufRead>(
             text.clear();
             in_text = false;
             pages_seen += 1;
+            maybe_report_parse_progress(progress, pages_seen, &data);
             if config.max_pages.is_some_and(|max| pages_seen >= max) {
                 break;
             }
@@ -531,7 +683,31 @@ fn parse_xml_pages<R: BufRead>(
         }
     }
 
+    progress(PrepareProgress::Parse {
+        pages: pages_seen,
+        patterns: data.patterns.len(),
+        phonemes: data.phonemes.len(),
+        phones: data.phones.len(),
+        pie_roots: data.pie_roots.len(),
+    });
+
     Ok(data)
+}
+
+fn maybe_report_parse_progress(
+    progress: &mut impl FnMut(PrepareProgress),
+    pages_seen: usize,
+    data: &ExtractedWiktionaryData,
+) {
+    if pages_seen <= 10 || pages_seen % 1_000 == 0 {
+        progress(PrepareProgress::Parse {
+            pages: pages_seen,
+            patterns: data.patterns.len(),
+            phonemes: data.phonemes.len(),
+            phones: data.phones.len(),
+            pie_roots: data.pie_roots.len(),
+        });
+    }
 }
 
 impl ExtractedWiktionaryData {
@@ -1796,11 +1972,22 @@ fn split_examples(
     (examples, valid, test)
 }
 
-fn write_jsonl<T: Serialize>(path: &Path, examples: &[T]) -> Result<()> {
+fn write_jsonl_with_progress<T: Serialize>(
+    path: &Path,
+    examples: &[T],
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
+    progress(PrepareProgress::Stage {
+        message: format!("Writing {} rows to {}", examples.len(), path.display()),
+    });
     let mut file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     for example in examples {
         writeln!(file, "{}", serde_json::to_string(example)?)?;
     }
+    progress(PrepareProgress::Write {
+        path: path.display().to_string(),
+        rows: examples.len(),
+    });
     Ok(())
 }
 
