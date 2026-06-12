@@ -556,6 +556,10 @@ enum SentenceParserCommands {
         #[arg(long, default_value = "configs/sentence-parser/default.toml")]
         config: PathBuf,
 
+        /// Project Gutenberg text file or directory; may be passed more than once
+        #[arg(long = "input")]
+        inputs: Vec<PathBuf>,
+
         /// Output directory for parser data
         #[arg(long, default_value = "datasets/sentence-parser/v0")]
         out: PathBuf,
@@ -574,6 +578,42 @@ enum SentenceParserCommands {
         /// Output directory for the model
         #[arg(long, default_value = "models/sentence-parser/v0")]
         out: PathBuf,
+
+        /// Prepare data before training
+        #[arg(long)]
+        prepare: bool,
+
+        /// AdamW learning rate
+        #[arg(long, default_value_t = 3e-4)]
+        learning_rate: f64,
+
+        /// AdamW weight decay
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f32,
+
+        /// Dropout rate
+        #[arg(long, default_value_t = 0.1)]
+        dropout: f64,
+
+        /// Mini-batch size
+        #[arg(long, default_value_t = 64)]
+        batch_size: usize,
+
+        /// Maximum training epochs
+        #[arg(long, default_value_t = 20)]
+        epochs: usize,
+
+        /// Early stopping patience
+        #[arg(long, default_value_t = 5)]
+        patience: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+
+        /// Prepared row source to train on
+        #[arg(long, value_enum, default_value = "all")]
+        training_set: SentenceParserTrainingSetArg,
     },
 
     /// Validate a sentence parser artifact scaffold
@@ -595,6 +635,20 @@ enum SentenceParserCommands {
 
         /// Sentence to parse
         text: String,
+    },
+
+    /// Run cursor-time sentence-boundary seq2seq inference
+    Infer {
+        /// Directory containing the parser model
+        #[arg(long, default_value = "models/sentence-parser/v0")]
+        model: PathBuf,
+
+        /// Previously parsed sentence to show the model
+        #[arg(long, default_value = "")]
+        previous: String,
+
+        /// Current cursor prefix
+        cursor: String,
     },
 }
 
@@ -834,6 +888,16 @@ enum MaskPolicyArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum SentenceParserTrainingSetArg {
+    /// Train on regular seams rows plus mined naive-discrepancy correction rows.
+    All,
+    /// Train only on rows whose targets come directly from seams sentence boundaries.
+    Seams,
+    /// Train only on correction rows mined from naive-vs-seams disagreements.
+    NaiveDiscrepancy,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum RefinementSourceArg {
     /// Mine held-out split examples where model predictions disagree with OpenEPD.
     Discrepancies,
@@ -883,7 +947,7 @@ fn main() -> Result<()> {
 
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
-        Commands::SentenceParser { command } => run_sentence_parser_command(command),
+        Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::SpeechManifold { command } => {
             run_speech_manifold_command(command, device_arg, output_mode)
         }
@@ -1018,6 +1082,10 @@ fn command_needs_device(command: &Commands) -> bool {
                 | SpeechManifoldCommands::Eval { .. }
                 | SpeechManifoldCommands::Infer { .. }
         ),
+        Commands::SentenceParser { command } => matches!(
+            command,
+            SentenceParserCommands::Train { .. } | SentenceParserCommands::Infer { .. }
+        ),
         Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
         Commands::Train { .. }
         | Commands::Eval { .. }
@@ -1035,6 +1103,9 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         }
         | Commands::SpeechManifold {
             command: SpeechManifoldCommands::Infer { .. },
+        }
+        | Commands::SentenceParser {
+            command: SentenceParserCommands::Infer { .. },
         }
         | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
@@ -1405,28 +1476,88 @@ fn read_sentence_parser_config(
     toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
-fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
+fn run_sentence_parser_command(
+    command: SentenceParserCommands,
+    device_arg: DeviceArg,
+) -> Result<()> {
     match command {
-        SentenceParserCommands::Prepare { config, out } => {
-            let config = read_sentence_parser_config(&config)?;
-            tongues_sentence_parser::prepare_dataset(&out, &config)?;
+        SentenceParserCommands::Prepare {
+            config,
+            inputs,
+            out,
+        } => {
+            let mut config = read_sentence_parser_config(&config)?;
+            if !inputs.is_empty() {
+                config.source_paths = inputs;
+            }
+            let report = tongues_sentence_parser::prepare_dataset(&out, &config)?;
             println!(
-                "Sentence parser dataset scaffold written to {}",
-                out.display()
+                "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
+                out.display(),
+                report.train_examples,
+                report.valid_examples,
+                report.test_examples,
+                report.detected_sentences,
+                report.source_files
             );
+            if report.naive_discrepancy_examples > 0 {
+                println!(
+                    "  included {} naive-vs-seams correction rows",
+                    report.naive_discrepancy_examples
+                );
+            }
             Ok(())
         }
-        SentenceParserCommands::Train { config, data, out } => {
-            if !data.exists() {
+        SentenceParserCommands::Train {
+            config,
+            data,
+            out,
+            prepare,
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            epochs,
+            patience,
+            seed,
+            training_set,
+        } => {
+            if prepare
+                || !data.join("vocab.json").exists()
+                || !data.join("train.jsonl").exists()
+                || !data.join("valid.jsonl").exists()
+            {
                 let config_data = read_sentence_parser_config(&config)?;
-                tongues_sentence_parser::prepare_dataset(&data, &config_data)?;
+                let report = tongues_sentence_parser::prepare_dataset(&data, &config_data)?;
+                println!(
+                    "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples",
+                    data.display(),
+                    report.train_examples,
+                    report.valid_examples,
+                    report.test_examples
+                );
+                if report.naive_discrepancy_examples > 0 {
+                    println!(
+                        "  included {} naive-vs-seams correction rows",
+                        report.naive_discrepancy_examples
+                    );
+                }
             }
             let config = read_sentence_parser_config(&config)?;
-            tongues_sentence_parser::write_scaffold_model(&out, &config)?;
-            println!(
-                "Sentence parser model scaffold written to {}",
-                out.display()
-            );
+            cmd_sentence_parser_train(
+                &data,
+                &out,
+                &config,
+                learning_rate,
+                weight_decay,
+                dropout,
+                batch_size,
+                epochs,
+                patience,
+                seed,
+                training_set,
+                device_arg,
+            )?;
             Ok(())
         }
         SentenceParserCommands::Eval { model, split } => {
@@ -1460,7 +1591,218 @@ fn run_sentence_parser_command(command: SentenceParserCommands) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&analysis)?);
             Ok(())
         }
+        SentenceParserCommands::Infer {
+            model,
+            previous,
+            cursor,
+        } => cmd_sentence_parser_infer(&model, &previous, &cursor, device_arg),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_sentence_parser_train(
+    data: &Path,
+    out: &Path,
+    config: &tongues_sentence_parser::SentenceParserConfig,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    training_set: SentenceParserTrainingSetArg,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
+    let train_rows: Vec<tongues_sentence_parser::BoundaryTrainingExample> =
+        read_jsonl_as(&data.join("train.jsonl"))?;
+    let valid_rows: Vec<tongues_sentence_parser::BoundaryTrainingExample> =
+        read_jsonl_as(&data.join("valid.jsonl"))?;
+    let source_filter = sentence_parser_training_source_filter(training_set);
+    let train_rows = tongues_sentence_parser::filter_examples_by_source(train_rows, source_filter);
+    let valid_rows = tongues_sentence_parser::filter_examples_by_source(valid_rows, source_filter);
+    anyhow::ensure!(
+        !train_rows.is_empty(),
+        "sentence-parser train split is empty"
+    );
+    anyhow::ensure!(
+        !valid_rows.is_empty(),
+        "sentence-parser valid split is empty"
+    );
+
+    let train_examples = tongues_sentence_parser::make_seq2seq_examples(&train_rows, &vocab);
+    let valid_examples = tongues_sentence_parser::make_seq2seq_examples(&valid_rows, &vocab);
+    let model_config = if out.join("model_config.json").exists() {
+        let existing: ModelConfig = read_json_file(&out.join("model_config.json"))?;
+        anyhow::ensure!(
+            existing.vocab_size == vocab.size(),
+            "existing model_config.json vocab_size={} does not match vocab size {}; use a fresh --out directory after rebuilding sentence-parser data",
+            existing.vocab_size,
+            vocab.size()
+        );
+        existing
+    } else {
+        ModelConfig::new(vocab.size()).with_dropout(dropout)
+    };
+    let train_config = TrainConfig {
+        learning_rate,
+        weight_decay,
+        dropout,
+        batch_size,
+        epochs,
+        early_stopping_patience: patience,
+        task: None,
+        max_frequency_repeat: 1,
+        frequency_rarity_cap: 0.0,
+    };
+
+    fs::write(
+        out.join("model_config.json"),
+        serde_json::to_string_pretty(&model_config)?,
+    )?;
+    fs::write(
+        out.join("train_config.json"),
+        serde_json::to_string_pretty(&train_config)?,
+    )?;
+    fs::write(
+        out.join("sentence_parser_config.json"),
+        serde_json::to_string_pretty(config)?,
+    )?;
+    fs::write(
+        out.join("vocab.json"),
+        serde_json::to_string_pretty(&vocab)?,
+    )?;
+    fs::write(
+        out.join("label_schema.json"),
+        serde_json::to_string_pretty(&tongues_sentence_parser::LabelSchema::default())?,
+    )?;
+    write_manifest(
+        out,
+        &ModelArtifactManifest::new(
+            tongues_sentence_parser::FAMILY,
+            tongues_sentence_parser::ARCHITECTURE,
+            data_id_from_path(data),
+        )
+        .with_task("cursor-boundary"),
+    )?;
+
+    let model_path = out.join("model");
+    println!("Starting sentence-parser seq2seq training...");
+    println!(
+        "  training_set={} examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
+        sentence_parser_training_set_label(training_set),
+        train_examples.len(),
+        valid_examples.len(),
+        vocab.size(),
+        learning_rate,
+        weight_decay,
+        dropout,
+        epochs,
+        patience,
+        batch_size
+    );
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            train_seq2seq_examples::<CpuTrainBackend, _>(
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            train_seq2seq_examples::<CudaTrainBackend, _>(
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn sentence_parser_training_source_filter(
+    training_set: SentenceParserTrainingSetArg,
+) -> Option<tongues_sentence_parser::TrainingRowSource> {
+    match training_set {
+        SentenceParserTrainingSetArg::All => None,
+        SentenceParserTrainingSetArg::Seams => {
+            Some(tongues_sentence_parser::TrainingRowSource::Seams)
+        }
+        SentenceParserTrainingSetArg::NaiveDiscrepancy => {
+            Some(tongues_sentence_parser::TrainingRowSource::NaiveDiscrepancy)
+        }
+    }
+}
+
+fn sentence_parser_training_set_label(training_set: SentenceParserTrainingSetArg) -> &'static str {
+    match training_set {
+        SentenceParserTrainingSetArg::All => "all",
+        SentenceParserTrainingSetArg::Seams => "seams",
+        SentenceParserTrainingSetArg::NaiveDiscrepancy => "naive-discrepancy",
+    }
+}
+
+fn cmd_sentence_parser_infer(
+    model_dir: &Path,
+    previous: &str,
+    cursor: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let manifest =
+        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
+    anyhow::ensure!(
+        manifest.family == tongues_sentence_parser::FAMILY,
+        "expected sentence-parser manifest, found `{}`",
+        manifest.family
+    );
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let lowercase = read_json_file::<tongues_sentence_parser::SentenceParserConfig>(
+        &model_dir.join("sentence_parser_config.json"),
+    )
+    .map(|config| config.lowercase)
+    .unwrap_or(false);
+    let input = tongues_sentence_parser::format_boundary_input(previous, cursor, lowercase);
+    let output = match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model =
+                load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            predict_sentence_boundary(&model, &input, &vocab, &device)
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model =
+                load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            predict_sentence_boundary(&model, &input, &vocab, &device)
+        }
+    };
+    let (action, text) = tongues_sentence_parser::parse_boundary_output(&output);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "action": action,
+            "text": text,
+            "raw": output
+        }))?
+    );
+    Ok(())
 }
 
 fn effective_wiktionary_data_path(
@@ -2680,6 +3022,25 @@ fn cmd_speech_manifold_infer(
 fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn predict_sentence_boundary<B: Backend>(
+    model: &Seq2SeqModel<B>,
+    input: &str,
+    vocab: &Vocab,
+    device: &B::Device,
+) -> String {
+    let src_ids = vocab.encode_string(input);
+    let src_len = src_ids.len();
+    let src_tensor = Tensor::<B, 2, Int>::from_data(
+        burn::tensor::TensorData::new(
+            src_ids.iter().map(|&x| x as i32).collect::<Vec<_>>(),
+            [1, src_len],
+        ),
+        device,
+    );
+    let pred_ids = model.generate(src_tensor, 128);
+    vocab.decode_ids(&pred_ids)
 }
 
 fn read_jsonl_as<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {

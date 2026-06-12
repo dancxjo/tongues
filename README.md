@@ -68,6 +68,7 @@ For detailed training, data preparation, and model-family documentation, see:
 
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
+- [Sentence parser](docs/sentence-parser.md)
 - [Speech manifold](docs/speech-manifold.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
@@ -83,7 +84,7 @@ crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
 crates/tongues-speech-manifold   multimodal speech-manifold data/model family
-crates/tongues-sentence-parser   sentence parser artifact/output scaffold
+crates/tongues-sentence-parser   cursor-boundary data and model-family code
 crates/tongues-cli               command-line routing and model/data wiring
 crates/speech                    rule-based phonemicization and realization pipeline
 crates/styletts2                 StyleTTS2 symbol lowering and backend experiments
@@ -120,7 +121,7 @@ Most commands also have direct `cargo run --release -- ...` forms documented in 
 |---|---|---|
 | `g2p2g` | spelling <-> broad IPA | active |
 | `wiktionary` | multilingual orthography/phonology | active |
-| `sentence-parser` | syntax analysis | scaffold |
+| `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
 | `speech-manifold` | multimodal speech representations | experimental |
 
 Legacy verb-first commands still work for now, but the active CLI shape is model-family first: `tongues g2p2g ...`, `tongues wiktionary ...`, and so on.
