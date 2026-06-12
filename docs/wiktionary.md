@@ -11,6 +11,14 @@ cargo run --release -- wiktionary prepare \
     --out datasets/wiktionary/enwiktionary-2026-06-01-v0
 ```
 
+Start a fresh default run by archiving the existing default dataset/model artifacts and recreating empty directories:
+
+```sh
+cargo run --bin tongues -- wiktionary clean --all
+```
+
+Use `--data` or `--model` to archive only one side. Artifacts are moved under `archive/<run-id>/...`; pass `--run-id NAME` for a stable archive folder or `--no-create` if you do not want empty defaults recreated.
+
 This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configured Wikimedia dump index:
 
 ```text

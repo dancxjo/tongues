@@ -18,10 +18,10 @@ use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -56,6 +56,12 @@ type CudaTrainBackend = Autodiff<CudaInferBackend>;
 const DEFAULT_WIKTIONARY_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
 const DEFAULT_WIKTIONARY_DATA_DIR: &str = "datasets/wiktionary/enwiktionary-2026-06-01-v0";
 const DEFAULT_WIKTIONARY_MODEL_DIR: &str = "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
+const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
+const DEFAULT_G2P2G_MODEL_DIR: &str = "models/g2p2g/openepd-v0";
+const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
+const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
+const DEFAULT_SPEECH_MANIFOLD_DATA_DIR: &str = "datasets/speech-manifold/openepd-synth-v0";
+const DEFAULT_SPEECH_MANIFOLD_MODEL_DIR: &str = "models/speech-manifold/openepd-synth-v0";
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
@@ -357,6 +363,9 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum G2p2gCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
     /// Parse OpenEPD, build vocabulary, and create train/valid/test splits
     Prepare {
         /// TOML config file for the G2P2G pipeline
@@ -550,6 +559,9 @@ enum G2p2gCommands {
 
 #[derive(Subcommand, Debug)]
 enum SentenceParserCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
     /// Prepare a sentence parser dataset scaffold
     Prepare {
         /// TOML config file for the sentence parser pipeline
@@ -658,6 +670,9 @@ enum SentenceParserCommands {
 
 #[derive(Subcommand, Debug)]
 enum SpeechManifoldCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
     /// Prepare an OpenEPD-derived multimodal dataset
     Prepare {
         /// TOML config file for the speech-manifold pipeline
@@ -747,6 +762,9 @@ enum SpeechManifoldCommands {
 
 #[derive(Subcommand, Debug)]
 enum WiktionaryCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
     /// Download the Wiktionary dump and prepare pronunciation training JSONL
     Prepare {
         /// TOML config file for the Wiktionary pipeline
@@ -873,6 +891,47 @@ enum WiktionaryCommands {
         /// Input orthography, phoneme/phone sequence, or raw tagged source string
         input: String,
     },
+}
+
+#[derive(Args, Debug, Clone)]
+struct CleanArgs {
+    /// Archive the default prepared dataset directory
+    #[arg(long)]
+    data: bool,
+
+    /// Archive the default model directory
+    #[arg(long)]
+    model: bool,
+
+    /// Archive both default dataset and model directories; this is also the default
+    #[arg(long)]
+    all: bool,
+
+    /// Root directory for archived artifacts
+    #[arg(long, default_value = "archive")]
+    archive_dir: PathBuf,
+
+    /// Archive run id; defaults to a unix-seconds id
+    #[arg(long)]
+    run_id: Option<String>,
+
+    /// Do not recreate empty default directories after archiving
+    #[arg(long)]
+    no_create: bool,
+}
+
+impl CleanArgs {
+    fn clean_data(&self) -> bool {
+        self.all || self.data || (!self.data && !self.model)
+    }
+
+    fn clean_model(&self) -> bool {
+        self.all || self.model || (!self.data && !self.model)
+    }
+
+    fn create_defaults(&self) -> bool {
+        !self.no_create
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -1147,6 +1206,23 @@ fn finish_status(pb: indicatif::ProgressBar, message: impl AsRef<str>) {
     }
 }
 
+fn format_count(value: impl std::fmt::Display) -> String {
+    let value = value.to_string();
+    let mut grouped = String::with_capacity(value.len() + value.len() / 3);
+    let mut digits = 0usize;
+
+    for ch in value.chars().rev() {
+        if digits == 3 && ch != '-' {
+            grouped.push(',');
+            digits = 0;
+        }
+        grouped.push(ch);
+        digits += 1;
+    }
+
+    grouped.chars().rev().collect()
+}
+
 fn format_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
@@ -1159,8 +1235,34 @@ fn format_bytes(bytes: u64) -> String {
     } else if bytes_f >= KIB {
         format!("{:.1} KiB", bytes_f / KIB)
     } else {
-        format!("{bytes} B")
+        format!("{} B", format_count(bytes))
     }
+}
+
+fn counted_progress_style() -> Result<indicatif::ProgressStyle> {
+    use std::fmt::Write;
+
+    Ok(indicatif::ProgressStyle::default_bar()
+        .template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ({percent}%) {msg}",
+        )?
+        .with_key(
+            "human_pos",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                write!(w, "{}", format_count(state.pos())).expect("write to progress key")
+            },
+        )
+        .with_key(
+            "human_len",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                let len = state
+                    .len()
+                    .map(format_count)
+                    .unwrap_or_else(|| "?".to_string());
+                write!(w, "{len}").expect("write to progress key")
+            },
+        )
+        .progress_chars("#>-"))
 }
 
 fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProgress) -> String {
@@ -1176,18 +1278,31 @@ fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProg
             phones,
             pie_roots,
         } => format!(
-            "Parsing dump: {pages} pages, {patterns} patterns, {phonemes} phonemes, {phones} phones, {pie_roots} PIE roots"
+            "Parsing dump: {} pages, {} patterns, {} phonemes, {} phones, {} PIE roots",
+            format_count(pages),
+            format_count(patterns),
+            format_count(phonemes),
+            format_count(phones),
+            format_count(pie_roots)
         ),
         tongues_wiktionary::PrepareProgress::Expand {
             rows,
             examples,
             path,
         } => match path {
-            Some(path) => format!("Expanded {rows} rows into {examples} examples -> {path}"),
-            None => format!("Expanded {rows} rows into {examples} examples"),
+            Some(path) => format!(
+                "Expanded {} rows into {} examples -> {path}",
+                format_count(rows),
+                format_count(examples)
+            ),
+            None => format!(
+                "Expanded {} rows into {} examples",
+                format_count(rows),
+                format_count(examples)
+            ),
         },
         tongues_wiktionary::PrepareProgress::Write { path, rows } => {
-            format!("Wrote {rows} rows to {path}")
+            format!("Wrote {} rows to {path}", format_count(rows))
         }
     }
 }
@@ -1365,12 +1480,127 @@ fn speech_manifold_train_config(
     })
 }
 
+#[derive(Debug)]
+struct CleanTarget {
+    kind: &'static str,
+    path: PathBuf,
+}
+
+fn cmd_clean_family(
+    family: &str,
+    args: &CleanArgs,
+    data_dir: impl Into<PathBuf>,
+    model_dir: impl Into<PathBuf>,
+) -> Result<()> {
+    let mut targets = Vec::new();
+    if args.clean_data() {
+        targets.push(CleanTarget {
+            kind: "dataset",
+            path: data_dir.into(),
+        });
+    }
+    if args.clean_model() {
+        targets.push(CleanTarget {
+            kind: "model",
+            path: model_dir.into(),
+        });
+    }
+
+    let run_id = args.run_id.clone().unwrap_or_else(default_archive_run_id);
+    let archive_root = args.archive_dir.join(&run_id);
+    let mut moved = 0usize;
+
+    for target in &targets {
+        if target.path.exists() {
+            let archive_path = unique_archive_path(&archive_root.join(&target.path));
+            if let Some(parent) = archive_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            fs::rename(&target.path, &archive_path).with_context(|| {
+                format!(
+                    "moving {} to {}",
+                    target.path.display(),
+                    archive_path.display()
+                )
+            })?;
+            println!(
+                "Archived {} {}: {} -> {}",
+                family,
+                target.kind,
+                target.path.display(),
+                archive_path.display()
+            );
+            moved += 1;
+        } else {
+            println!(
+                "No existing {} {} at {}",
+                family,
+                target.kind,
+                target.path.display()
+            );
+        }
+
+        if args.create_defaults() {
+            fs::create_dir_all(&target.path)
+                .with_context(|| format!("creating {}", target.path.display()))?;
+            println!(
+                "Ready {} {} directory: {}",
+                family,
+                target.kind,
+                target.path.display()
+            );
+        }
+    }
+
+    if moved == 0 {
+        println!("Nothing archived for {family}.");
+    } else {
+        println!("Archive root: {}", archive_root.display());
+    }
+    Ok(())
+}
+
+fn default_archive_run_id() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("run-{seconds}")
+}
+
+fn unique_archive_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+
+    for index in 1.. {
+        let candidate = path.with_file_name(format!(
+            "{}-{}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("artifact"),
+            index
+        ));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded archive path suffix search should return")
+}
+
 fn run_g2p2g_command(
     command: G2p2gCommands,
     device_arg: DeviceArg,
     output_mode: OutputMode,
 ) -> Result<()> {
     match command {
+        G2p2gCommands::Clean(args) => cmd_clean_family(
+            "g2p2g",
+            &args,
+            DEFAULT_G2P2G_DATA_DIR,
+            DEFAULT_G2P2G_MODEL_DIR,
+        ),
         G2p2gCommands::Prepare {
             config,
             input,
@@ -1494,13 +1724,24 @@ fn sentence_parser_prepare_progress_message(
     match progress {
         tongues_sentence_parser::PrepareProgress::Stage { message } => message,
         tongues_sentence_parser::PrepareProgress::Discover { files } => {
-            format!("Discovered {files} sentence-parser source files")
+            format!(
+                "Discovered {} sentence-parser source files",
+                format_count(files)
+            )
         }
         tongues_sentence_parser::PrepareProgress::Download { url, path, bytes } => {
-            format!("Downloaded {} from {} -> {}", format_bytes(bytes), url, path)
+            format!(
+                "Downloaded {} from {} -> {}",
+                format_bytes(bytes),
+                url,
+                path
+            )
         }
         tongues_sentence_parser::PrepareProgress::Synthesize { path, sentences } => {
-            format!("Synthesized {sentences} sentence-boundary cases -> {path}")
+            format!(
+                "Synthesized {} sentence-boundary cases -> {path}",
+                format_count(sentences)
+            )
         }
         tongues_sentence_parser::PrepareProgress::Detect {
             path,
@@ -1509,14 +1750,22 @@ fn sentence_parser_prepare_progress_message(
             sentences,
             naive_discrepancies,
         } => format!(
-            "Detected {sentences} sentences and {naive_discrepancies} repairs ({files_done}/{files_total}: {path})"
+            "Detected {} sentences and {} repairs ({}/{}: {path})",
+            format_count(sentences),
+            format_count(naive_discrepancies),
+            format_count(files_done),
+            format_count(files_total)
         ),
         tongues_sentence_parser::PrepareProgress::Build {
             sentences,
             examples,
-        } => format!("Built {examples} boundary examples from {sentences} sentences"),
+        } => format!(
+            "Built {} boundary examples from {} sentences",
+            format_count(examples),
+            format_count(sentences)
+        ),
         tongues_sentence_parser::PrepareProgress::Write { path, rows } => {
-            format!("Wrote {rows} rows to {path}")
+            format!("Wrote {} rows to {path}", format_count(rows))
         }
     }
 }
@@ -1526,6 +1775,12 @@ fn run_sentence_parser_command(
     device_arg: DeviceArg,
 ) -> Result<()> {
     match command {
+        SentenceParserCommands::Clean(args) => cmd_clean_family(
+            "sentence-parser",
+            &args,
+            DEFAULT_SENTENCE_PARSER_DATA_DIR,
+            DEFAULT_SENTENCE_PARSER_MODEL_DIR,
+        ),
         SentenceParserCommands::Prepare {
             config,
             inputs,
@@ -1550,17 +1805,17 @@ fn run_sentence_parser_command(
                 format!(
                     "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
                     out.display(),
-                    report.train_examples,
-                    report.valid_examples,
-                    report.test_examples,
-                    report.detected_sentences,
-                    report.source_files
+                    format_count(report.train_examples),
+                    format_count(report.valid_examples),
+                    format_count(report.test_examples),
+                    format_count(report.detected_sentences),
+                    format_count(report.source_files)
                 ),
             );
             if report.naive_discrepancy_examples > 0 {
                 println!(
                     "  included {} naive-vs-seams correction rows",
-                    report.naive_discrepancy_examples
+                    format_count(report.naive_discrepancy_examples)
                 );
             }
             Ok(())
@@ -1605,17 +1860,17 @@ fn run_sentence_parser_command(
                     format!(
                         "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
                         data.display(),
-                        report.train_examples,
-                        report.valid_examples,
-                        report.test_examples,
-                        report.detected_sentences,
-                        report.source_files
+                        format_count(report.train_examples),
+                        format_count(report.valid_examples),
+                        format_count(report.test_examples),
+                        format_count(report.detected_sentences),
+                        format_count(report.source_files)
                     ),
                 );
                 if report.naive_discrepancy_examples > 0 {
                     println!(
                         "  included {} naive-vs-seams correction rows",
-                        report.naive_discrepancy_examples
+                        format_count(report.naive_discrepancy_examples)
                     );
                 }
             }
@@ -1772,16 +2027,16 @@ fn cmd_sentence_parser_train(
     println!(
         "  training_set={} examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={} max_seq_len={}",
         sentence_parser_training_set_label(training_set),
-        train_examples.len(),
-        valid_examples.len(),
-        vocab.size(),
+        format_count(train_examples.len()),
+        format_count(valid_examples.len()),
+        format_count(vocab.size()),
         learning_rate,
         weight_decay,
         dropout,
-        epochs,
-        patience,
-        batch_size,
-        train_config.max_seq_len
+        format_count(epochs),
+        format_count(patience),
+        format_count(batch_size),
+        format_count(train_config.max_seq_len)
     );
     println!("  train_state: {}", out.join("train_state.json").display());
     println!(
@@ -1926,6 +2181,12 @@ fn run_wiktionary_command(
     output_mode: OutputMode,
 ) -> Result<()> {
     match command {
+        WiktionaryCommands::Clean(args) => cmd_clean_family(
+            "wiktionary",
+            &args,
+            DEFAULT_WIKTIONARY_DATA_DIR,
+            DEFAULT_WIKTIONARY_MODEL_DIR,
+        ),
         WiktionaryCommands::Prepare {
             config,
             dump,
@@ -1962,12 +2223,12 @@ fn run_wiktionary_command(
             );
             println!(
                 "Parsed {} phonemes, {} phones, and {} PIE roots into train/valid/test examples: {}/{}/{}",
-                report.parsed_phonemes,
-                report.parsed_phones,
-                report.parsed_pie_roots,
-                report.train_examples,
-                report.valid_examples,
-                report.test_examples
+                format_count(report.parsed_phonemes),
+                format_count(report.parsed_phones),
+                format_count(report.parsed_pie_roots),
+                format_count(report.train_examples),
+                format_count(report.valid_examples),
+                format_count(report.test_examples)
             );
             Ok(())
         }
@@ -2020,9 +2281,9 @@ fn run_wiktionary_command(
                     pb,
                     format!(
                         "Prepared {} train / {} valid / {} test examples from {}",
-                        report.train_examples,
-                        report.valid_examples,
-                        report.test_examples,
+                        format_count(report.train_examples),
+                        format_count(report.valid_examples),
+                        format_count(report.test_examples),
                         report.dump_path
                     ),
                 );
@@ -2136,7 +2397,7 @@ fn cmd_wiktionary_train(
         pb,
         format!(
             "Loaded {} rows for {}",
-            entries.len(),
+            format_count(entries.len()),
             wiktionary_notation_label(&notations)
         ),
     );
@@ -2148,7 +2409,7 @@ fn cmd_wiktionary_train(
         pb,
         format!(
             "Selected {} Wiktionary examples for task={task}",
-            examples.len()
+            format_count(examples.len())
         ),
     );
     anyhow::ensure!(
@@ -2175,7 +2436,7 @@ fn cmd_wiktionary_train(
         if skipped_train > 0 || skipped_valid > 0 {
             println!(
                 "Skipped {} train / {} valid Wiktionary examples containing tokens outside the existing model vocabulary. Use a new --out directory to train the full expanded language set from a rebuilt vocabulary.",
-                skipped_train, skipped_valid
+                format_count(skipped_train), format_count(skipped_valid)
             );
         }
         vocab
@@ -2196,18 +2457,18 @@ fn cmd_wiktionary_train(
         pb,
         format!(
             "Encoded {} train / {} valid examples with vocab size {}",
-            train_examples.len(),
-            valid_examples.len(),
-            vocab.size()
+            format_count(train_examples.len()),
+            format_count(valid_examples.len()),
+            format_count(vocab.size())
         ),
     );
 
     println!(
         "Loaded {} {} rows -> {} train / {} valid examples for task={}",
-        entries.len(),
+        format_count(entries.len()),
         wiktionary_notation_label(&notations),
-        train_examples.len(),
-        valid_examples.len(),
+        format_count(train_examples.len()),
+        format_count(valid_examples.len()),
         task
     );
 
@@ -2257,8 +2518,8 @@ fn cmd_wiktionary_train_prepared_rows(
         pb,
         format!(
             "Loaded {} train / {} valid prepared rows",
-            train_rows_raw.len(),
-            valid_rows_raw.len()
+            format_count(train_rows_raw.len()),
+            format_count(valid_rows_raw.len())
         ),
     );
 
@@ -2269,8 +2530,8 @@ fn cmd_wiktionary_train_prepared_rows(
         pb,
         format!(
             "Selected {} train / {} valid rows for task={task}",
-            train_rows.len(),
-            valid_rows.len()
+            format_count(train_rows.len()),
+            format_count(valid_rows.len())
         ),
     );
     anyhow::ensure!(
@@ -2290,16 +2551,16 @@ fn cmd_wiktionary_train_prepared_rows(
         pb,
         format!(
             "Encoded {} train / {} valid examples with vocab size {}",
-            train_examples.len(),
-            valid_examples.len(),
-            vocab.size()
+            format_count(train_examples.len()),
+            format_count(valid_examples.len()),
+            format_count(vocab.size())
         ),
     );
 
     println!(
         "Loaded prepared rows -> {} train / {} valid examples for task={}",
-        train_examples.len(),
-        valid_examples.len(),
+        format_count(train_examples.len()),
+        format_count(valid_examples.len()),
         task
     );
 
@@ -2392,7 +2653,12 @@ fn write_and_train_wiktionary_seq2seq(
     println!("Starting Wiktionary training...");
     println!(
         "  lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
-        learning_rate, weight_decay, dropout, epochs, patience, batch_size
+        learning_rate,
+        weight_decay,
+        dropout,
+        format_count(epochs),
+        format_count(patience),
+        format_count(batch_size)
     );
 
     match device_arg {
@@ -2886,6 +3152,12 @@ fn run_speech_manifold_command(
     output_mode: OutputMode,
 ) -> Result<()> {
     match command {
+        SpeechManifoldCommands::Clean(args) => cmd_clean_family(
+            "speech-manifold",
+            &args,
+            DEFAULT_SPEECH_MANIFOLD_DATA_DIR,
+            DEFAULT_SPEECH_MANIFOLD_MODEL_DIR,
+        ),
         SpeechManifoldCommands::Prepare { config, out } => {
             let config = speech_manifold_prepare_config(&config)?;
             tongues_speech_manifold::prepare_dataset(&out, &config)?;
@@ -2972,9 +3244,9 @@ fn cmd_speech_manifold_train(
         pb,
         format!(
             "Loaded {} train / {} valid examples with vocab size {}",
-            train_examples.len(),
-            valid_examples.len(),
-            vocab.size()
+            format_count(train_examples.len()),
+            format_count(valid_examples.len()),
+            format_count(vocab.size())
         ),
     );
     fs::create_dir_all(out).context("creating speech-manifold model directory")?;
@@ -3481,7 +3753,8 @@ fn cmd_prepare(
     let total_words = lexemes.len();
     println!(
         "  {} OpenEPD lexemes loaded ({} skipped by word/IPA filters)",
-        total_words, skipped_openepd
+        format_count(total_words),
+        format_count(skipped_openepd)
     );
     fs::create_dir_all(out).context("creating output directory")?;
 
@@ -3494,7 +3767,7 @@ fn cmd_prepare(
     let valid_file = fs::File::create(&valid_path)?;
     let test_file = fs::File::create(&test_path)?;
 
-    use indicatif::{ProgressBar, ProgressStyle};
+    use indicatif::ProgressBar;
     use std::io::Write;
 
     let mut train_writer = std::io::BufWriter::new(train_file);
@@ -3514,11 +3787,7 @@ fn cmd_prepare(
 
     // Setup indicatif progress bar!
     let pb = ProgressBar::new(total_words as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
-            .progress_chars("#>-")
-    );
+    pb.set_style(counted_progress_style()?);
 
     // Deterministic FNV-1a hash function for thread-safe split assignment
     fn fnv1a_hash(s: &str) -> u64 {
@@ -3567,9 +3836,9 @@ fn cmd_prepare(
 
     println!(
         "Data splits generated on-the-fly:\n  train={} valid={} test={}",
-        train_words.len(),
-        valid_words.len(),
-        test_words.len()
+        format_count(train_words.len()),
+        format_count(valid_words.len()),
+        format_count(test_words.len())
     );
 
     // Save word lists
@@ -3593,7 +3862,7 @@ fn cmd_prepare(
         Vocab::build(&w_list, &pm_list, &[])
     };
 
-    println!("  Unified vocabulary size: {}", vocab.size());
+    println!("  Unified vocabulary size: {}", format_count(vocab.size()));
     let vocab_path = out.join("vocab.json");
     let vocab_json = serde_json::to_string_pretty(&vocab)?;
     fs::write(&vocab_path, &vocab_json).context("writing vocab.json")?;
@@ -3721,7 +3990,10 @@ fn cmd_train(
         let vocab: Vocab = serde_json::from_str(&s)?;
         finish_status(
             pb,
-            format!("Loaded vocabulary with {} tokens", vocab.size()),
+            format!(
+                "Loaded vocabulary with {} tokens",
+                format_count(vocab.size())
+            ),
         );
         vocab
     };
@@ -3736,15 +4008,15 @@ fn cmd_train(
         pb,
         format!(
             "Loaded {} train / {} valid lexemes",
-            base_train_lexemes.len(),
-            valid_lexemes.len()
+            format_count(base_train_lexemes.len()),
+            format_count(valid_lexemes.len())
         ),
     );
 
     println!(
         "Loaded {} train / {} valid lexemes",
-        base_train_lexemes.len(),
-        valid_lexemes.len()
+        format_count(base_train_lexemes.len()),
+        format_count(valid_lexemes.len())
     );
 
     let model_config = ModelConfig::new(vocab.size()).with_dropout(dropout);
@@ -3779,13 +4051,13 @@ fn cmd_train(
         pb,
         format!(
             "Expanded to {} frequency-weighted train examples",
-            train_lexemes.len()
+            format_count(train_lexemes.len())
         ),
     );
     println!(
         "  frequency-weighted train examples: {} (max_repeat={} rarity_cap={})",
-        train_lexemes.len(),
-        train_config.max_frequency_repeat,
+        format_count(train_lexemes.len()),
+        format_count(train_config.max_frequency_repeat),
         train_config.frequency_rarity_cap
     );
 
@@ -3793,7 +4065,7 @@ fn cmd_train(
     if added_sight_word_lexemes > 0 {
         println!(
             "  included {} extra sight-word training examples",
-            added_sight_word_lexemes
+            format_count(added_sight_word_lexemes)
         );
     }
 
@@ -3833,7 +4105,9 @@ fn cmd_train(
     );
     println!(
         "  epochs={} patience={} batch_size={}",
-        epochs, patience, batch_size
+        format_count(epochs),
+        format_count(patience),
+        format_count(batch_size)
     );
 
     match device_arg {
@@ -3953,7 +4227,7 @@ fn cmd_eval(
     println!(
         "Evaluating on {} split ({} lexemes) ...",
         split,
-        test_lexemes.len()
+        format_count(test_lexemes.len())
     );
     if let Some(task) = resolved_task {
         println!("  task: {:?}", task);
@@ -4449,13 +4723,13 @@ fn cmd_refine(
             println!("  source: held-out discrepancies");
             println!("  splits: {}", split_names.join(","));
             for (split, lexemes) in &split_lexemes {
-                println!("  {}: {} lexemes", split, lexemes.len());
+                println!("  {}: {} lexemes", split, format_count(lexemes.len()));
             }
         }
         RefinementSourceArg::SightWords => {
             println!(
                 "  source: built-in Dolch sight words ({} words before OpenEPD/vocab filtering)",
-                SIGHT_WORDS.len()
+                format_count(SIGHT_WORDS.len())
             );
         }
     }
@@ -4527,7 +4801,7 @@ fn cmd_refine(
     write_discrepancies(&discrepancies_path, &records)?;
     println!(
         "Stored {} discrepancies at {}",
-        records.len(),
+        format_count(records.len()),
         discrepancies_path.display()
     );
     print_discrepancy_summary(&records);
@@ -4551,12 +4825,16 @@ fn cmd_refine(
     };
     println!(
         "Refinement set: {} lexemes, mean edit distance {:.2}",
-        refine_lexemes.len(),
+        format_count(refine_lexemes.len()),
         mean_edit_distance
     );
     println!(
         "Refinement training: lr={} wd={} epochs={} patience={} batch_size={}",
-        learning_rate, weight_decay, epochs, patience, batch_size
+        learning_rate,
+        weight_decay,
+        format_count(epochs),
+        format_count(patience),
+        format_count(batch_size)
     );
 
     let train_config = TrainConfig {
@@ -4622,7 +4900,7 @@ fn collect_discrepancies<B: Backend>(
     println!("Loading OpenEPD corpus...");
     let openepd = open_english_pronouncing_dictionary::load()
         .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
-    println!("  OpenEPD words: {}", openepd.word_count());
+    println!("  OpenEPD words: {}", format_count(openepd.word_count()));
 
     let tasks: Vec<Task> = match task_filter {
         Some(task) => vec![task],
@@ -4634,11 +4912,7 @@ fn collect_discrepancies<B: Backend>(
         .map(|(_, lexemes)| lexemes.len() * tasks.len())
         .sum();
     let pb = indicatif::ProgressBar::new(total as u64);
-    pb.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
-            .progress_chars("#>-"),
-    );
+    pb.set_style(counted_progress_style()?);
 
     let mut records = Vec::new();
     let mut refine_lexemes = Vec::new();
@@ -4739,18 +5013,20 @@ fn collect_discrepancies<B: Backend>(
         pb.println(format!(
             "Completed split {}: checked {} examples, found {} discrepancies, skipped {} missing OpenEPD, skipped {} parse errors, skipped {} unknown-vocab golds",
             split,
-            split_checked,
-            split_discrepancies,
-            split_skipped_missing_openepd,
-            split_skipped_parse_error,
-            split_skipped_unknown_vocab
+            format_count(split_checked),
+            format_count(split_discrepancies),
+            format_count(split_skipped_missing_openepd),
+            format_count(split_skipped_parse_error),
+            format_count(split_skipped_unknown_vocab)
         ));
     }
     pb.finish_and_clear();
     if skipped_missing_openepd > 0 || skipped_parse_error > 0 || skipped_unknown_vocab > 0 {
         println!(
             "Skipped during OpenEPD mining: {} missing OpenEPD entries, {} parse errors, {} OpenEPD golds with chars outside vocab",
-            skipped_missing_openepd, skipped_parse_error, skipped_unknown_vocab
+            format_count(skipped_missing_openepd),
+            format_count(skipped_parse_error),
+            format_count(skipped_unknown_vocab)
         );
     }
 
@@ -4769,7 +5045,7 @@ fn collect_sight_word_refinement<B: Backend>(
     println!("Loading OpenEPD corpus...");
     let openepd = open_english_pronouncing_dictionary::load()
         .map_err(|err| anyhow::anyhow!("loading OpenEPD corpus: {}", err))?;
-    println!("  OpenEPD words: {}", openepd.word_count());
+    println!("  OpenEPD words: {}", format_count(openepd.word_count()));
 
     let tasks: Vec<Task> = match task_filter {
         Some(task) => vec![task],
@@ -4782,11 +5058,7 @@ fn collect_sight_word_refinement<B: Backend>(
     }
 
     let pb = indicatif::ProgressBar::new((sight_words.len() * tasks.len()) as u64);
-    pb.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")?
-            .progress_chars("#>-"),
-    );
+    pb.set_style(counted_progress_style()?);
 
     let mut records = Vec::new();
     let mut refine_lexemes = Vec::new();
@@ -4874,12 +5146,12 @@ fn collect_sight_word_refinement<B: Backend>(
     }
     pb.println(format!(
         "Completed sight-word source: checked {} examples, found {} discrepancies, selected {} training lexemes, skipped {} missing OpenEPD, skipped {} parse errors, skipped {} unknown-vocab forms",
-        checked,
-        records.len(),
-        refine_lexemes.len(),
-        skipped_missing_openepd,
-        skipped_parse_error,
-        skipped_unknown_vocab
+        format_count(checked),
+        format_count(records.len()),
+        format_count(refine_lexemes.len()),
+        format_count(skipped_missing_openepd),
+        format_count(skipped_parse_error),
+        format_count(skipped_unknown_vocab)
     ));
     pb.finish_and_clear();
 
@@ -5432,6 +5704,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn format_count_adds_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_000), "1,000");
+        assert_eq!(format_count(12_345_678), "12,345,678");
+    }
+
+    #[test]
     fn test_detect_task() {
         assert_eq!(detect_task("farkle"), Task::G2P);
         assert_eq!(detect_task("farkle's"), Task::G2P);
@@ -5612,6 +5892,45 @@ mod tests {
             cli.command,
             Some(Commands::Wiktionary {
                 command: WiktionaryCommands::Infer { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_family_clean_commands() {
+        let cli = Cli::try_parse_from(["tongues", "g2p2g", "clean", "--data"])
+            .expect("g2p2g clean should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::G2p2g {
+                command: G2p2gCommands::Clean(_)
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["tongues", "sentence-parser", "clean", "--all"])
+            .expect("sentence-parser clean should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SentenceParser {
+                command: SentenceParserCommands::Clean(_)
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["tongues", "speech-manifold", "clean", "--model"])
+            .expect("speech-manifold clean should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::SpeechManifold {
+                command: SpeechManifoldCommands::Clean(_)
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["tongues", "wiktionary", "clean"])
+            .expect("wiktionary clean should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Wiktionary {
+                command: WiktionaryCommands::Clean(_)
             })
         ));
     }

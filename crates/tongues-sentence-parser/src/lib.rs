@@ -34,6 +34,11 @@ const USER_AGENT: &str = "tongues-sentence-parser/0.1";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
     "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+    "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+    "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+    "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+    "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+    "https://www.gutenberg.org/cache/epub/345/pg345.txt",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -271,7 +276,10 @@ pub fn prepare_dataset_with_progress(
     mut progress: impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
     progress(PrepareProgress::Stage {
-        message: format!("Creating sentence-parser output directory {}", out.display()),
+        message: format!(
+            "Creating sentence-parser output directory {}",
+            out.display()
+        ),
     });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let files = resolve_source_files_with_progress(out, config, &mut progress)?;
@@ -314,7 +322,6 @@ pub fn prepare_dataset_with_progress(
         }
         if config.include_naive_discrepancies {
             let file_corrections = build_naive_discrepancy_examples(
-                &raw,
                 &file_sentences,
                 &path.display().to_string(),
                 config,
@@ -691,57 +698,38 @@ pub fn naive_split_sentences(text: &str, lowercase: bool) -> Vec<String> {
 }
 
 fn build_naive_discrepancy_examples(
-    raw: &str,
     seams_sentences: &[String],
     source: &str,
     config: &SentenceParserConfig,
 ) -> Vec<BoundaryTrainingExample> {
-    let naive = naive_split_sentences(raw, config.lowercase);
     let mut examples = Vec::new();
-    let mut naive_index = 0usize;
     for seams_sentence in seams_sentences {
         if examples.len() >= config.max_naive_discrepancies_per_file {
             break;
         }
-        while naive_index < naive.len() && !seams_sentence.starts_with(naive[naive_index].as_str())
-        {
-            naive_index += 1;
-        }
-        if naive_index >= naive.len() {
-            break;
+        let naive = naive_split_sentences(seams_sentence, config.lowercase);
+        if naive.len() <= 1 {
+            continue;
         }
 
-        let mut combined = naive[naive_index].clone();
-        let first = naive[naive_index].clone();
-        let mut consumed = 1usize;
-        while normalize_sentence(&combined, config.lowercase) != *seams_sentence
-            && naive_index + consumed < naive.len()
-            && seams_sentence.starts_with(combined.as_str())
-        {
-            combined = format!("{} {}", combined.trim_end(), naive[naive_index + consumed]);
-            consumed += 1;
+        let combined = normalize_sentence(&naive.join(" "), config.lowercase);
+        if combined != *seams_sentence {
+            continue;
         }
 
-        if consumed > 1 && normalize_sentence(&combined, config.lowercase) == *seams_sentence {
-            let cursor = combined
-                .strip_prefix(first.as_str())
-                .unwrap_or("")
-                .trim_start();
-            if !cursor.is_empty() {
-                push_example(
-                    &mut examples,
-                    BoundaryAction::Repair,
-                    TrainingRowSource::NaiveDiscrepancy,
-                    &first,
-                    cursor,
-                    format!("{REPAIR_TOKEN}{seams_sentence}"),
-                    source,
-                    config.lowercase,
-                );
-            }
-            naive_index += consumed;
-        } else {
-            naive_index += 1;
+        let first = &naive[0];
+        let cursor = naive[1..].join(" ");
+        if !cursor.is_empty() {
+            push_example(
+                &mut examples,
+                BoundaryAction::Repair,
+                TrainingRowSource::NaiveDiscrepancy,
+                first,
+                &cursor,
+                format!("{REPAIR_TOKEN}{seams_sentence}"),
+                source,
+                config.lowercase,
+            );
         }
     }
     examples
@@ -859,9 +847,8 @@ fn download_gutenberg_source(
     });
     let stripped = strip_gutenberg_boilerplate(&raw);
     fs::write(&part_path, stripped).with_context(|| format!("writing {}", part_path.display()))?;
-    fs::rename(&part_path, &path).with_context(|| {
-        format!("moving {} to {}", part_path.display(), path.display())
-    })?;
+    fs::rename(&part_path, &path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
     Ok(path)
 }
 
@@ -887,9 +874,26 @@ fn strip_gutenberg_boilerplate(raw: &str) -> String {
 fn synthesize_boundary_text(sentences: usize, seed: u64) -> String {
     let first_names = ["Ada", "Mina", "Clara", "Henry", "Elias", "Nora"];
     let last_names = ["Bennet", "Weston", "Lanyon", "Murray", "Price", "Harker"];
-    let places = ["St. Ives", "Washington, D.C.", "No. 4 station", "Mt. Vernon"];
-    let objects = ["the ledger", "a sealed note", "the timetable", "a small map"];
-    let verbs = ["examined", "carried", "misplaced", "copied", "folded", "delivered"];
+    let places = [
+        "St. Ives",
+        "Washington, D.C.",
+        "No. 4 station",
+        "Mt. Vernon",
+    ];
+    let objects = [
+        "the ledger",
+        "a sealed note",
+        "the timetable",
+        "a small map",
+    ];
+    let verbs = [
+        "examined",
+        "carried",
+        "misplaced",
+        "copied",
+        "folded",
+        "delivered",
+    ];
     let mut rng = StdRng::seed_from_u64(seed);
     let mut lines = Vec::new();
 
@@ -904,8 +908,14 @@ fn synthesize_boundary_text(sentences: usize, seed: u64) -> String {
             0 => format!("Mr. {last} {verb} {object} before noon."),
             1 => format!("Dr. {last} met {first} at {place}, and they compared notes."),
             2 => format!("{first} J. {last} asked whether Prof. {other} had arrived."),
-            3 => format!("The parcel reached {place} at {hour}:15 p.m. without a label.", hour = 1 + index % 11),
-            4 => format!("No. {number} was missing, but Mrs. {last} found it later.", number = 10 + index % 90),
+            3 => format!(
+                "The parcel reached {place} at {hour}:15 p.m. without a label.",
+                hour = 1 + index % 11
+            ),
+            4 => format!(
+                "No. {number} was missing, but Mrs. {last} found it later.",
+                number = 10 + index % 90
+            ),
             _ => format!("Who told {first} F. {last} that the train had stopped?"),
         };
         lines.push(text);
@@ -962,22 +972,16 @@ fn write_jsonl_with_progress<T: Serialize>(
     progress(PrepareProgress::Stage {
         message: format!("Writing {} rows to {}", rows.len(), part_path.display()),
     });
-    let mut file =
-        BufWriter::new(File::create(&part_path).with_context(|| {
-            format!("creating {}", part_path.display())
-        })?);
+    let mut file = BufWriter::new(
+        File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?,
+    );
     for row in rows {
         writeln!(file, "{}", serde_json::to_string(row)?)?;
     }
     file.flush()
         .with_context(|| format!("flushing {}", part_path.display()))?;
-    fs::rename(&part_path, path).with_context(|| {
-        format!(
-            "moving {} to {}",
-            part_path.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&part_path, path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
     progress(PrepareProgress::Write {
         path: path.display().to_string(),
         rows: rows.len(),
@@ -1052,7 +1056,6 @@ mod tests {
     fn naive_disagreement_becomes_repair_training_row() {
         let config = SentenceParserConfig::default();
         let rows = build_naive_discrepancy_examples(
-            "Who shot John F. Kennedy?",
             &["Who shot John F. Kennedy?".to_string()],
             "fixture",
             &config,
@@ -1064,5 +1067,26 @@ mod tests {
         assert_eq!(rows[0].previous, "Who shot John F.");
         assert_eq!(rows[0].cursor, "Kennedy?");
         assert_eq!(rows[0].output, "<boundary:repair>Who shot John F. Kennedy?");
+    }
+
+    #[test]
+    fn naive_disagreement_mines_each_detected_sentence_without_raw_file_alignment() {
+        let config = SentenceParserConfig::default();
+        let rows = build_naive_discrepancy_examples(
+            &[
+                "A chapter title that would have shifted raw-file alignment.".to_string(),
+                "Elizabeth met Mr. Darcy at Pemberley.".to_string(),
+            ],
+            "fixture",
+            &config,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].previous, "Elizabeth met Mr.");
+        assert_eq!(rows[0].cursor, "Darcy at Pemberley.");
+        assert_eq!(
+            rows[0].output,
+            "<boundary:repair>Elizabeth met Mr. Darcy at Pemberley."
+        );
     }
 }

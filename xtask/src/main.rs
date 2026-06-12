@@ -676,7 +676,10 @@ fn extract_prediction(stdout: &str) -> Option<String> {
             return lines.next().map(|value| value.trim().to_string());
         }
     }
-    let mut non_empty = stdout.lines().map(str::trim).filter(|line| !line.is_empty());
+    let mut non_empty = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
     let prediction = non_empty.next()?;
     if non_empty.next().is_none() {
         Some(prediction.to_string())

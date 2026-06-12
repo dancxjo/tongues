@@ -11,6 +11,14 @@ cargo run --release -- speech-manifold prepare \
     --out datasets/speech-manifold/openepd-synth-v0
 ```
 
+Start a fresh default run by archiving the existing default dataset/model artifacts and recreating empty directories:
+
+```sh
+cargo run --bin tongues -- speech-manifold clean --all
+```
+
+Use `--data` or `--model` to archive only one side. Artifacts are moved under `archive/<run-id>/...`; pass `--run-id NAME` for a stable archive folder or `--no-create` if you do not want empty defaults recreated.
+
 The audio stage is intentionally quota-based: it samples a small diversity of available voices/backends rather than generating a WAV for every word.
 
 Network-backed audio fetches are conservative. The prepare step checks `robots.txt` before attempting each network audio URL. If a host disallows a path, that backend is skipped and the example falls back to local eSpeak/mock provenance. Dictionary.com and Wiktionary page URLs are recorded as reference metadata only; Dictionary.com pages are not fetched.

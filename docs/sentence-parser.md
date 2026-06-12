@@ -9,6 +9,14 @@ just sentence-parser prepare \
   --out datasets/sentence-parser/v0
 ```
 
+Start a fresh default run by archiving the existing default dataset/model artifacts and recreating empty directories:
+
+```sh
+just sentence-parser clean --all
+```
+
+Use `--data` or `--model` to archive only one side. Artifacts are moved under `archive/<run-id>/...`; pass `--run-id NAME` for a stable archive folder or `--no-create` if you do not want empty defaults recreated.
+
 With the default config, preparation downloads a small Project Gutenberg cache and generates deterministic synthetic sentence-boundary cases. Local text files or directories can still override those defaults:
 
 ```sh

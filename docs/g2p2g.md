@@ -19,6 +19,14 @@ cargo run --release -- g2p2g prepare \
     --out datasets/g2p2g/openepd-v0
 ```
 
+## Clean Start
+
+```sh
+cargo run --bin tongues -- g2p2g clean --all
+```
+
+`clean` archives selected default artifacts and recreates empty directories for the next run. Use `--data` or `--model` to archive only one side. Archives preserve the original relative path under `archive/<run-id>/...`; pass `--run-id NAME` for a named archive folder or `--no-create` to skip recreating empty defaults.
+
 `prepare` builds `datasets/g2p2g/openepd-v0` from the embedded OpenEPD corpus. Splits are deterministic by base word, and alternate source entries for the same base word are collapsed before splitting.
 
 The prepared directory contains:

@@ -7,6 +7,11 @@ include_default_gutenberg = true
 gutenberg_urls = [
   "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
   "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+  "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+  "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+  "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+  "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+  "https://www.gutenberg.org/cache/epub/345/pg345.txt",
 ]
 include_synthetic = true
 synthetic_sentences = 512
