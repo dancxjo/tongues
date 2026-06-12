@@ -2,10 +2,10 @@
 
 Dataset: `v0`
 
-Sources: 0 Project Gutenberg-style text files
-Detected sentences: 0
-Training rows: 0
-Naive-discrepancy correction rows: 0
+Sources: 3 Project Gutenberg-style text files
+Detected sentences: 6776
+Training rows: 20503
+Naive-discrepancy correction rows: 406
 
 Input shape:
 

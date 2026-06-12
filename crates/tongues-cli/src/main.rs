@@ -1539,13 +1539,12 @@ fn run_sentence_parser_command(
                 "Preparing sentence-parser dataset at {}",
                 out.display()
             ));
-            let report =
-                tongues_sentence_parser::prepare_dataset_with_progress(&out, &config, {
-                    let pb = pb.clone();
-                    move |progress| {
-                        pb.set_message(sentence_parser_prepare_progress_message(progress));
-                    }
-                })?;
+            let report = tongues_sentence_parser::prepare_dataset_with_progress(&out, &config, {
+                let pb = pb.clone();
+                move |progress| {
+                    pb.set_message(sentence_parser_prepare_progress_message(progress));
+                }
+            })?;
             finish_status(
                 pb,
                 format!(
@@ -1732,6 +1731,7 @@ fn cmd_sentence_parser_train(
         batch_size,
         epochs,
         early_stopping_patience: patience,
+        max_seq_len: model_config.max_seq_len,
         task: None,
         max_frequency_repeat: 1,
         frequency_rarity_cap: 0.0,
@@ -1770,7 +1770,7 @@ fn cmd_sentence_parser_train(
     let model_path = out.join("model");
     println!("Starting sentence-parser seq2seq training...");
     println!(
-        "  training_set={} examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
+        "  training_set={} examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={} max_seq_len={}",
         sentence_parser_training_set_label(training_set),
         train_examples.len(),
         valid_examples.len(),
@@ -1780,14 +1780,18 @@ fn cmd_sentence_parser_train(
         dropout,
         epochs,
         patience,
-        batch_size
+        batch_size,
+        train_config.max_seq_len
     );
     println!("  train_state: {}", out.join("train_state.json").display());
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
     );
-    println!("  best model: {}", model_path.with_extension("bin").display());
+    println!(
+        "  best model: {}",
+        model_path.with_extension("bin").display()
+    );
 
     let mut rng = StdRng::seed_from_u64(seed);
     match device_arg {
@@ -2356,6 +2360,7 @@ fn write_and_train_wiktionary_seq2seq(
         batch_size,
         epochs,
         early_stopping_patience: patience,
+        max_seq_len: model_config.max_seq_len,
         task: None,
         max_frequency_repeat: 1,
         frequency_rarity_cap: 0.0,
@@ -3758,6 +3763,7 @@ fn cmd_train(
         batch_size,
         epochs,
         early_stopping_patience: patience,
+        max_seq_len: model_config.max_seq_len,
         task: task_opt,
         max_frequency_repeat: DEFAULT_MAX_FREQUENCY_REPEAT,
         frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
@@ -4007,6 +4013,7 @@ fn run_eval<B: Backend>(
         train_lexemes,
         vocab,
         task_filter,
+        model_config.max_seq_len,
         device,
         &mut rng,
     );
@@ -4559,6 +4566,7 @@ fn cmd_refine(
         batch_size,
         epochs,
         early_stopping_patience: patience,
+        max_seq_len: model_config.max_seq_len,
         task: task_filter,
         max_frequency_repeat: DEFAULT_MAX_FREQUENCY_REPEAT,
         frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,

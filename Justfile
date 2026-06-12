@@ -11,6 +11,22 @@ new-family family:
 race *args:
     @cargo run -q -p xtask -- race "$@"
 
+# Forward a model-family command to the tongues CLI
+g2p2g *args:
+    cargo run --bin tongues -- g2p2g "$@"
+
+# Forward a model-family command to the tongues CLI
+wiktionary *args:
+    cargo run --bin tongues -- wiktionary "$@"
+
+# Forward a model-family command to the tongues CLI
+sentence-parser *args:
+    cargo run --bin tongues -- sentence-parser "$@"
+
+# Forward a model-family command to the tongues CLI
+speech-manifold *args:
+    cargo run --bin tongues -- speech-manifold "$@"
+
 # Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:
     cargo run --bin tongues -- g2p2g prepare --out datasets/g2p2g/openepd-v0 "$@"

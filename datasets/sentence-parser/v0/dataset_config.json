@@ -2,6 +2,13 @@
   "dataset_id": "v0",
   "lowercase": false,
   "source_paths": [],
+  "include_default_gutenberg": true,
+  "gutenberg_urls": [
+    "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+    "https://www.gutenberg.org/cache/epub/84/pg84.txt"
+  ],
+  "include_synthetic": true,
+  "synthetic_sentences": 512,
   "train_frac": 0.8,
   "valid_frac": 0.1,
   "seed": 42,

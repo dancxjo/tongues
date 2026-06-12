@@ -105,6 +105,7 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just prepare` | Prepare default OpenEPD G2P2G data. |
 | `just train` | Train the default `g2p2g` model. |
 | `just infer "farkle"` | Run one G2P2G prediction. |
+| `just sentence-parser train --training-set all` | Forward a model-family command to `tongues`. |
 | `cargo run --release -- g2p2g repl` | Start the G2P2G REPL. |
 | `cargo run --release -- g2p2g eval --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0` | Evaluate a trained model. |
 | `just refine` | Fine-tune from validation/test discrepancies. |

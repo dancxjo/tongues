@@ -5,14 +5,14 @@
 Prepare data with the default sources:
 
 ```sh
-cargo run --bin tongues -- sentence-parser prepare \
+just sentence-parser prepare \
   --out datasets/sentence-parser/v0
 ```
 
 With the default config, preparation downloads a small Project Gutenberg cache and generates deterministic synthetic sentence-boundary cases. Local text files or directories can still override those defaults:
 
 ```sh
-cargo run --bin tongues -- sentence-parser prepare \
+just sentence-parser prepare \
   --input /path/to/gutenberg_texts \
   --out datasets/sentence-parser/v0
 ```
@@ -20,7 +20,7 @@ cargo run --bin tongues -- sentence-parser prepare \
 Train:
 
 ```sh
-cargo run --bin tongues -- sentence-parser train \
+just sentence-parser train \
   --data datasets/sentence-parser/v0 \
   --out models/sentence-parser/v0
 ```
@@ -28,7 +28,7 @@ cargo run --bin tongues -- sentence-parser train \
 Prepare and train in one command:
 
 ```sh
-cargo run --bin tongues -- sentence-parser train --prepare \
+just sentence-parser train --prepare \
   --input /path/to/gutenberg_texts \
   --data datasets/sentence-parser/v0 \
   --out models/sentence-parser/v0
@@ -39,15 +39,15 @@ Preparation also runs a deliberately naive punctuation splitter and compares it 
 Train only the clean `seams` rows, only mined corrections, or both:
 
 ```sh
-cargo run --bin tongues -- sentence-parser train --training-set seams
-cargo run --bin tongues -- sentence-parser train --training-set naive-discrepancy
-cargo run --bin tongues -- sentence-parser train --training-set all
+just sentence-parser train --training-set seams
+just sentence-parser train --training-set naive-discrepancy
+just sentence-parser train --training-set all
 ```
 
 Cursor inference:
 
 ```sh
-cargo run --bin tongues -- sentence-parser infer \
+just sentence-parser infer \
   --model models/sentence-parser/v0 \
   --previous "Who shot John F." \
   "Kennedy?"

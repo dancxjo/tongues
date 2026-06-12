@@ -100,6 +100,9 @@ pub struct TrainConfig {
     /// Early stopping: stop if validation loss does not improve for this
     /// many consecutive epochs.
     pub early_stopping_patience: usize,
+    /// Maximum sequence length used when padding/truncating batches.
+    #[serde(default = "default_max_seq_len")]
+    pub max_seq_len: usize,
     /// Optional training direction task (None = Both).
     #[serde(default)]
     pub task: Option<Task>,
@@ -118,11 +121,16 @@ impl Default for TrainConfig {
             batch_size: 64,
             epochs: 20,
             early_stopping_patience: 5,
+            max_seq_len: default_max_seq_len(),
             task: None,
             max_frequency_repeat: 8,
             frequency_rarity_cap: 50_000.0,
         }
     }
+}
+
+fn default_max_seq_len() -> usize {
+    128
 }
 
 // ── Model ──────────────────────────────────────────────────────────────────
@@ -325,12 +333,14 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             .iter()
             .map(|ex| ex.src_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(config.max_seq_len);
         let max_tgt = examples
             .iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(config.max_seq_len);
         let batch = collate_batch(&examples, max_src, max_tgt);
 
         let batch = tensor_seq2seq_batch(
@@ -397,12 +407,14 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
             .iter()
             .map(|ex| ex.src_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(config.max_seq_len);
         let max_tgt = examples
             .iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(config.max_seq_len);
         let batch = collate_batch(&examples, max_src, max_tgt);
 
         let batch = tensor_seq2seq_batch(
@@ -453,6 +465,7 @@ pub fn evaluate<B: Backend, R: Rng>(
     lexemes: &[Lexeme],
     vocab: &Vocab,
     task_filter: Option<Task>,
+    max_seq_len: usize,
     device: &B::Device,
     _rng: &mut R,
 ) -> (f32, f32, f32) {
@@ -506,12 +519,18 @@ pub fn evaluate<B: Backend, R: Rng>(
     pb.set_message("loss=...");
 
     for chunk in examples.chunks(64) {
-        let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
+        let max_src = chunk
+            .iter()
+            .map(|ex| ex.src_ids.len())
+            .max()
+            .unwrap_or(1)
+            .min(max_seq_len);
         let max_tgt = chunk
             .iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(max_seq_len);
         let batch = collate_batch(chunk, max_src, max_tgt);
 
         let b = batch.size;
@@ -592,6 +611,7 @@ pub fn evaluate<B: Backend, R: Rng>(
 pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
     model: &Seq2SeqModel<B>,
     examples: &[Seq2SeqExample],
+    max_seq_len: usize,
     device: &B::Device,
     _rng: &mut R,
 ) -> (f32, f32, f32) {
@@ -624,12 +644,18 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
     pb.set_message("loss=...");
 
     for chunk in eval_examples.chunks(64) {
-        let max_src = chunk.iter().map(|ex| ex.src_ids.len()).max().unwrap_or(1);
+        let max_src = chunk
+            .iter()
+            .map(|ex| ex.src_ids.len())
+            .max()
+            .unwrap_or(1)
+            .min(max_seq_len);
         let max_tgt = chunk
             .iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(max_seq_len);
         let batch = collate_batch(chunk, max_src, max_tgt);
 
         let b = batch.size;
@@ -718,6 +744,21 @@ pub fn train<B: AutodiffBackend, R: Rng>(
 where
     <Seq2SeqModel<B> as Module<B>>::Record: Send,
 {
+    anyhow::ensure!(
+        train_config.batch_size >= 2,
+        "batch_size must be at least 2 for transformer training"
+    );
+    anyhow::ensure!(
+        train_config.max_seq_len > 0,
+        "max_seq_len must be greater than zero"
+    );
+    anyhow::ensure!(
+        train_config.max_seq_len <= model_config.max_seq_len,
+        "train_config max_seq_len={} exceeds model_config max_seq_len={}",
+        train_config.max_seq_len,
+        model_config.max_seq_len
+    );
+
     let out_dir = model_path.parent().unwrap_or(Path::new("."));
     let state_path = out_dir.join("train_state.json");
     let model_file = model_path.with_extension("bin");
@@ -862,6 +903,7 @@ where
             valid_lexemes,
             vocab,
             train_config.task,
+            train_config.max_seq_len,
             device,
             rng,
         );
@@ -943,6 +985,21 @@ pub fn train_seq2seq_examples<B: AutodiffBackend, R: Rng>(
 where
     <Seq2SeqModel<B> as Module<B>>::Record: Send,
 {
+    anyhow::ensure!(
+        train_config.batch_size >= 2,
+        "batch_size must be at least 2 for transformer training"
+    );
+    anyhow::ensure!(
+        train_config.max_seq_len > 0,
+        "max_seq_len must be greater than zero"
+    );
+    anyhow::ensure!(
+        train_config.max_seq_len <= model_config.max_seq_len,
+        "train_config max_seq_len={} exceeds model_config max_seq_len={}",
+        train_config.max_seq_len,
+        model_config.max_seq_len
+    );
+
     let out_dir = model_path.parent().unwrap_or(Path::new("."));
     let state_path = out_dir.join("train_state.json");
     let model_file = model_path.with_extension("bin");
@@ -1072,8 +1129,13 @@ where
 
         pb.set_message("evaluating...");
         let eval_model: Seq2SeqModel<B::InnerBackend> = model.valid();
-        let (val_loss, val_acc, val_token_acc) =
-            evaluate_seq2seq_examples(&eval_model, valid_examples, device, rng);
+        let (val_loss, val_acc, val_token_acc) = evaluate_seq2seq_examples(
+            &eval_model,
+            valid_examples,
+            train_config.max_seq_len,
+            device,
+            rng,
+        );
 
         pb.finish_and_clear();
 
@@ -1151,10 +1213,19 @@ pub fn eval_report<B: Backend, R: Rng>(
     _train_lexemes: &[Lexeme],
     vocab: &Vocab,
     task_filter: Option<Task>,
+    max_seq_len: usize,
     device: &B::Device,
     rng: &mut R,
 ) -> EvalReport {
-    let (loss, acc, token_acc) = evaluate(model, test_lexemes, vocab, task_filter, device, rng);
+    let (loss, acc, token_acc) = evaluate(
+        model,
+        test_lexemes,
+        vocab,
+        task_filter,
+        max_seq_len,
+        device,
+        rng,
+    );
     EvalReport {
         exact_match_accuracy: acc,
         val_loss: loss,
@@ -1324,6 +1395,7 @@ mod tests {
             batch_size: 2,
             epochs: 2,
             early_stopping_patience: 5,
+            max_seq_len: default_max_seq_len(),
             task: None,
             max_frequency_repeat: 8,
             frequency_rarity_cap: 50_000.0,

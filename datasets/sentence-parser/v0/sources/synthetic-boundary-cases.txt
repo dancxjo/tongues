@@ -1,0 +1,639 @@
+Mr. Murray examined a small map before noon.
+Dr. Murray met Nora at No. 4 station, and they compared notes.
+Ada J. Harker asked whether Prof. Murray had arrived.
+The parcel reached Mt. Vernon at 4:15 p.m. without a label.
+No. 14 was missing, but Mrs. Lanyon found it later.
+
+Who told Elias F. Murray that the train had stopped?
+Mr. Price copied a small map before noon.
+Dr. Harker met Clara at Mt. Vernon, and they compared notes.
+Clara J. Price asked whether Prof. Price had arrived.
+
+The parcel reached Mt. Vernon at 10:15 p.m. without a label.
+No. 20 was missing, but Mrs. Weston found it later.
+Who told Elias F. Weston that the train had stopped?
+Mr. Harker folded the ledger before noon.
+
+Dr. Weston met Clara at St. Ives, and they compared notes.
+Elias J. Bennet asked whether Prof. Weston had arrived.
+The parcel reached No. 4 station at 5:15 p.m. without a label.
+No. 26 was missing, but Mrs. Weston found it later.
+
+Who told Nora F. Weston that the train had stopped?
+Mr. Murray examined the ledger before noon.
+Dr. Murray met Elias at Washington, D.C., and they compared notes.
+Elias J. Bennet asked whether Prof. Price had arrived.
+
+The parcel reached No. 4 station at 11:15 p.m. without a label.
+No. 32 was missing, but Mrs. Harker found it later.
+Who told Elias F. Price that the train had stopped?
+Mr. Harker misplaced the timetable before noon.
+
+Dr. Murray met Ada at No. 4 station, and they compared notes.
+Nora J. Price asked whether Prof. Harker had arrived.
+The parcel reached Washington, D.C. at 6:15 p.m. without a label.
+No. 38 was missing, but Mrs. Harker found it later.
+
+Who told Nora F. Bennet that the train had stopped?
+Mr. Price carried the ledger before noon.
+Dr. Bennet met Clara at St. Ives, and they compared notes.
+Henry J. Harker asked whether Prof. Price had arrived.
+
+The parcel reached St. Ives at 1:15 p.m. without a label.
+No. 44 was missing, but Mrs. Weston found it later.
+Who told Henry F. Murray that the train had stopped?
+Mr. Weston carried the ledger before noon.
+
+Dr. Weston met Mina at No. 4 station, and they compared notes.
+Clara J. Harker asked whether Prof. Weston had arrived.
+The parcel reached Mt. Vernon at 7:15 p.m. without a label.
+No. 50 was missing, but Mrs. Murray found it later.
+
+Who told Nora F. Murray that the train had stopped?
+Mr. Murray misplaced the timetable before noon.
+Dr. Lanyon met Henry at Mt. Vernon, and they compared notes.
+Clara J. Bennet asked whether Prof. Murray had arrived.
+
+The parcel reached No. 4 station at 2:15 p.m. without a label.
+No. 56 was missing, but Mrs. Lanyon found it later.
+Who told Nora F. Price that the train had stopped?
+Mr. Bennet misplaced the ledger before noon.
+
+Dr. Price met Nora at St. Ives, and they compared notes.
+Nora J. Bennet asked whether Prof. Price had arrived.
+The parcel reached Mt. Vernon at 8:15 p.m. without a label.
+No. 62 was missing, but Mrs. Murray found it later.
+
+Who told Clara F. Bennet that the train had stopped?
+Mr. Lanyon copied a small map before noon.
+Dr. Bennet met Henry at Washington, D.C., and they compared notes.
+Elias J. Murray asked whether Prof. Bennet had arrived.
+
+The parcel reached Mt. Vernon at 3:15 p.m. without a label.
+No. 68 was missing, but Mrs. Murray found it later.
+Who told Nora F. Murray that the train had stopped?
+Mr. Weston copied the timetable before noon.
+
+Dr. Bennet met Nora at St. Ives, and they compared notes.
+Nora J. Harker asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 9:15 p.m. without a label.
+No. 74 was missing, but Mrs. Murray found it later.
+
+Who told Elias F. Bennet that the train had stopped?
+Mr. Weston examined the timetable before noon.
+Dr. Lanyon met Clara at Washington, D.C., and they compared notes.
+Mina J. Harker asked whether Prof. Lanyon had arrived.
+
+The parcel reached Mt. Vernon at 4:15 p.m. without a label.
+No. 80 was missing, but Mrs. Price found it later.
+Who told Henry F. Lanyon that the train had stopped?
+Mr. Harker examined the timetable before noon.
+
+Dr. Murray met Nora at Washington, D.C., and they compared notes.
+Ada J. Harker asked whether Prof. Harker had arrived.
+The parcel reached Mt. Vernon at 10:15 p.m. without a label.
+No. 86 was missing, but Mrs. Lanyon found it later.
+
+Who told Mina F. Weston that the train had stopped?
+Mr. Harker copied the ledger before noon.
+Dr. Lanyon met Clara at Washington, D.C., and they compared notes.
+Clara J. Bennet asked whether Prof. Lanyon had arrived.
+
+The parcel reached Mt. Vernon at 5:15 p.m. without a label.
+No. 92 was missing, but Mrs. Bennet found it later.
+Who told Elias F. Weston that the train had stopped?
+Mr. Price carried the timetable before noon.
+
+Dr. Weston met Clara at Washington, D.C., and they compared notes.
+Henry J. Bennet asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 11:15 p.m. without a label.
+No. 98 was missing, but Mrs. Weston found it later.
+
+Who told Nora F. Weston that the train had stopped?
+Mr. Price copied a sealed note before noon.
+Dr. Lanyon met Elias at No. 4 station, and they compared notes.
+Ada J. Price asked whether Prof. Lanyon had arrived.
+
+The parcel reached No. 4 station at 6:15 p.m. without a label.
+No. 14 was missing, but Mrs. Bennet found it later.
+Who told Henry F. Harker that the train had stopped?
+Mr. Bennet folded the timetable before noon.
+
+Dr. Weston met Nora at Mt. Vernon, and they compared notes.
+Clara J. Weston asked whether Prof. Bennet had arrived.
+The parcel reached Washington, D.C. at 1:15 p.m. without a label.
+No. 20 was missing, but Mrs. Murray found it later.
+
+Who told Nora F. Lanyon that the train had stopped?
+Mr. Murray folded a small map before noon.
+Dr. Price met Mina at St. Ives, and they compared notes.
+Henry J. Lanyon asked whether Prof. Murray had arrived.
+
+The parcel reached Mt. Vernon at 7:15 p.m. without a label.
+No. 26 was missing, but Mrs. Bennet found it later.
+Who told Clara F. Weston that the train had stopped?
+Mr. Lanyon delivered a sealed note before noon.
+
+Dr. Harker met Mina at Mt. Vernon, and they compared notes.
+Ada J. Murray asked whether Prof. Harker had arrived.
+The parcel reached Mt. Vernon at 2:15 p.m. without a label.
+No. 32 was missing, but Mrs. Weston found it later.
+
+Who told Elias F. Weston that the train had stopped?
+Mr. Weston copied a small map before noon.
+Dr. Bennet met Ada at No. 4 station, and they compared notes.
+Henry J. Murray asked whether Prof. Harker had arrived.
+
+The parcel reached Washington, D.C. at 8:15 p.m. without a label.
+No. 38 was missing, but Mrs. Murray found it later.
+Who told Mina F. Weston that the train had stopped?
+Mr. Lanyon copied a small map before noon.
+
+Dr. Price met Henry at Washington, D.C., and they compared notes.
+Nora J. Murray asked whether Prof. Bennet had arrived.
+The parcel reached St. Ives at 3:15 p.m. without a label.
+No. 44 was missing, but Mrs. Murray found it later.
+
+Who told Mina F. Harker that the train had stopped?
+Mr. Weston delivered the ledger before noon.
+Dr. Harker met Ada at Washington, D.C., and they compared notes.
+Nora J. Harker asked whether Prof. Murray had arrived.
+
+The parcel reached No. 4 station at 9:15 p.m. without a label.
+No. 50 was missing, but Mrs. Murray found it later.
+Who told Ada F. Harker that the train had stopped?
+Mr. Price copied a small map before noon.
+
+Dr. Murray met Mina at No. 4 station, and they compared notes.
+Elias J. Weston asked whether Prof. Murray had arrived.
+The parcel reached Washington, D.C. at 4:15 p.m. without a label.
+No. 56 was missing, but Mrs. Weston found it later.
+
+Who told Nora F. Weston that the train had stopped?
+Mr. Murray carried a small map before noon.
+Dr. Lanyon met Ada at Mt. Vernon, and they compared notes.
+Henry J. Weston asked whether Prof. Price had arrived.
+
+The parcel reached No. 4 station at 10:15 p.m. without a label.
+No. 62 was missing, but Mrs. Bennet found it later.
+Who told Elias F. Price that the train had stopped?
+Mr. Bennet folded a small map before noon.
+
+Dr. Murray met Nora at Mt. Vernon, and they compared notes.
+Ada J. Weston asked whether Prof. Weston had arrived.
+The parcel reached St. Ives at 5:15 p.m. without a label.
+No. 68 was missing, but Mrs. Bennet found it later.
+
+Who told Ada F. Weston that the train had stopped?
+Mr. Harker folded a small map before noon.
+Dr. Harker met Mina at Washington, D.C., and they compared notes.
+Nora J. Lanyon asked whether Prof. Price had arrived.
+
+The parcel reached No. 4 station at 11:15 p.m. without a label.
+No. 74 was missing, but Mrs. Lanyon found it later.
+Who told Henry F. Bennet that the train had stopped?
+Mr. Weston copied a sealed note before noon.
+
+Dr. Lanyon met Nora at Mt. Vernon, and they compared notes.
+Ada J. Price asked whether Prof. Price had arrived.
+The parcel reached Mt. Vernon at 6:15 p.m. without a label.
+No. 80 was missing, but Mrs. Murray found it later.
+
+Who told Nora F. Price that the train had stopped?
+Mr. Bennet folded a sealed note before noon.
+Dr. Bennet met Ada at No. 4 station, and they compared notes.
+Nora J. Harker asked whether Prof. Bennet had arrived.
+
+The parcel reached Mt. Vernon at 1:15 p.m. without a label.
+No. 86 was missing, but Mrs. Murray found it later.
+Who told Ada F. Price that the train had stopped?
+Mr. Weston carried the ledger before noon.
+
+Dr. Price met Nora at No. 4 station, and they compared notes.
+Elias J. Bennet asked whether Prof. Lanyon had arrived.
+The parcel reached Mt. Vernon at 7:15 p.m. without a label.
+No. 92 was missing, but Mrs. Harker found it later.
+
+Who told Ada F. Price that the train had stopped?
+Mr. Weston folded a sealed note before noon.
+Dr. Harker met Clara at Mt. Vernon, and they compared notes.
+Nora J. Harker asked whether Prof. Price had arrived.
+
+The parcel reached St. Ives at 2:15 p.m. without a label.
+No. 98 was missing, but Mrs. Price found it later.
+Who told Mina F. Price that the train had stopped?
+Mr. Lanyon delivered a sealed note before noon.
+
+Dr. Harker met Henry at Washington, D.C., and they compared notes.
+Elias J. Weston asked whether Prof. Price had arrived.
+The parcel reached Washington, D.C. at 8:15 p.m. without a label.
+No. 14 was missing, but Mrs. Weston found it later.
+
+Who told Nora F. Lanyon that the train had stopped?
+Mr. Lanyon copied a small map before noon.
+Dr. Weston met Henry at No. 4 station, and they compared notes.
+Clara J. Price asked whether Prof. Price had arrived.
+
+The parcel reached Washington, D.C. at 3:15 p.m. without a label.
+No. 20 was missing, but Mrs. Weston found it later.
+Who told Ada F. Bennet that the train had stopped?
+Mr. Bennet misplaced a small map before noon.
+
+Dr. Weston met Ada at No. 4 station, and they compared notes.
+Clara J. Bennet asked whether Prof. Lanyon had arrived.
+The parcel reached Mt. Vernon at 9:15 p.m. without a label.
+No. 26 was missing, but Mrs. Lanyon found it later.
+
+Who told Elias F. Price that the train had stopped?
+Mr. Harker misplaced a sealed note before noon.
+Dr. Bennet met Nora at Mt. Vernon, and they compared notes.
+Henry J. Weston asked whether Prof. Bennet had arrived.
+
+The parcel reached St. Ives at 4:15 p.m. without a label.
+No. 32 was missing, but Mrs. Murray found it later.
+Who told Elias F. Murray that the train had stopped?
+Mr. Weston delivered the timetable before noon.
+
+Dr. Bennet met Clara at St. Ives, and they compared notes.
+Ada J. Weston asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 10:15 p.m. without a label.
+No. 38 was missing, but Mrs. Weston found it later.
+
+Who told Henry F. Price that the train had stopped?
+Mr. Lanyon examined the timetable before noon.
+Dr. Weston met Henry at St. Ives, and they compared notes.
+Elias J. Murray asked whether Prof. Murray had arrived.
+
+The parcel reached Mt. Vernon at 5:15 p.m. without a label.
+No. 44 was missing, but Mrs. Lanyon found it later.
+Who told Clara F. Weston that the train had stopped?
+Mr. Murray delivered a small map before noon.
+
+Dr. Price met Clara at No. 4 station, and they compared notes.
+Mina J. Lanyon asked whether Prof. Lanyon had arrived.
+The parcel reached No. 4 station at 11:15 p.m. without a label.
+No. 50 was missing, but Mrs. Harker found it later.
+
+Who told Elias F. Price that the train had stopped?
+Mr. Weston misplaced the timetable before noon.
+Dr. Lanyon met Nora at Washington, D.C., and they compared notes.
+Ada J. Price asked whether Prof. Harker had arrived.
+
+The parcel reached No. 4 station at 6:15 p.m. without a label.
+No. 56 was missing, but Mrs. Bennet found it later.
+Who told Mina F. Bennet that the train had stopped?
+Mr. Murray copied a sealed note before noon.
+
+Dr. Murray met Ada at Washington, D.C., and they compared notes.
+Henry J. Harker asked whether Prof. Murray had arrived.
+The parcel reached No. 4 station at 1:15 p.m. without a label.
+No. 62 was missing, but Mrs. Harker found it later.
+
+Who told Elias F. Murray that the train had stopped?
+Mr. Price copied a sealed note before noon.
+Dr. Weston met Nora at Mt. Vernon, and they compared notes.
+Clara J. Price asked whether Prof. Lanyon had arrived.
+
+The parcel reached No. 4 station at 7:15 p.m. without a label.
+No. 68 was missing, but Mrs. Harker found it later.
+Who told Clara F. Bennet that the train had stopped?
+Mr. Harker delivered the timetable before noon.
+
+Dr. Murray met Elias at No. 4 station, and they compared notes.
+Henry J. Bennet asked whether Prof. Lanyon had arrived.
+The parcel reached No. 4 station at 2:15 p.m. without a label.
+No. 74 was missing, but Mrs. Murray found it later.
+
+Who told Clara F. Bennet that the train had stopped?
+Mr. Harker carried the ledger before noon.
+Dr. Weston met Henry at No. 4 station, and they compared notes.
+Mina J. Bennet asked whether Prof. Murray had arrived.
+
+The parcel reached No. 4 station at 8:15 p.m. without a label.
+No. 80 was missing, but Mrs. Price found it later.
+Who told Ada F. Weston that the train had stopped?
+Mr. Harker delivered the ledger before noon.
+
+Dr. Weston met Henry at St. Ives, and they compared notes.
+Ada J. Weston asked whether Prof. Weston had arrived.
+The parcel reached No. 4 station at 3:15 p.m. without a label.
+No. 86 was missing, but Mrs. Lanyon found it later.
+
+Who told Mina F. Lanyon that the train had stopped?
+Mr. Bennet examined a small map before noon.
+Dr. Price met Nora at No. 4 station, and they compared notes.
+Henry J. Price asked whether Prof. Price had arrived.
+
+The parcel reached St. Ives at 9:15 p.m. without a label.
+No. 92 was missing, but Mrs. Harker found it later.
+Who told Elias F. Bennet that the train had stopped?
+Mr. Price misplaced a sealed note before noon.
+
+Dr. Murray met Elias at Mt. Vernon, and they compared notes.
+Henry J. Murray asked whether Prof. Weston had arrived.
+The parcel reached Washington, D.C. at 4:15 p.m. without a label.
+No. 98 was missing, but Mrs. Price found it later.
+
+Who told Nora F. Weston that the train had stopped?
+Mr. Lanyon misplaced the ledger before noon.
+Dr. Weston met Mina at Mt. Vernon, and they compared notes.
+Clara J. Lanyon asked whether Prof. Lanyon had arrived.
+
+The parcel reached No. 4 station at 10:15 p.m. without a label.
+No. 14 was missing, but Mrs. Harker found it later.
+Who told Elias F. Lanyon that the train had stopped?
+Mr. Weston delivered a sealed note before noon.
+
+Dr. Lanyon met Clara at No. 4 station, and they compared notes.
+Henry J. Murray asked whether Prof. Harker had arrived.
+The parcel reached Mt. Vernon at 5:15 p.m. without a label.
+No. 20 was missing, but Mrs. Harker found it later.
+
+Who told Henry F. Harker that the train had stopped?
+Mr. Harker delivered the timetable before noon.
+Dr. Bennet met Elias at Mt. Vernon, and they compared notes.
+Clara J. Harker asked whether Prof. Murray had arrived.
+
+The parcel reached St. Ives at 11:15 p.m. without a label.
+No. 26 was missing, but Mrs. Murray found it later.
+Who told Nora F. Murray that the train had stopped?
+Mr. Bennet misplaced a small map before noon.
+
+Dr. Harker met Nora at No. 4 station, and they compared notes.
+Elias J. Weston asked whether Prof. Weston had arrived.
+The parcel reached St. Ives at 6:15 p.m. without a label.
+No. 32 was missing, but Mrs. Price found it later.
+
+Who told Henry F. Murray that the train had stopped?
+Mr. Price folded a sealed note before noon.
+Dr. Lanyon met Elias at St. Ives, and they compared notes.
+Henry J. Price asked whether Prof. Harker had arrived.
+
+The parcel reached No. 4 station at 1:15 p.m. without a label.
+No. 38 was missing, but Mrs. Lanyon found it later.
+Who told Henry F. Lanyon that the train had stopped?
+Mr. Lanyon carried the timetable before noon.
+
+Dr. Bennet met Nora at Mt. Vernon, and they compared notes.
+Clara J. Bennet asked whether Prof. Weston had arrived.
+The parcel reached No. 4 station at 7:15 p.m. without a label.
+No. 44 was missing, but Mrs. Harker found it later.
+
+Who told Henry F. Bennet that the train had stopped?
+Mr. Bennet folded a small map before noon.
+Dr. Price met Mina at Mt. Vernon, and they compared notes.
+Henry J. Bennet asked whether Prof. Weston had arrived.
+
+The parcel reached Mt. Vernon at 2:15 p.m. without a label.
+No. 50 was missing, but Mrs. Price found it later.
+Who told Clara F. Bennet that the train had stopped?
+Mr. Murray carried a small map before noon.
+
+Dr. Price met Henry at Washington, D.C., and they compared notes.
+Mina J. Price asked whether Prof. Lanyon had arrived.
+The parcel reached No. 4 station at 8:15 p.m. without a label.
+No. 56 was missing, but Mrs. Price found it later.
+
+Who told Clara F. Weston that the train had stopped?
+Mr. Murray misplaced a sealed note before noon.
+Dr. Bennet met Ada at No. 4 station, and they compared notes.
+Clara J. Price asked whether Prof. Bennet had arrived.
+
+The parcel reached St. Ives at 3:15 p.m. without a label.
+No. 62 was missing, but Mrs. Bennet found it later.
+Who told Clara F. Price that the train had stopped?
+Mr. Price carried a sealed note before noon.
+
+Dr. Price met Nora at No. 4 station, and they compared notes.
+Mina J. Price asked whether Prof. Lanyon had arrived.
+The parcel reached St. Ives at 9:15 p.m. without a label.
+No. 68 was missing, but Mrs. Harker found it later.
+
+Who told Nora F. Murray that the train had stopped?
+Mr. Harker examined a small map before noon.
+Dr. Murray met Clara at St. Ives, and they compared notes.
+Henry J. Price asked whether Prof. Murray had arrived.
+
+The parcel reached Mt. Vernon at 4:15 p.m. without a label.
+No. 74 was missing, but Mrs. Lanyon found it later.
+Who told Elias F. Price that the train had stopped?
+Mr. Murray delivered the ledger before noon.
+
+Dr. Lanyon met Elias at Mt. Vernon, and they compared notes.
+Henry J. Lanyon asked whether Prof. Bennet had arrived.
+The parcel reached No. 4 station at 10:15 p.m. without a label.
+No. 80 was missing, but Mrs. Bennet found it later.
+
+Who told Ada F. Bennet that the train had stopped?
+Mr. Harker misplaced the ledger before noon.
+Dr. Bennet met Henry at No. 4 station, and they compared notes.
+Mina J. Bennet asked whether Prof. Murray had arrived.
+
+The parcel reached No. 4 station at 5:15 p.m. without a label.
+No. 86 was missing, but Mrs. Murray found it later.
+Who told Clara F. Weston that the train had stopped?
+Mr. Weston carried a small map before noon.
+
+Dr. Weston met Elias at St. Ives, and they compared notes.
+Henry J. Bennet asked whether Prof. Lanyon had arrived.
+The parcel reached Mt. Vernon at 11:15 p.m. without a label.
+No. 92 was missing, but Mrs. Murray found it later.
+
+Who told Clara F. Lanyon that the train had stopped?
+Mr. Weston misplaced a sealed note before noon.
+Dr. Bennet met Henry at St. Ives, and they compared notes.
+Henry J. Bennet asked whether Prof. Murray had arrived.
+
+The parcel reached No. 4 station at 6:15 p.m. without a label.
+No. 98 was missing, but Mrs. Murray found it later.
+Who told Mina F. Price that the train had stopped?
+Mr. Harker folded the ledger before noon.
+
+Dr. Harker met Ada at Mt. Vernon, and they compared notes.
+Nora J. Murray asked whether Prof. Bennet had arrived.
+The parcel reached Washington, D.C. at 1:15 p.m. without a label.
+No. 14 was missing, but Mrs. Murray found it later.
+
+Who told Ada F. Price that the train had stopped?
+Mr. Harker examined a sealed note before noon.
+Dr. Price met Mina at St. Ives, and they compared notes.
+Henry J. Weston asked whether Prof. Bennet had arrived.
+
+The parcel reached No. 4 station at 7:15 p.m. without a label.
+No. 20 was missing, but Mrs. Weston found it later.
+Who told Mina F. Bennet that the train had stopped?
+Mr. Price folded a small map before noon.
+
+Dr. Murray met Henry at No. 4 station, and they compared notes.
+Ada J. Bennet asked whether Prof. Lanyon had arrived.
+The parcel reached Washington, D.C. at 2:15 p.m. without a label.
+No. 26 was missing, but Mrs. Bennet found it later.
+
+Who told Clara F. Harker that the train had stopped?
+Mr. Weston copied a sealed note before noon.
+Dr. Harker met Elias at Mt. Vernon, and they compared notes.
+Mina J. Bennet asked whether Prof. Weston had arrived.
+
+The parcel reached Mt. Vernon at 8:15 p.m. without a label.
+No. 32 was missing, but Mrs. Weston found it later.
+Who told Henry F. Murray that the train had stopped?
+Mr. Weston delivered the ledger before noon.
+
+Dr. Weston met Clara at No. 4 station, and they compared notes.
+Henry J. Lanyon asked whether Prof. Bennet had arrived.
+The parcel reached Washington, D.C. at 3:15 p.m. without a label.
+No. 38 was missing, but Mrs. Weston found it later.
+
+Who told Nora F. Murray that the train had stopped?
+Mr. Price copied a small map before noon.
+Dr. Murray met Clara at No. 4 station, and they compared notes.
+Ada J. Price asked whether Prof. Bennet had arrived.
+
+The parcel reached Mt. Vernon at 9:15 p.m. without a label.
+No. 44 was missing, but Mrs. Bennet found it later.
+Who told Elias F. Price that the train had stopped?
+Mr. Price examined the ledger before noon.
+
+Dr. Weston met Clara at No. 4 station, and they compared notes.
+Nora J. Bennet asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 4:15 p.m. without a label.
+No. 50 was missing, but Mrs. Price found it later.
+
+Who told Nora F. Harker that the train had stopped?
+Mr. Weston copied a sealed note before noon.
+Dr. Lanyon met Nora at No. 4 station, and they compared notes.
+Ada J. Murray asked whether Prof. Lanyon had arrived.
+
+The parcel reached Washington, D.C. at 10:15 p.m. without a label.
+No. 56 was missing, but Mrs. Murray found it later.
+Who told Nora F. Price that the train had stopped?
+Mr. Bennet misplaced the ledger before noon.
+
+Dr. Bennet met Ada at Mt. Vernon, and they compared notes.
+Nora J. Harker asked whether Prof. Price had arrived.
+The parcel reached No. 4 station at 5:15 p.m. without a label.
+No. 62 was missing, but Mrs. Harker found it later.
+
+Who told Henry F. Harker that the train had stopped?
+Mr. Murray carried a sealed note before noon.
+Dr. Bennet met Mina at St. Ives, and they compared notes.
+Clara J. Price asked whether Prof. Murray had arrived.
+
+The parcel reached Mt. Vernon at 11:15 p.m. without a label.
+No. 68 was missing, but Mrs. Weston found it later.
+Who told Ada F. Harker that the train had stopped?
+Mr. Weston delivered the timetable before noon.
+
+Dr. Price met Elias at Washington, D.C., and they compared notes.
+Henry J. Lanyon asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 6:15 p.m. without a label.
+No. 74 was missing, but Mrs. Harker found it later.
+
+Who told Ada F. Bennet that the train had stopped?
+Mr. Harker delivered a small map before noon.
+Dr. Lanyon met Mina at No. 4 station, and they compared notes.
+Clara J. Murray asked whether Prof. Price had arrived.
+
+The parcel reached St. Ives at 1:15 p.m. without a label.
+No. 80 was missing, but Mrs. Weston found it later.
+Who told Ada F. Price that the train had stopped?
+Mr. Lanyon carried a sealed note before noon.
+
+Dr. Price met Nora at Washington, D.C., and they compared notes.
+Henry J. Harker asked whether Prof. Harker had arrived.
+The parcel reached St. Ives at 7:15 p.m. without a label.
+No. 86 was missing, but Mrs. Price found it later.
+
+Who told Ada F. Lanyon that the train had stopped?
+Mr. Price misplaced a small map before noon.
+Dr. Murray met Mina at Washington, D.C., and they compared notes.
+Nora J. Murray asked whether Prof. Murray had arrived.
+
+The parcel reached Washington, D.C. at 2:15 p.m. without a label.
+No. 92 was missing, but Mrs. Weston found it later.
+Who told Nora F. Lanyon that the train had stopped?
+Mr. Murray examined a small map before noon.
+
+Dr. Weston met Elias at No. 4 station, and they compared notes.
+Ada J. Weston asked whether Prof. Weston had arrived.
+The parcel reached St. Ives at 8:15 p.m. without a label.
+No. 98 was missing, but Mrs. Lanyon found it later.
+
+Who told Nora F. Harker that the train had stopped?
+Mr. Harker folded a small map before noon.
+Dr. Price met Ada at Washington, D.C., and they compared notes.
+Henry J. Murray asked whether Prof. Weston had arrived.
+
+The parcel reached No. 4 station at 3:15 p.m. without a label.
+No. 14 was missing, but Mrs. Lanyon found it later.
+Who told Henry F. Murray that the train had stopped?
+Mr. Bennet delivered the ledger before noon.
+
+Dr. Weston met Clara at Washington, D.C., and they compared notes.
+Ada J. Murray asked whether Prof. Murray had arrived.
+The parcel reached No. 4 station at 9:15 p.m. without a label.
+No. 20 was missing, but Mrs. Weston found it later.
+
+Who told Ada F. Harker that the train had stopped?
+Mr. Murray examined the ledger before noon.
+Dr. Price met Clara at Washington, D.C., and they compared notes.
+Henry J. Bennet asked whether Prof. Price had arrived.
+
+The parcel reached St. Ives at 4:15 p.m. without a label.
+No. 26 was missing, but Mrs. Weston found it later.
+Who told Clara F. Murray that the train had stopped?
+Mr. Weston delivered the ledger before noon.
+
+Dr. Murray met Henry at Mt. Vernon, and they compared notes.
+Henry J. Harker asked whether Prof. Murray had arrived.
+The parcel reached St. Ives at 10:15 p.m. without a label.
+No. 32 was missing, but Mrs. Harker found it later.
+
+Who told Clara F. Harker that the train had stopped?
+Mr. Harker carried a small map before noon.
+Dr. Murray met Clara at Washington, D.C., and they compared notes.
+Henry J. Weston asked whether Prof. Bennet had arrived.
+
+The parcel reached No. 4 station at 5:15 p.m. without a label.
+No. 38 was missing, but Mrs. Weston found it later.
+Who told Nora F. Harker that the train had stopped?
+Mr. Lanyon delivered the timetable before noon.
+
+Dr. Price met Nora at Washington, D.C., and they compared notes.
+Henry J. Murray asked whether Prof. Harker had arrived.
+The parcel reached Washington, D.C. at 11:15 p.m. without a label.
+No. 44 was missing, but Mrs. Price found it later.
+
+Who told Nora F. Murray that the train had stopped?
+Mr. Lanyon misplaced the timetable before noon.
+Dr. Lanyon met Nora at St. Ives, and they compared notes.
+Elias J. Murray asked whether Prof. Harker had arrived.
+
+The parcel reached Mt. Vernon at 6:15 p.m. without a label.
+No. 50 was missing, but Mrs. Weston found it later.
+Who told Mina F. Bennet that the train had stopped?
+Mr. Price delivered a sealed note before noon.
+
+Dr. Price met Nora at No. 4 station, and they compared notes.
+Ada J. Price asked whether Prof. Lanyon had arrived.
+The parcel reached Washington, D.C. at 1:15 p.m. without a label.
+No. 56 was missing, but Mrs. Price found it later.
+
+Who told Nora F. Harker that the train had stopped?
+Mr. Harker carried a small map before noon.
+Dr. Harker met Clara at St. Ives, and they compared notes.
+Clara J. Murray asked whether Prof. Lanyon had arrived.
+
+The parcel reached Washington, D.C. at 7:15 p.m. without a label.
+No. 62 was missing, but Mrs. Price found it later.
+Who told Clara F. Bennet that the train had stopped?
+Mr. Price examined the ledger before noon.
+
+Dr. Bennet met Clara at Mt. Vernon, and they compared notes.
+Clara J. Lanyon asked whether Prof. Lanyon had arrived.
+The parcel reached Mt. Vernon at 2:15 p.m. without a label.
+No. 68 was missing, but Mrs. Harker found it later.
+
+Who told Henry F. Lanyon that the train had stopped?
+Mr. Murray folded a small map before noon.
+Dr. Weston met Ada at St. Ives, and they compared notes.
