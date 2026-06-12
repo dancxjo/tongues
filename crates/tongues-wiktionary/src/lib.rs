@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -276,6 +276,11 @@ pub enum PrepareProgress {
         phones: usize,
         pie_roots: usize,
     },
+    Expand {
+        rows: usize,
+        examples: usize,
+        path: Option<String>,
+    },
     Write {
         path: String,
         rows: usize,
@@ -325,14 +330,37 @@ pub fn prepare_dataset_with_progress(
             phones.len()
         ),
     });
-    let examples = expand_training_examples(
-        &phonemes
-            .iter()
-            .chain(phones.iter())
-            .cloned()
-            .collect::<Vec<_>>(),
-        config,
+    let expanded_path = out.join("expanded.jsonl.part");
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Writing expanded training examples to {}",
+            expanded_path.display()
+        ),
+    });
+    let mut expanded_file = BufWriter::new(
+        File::create(&expanded_path)
+            .with_context(|| format!("creating {}", expanded_path.display()))?,
     );
+    let mut examples = Vec::new();
+    let entries = phonemes
+        .iter()
+        .chain(phones.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    expand_training_examples_to(
+        &entries,
+        config,
+        &mut progress,
+        Some(&expanded_path),
+        |example| {
+            writeln!(expanded_file, "{}", serde_json::to_string(&example)?)?;
+            examples.push(example);
+            Ok(())
+        },
+    )?;
+    expanded_file
+        .flush()
+        .with_context(|| format!("flushing {}", expanded_path.display()))?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Splitting {} examples into train/valid/test",
@@ -370,6 +398,8 @@ pub fn prepare_dataset_with_progress(
         serde_json::to_string_pretty(config)?,
     )?;
     fs::write(out.join("README.md"), dataset_readme(config, &dump_path))?;
+    fs::remove_file(&expanded_path)
+        .with_context(|| format!("removing {}", expanded_path.display()))?;
 
     Ok(PrepareReport {
         dump_path: dump_path.display().to_string(),
@@ -2004,16 +2034,32 @@ pub fn expand_training_examples(
     entries: &[PronunciationEntry],
     config: &WiktionaryConfig,
 ) -> Vec<TrainingExample> {
-    let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
     let mut examples = Vec::new();
+    expand_training_examples_to(entries, config, &mut |_| {}, None, |example| {
+        examples.push(example);
+        Ok(())
+    })
+    .expect("collecting expanded training examples should not fail");
+    examples
+}
+
+fn expand_training_examples_to(
+    entries: &[PronunciationEntry],
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+    progress_path: Option<&Path>,
+    mut emit: impl FnMut(TrainingExample) -> Result<()>,
+) -> Result<()> {
+    let allowed: BTreeSet<&str> = config.languages.iter().map(String::as_str).collect();
     let mut seen_normalize = HashSet::new();
     let normalized_entries = entries
         .iter()
         .filter(|entry| allowed.contains(entry.lang.as_str()))
         .map(NormalizedPronunciationEntry::from)
         .collect::<Vec<_>>();
+    let mut emitted = 0_usize;
 
-    for row in &normalized_entries {
+    for (index, row) in normalized_entries.iter().enumerate() {
         let entry = row.entry;
         let controls = wiktionary_training_controls(
             WiktionaryTask::OrthographyToPhonology,
@@ -2022,7 +2068,7 @@ pub fn expand_training_examples(
             row.variety.as_deref(),
         );
         let source = pronunciation_entry_source(entry);
-        examples.push(TrainingExample {
+        emit(TrainingExample {
             task: WiktionaryTask::OrthographyToPhonology,
             lang: Some(entry.lang.clone()),
             notation: Some(entry.notation.clone()),
@@ -2030,7 +2076,8 @@ pub fn expand_training_examples(
             input: format!("{controls} {}", row.orthography),
             output: row.pronunciation.clone(),
             source: source.clone(),
-        });
+        })?;
+        emitted += 1;
         if config.include_reverse {
             let controls = wiktionary_training_controls(
                 WiktionaryTask::PhonologyToOrthography,
@@ -2038,7 +2085,7 @@ pub fn expand_training_examples(
                 Some(row.representation),
                 row.variety.as_deref(),
             );
-            examples.push(TrainingExample {
+            emit(TrainingExample {
                 task: WiktionaryTask::PhonologyToOrthography,
                 lang: Some(entry.lang.clone()),
                 notation: Some(entry.notation.clone()),
@@ -2046,10 +2093,11 @@ pub fn expand_training_examples(
                 input: format!("{controls} {}", row.pronunciation),
                 output: row.orthography.clone(),
                 source: source.clone(),
-            });
+            })?;
+            emitted += 1;
         }
         if seen_normalize.insert(format!("{}\t{}", entry.lang, row.orthography)) {
-            examples.push(TrainingExample {
+            emit(TrainingExample {
                 task: WiktionaryTask::NormalizeText,
                 lang: Some(entry.lang.clone()),
                 notation: None,
@@ -2062,10 +2110,11 @@ pub fn expand_training_examples(
                 ),
                 output: normalize_spelling_for_training(&row.orthography),
                 source: source.clone(),
-            });
+            })?;
+            emitted += 1;
         }
         if config.include_language_guessing {
-            examples.push(TrainingExample {
+            emit(TrainingExample {
                 task: WiktionaryTask::GuessLangFromOrthography,
                 lang: None,
                 notation: Some(entry.notation.clone()),
@@ -2078,8 +2127,9 @@ pub fn expand_training_examples(
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
-            });
-            examples.push(TrainingExample {
+            })?;
+            emitted += 1;
+            emit(TrainingExample {
                 task: WiktionaryTask::GuessLangFromPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
@@ -2092,8 +2142,9 @@ pub fn expand_training_examples(
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
-            });
-            examples.push(TrainingExample {
+            })?;
+            emitted += 1;
+            emit(TrainingExample {
                 task: WiktionaryTask::GuessLangFromOrthographyAndPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
@@ -2107,14 +2158,17 @@ pub fn expand_training_examples(
                 ),
                 output: entry.lang.clone(),
                 source: source.clone(),
-            });
+            })?;
+            emitted += 1;
         }
+        maybe_report_expand_progress(progress, index + 1, emitted, progress_path);
     }
 
     let mut seen_realization = HashSet::new();
-    for phonemes in normalized_entries
+    for (index, phonemes) in normalized_entries
         .iter()
         .filter(|entry| entry.representation == "<repr:phonemes>")
+        .enumerate()
     {
         for phones in normalized_entries.iter().filter(|entry| {
             entry.representation == "<repr:phones>"
@@ -2144,7 +2198,7 @@ pub fn expand_training_examples(
                 Some("<repr:phonemes>"),
                 variety,
             );
-            examples.push(TrainingExample {
+            emit(TrainingExample {
                 task: WiktionaryTask::PhoneticRealization,
                 lang: Some(phonemes.entry.lang.clone()),
                 notation: Some("phonetic-realization".to_string()),
@@ -2156,11 +2210,38 @@ pub fn expand_training_examples(
                     pronunciation_entry_source(phonemes.entry),
                     pronunciation_entry_source(phones.entry)
                 ),
-            });
+            })?;
+            emitted += 1;
         }
+        maybe_report_expand_progress(
+            progress,
+            normalized_entries.len() + index + 1,
+            emitted,
+            progress_path,
+        );
     }
 
-    examples
+    progress(PrepareProgress::Expand {
+        rows: entries.len(),
+        examples: emitted,
+        path: progress_path.map(|path| path.display().to_string()),
+    });
+    Ok(())
+}
+
+fn maybe_report_expand_progress(
+    progress: &mut impl FnMut(PrepareProgress),
+    rows: usize,
+    examples: usize,
+    path: Option<&Path>,
+) {
+    if rows <= 10 || rows % 10_000 == 0 {
+        progress(PrepareProgress::Expand {
+            rows,
+            examples,
+            path: path.map(|path| path.display().to_string()),
+        });
+    }
 }
 
 struct NormalizedPronunciationEntry<'a> {

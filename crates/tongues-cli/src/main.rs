@@ -1174,6 +1174,14 @@ fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProg
         } => format!(
             "Parsing dump: {pages} pages, {patterns} patterns, {phonemes} phonemes, {phones} phones, {pie_roots} PIE roots"
         ),
+        tongues_wiktionary::PrepareProgress::Expand {
+            rows,
+            examples,
+            path,
+        } => match path {
+            Some(path) => format!("Expanded {rows} rows into {examples} examples -> {path}"),
+            None => format!("Expanded {rows} rows into {examples} examples"),
+        },
         tongues_wiktionary::PrepareProgress::Write { path, rows } => {
             format!("Wrote {rows} rows to {path}")
         }
@@ -1476,6 +1484,33 @@ fn read_sentence_parser_config(
     toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
+fn sentence_parser_prepare_progress_message(
+    progress: tongues_sentence_parser::PrepareProgress,
+) -> String {
+    match progress {
+        tongues_sentence_parser::PrepareProgress::Stage { message } => message,
+        tongues_sentence_parser::PrepareProgress::Discover { files } => {
+            format!("Discovered {files} sentence-parser source files")
+        }
+        tongues_sentence_parser::PrepareProgress::Detect {
+            path,
+            files_done,
+            files_total,
+            sentences,
+            naive_discrepancies,
+        } => format!(
+            "Detected {sentences} sentences and {naive_discrepancies} repairs ({files_done}/{files_total}: {path})"
+        ),
+        tongues_sentence_parser::PrepareProgress::Build {
+            sentences,
+            examples,
+        } => format!("Built {examples} boundary examples from {sentences} sentences"),
+        tongues_sentence_parser::PrepareProgress::Write { path, rows } => {
+            format!("Wrote {rows} rows to {path}")
+        }
+    }
+}
+
 fn run_sentence_parser_command(
     command: SentenceParserCommands,
     device_arg: DeviceArg,
@@ -1490,7 +1525,27 @@ fn run_sentence_parser_command(
             if !inputs.is_empty() {
                 config.source_paths = inputs;
             }
-            let report = tongues_sentence_parser::prepare_dataset(&out, &config)?;
+            let pb = status_spinner(format!(
+                "Preparing sentence-parser dataset at {}",
+                out.display()
+            ));
+            let report =
+                tongues_sentence_parser::prepare_dataset_with_progress(&out, &config, {
+                    let pb = pb.clone();
+                    move |progress| {
+                        pb.set_message(sentence_parser_prepare_progress_message(progress));
+                    }
+                })?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples",
+                    out.display(),
+                    report.train_examples,
+                    report.valid_examples,
+                    report.test_examples
+                ),
+            );
             println!(
                 "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples from {} sentences in {} files",
                 out.display(),
@@ -1528,7 +1583,27 @@ fn run_sentence_parser_command(
                 || !data.join("valid.jsonl").exists()
             {
                 let config_data = read_sentence_parser_config(&config)?;
-                let report = tongues_sentence_parser::prepare_dataset(&data, &config_data)?;
+                let pb = status_spinner(format!(
+                    "Preparing sentence-parser dataset at {}",
+                    data.display()
+                ));
+                let report =
+                    tongues_sentence_parser::prepare_dataset_with_progress(&data, &config_data, {
+                        let pb = pb.clone();
+                        move |progress| {
+                            pb.set_message(sentence_parser_prepare_progress_message(progress));
+                        }
+                    })?;
+                finish_status(
+                    pb,
+                    format!(
+                        "Prepared sentence-parser dataset at {}: {} train / {} valid / {} test examples",
+                        data.display(),
+                        report.train_examples,
+                        report.valid_examples,
+                        report.test_examples
+                    ),
+                );
                 println!(
                     "Prepared sentence parser dataset at {}: {} train / {} valid / {} test examples",
                     data.display(),
@@ -1703,6 +1778,12 @@ fn cmd_sentence_parser_train(
         patience,
         batch_size
     );
+    println!("  train_state: {}", out.join("train_state.json").display());
+    println!(
+        "  epoch checkpoints: {}",
+        out.join("model-epoch-N.bin").display()
+    );
+    println!("  best model: {}", model_path.with_extension("bin").display());
 
     let mut rng = StdRng::seed_from_u64(seed);
     match device_arg {

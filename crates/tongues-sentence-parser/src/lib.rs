@@ -5,7 +5,7 @@
 //! needs to repair a previously emitted boundary.
 
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -191,12 +191,63 @@ pub struct PrepareReport {
 }
 
 pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<PrepareReport> {
+    prepare_dataset_with_progress(out, config, |_| {})
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareProgress {
+    Stage {
+        message: String,
+    },
+    Discover {
+        files: usize,
+    },
+    Detect {
+        path: String,
+        files_done: usize,
+        files_total: usize,
+        sentences: usize,
+        naive_discrepancies: usize,
+    },
+    Build {
+        sentences: usize,
+        examples: usize,
+    },
+    Write {
+        path: String,
+        rows: usize,
+    },
+}
+
+pub fn prepare_dataset_with_progress(
+    out: &Path,
+    config: &SentenceParserConfig,
+    mut progress: impl FnMut(PrepareProgress),
+) -> Result<PrepareReport> {
+    progress(PrepareProgress::Stage {
+        message: format!("Creating sentence-parser output directory {}", out.display()),
+    });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let files = discover_source_files(&config.source_paths)?;
+    progress(PrepareProgress::Discover { files: files.len() });
     let mut sentences = Vec::new();
     let mut correction_examples = Vec::new();
+    let sentences_part_path = out.join("sentences.jsonl.part");
+    let discrepancies_part_path = out.join("naive_discrepancies.jsonl.part");
+    let examples_part_path = out.join("examples.jsonl.part");
+    let mut sentences_part = BufWriter::new(
+        File::create(&sentences_part_path)
+            .with_context(|| format!("creating {}", sentences_part_path.display()))?,
+    );
+    let mut discrepancies_part = BufWriter::new(
+        File::create(&discrepancies_part_path)
+            .with_context(|| format!("creating {}", discrepancies_part_path.display()))?,
+    );
     let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
-    for path in &files {
+    for (file_index, path) in files.iter().enumerate() {
+        progress(PrepareProgress::Stage {
+            message: format!("Detecting sentence boundaries in {}", path.display()),
+        });
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut file_sentences = Vec::new();
@@ -212,23 +263,63 @@ pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<Prep
             }
         }
         if config.include_naive_discrepancies {
-            correction_examples.extend(build_naive_discrepancy_examples(
+            let file_corrections = build_naive_discrepancy_examples(
                 &raw,
                 &file_sentences,
                 &path.display().to_string(),
                 config,
-            ));
+            );
+            for example in &file_corrections {
+                writeln!(discrepancies_part, "{}", serde_json::to_string(example)?)?;
+            }
+            correction_examples.extend(file_corrections);
+        }
+        for sentence in &file_sentences {
+            writeln!(
+                sentences_part,
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "sentence": sentence,
+                    "source": path.display().to_string()
+                }))?
+            )?;
         }
         sentences.extend(
             file_sentences
                 .into_iter()
                 .map(|sentence| (sentence, path.display().to_string())),
         );
+        progress(PrepareProgress::Detect {
+            path: path.display().to_string(),
+            files_done: file_index + 1,
+            files_total: files.len(),
+            sentences: sentences.len(),
+            naive_discrepancies: correction_examples.len(),
+        });
     }
+    sentences_part
+        .flush()
+        .with_context(|| format!("flushing {}", sentences_part_path.display()))?;
+    discrepancies_part
+        .flush()
+        .with_context(|| format!("flushing {}", discrepancies_part_path.display()))?;
+    drop(sentences_part);
+    drop(discrepancies_part);
 
     let naive_discrepancy_examples = correction_examples.len();
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Building boundary examples from {} detected sentences",
+            sentences.len()
+        ),
+    });
     let mut examples = build_boundary_examples(&sentences, config);
     examples.extend(correction_examples.clone());
+    progress(PrepareProgress::Build {
+        sentences: sentences.len(),
+        examples: examples.len(),
+    });
+    write_jsonl_with_progress(&examples_part_path, &examples, &mut progress)?;
     let mut shuffled = examples;
     shuffled.shuffle(&mut StdRng::seed_from_u64(config.seed));
     let n = shuffled.len();
@@ -238,15 +329,26 @@ pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<Prep
     let valid = shuffled[train_end.min(n)..valid_end].to_vec();
     let test = shuffled[valid_end..].to_vec();
 
-    write_jsonl(&out.join("train.jsonl"), &train)?;
-    write_jsonl(&out.join("valid.jsonl"), &valid)?;
-    write_jsonl(&out.join("test.jsonl"), &test)?;
-    write_jsonl(&out.join("naive_discrepancies.jsonl"), &correction_examples)?;
+    write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
+    write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
+    write_jsonl_with_progress(&out.join("test.jsonl"), &test, &mut progress)?;
+    write_jsonl_with_progress(
+        &out.join("naive_discrepancies.jsonl"),
+        &correction_examples,
+        &mut progress,
+    )?;
+    progress(PrepareProgress::Stage {
+        message: "Building sentence-parser vocabulary".to_string(),
+    });
     let vocab = build_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
     fs::write(
         out.join("vocab.json"),
         serde_json::to_string_pretty(&vocab)?,
     )?;
+    progress(PrepareProgress::Write {
+        path: out.join("vocab.json").display().to_string(),
+        rows: train.len() + valid.len() + test.len(),
+    });
     fs::write(
         out.join("dataset_config.json"),
         serde_json::to_string_pretty(config)?,
@@ -261,6 +363,10 @@ pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<Prep
             naive_discrepancy_examples,
         ),
     )?;
+    fs::remove_file(&sentences_part_path)
+        .with_context(|| format!("removing {}", sentences_part_path.display()))?;
+    fs::remove_file(&examples_part_path)
+        .with_context(|| format!("removing {}", examples_part_path.display()))?;
     Ok(PrepareReport {
         source_files: files.len(),
         detected_sentences: sentences.len(),
@@ -641,11 +747,40 @@ fn discover_source_files_in_dir(dir: &Path, files: &mut Vec<PathBuf>) -> Result<
     Ok(())
 }
 
-fn write_jsonl<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
-    let mut file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+fn write_jsonl_with_progress<T: Serialize>(
+    path: &Path,
+    rows: &[T],
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
+    let part_path = path.with_extension(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}.part"))
+            .unwrap_or_else(|| "part".to_string()),
+    );
+    progress(PrepareProgress::Stage {
+        message: format!("Writing {} rows to {}", rows.len(), part_path.display()),
+    });
+    let mut file =
+        BufWriter::new(File::create(&part_path).with_context(|| {
+            format!("creating {}", part_path.display())
+        })?);
     for row in rows {
         writeln!(file, "{}", serde_json::to_string(row)?)?;
     }
+    file.flush()
+        .with_context(|| format!("flushing {}", part_path.display()))?;
+    fs::rename(&part_path, path).with_context(|| {
+        format!(
+            "moving {} to {}",
+            part_path.display(),
+            path.display()
+        )
+    })?;
+    progress(PrepareProgress::Write {
+        path: path.display().to_string(),
+        rows: rows.len(),
+    });
     Ok(())
 }
 
