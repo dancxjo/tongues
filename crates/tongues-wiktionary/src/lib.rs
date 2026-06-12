@@ -54,6 +54,8 @@ pub struct WiktionaryConfig {
     pub include_language_guessing: bool,
     #[serde(default = "default_synthesize_spanish")]
     pub synthesize_spanish: bool,
+    #[serde(default = "default_include_wiktionary_supplements")]
+    pub include_wiktionary_supplements: bool,
     #[serde(default)]
     pub include_descendant_pairs: bool,
     #[serde(default)]
@@ -85,7 +87,7 @@ impl Default for WiktionaryConfig {
             train_frac: 0.8,
             valid_frac: 0.1,
             seed: 42,
-            languages: ["eng", "fra", "deu", "spa"]
+            languages: ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
@@ -94,6 +96,7 @@ impl Default for WiktionaryConfig {
             include_reverse: true,
             include_language_guessing: true,
             synthesize_spanish: true,
+            include_wiktionary_supplements: true,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -121,6 +124,7 @@ impl WiktionaryConfig {
             include_reverse: true,
             include_language_guessing: false,
             synthesize_spanish: false,
+            include_wiktionary_supplements: false,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -139,6 +143,10 @@ fn default_train_notations() -> Vec<String> {
 }
 
 fn default_synthesize_spanish() -> bool {
+    true
+}
+
+fn default_include_wiktionary_supplements() -> bool {
     true
 }
 
@@ -164,6 +172,16 @@ pub struct WiktionaryPattern {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
     pub raw_template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplementalTerm {
+    pub domain: String,
+    pub lang: String,
+    pub wiktionary_lang: String,
+    pub spelling: String,
+    pub evidence: Vec<String>,
+    pub has_pronunciation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,6 +347,11 @@ pub fn prepare_dataset_with_progress(
     )?;
     write_jsonl_with_progress(&out.join("phonemes.jsonl"), &phonemes, &mut progress)?;
     write_jsonl_with_progress(&out.join("phones.jsonl"), &phones, &mut progress)?;
+    write_jsonl_with_progress(
+        &out.join("supplemental_terms.jsonl"),
+        &extracted.supplemental_terms,
+        &mut progress,
+    )?;
     progress(PrepareProgress::Stage {
         message: "Building vocabulary".to_string(),
     });
@@ -622,6 +645,7 @@ pub struct ExtractedWiktionaryData {
     pub patterns: Vec<WiktionaryPattern>,
     pub phonemes: Vec<PronunciationEntry>,
     pub phones: Vec<PronunciationEntry>,
+    pub supplemental_terms: Vec<SupplementalTerm>,
     pub pie_roots: Vec<PieEtymologyEntry>,
 }
 
@@ -743,6 +767,7 @@ impl ExtractedWiktionaryData {
         self.patterns.extend(other.patterns);
         self.phonemes.extend(other.phonemes);
         self.phones.extend(other.phones);
+        self.supplemental_terms.extend(other.supplemental_terms);
         self.pie_roots.extend(other.pie_roots);
     }
 }
@@ -782,6 +807,11 @@ pub fn extract_page_data(
     let allowed = allowed_wiktionary_langs(config);
     let mut data = ExtractedWiktionaryData::default();
     let mut seen = HashSet::new();
+    let supplements = if config.include_wiktionary_supplements {
+        classify_supplemental_terms(spelling, wikitext, &allowed)
+    } else {
+        Vec::new()
+    };
     for template in find_named_templates(wikitext, &["IPA", "audio", "homophones", "rhymes"]) {
         let params = split_template_params(template);
         if params.len() < 2 {
@@ -866,7 +896,226 @@ pub fn extract_page_data(
             }
         }
     }
+    if !supplements.is_empty() {
+        let has_pronunciation = !data.phonemes.is_empty() || !data.phones.is_empty();
+        data.supplemental_terms = supplements
+            .iter()
+            .map(|supplement| SupplementalTerm {
+                domain: supplement.domain.to_string(),
+                lang: supplement.lang.to_string(),
+                wiktionary_lang: supplement.wiktionary_lang.to_string(),
+                spelling: spelling.to_string(),
+                evidence: supplement.evidence.clone(),
+                has_pronunciation,
+            })
+            .collect();
+        append_supplemental_pronunciation_rows(&mut data, &supplements, &mut seen);
+    }
     data
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SupplementalTermMatch {
+    domain: &'static str,
+    accent: &'static str,
+    lang: &'static str,
+    wiktionary_lang: &'static str,
+    evidence: Vec<String>,
+}
+
+fn classify_supplemental_terms(
+    spelling: &str,
+    wikitext: &str,
+    allowed: &BTreeSet<&str>,
+) -> Vec<SupplementalTermMatch> {
+    let mut matches = Vec::new();
+    let lower = wikitext.to_ascii_lowercase();
+
+    if allowed.contains("en")
+        && has_language_section(wikitext, "English")
+        && spelling.chars().next().is_some_and(char::is_uppercase)
+        && contains_any(
+            &lower,
+            &[
+                "derived from ancient greek",
+                "from ancient greek",
+                "greek given names",
+                "greek surnames",
+                "category:english terms derived from ancient greek",
+                "{{given name",
+                "{{surname",
+            ],
+        )
+    {
+        matches.push(SupplementalTermMatch {
+            domain: "english-greek-name",
+            accent: "GreekName",
+            lang: "eng",
+            wiktionary_lang: "en",
+            evidence: supplemental_evidence(
+                &lower,
+                &[
+                    "derived from ancient greek",
+                    "from ancient greek",
+                    "greek given names",
+                    "greek surnames",
+                    "{{given name",
+                    "{{surname",
+                ],
+            ),
+        });
+    }
+
+    if allowed.contains("la") && has_language_section(wikitext, "Latin") {
+        matches.push(SupplementalTermMatch {
+            domain: "latin",
+            accent: "Latin",
+            lang: "lat",
+            wiktionary_lang: "la",
+            evidence: vec!["==Latin==".to_string()],
+        });
+    }
+
+    if (allowed.contains("la") || allowed.contains("en"))
+        && contains_any(
+            &lower,
+            &[
+                "new latin",
+                "neo-latin",
+                "scientific name",
+                "taxonomic name",
+                "{{taxon",
+                "{{species",
+                "{{taxlink",
+                "category:translingual taxonomic names",
+                "category:species",
+            ],
+        )
+    {
+        let latin = has_language_section(wikitext, "Latin");
+        matches.push(SupplementalTermMatch {
+            domain: "neo-latin-scientific",
+            accent: "NeoLatinScientific",
+            lang: if latin { "lat" } else { "eng" },
+            wiktionary_lang: if latin { "la" } else { "en" },
+            evidence: supplemental_evidence(
+                &lower,
+                &[
+                    "new latin",
+                    "neo-latin",
+                    "scientific name",
+                    "taxonomic name",
+                    "{{taxon",
+                    "{{species",
+                    "{{taxlink",
+                ],
+            ),
+        });
+    }
+
+    if (allowed.contains("la") || allowed.contains("en"))
+        && contains_any(
+            &lower,
+            &[
+                "legal latin",
+                "category:legal latin",
+                "category:english legal terms",
+                "category:latin legal terms",
+                "{{lb|en|law",
+                "{{lb|la|law",
+                "{{legal",
+            ],
+        )
+    {
+        let latin = has_language_section(wikitext, "Latin");
+        matches.push(SupplementalTermMatch {
+            domain: "legal-latin",
+            accent: "LegalLatin",
+            lang: if latin { "lat" } else { "eng" },
+            wiktionary_lang: if latin { "la" } else { "en" },
+            evidence: supplemental_evidence(
+                &lower,
+                &[
+                    "legal latin",
+                    "category:legal latin",
+                    "category:english legal terms",
+                    "category:latin legal terms",
+                    "{{lb|en|law",
+                    "{{lb|la|law",
+                    "{{legal",
+                ],
+            ),
+        });
+    }
+
+    matches
+}
+
+fn append_supplemental_pronunciation_rows(
+    data: &mut ExtractedWiktionaryData,
+    supplements: &[SupplementalTermMatch],
+    seen: &mut HashSet<String>,
+) {
+    let phonemes = data.phonemes.clone();
+    let phones = data.phones.clone();
+    for supplement in supplements {
+        for entry in phonemes.iter().filter(|entry| {
+            entry.lang == supplement.lang && entry.wiktionary_lang == supplement.wiktionary_lang
+        }) {
+            append_supplemental_pronunciation_row(
+                &mut data.phonemes,
+                entry,
+                supplement,
+                "phonemes",
+                seen,
+            );
+        }
+        for entry in phones.iter().filter(|entry| {
+            entry.lang == supplement.lang && entry.wiktionary_lang == supplement.wiktionary_lang
+        }) {
+            append_supplemental_pronunciation_row(
+                &mut data.phones,
+                entry,
+                supplement,
+                "phones",
+                seen,
+            );
+        }
+    }
+}
+
+fn append_supplemental_pronunciation_row(
+    rows: &mut Vec<PronunciationEntry>,
+    entry: &PronunciationEntry,
+    supplement: &SupplementalTermMatch,
+    kind: &str,
+    seen: &mut HashSet<String>,
+) {
+    let key = format!(
+        "{}\t{}\t{}\t{}",
+        entry.lang, entry.spelling, entry.ipa, supplement.domain
+    );
+    if seen.insert(key) {
+        let mut row = entry.clone();
+        row.accent = Some(supplement.accent.to_string());
+        row.raw_template = format!(
+            "{{{{wiktionary-supplement|{}|{}|{}}}}}",
+            kind, supplement.domain, entry.spelling
+        );
+        rows.push(row);
+    }
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn supplemental_evidence(haystack: &str, needles: &[&str]) -> Vec<String> {
+    needles
+        .iter()
+        .filter(|needle| haystack.contains(**needle))
+        .map(|needle| (*needle).to_string())
+        .collect()
 }
 
 fn has_language_section(wikitext: &str, language: &str) -> bool {
@@ -1591,6 +1840,10 @@ fn wiktionary_lang_from_iso3(lang: &str) -> Option<&'static str> {
         "fra" => Some("fr"),
         "deu" => Some("de"),
         "spa" => Some("es"),
+        "lat" => Some("la"),
+        "ell" => Some("el"),
+        "grc" => Some("grc"),
+        "san" => Some("sa"),
         _ => None,
     }
 }
@@ -1601,6 +1854,10 @@ fn iso3_from_wiktionary_lang(lang: &str) -> Option<&'static str> {
         "fr" => Some("fra"),
         "de" => Some("deu"),
         "es" => Some("spa"),
+        "la" => Some("lat"),
+        "el" => Some("ell"),
+        "grc" => Some("grc"),
+        "sa" => Some("san"),
         _ => None,
     }
 }
@@ -1852,6 +2109,8 @@ pub fn expand_training_examples(
 fn pronunciation_entry_source(entry: &PronunciationEntry) -> String {
     if entry.raw_template.starts_with("{{synthetic-spanish|") {
         "synthetic-spanish-orthography+enwiktionary-title".to_string()
+    } else if entry.raw_template.starts_with("{{wiktionary-supplement|") {
+        "wiktionary-supplement".to_string()
     } else {
         "enwiktionary".to_string()
     }
@@ -2148,7 +2407,10 @@ mod tests {
         let config = WiktionaryConfig::default();
         assert_eq!(config.dataset_id, DEFAULT_DATASET_ID);
         assert_eq!(config.dump_index_url, DEFAULT_DUMP_INDEX_URL);
-        assert_eq!(config.languages, ["eng", "fra", "deu", "spa"]);
+        assert_eq!(
+            config.languages,
+            ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"]
+        );
         assert_eq!(config.train_task, "all");
         assert_eq!(config.train_notations, ["phonemic", "phonetic"]);
     }

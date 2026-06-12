@@ -8,6 +8,17 @@ target/
 !/models/*/
 /models/*/*
 !/models/*/.gitkeep
+!/models/wiktionary/
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/manifest.json
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/model.bin
+/models/wiktionary/enwiktionary-2026-06-01-v0-phones/model-epoch-*.bin
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/model-epoch-11.bin
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/model_config.json
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/train_config.json
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/train_state.json
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/vocab.json
+!/models/wiktionary/enwiktionary-2026-06-01-v0-phones/wiktionary_config.json
 /datasets/speech-manifold/*/audio/
 /archive/
 *.bin.gz

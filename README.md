@@ -210,9 +210,11 @@ This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configur
 https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/
 ```
 
-The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, and `spa`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
+The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `lat`, `ell`, `grc`, and `san`. Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Training splits currently expand phoneme rows into spelling-to-IPA, IPA-to-spelling, and language-guessing tasks.
 
 Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
+
+Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching IPA rows with domain accents for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without an IPA row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.
 
 Focused Spanish/French preparation and training can be run in place with language overrides:
 
@@ -362,6 +364,8 @@ The model directory receives:
 | `manifest.json` | Generic model-family artifact metadata |
 
 Training resumes automatically when `train_state.json` and checkpoint files are present in the output directory.
+
+The default Wiktionary pronunciation model has a tracked minimal artifact set and training notes in [`docs/models/wiktionary-default.md`](docs/models/wiktionary-default.md). Only the best weights, latest resume checkpoint, vocab, and metadata are versioned; older epoch checkpoints remain local artifacts.
 
 ### Predict
 
