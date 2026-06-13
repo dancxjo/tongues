@@ -3616,6 +3616,8 @@ fn run_interpretation_command(
             if let Some(seed) = seed {
                 train_config.seed = seed;
             }
+            let mut train_config = train_config;
+            train_config.input_feature_bins = interpretation_feature_bins(&data)?;
             cmd_interpretation_train(&data, &out, &train_config, device_arg)
         }
         InterpretationCommands::Eval { model, data, split } => {
@@ -3781,8 +3783,9 @@ fn cmd_interpretation_train(
         ),
     );
     fs::create_dir_all(out).context("creating LibriSpeech ASR model directory")?;
+    let feature_bins = interpretation_feature_bins(data)?;
     let model_config = tongues_interpretation::ModelConfig::new(
-        tongues_interpretation::DEFAULT_MEL_BINS,
+        feature_bins,
         vocab.size(),
         phoneme_vocab.size(),
         phone_vocab.size(),
@@ -3799,10 +3802,15 @@ fn cmd_interpretation_train(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
     );
+    println!(
+        "  optimizer checkpoints: {}",
+        out.join("optim-epoch-N.bin").display()
+    );
     println!("  best model: {}", out.join("model.bin").display());
     println!(
-        "  loss weights: transcript={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} syntax={} masked_audio={}",
+        "  loss weights: transcript={} seq2seq={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} syntax={} masked_audio={}",
         train_config.transcript_loss_weight,
+        train_config.seq2seq_loss_weight,
         train_config.boundary_loss_weight,
         train_config.repair_loss_weight,
         train_config.phoneme_loss_weight,
@@ -3867,6 +3875,15 @@ fn cmd_interpretation_train(
     Ok(())
 }
 
+fn interpretation_feature_bins(data: &Path) -> Result<usize> {
+    let rows = tongues_interpretation::read_examples(&data.join("train.jsonl"))?;
+    let first = rows
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no training rows in {}", data.display()))?;
+    let (_, bins) = tongues_interpretation::feature_file_shape(&data.join(&first.mel_path))?;
+    Ok(bins)
+}
+
 fn cmd_interpretation_eval(
     model_dir: &Path,
     data: &Path,
@@ -3883,8 +3900,9 @@ fn cmd_interpretation_eval(
         read_json_file(&model_dir.join("syntax_head_offset_vocab.json"))?;
     let model_config: tongues_interpretation::ModelConfig =
         read_json_file(&model_dir.join("model_config.json"))?;
-    let train_config: InterpretationTrainConfig =
+    let mut train_config: InterpretationTrainConfig =
         read_json_file(&model_dir.join("train_config.json"))?;
+    train_config.input_feature_bins = model_config.mel_bins;
     let rows = tongues_interpretation::read_examples(&data.join(format!("{split}.jsonl")))?;
     match device_arg {
         DeviceArg::Cpu => {
@@ -3960,6 +3978,7 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 &word_vocab,
                 &phoneme_vocab,
                 &config,
+                model_config.mel_bins,
                 &device,
             )?;
             println!("{}", serde_json::to_string_pretty(&event)?);
@@ -3978,6 +3997,7 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 &word_vocab,
                 &phoneme_vocab,
                 &config,
+                model_config.mel_bins,
                 &device,
             )?;
             println!("{}", serde_json::to_string_pretty(&event)?);

@@ -17,6 +17,7 @@ use burn::nn::loss::{CTCLossConfig, CrossEntropyLossConfig, Reduction};
 use burn::nn::{Dropout, DropoutConfig, Linear, LinearConfig};
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
+use burn::record::Recorder;
 use burn::tensor::activation::log_softmax;
 use burn::tensor::backend::AutodiffBackend;
 use rand::seq::SliceRandom;
@@ -40,9 +41,15 @@ pub const ARCHITECTURE: &str = "streaming-mel-native-ctc";
 pub const DEFAULT_DATASET_ID: &str = "librispeech-mini-v0";
 pub const DEFAULT_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const DEFAULT_MEL_BINS: usize = 80;
+pub const COMPACT_AUDIO_EXTRA_BINS: usize = 7;
+pub const DEFAULT_COMPACT_AUDIO_FEATURE_BINS: usize =
+    DEFAULT_MEL_BINS + DEFAULT_MEL_BINS + COMPACT_AUDIO_EXTRA_BINS;
 pub const CTC_BLANK: &str = "<CTC_BLANK>";
 pub const WORD_BLANK: &str = "<WORD_BLANK>";
 pub const WORD_UNK: &str = "<WORD_UNK>";
+pub const WORD_NUM: &str = "<NUM>";
+pub const MAX_WORD_VOCAB_TOKENS: usize = 20_000;
+pub const MIN_WORD_VOCAB_COUNT: usize = 2;
 pub const BOUNDARY_CONTINUE: &str = "<boundary:continue>";
 pub const BOUNDARY_EMIT: &str = "<boundary:emit>";
 pub const BOUNDARY_REPAIR: &str = "<boundary:repair>";
@@ -89,6 +96,8 @@ pub struct InterpretationConfig {
     pub window_ms: f32,
     pub hop_ms: f32,
     pub mel_bins: usize,
+    #[serde(default = "default_compact_audio_features")]
+    pub compact_audio_features: bool,
     pub variety: String,
     pub max_utterances: Option<usize>,
     pub download_url: String,
@@ -107,6 +116,7 @@ impl Default for InterpretationConfig {
             window_ms: 25.0,
             hop_ms: 10.0,
             mel_bins: DEFAULT_MEL_BINS,
+            compact_audio_features: true,
             variety: "en-US".to_string(),
             max_utterances: None,
             download_url: subset.archive_url().to_string(),
@@ -144,13 +154,21 @@ pub struct InterpretationTrainConfig {
     pub masked_audio_loss_weight: f32,
     #[serde(default = "default_syntax_loss_weight")]
     pub syntax_loss_weight: f32,
+    #[serde(default = "default_seq2seq_loss_weight")]
+    pub seq2seq_loss_weight: f32,
     #[serde(default = "default_word_mask_rate")]
     pub word_mask_rate: f32,
     #[serde(default = "default_mask_every_n_frames")]
     pub mask_every_n_frames: usize,
     #[serde(default = "default_mask_span_frames")]
     pub mask_span_frames: usize,
+    #[serde(default = "default_resume_learning_rate_scale")]
+    pub resume_learning_rate_scale: f64,
     pub max_frames: usize,
+    #[serde(default = "default_max_seq2seq_tokens")]
+    pub max_seq2seq_tokens: usize,
+    #[serde(default = "default_input_feature_bins")]
+    pub input_feature_bins: usize,
 }
 
 fn default_phone_loss_weight() -> f32 {
@@ -189,6 +207,10 @@ fn default_syntax_loss_weight() -> f32 {
     0.05
 }
 
+fn default_seq2seq_loss_weight() -> f32 {
+    0.35
+}
+
 fn default_word_mask_rate() -> f32 {
     1.0
 }
@@ -199,6 +221,22 @@ fn default_mask_every_n_frames() -> usize {
 
 fn default_mask_span_frames() -> usize {
     3
+}
+
+fn default_resume_learning_rate_scale() -> f64 {
+    0.25
+}
+
+fn default_max_seq2seq_tokens() -> usize {
+    192
+}
+
+fn default_input_feature_bins() -> usize {
+    DEFAULT_COMPACT_AUDIO_FEATURE_BINS
+}
+
+fn default_compact_audio_features() -> bool {
+    true
 }
 
 impl Default for InterpretationTrainConfig {
@@ -223,10 +261,14 @@ impl Default for InterpretationTrainConfig {
             repair_loss_weight: 0.15,
             masked_audio_loss_weight: 0.35,
             syntax_loss_weight: default_syntax_loss_weight(),
+            seq2seq_loss_weight: default_seq2seq_loss_weight(),
             word_mask_rate: default_word_mask_rate(),
             mask_every_n_frames: default_mask_every_n_frames(),
             mask_span_frames: default_mask_span_frames(),
+            resume_learning_rate_scale: default_resume_learning_rate_scale(),
             max_frames: 1600,
+            max_seq2seq_tokens: default_max_seq2seq_tokens(),
+            input_feature_bins: default_input_feature_bins(),
         }
     }
 }
@@ -255,6 +297,7 @@ impl ModelConfig {
         AsrModel {
             input: LinearConfig::new(self.mel_bins, self.hidden_size).init(device),
             transcript: LinearConfig::new(self.hidden_size, self.vocab_size).init(device),
+            seq2seq_transcript: LinearConfig::new(self.hidden_size, self.vocab_size).init(device),
             boundary: LinearConfig::new(self.hidden_size, 3).init(device),
             phoneme: LinearConfig::new(self.hidden_size, self.phoneme_vocab_size).init(device),
             phone: LinearConfig::new(self.hidden_size, self.phone_vocab_size).init(device),
@@ -285,6 +328,7 @@ impl ModelConfig {
 pub struct AsrModel<B: Backend> {
     input: Linear<B>,
     transcript: Linear<B>,
+    seq2seq_transcript: Linear<B>,
     boundary: Linear<B>,
     phoneme: Linear<B>,
     phone: Linear<B>,
@@ -307,6 +351,7 @@ impl<B: Backend> AsrModel<B> {
         let hidden = self.dropout.forward(self.input.forward(mel).tanh());
         AsrForward {
             transcript_logits: self.transcript.forward(hidden.clone()),
+            seq2seq_transcript_logits: self.seq2seq_transcript.forward(hidden.clone()),
             boundary_logits: self.boundary.forward(hidden.clone()),
             phoneme_logits: self.phoneme.forward(hidden.clone()),
             phone_logits: self.phone.forward(hidden.clone()),
@@ -328,6 +373,7 @@ impl<B: Backend> AsrModel<B> {
 #[derive(Debug)]
 pub struct AsrForward<B: Backend> {
     pub transcript_logits: Tensor<B, 3>,
+    pub seq2seq_transcript_logits: Tensor<B, 3>,
     pub boundary_logits: Tensor<B, 3>,
     pub phoneme_logits: Tensor<B, 3>,
     pub phone_logits: Tensor<B, 3>,
@@ -516,6 +562,7 @@ pub struct EvalReport {
     pub loss: f32,
     pub token_error_rate: f32,
     pub word_error_rate: f32,
+    pub seq2seq_token_error_rate: f32,
     pub boundary_f1: f32,
     pub repair_f1: f32,
     pub phoneme_token_error_rate: f32,
@@ -531,6 +578,7 @@ pub struct EvalReport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamEvent {
     pub partial_transcript: String,
+    pub seq2seq_transcript: String,
     pub final_sentences: Vec<SentenceSupervision>,
     pub repair_events: Vec<RepairSupervision>,
     pub previous_word: Option<WordPrediction>,
@@ -582,6 +630,7 @@ fn prepare_dataset_inner(
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(out.join("features")).context("creating features directory")?;
+    let feature_bins = audio_feature_bins(config);
     let archive = out.join("source.tar.gz");
     if !archive.exists() {
         progress(PrepareProgress::Stage {
@@ -666,7 +715,7 @@ fn prepare_dataset_inner(
         let samples = read_flac_mono(&item.audio_path)?;
         let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", item.utterance_id));
         let mel_path = out.join(&rel_mel);
-        let frames = match valid_mel_frames(&mel_path, config.mel_bins)? {
+        let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
             Some(frames) => {
                 progress(PrepareProgress::Reuse {
                     utterance_id: item.utterance_id.clone(),
@@ -676,8 +725,8 @@ fn prepare_dataset_inner(
                 frames
             }
             None => {
-                let features = log_mel_features(&samples, config);
-                write_mel_file(&mel_path, &features, config.mel_bins)?;
+                let features = audio_features(&samples, config);
+                write_mel_file(&mel_path, &features, feature_bins)?;
                 progress(PrepareProgress::Features {
                     utterance_id: item.utterance_id.clone(),
                     rows: features.len(),
@@ -961,6 +1010,77 @@ pub fn normalize_asr_transcript(text: &str) -> String {
 }
 
 pub fn log_mel_features(samples: &[f32], config: &InterpretationConfig) -> Vec<Vec<f32>> {
+    frame_spectral_features(samples, config)
+        .into_iter()
+        .map(|frame| frame.log_mel)
+        .collect()
+}
+
+pub fn audio_features(samples: &[f32], config: &InterpretationConfig) -> Vec<Vec<f32>> {
+    if !config.compact_audio_features {
+        return log_mel_features(samples, config);
+    }
+    let frames = frame_spectral_features(samples, config);
+    let mut previous_mel: Option<Vec<f32>> = None;
+    let mut previous_power: Option<Vec<f32>> = None;
+    let mut rows = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let delta = previous_mel
+            .as_ref()
+            .map(|prev| {
+                frame
+                    .log_mel
+                    .iter()
+                    .zip(prev)
+                    .map(|(current, previous)| current - previous)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![0.0; frame.log_mel.len()]);
+        let spectral_flux = previous_power
+            .as_ref()
+            .map(|prev| {
+                frame
+                    .power
+                    .iter()
+                    .zip(prev)
+                    .map(|(current, previous)| (current.sqrt() - previous.sqrt()).max(0.0))
+                    .sum::<f32>()
+                    / frame.power.len().max(1) as f32
+            })
+            .unwrap_or(0.0);
+        let mut row = Vec::with_capacity(DEFAULT_COMPACT_AUDIO_FEATURE_BINS);
+        row.extend(frame.log_mel.iter().copied());
+        row.extend(delta);
+        row.push(frame.rms_energy);
+        row.push(frame.vad);
+        row.push(frame.zcr);
+        row.push(frame.spectral_centroid);
+        row.push(spectral_flux);
+        row.push(frame.f0);
+        row.push(frame.voiced_prob);
+        previous_mel = Some(frame.log_mel);
+        previous_power = Some(frame.power);
+        rows.push(row);
+    }
+    rows
+}
+
+#[derive(Debug)]
+struct FrameSpectralFeatures {
+    log_mel: Vec<f32>,
+    power: Vec<f32>,
+    rms_energy: f32,
+    vad: f32,
+    zcr: f32,
+    spectral_centroid: f32,
+    f0: f32,
+    voiced_prob: f32,
+}
+
+fn frame_spectral_features(
+    samples: &[f32],
+    config: &InterpretationConfig,
+) -> Vec<FrameSpectralFeatures> {
     let window = ((config.sample_rate_hz as f32 * config.window_ms) / 1000.0).round() as usize;
     let hop = ((config.sample_rate_hz as f32 * config.hop_ms) / 1000.0).round() as usize;
     if samples.len() < window || window == 0 || hop == 0 {
@@ -970,6 +1090,20 @@ pub fn log_mel_features(samples: &[f32], config: &InterpretationConfig) -> Vec<V
     let mut rows = Vec::new();
     for start in (0..=samples.len() - window).step_by(hop) {
         let mut power = vec![0.0f32; n_fft / 2 + 1];
+        let frame = &samples[start..start + window];
+        let rms_energy = (frame.iter().map(|sample| sample * sample).sum::<f32>()
+            / window.max(1) as f32)
+            .sqrt()
+            .ln_1p();
+        let peak_energy = frame
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0f32, f32::max);
+        let crossings = frame
+            .windows(2)
+            .filter(|pair| (pair[0] >= 0.0) != (pair[1] >= 0.0))
+            .count();
+        let zcr = crossings as f32 / window.max(1) as f32;
         for k in 0..=n_fft / 2 {
             let mut re = 0.0;
             let mut im = 0.0;
@@ -982,9 +1116,77 @@ pub fn log_mel_features(samples: &[f32], config: &InterpretationConfig) -> Vec<V
             }
             power[k] = re * re + im * im;
         }
-        rows.push(mel_project(&power, config.mel_bins));
+        let power_sum = power.iter().sum::<f32>().max(1e-8);
+        let spectral_centroid = power
+            .iter()
+            .enumerate()
+            .map(|(bin, value)| {
+                let hz = bin as f32 * config.sample_rate_hz as f32 / n_fft as f32;
+                hz * *value
+            })
+            .sum::<f32>()
+            / power_sum
+            / (config.sample_rate_hz as f32 * 0.5);
+        let (f0, voiced_prob) = estimate_pitch(frame, config.sample_rate_hz);
+        rows.push(FrameSpectralFeatures {
+            log_mel: mel_project(&power, config.mel_bins),
+            power,
+            rms_energy,
+            vad: if peak_energy > 0.01 || rms_energy > 0.001 {
+                1.0
+            } else {
+                0.0
+            },
+            zcr,
+            spectral_centroid,
+            f0,
+            voiced_prob,
+        });
     }
     rows
+}
+
+fn estimate_pitch(frame: &[f32], sample_rate_hz: u32) -> (f32, f32) {
+    if frame.is_empty() {
+        return (0.0, 0.0);
+    }
+    let min_lag = (sample_rate_hz as f32 / 400.0).round().max(1.0) as usize;
+    let max_lag = (sample_rate_hz as f32 / 60.0).round().max(min_lag as f32) as usize;
+    let frame_energy = frame
+        .iter()
+        .map(|sample| sample * sample)
+        .sum::<f32>()
+        .max(1e-8);
+    let mut best_lag = 0usize;
+    let mut best_score = 0.0f32;
+    for lag in min_lag..=max_lag.min(frame.len().saturating_sub(1)) {
+        let score = frame
+            .iter()
+            .zip(frame.iter().skip(lag))
+            .map(|(left, right)| left * right)
+            .sum::<f32>()
+            / frame_energy;
+        if score > best_score {
+            best_score = score;
+            best_lag = lag;
+        }
+    }
+    if best_lag == 0 || best_score < 0.25 {
+        (0.0, best_score.clamp(0.0, 1.0))
+    } else {
+        (
+            (sample_rate_hz as f32 / best_lag as f32) / 400.0,
+            best_score.clamp(0.0, 1.0),
+        )
+    }
+}
+
+pub fn audio_feature_bins(config: &InterpretationConfig) -> usize {
+    if config.compact_audio_features {
+        config.mel_bins + config.mel_bins + COMPACT_AUDIO_EXTRA_BINS
+    } else {
+        config.mel_bins
+    }
 }
 
 fn mel_project(power: &[f32], bins: usize) -> Vec<f32> {
@@ -1047,6 +1249,78 @@ fn valid_mel_frames(path: &Path, mel_bins: usize) -> Result<Option<usize>> {
     Ok(Some(frames))
 }
 
+fn recover_feature_frames(
+    path: &Path,
+    expected_bins: usize,
+    config: &InterpretationConfig,
+) -> Result<Option<usize>> {
+    if let Some(frames) = valid_mel_frames(path, expected_bins)? {
+        return Ok(Some(frames));
+    }
+    if !config.compact_audio_features || expected_bins == config.mel_bins {
+        return Ok(None);
+    }
+    let Some(frames) = valid_mel_frames(path, config.mel_bins)? else {
+        return Ok(None);
+    };
+    let mel = read_mel_file(path)?;
+    let compact = compact_features_from_log_mel(&mel, config);
+    write_mel_file(path, &compact, expected_bins)?;
+    Ok(Some(frames))
+}
+
+fn compact_features_from_log_mel(mel: &[Vec<f32>], config: &InterpretationConfig) -> Vec<Vec<f32>> {
+    let mut previous_mel: Option<&Vec<f32>> = None;
+    mel.iter()
+        .map(|row| {
+            let delta = previous_mel
+                .map(|prev| {
+                    row.iter()
+                        .zip(prev)
+                        .map(|(current, previous)| current - previous)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec![0.0; config.mel_bins]);
+            let energy = row.iter().copied().sum::<f32>() / row.len().max(1) as f32;
+            let linear_energy = energy.exp().ln_1p();
+            let vad = if energy > -12.0 { 1.0 } else { 0.0 };
+            let spectral_centroid = mel_centroid(row);
+            let spectral_flux = previous_mel
+                .map(|prev| {
+                    row.iter()
+                        .zip(prev)
+                        .map(|(current, previous)| (current.exp() - previous.exp()).max(0.0))
+                        .sum::<f32>()
+                        / row.len().max(1) as f32
+                })
+                .unwrap_or(0.0);
+            let mut out = Vec::with_capacity(audio_feature_bins(config));
+            out.extend(row.iter().copied());
+            out.extend(delta);
+            out.push(linear_energy);
+            out.push(vad);
+            out.push(0.0);
+            out.push(spectral_centroid);
+            out.push(spectral_flux);
+            out.push(0.0);
+            out.push(0.0);
+            previous_mel = Some(row);
+            out
+        })
+        .collect()
+}
+
+fn mel_centroid(row: &[f32]) -> f32 {
+    let weights = row.iter().map(|value| value.exp()).collect::<Vec<_>>();
+    let total = weights.iter().sum::<f32>().max(1e-8);
+    weights
+        .iter()
+        .enumerate()
+        .map(|(idx, weight)| idx as f32 / row.len().max(1) as f32 * *weight)
+        .sum::<f32>()
+        / total
+}
+
 pub fn read_mel_file(path: &Path) -> Result<Vec<Vec<f32>>> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 12];
@@ -1066,6 +1340,19 @@ pub fn read_mel_file(path: &Path) -> Result<Vec<Vec<f32>>> {
         }
     }
     Ok(out)
+}
+
+pub fn feature_file_shape(path: &Path) -> Result<(usize, usize)> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 12];
+    reader.read_exact(&mut magic)?;
+    anyhow::ensure!(&magic == b"TONGUES_MEL1", "invalid Mel feature file");
+    let mut buf = [0u8; 4];
+    reader.read_exact(&mut buf)?;
+    let frames = u32::from_le_bytes(buf) as usize;
+    reader.read_exact(&mut buf)?;
+    let bins = u32::from_le_bytes(buf) as usize;
+    Ok((frames, bins))
 }
 
 fn sentence_supervision(
@@ -1292,13 +1579,10 @@ fn phones_string(phones: &[speaking::PhoneToken]) -> String {
     phones
         .iter()
         .filter_map(|token| match &token.phone {
-            speaking::Spec::Known(id) => Some(
-                id.as_str()
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or(id.as_str())
-                    .to_string(),
-            ),
+            speaking::Spec::Known(id) => {
+                let raw: &str = &id.0;
+                Some(raw.rsplit('.').next().unwrap_or(raw).to_string())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -1433,6 +1717,48 @@ fn word_spans(text: &str) -> Vec<(usize, usize, String)> {
     spans
 }
 
+pub fn normalize_word_token(word: &str) -> Option<String> {
+    let mut normalized = word
+        .chars()
+        .map(|ch| match ch {
+            '\u{2018}' | '\u{2019}' | '\u{02bc}' | '\u{0060}' | '\u{00b4}' => '\'',
+            _ => ch,
+        })
+        .collect::<String>()
+        .trim_matches(|ch: char| {
+            ch == '\''
+                || ch == '"'
+                || ch == '`'
+                || ch == '\u{2018}'
+                || ch == '\u{2019}'
+                || ch == '\u{201c}'
+                || ch == '\u{201d}'
+        })
+        .to_lowercase();
+    normalized.retain(|ch| ch.is_alphanumeric() || ch == '\'' || ch == '-');
+    if normalized.is_empty() {
+        return None;
+    }
+    if is_numeric_word(&normalized) {
+        return Some(WORD_NUM.to_string());
+    }
+    if normalized.chars().any(char::is_alphabetic) && normalized.chars().count() <= 40 {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn is_numeric_word(word: &str) -> bool {
+    let base = word
+        .strip_suffix("st")
+        .or_else(|| word.strip_suffix("nd"))
+        .or_else(|| word.strip_suffix("rd"))
+        .or_else(|| word.strip_suffix("th"))
+        .unwrap_or(word);
+    !base.is_empty() && base.chars().all(|ch| ch.is_ascii_digit())
+}
+
 fn split_tokens_for_words(tokens: &str, words: usize) -> Vec<String> {
     if words == 0 {
         return Vec::new();
@@ -1548,7 +1874,8 @@ fn recover_utterance_rows(
             continue;
         }
         let mel_path = data_dir.join(&row.mel_path);
-        let Some(frames) = valid_mel_frames(&mel_path, config.mel_bins)? else {
+        let expected_bins = audio_feature_bins(config);
+        let Some(frames) = recover_feature_frames(&mel_path, expected_bins, config)? else {
             continue;
         };
         if frames == row.num_frames && row.sample_rate_hz == config.sample_rate_hz {
@@ -1588,7 +1915,7 @@ pub fn build_phoneme_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
     let mut set = BTreeSet::new();
     for row in rows {
         for sentence in &row.sentences {
-            for token in sentence.phonemes.split_whitespace() {
+            for token in sentence_phoneme_labels(sentence) {
                 set.insert(token.to_string());
             }
         }
@@ -1628,17 +1955,39 @@ pub fn build_phone_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
 }
 
 pub fn build_word_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
-    let mut tokens = vec![WORD_BLANK.to_string(), WORD_UNK.to_string()];
-    let mut set = BTreeSet::new();
+    let mut tokens = vec![
+        WORD_BLANK.to_string(),
+        WORD_UNK.to_string(),
+        WORD_NUM.to_string(),
+    ];
+    let mut counts = BTreeMap::new();
     for row in rows {
         for word in &row.word_supervision {
-            set.insert(word.word.clone());
+            if let Some(word) = normalize_word_token(&word.word) {
+                *counts.entry(word).or_insert(0usize) += 1;
+            }
         }
         for masked in &row.masked_word_examples {
-            set.insert(masked.masked_word.clone());
+            if let Some(word) = normalize_word_token(&masked.masked_word) {
+                *counts.entry(word).or_insert(0usize) += 1;
+            }
         }
     }
-    tokens.extend(set);
+    let mut ranked = counts
+        .into_iter()
+        .filter(|(token, count)| token == WORD_NUM || *count >= MIN_WORD_VOCAB_COUNT)
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left_token, left_count), (right_token, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left_token.cmp(right_token))
+    });
+    tokens.extend(
+        ranked
+            .into_iter()
+            .filter_map(|(token, _)| (token != WORD_NUM).then_some(token))
+            .take(MAX_WORD_VOCAB_TOKENS),
+    );
     let token_to_id = tokens
         .iter()
         .enumerate()
@@ -1660,7 +2009,7 @@ pub fn build_syntax_pos_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
             }
         }
     }
-    tokens.extend(set);
+    tokens.extend(set.into_iter().filter(|token| token != "unknown"));
     let token_to_id = tokens
         .iter()
         .enumerate()
@@ -1686,7 +2035,7 @@ pub fn build_syntax_link_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
             }
         }
     }
-    tokens.extend(set);
+    tokens.extend(set.into_iter().filter(|token| token != "none"));
     let token_to_id = tokens
         .iter()
         .enumerate()
@@ -1807,6 +2156,8 @@ where
     let mut best_val_loss = f32::INFINITY;
     let mut best_epoch = None;
     let mut last_finite_epoch = None;
+    let mut optimizer_resume_epoch = None;
+    let mut resume_without_optimizer = false;
     let mut model = if state_path.exists() {
         let state: InterpretationTrainState =
             serde_json::from_str(&fs::read_to_string(&state_path)?)?;
@@ -1840,6 +2191,7 @@ where
                 device,
             )?;
             if report_is_finite(&resume_report) {
+                optimizer_resume_epoch = Some(state.current_epoch);
                 candidate
             } else if model_path.with_extension("bin").exists() {
                 println!(
@@ -1878,6 +2230,7 @@ where
                 last_finite_epoch = recovered_epoch.or(last_finite_epoch);
                 if let Some(epoch) = recovered_epoch {
                     start_epoch = epoch + 1;
+                    optimizer_resume_epoch = Some(epoch);
                     write_interpretation_train_state(
                         &state_path,
                         epoch,
@@ -1922,8 +2275,37 @@ where
     let mut optimizer = AdamWConfig::new()
         .with_weight_decay(train_config.weight_decay)
         .init::<B, AsrModel<B>>();
+    if let Some(epoch) = optimizer_resume_epoch {
+        let optimizer_path = out_dir.join(format!("optim-epoch-{epoch}"));
+        if optimizer_path.with_extension("bin").exists() {
+            let record = make_recorder()
+                .load(optimizer_path.clone(), device)
+                .with_context(|| {
+                    format!("loading {}", optimizer_path.with_extension("bin").display())
+                })?;
+            optimizer = optimizer.load_record(record);
+            println!(
+                "Resuming optimizer state from {}",
+                optimizer_path.with_extension("bin").display()
+            );
+        } else {
+            resume_without_optimizer = true;
+            println!(
+                "No optimizer checkpoint found for epoch {epoch}; first resumed epoch will use lr={} ({} * {})",
+                train_config.learning_rate * train_config.resume_learning_rate_scale,
+                train_config.learning_rate,
+                train_config.resume_learning_rate_scale
+            );
+        }
+    }
     let mut patience = 0usize;
     for epoch in start_epoch..=train_config.epochs {
+        let learning_rate = if resume_without_optimizer {
+            train_config.learning_rate * train_config.resume_learning_rate_scale
+        } else {
+            train_config.learning_rate
+        };
+        resume_without_optimizer = false;
         let loss = train_epoch(
             &mut model,
             &mut optimizer,
@@ -1940,6 +2322,7 @@ where
             device,
             rng,
             epoch,
+            learning_rate,
         )?;
         if !loss.is_finite() {
             println!(
@@ -2014,6 +2397,20 @@ where
             &out_dir.join(format!("model-epoch-{epoch}")),
             &make_recorder(),
         )?;
+        make_recorder()
+            .record(
+                optimizer.to_record(),
+                out_dir.join(format!("optim-epoch-{epoch}")),
+            )
+            .with_context(|| {
+                format!(
+                    "writing {}",
+                    out_dir
+                        .join(format!("optim-epoch-{epoch}"))
+                        .with_extension("bin")
+                        .display()
+                )
+            })?;
         last_finite_epoch = Some(epoch);
         write_interpretation_train_state(
             &state_path,
@@ -2075,6 +2472,7 @@ fn report_is_finite(report: &EvalReport) -> bool {
     report.loss.is_finite()
         && report.token_error_rate.is_finite()
         && report.word_error_rate.is_finite()
+        && report.seq2seq_token_error_rate.is_finite()
         && report.boundary_f1.is_finite()
         && report.repair_f1.is_finite()
         && report.phoneme_token_error_rate.is_finite()
@@ -2158,6 +2556,7 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     device: &B::Device,
     rng: &mut R,
     epoch: usize,
+    learning_rate: f64,
 ) -> Result<f32> {
     let mut indices: Vec<_> = (0..rows.len()).collect();
     indices.shuffle(rng);
@@ -2191,7 +2590,7 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
             return Ok(loss_val);
         }
         let grads = GradientsParams::from_grads(loss.backward(), model);
-        *model = optimizer.step(config.learning_rate, model.clone(), grads);
+        *model = optimizer.step(learning_rate, model.clone(), grads);
         total += loss_val;
         n += 1;
         pb.set_message(format!("{:.4}", total / n as f32));
@@ -2206,6 +2605,7 @@ struct AsrBatch<B: Backend> {
     mel: Tensor<B, 3>,
     mel_target: Tensor<B, 3>,
     transcript_labels: Tensor<B, 2, Int>,
+    seq2seq_labels: Tensor<B, 2, Int>,
     boundary_labels: Tensor<B, 2, Int>,
     phoneme_labels: Tensor<B, 2, Int>,
     phone_labels: Tensor<B, 2, Int>,
@@ -2247,10 +2647,11 @@ fn make_batch<B: Backend>(
         .unwrap_or(1)
         .min(config.max_frames)
         .max(1);
-    let mel_bins = DEFAULT_MEL_BINS;
+    let mel_bins = config.input_feature_bins.max(1);
     let mut mel = Vec::new();
     let mut mel_target = Vec::new();
     let mut transcript_labels = Vec::new();
+    let mut seq2seq_labels = Vec::new();
     let mut boundary_labels = Vec::new();
     let mut phoneme_labels = Vec::new();
     let mut phone_labels = Vec::new();
@@ -2279,6 +2680,12 @@ fn make_batch<B: Backend>(
             }
         }
         transcript_labels.extend(proportional_labels(&row.transcript, vocab, max_frames));
+        seq2seq_labels.extend(seq2seq_labels_for(
+            &row.transcript,
+            vocab,
+            config.max_seq2seq_tokens.min(max_frames).max(1),
+            max_frames,
+        ));
         boundary_labels.extend(boundary_labels_for(row, max_frames));
         phoneme_labels.extend(proportional_phoneme_labels(row, phoneme_vocab, max_frames));
         phone_labels.extend(proportional_phone_labels(row, phone_vocab, max_frames));
@@ -2333,6 +2740,10 @@ fn make_batch<B: Backend>(
         ),
         transcript_labels: Tensor::<B, 2, Int>::from_data(
             TensorData::new(transcript_labels, [rows.len(), max_frames]),
+            device,
+        ),
+        seq2seq_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(seq2seq_labels, [rows.len(), max_frames]),
             device,
         ),
         boundary_labels: Tensor::<B, 2, Int>::from_data(
@@ -2423,6 +2834,7 @@ fn weighted_loss<B: Backend>(
     config: &InterpretationTrainConfig,
 ) -> Tensor<B, 1> {
     let transcript_loss = ce_loss(output.transcript_logits, batch.transcript_labels, 0);
+    let seq2seq_loss = ce_loss(output.seq2seq_transcript_logits, batch.seq2seq_labels, 0);
     let boundary_loss = ce_loss(output.boundary_logits, batch.boundary_labels, usize::MAX);
     let phoneme_loss = ce_loss(output.phoneme_logits, batch.phoneme_labels, 0);
     let phone_loss = ce_loss(output.phone_logits, batch.phone_labels, 0);
@@ -2485,6 +2897,7 @@ fn weighted_loss<B: Backend>(
         + masked_word_loss * config.masked_word_loss_weight
         + masked_word_phoneme_loss * config.masked_word_phoneme_loss_weight
         + syntax_loss * config.syntax_loss_weight
+        + seq2seq_loss * config.seq2seq_loss_weight
         + audio_loss * config.masked_audio_loss_weight
 }
 
@@ -2561,6 +2974,14 @@ fn proportional_labels(text: &str, vocab: &Vocab, frames: usize) -> Vec<i32> {
         .collect()
 }
 
+fn seq2seq_labels_for(text: &str, vocab: &Vocab, seq_len: usize, frames: usize) -> Vec<i32> {
+    let mut labels = vec![0; frames];
+    for (idx, ch) in text.chars().take(seq_len).enumerate() {
+        labels[idx] = vocab.get_id(&ch.to_string()) as i32;
+    }
+    labels
+}
+
 fn previous_word_targets(row: &LibriSpeechUtterance, vocab: &Vocab) -> Vec<i32> {
     row.word_supervision
         .iter()
@@ -2630,12 +3051,12 @@ fn ctc_target_within_input(mut sequence: Vec<i32>, input_len: usize) -> Vec<i32>
 }
 
 fn word_id(vocab: &Vocab, word: &str) -> u32 {
-    let id = vocab.get_id(word);
-    if id == 0 {
-        vocab.get_id(WORD_UNK).max(1)
-    } else {
-        id
+    if let Some(word) = normalize_word_token(word) {
+        if let Some(id) = vocab.token_to_id.get(&word) {
+            return *id;
+        }
     }
+    vocab.get_id(WORD_UNK).max(1)
 }
 
 fn nonblank_id(vocab: &Vocab, token: &str) -> u32 {
@@ -2650,7 +3071,7 @@ fn proportional_phoneme_labels(
     let phonemes = row
         .sentences
         .iter()
-        .flat_map(|s| s.phonemes.split_whitespace().map(str::to_string))
+        .flat_map(sentence_phoneme_labels)
         .collect::<Vec<_>>();
     if phonemes.is_empty() {
         return vec![0; frames];
@@ -2661,6 +3082,29 @@ fn proportional_phoneme_labels(
             vocab.get_id(&phonemes[idx.min(phonemes.len() - 1)]) as i32
         })
         .collect()
+}
+
+fn sentence_phoneme_labels(sentence: &SentenceSupervision) -> Vec<String> {
+    let labels = sentence
+        .phoneme_tokens
+        .iter()
+        .filter_map(|token| match &token.phoneme {
+            speaking::Spec::Known(id) => {
+                let raw: &str = &id.0;
+                Some(raw.rsplit('.').next().unwrap_or(raw).to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        sentence
+            .phonemes
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    } else {
+        labels
+    }
 }
 
 fn proportional_phone_labels(row: &LibriSpeechUtterance, vocab: &Vocab, frames: usize) -> Vec<i32> {
@@ -2796,6 +3240,7 @@ pub fn evaluate<B: Backend>(
             loss: 0.0,
             token_error_rate: 0.0,
             word_error_rate: 0.0,
+            seq2seq_token_error_rate: 0.0,
             boundary_f1: 0.0,
             repair_f1: 0.0,
             phoneme_token_error_rate: 0.0,
@@ -2812,6 +3257,8 @@ pub fn evaluate<B: Backend>(
     let mut batches = 0usize;
     let mut token_errors = 0usize;
     let mut token_total = 0usize;
+    let mut seq2seq_token_errors = 0usize;
+    let mut seq2seq_token_total = 0usize;
     let mut word_errors = 0usize;
     let mut word_total = 0usize;
     let mut boundary_tp = 0usize;
@@ -2856,6 +3303,7 @@ pub fn evaluate<B: Backend>(
         let loss = weighted_loss(
             AsrForward {
                 transcript_logits: output.transcript_logits.clone(),
+                seq2seq_transcript_logits: output.seq2seq_transcript_logits.clone(),
                 boundary_logits: output.boundary_logits.clone(),
                 phoneme_logits: output.phoneme_logits.clone(),
                 phone_logits: output.phone_logits.clone(),
@@ -2878,6 +3326,7 @@ pub fn evaluate<B: Backend>(
         audio_mse_total += audio_mse;
         batches += 1;
         let transcript_preds = argmax_ids(output.transcript_logits);
+        let seq2seq_preds = argmax_ids(output.seq2seq_transcript_logits);
         let boundary_preds = argmax_ids(output.boundary_logits);
         let phoneme_preds = argmax_ids(output.phoneme_logits);
         let phone_preds = argmax_ids(output.phone_logits);
@@ -2892,6 +3341,10 @@ pub fn evaluate<B: Backend>(
             let hyp_chars = decoded.chars().collect::<Vec<_>>();
             token_errors += edit_distance(&ref_chars, &hyp_chars);
             token_total += ref_chars.len();
+            let seq2seq_decoded = seq2seq_decode(&seq2seq_preds[i], vocab);
+            let seq2seq_hyp_chars = seq2seq_decoded.chars().collect::<Vec<_>>();
+            seq2seq_token_errors += edit_distance(&ref_chars, &seq2seq_hyp_chars);
+            seq2seq_token_total += ref_chars.len();
             let ref_words = row.transcript.split_whitespace().collect::<Vec<_>>();
             let hyp_words = decoded.split_whitespace().collect::<Vec<_>>();
             word_errors += edit_distance(&ref_words, &hyp_words);
@@ -2969,6 +3422,7 @@ pub fn evaluate<B: Backend>(
         loss: total_loss / batches.max(1) as f32,
         token_error_rate: token_errors as f32 / token_total.max(1) as f32,
         word_error_rate: word_errors as f32 / word_total.max(1) as f32,
+        seq2seq_token_error_rate: seq2seq_token_errors as f32 / seq2seq_token_total.max(1) as f32,
         boundary_f1: if precision + recall > 0.0 {
             2.0 * precision * recall / (precision + recall)
         } else {
@@ -3049,6 +3503,28 @@ pub fn greedy_collapse(ids: &[u32], vocab: &Vocab) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+pub fn seq2seq_decode(ids: &[u32], vocab: &Vocab) -> String {
+    let mut out = String::new();
+    for &id in ids {
+        if id == 0 {
+            continue;
+        }
+        if let Some(token) = vocab.tokens.get(id as usize) {
+            if !token.starts_with('<') {
+                out.push_str(token);
+            }
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn fit_feature_width(features: &mut [Vec<f32>], bins: usize) {
+    for row in features {
+        row.resize(bins, 0.0);
+        row.truncate(bins);
+    }
+}
+
 pub fn stream_from_samples<B: Backend>(
     model: &AsrModel<B>,
     samples: &[f32],
@@ -3056,13 +3532,17 @@ pub fn stream_from_samples<B: Backend>(
     word_vocab: &Vocab,
     phoneme_vocab: &Vocab,
     config: &InterpretationConfig,
+    input_feature_bins: usize,
     device: &B::Device,
 ) -> Result<StreamEvent> {
-    let features = log_mel_features(samples, config);
+    let mut stream_config = config.clone();
+    stream_config.compact_audio_features = input_feature_bins != stream_config.mel_bins;
+    let mut features = audio_features(samples, &stream_config);
+    fit_feature_width(&mut features, input_feature_bins);
     let batch = Tensor::<B, 3>::from_data(
         TensorData::new(
             features.iter().flatten().copied().collect::<Vec<_>>(),
-            [1, features.len(), config.mel_bins],
+            [1, features.len(), input_feature_bins],
         ),
         device,
     );
@@ -3071,6 +3551,11 @@ pub fn stream_from_samples<B: Backend>(
     let partial = ids
         .first()
         .map(|ids| greedy_collapse(ids, vocab))
+        .unwrap_or_default();
+    let seq2seq_ids = argmax_ids(output.seq2seq_transcript_logits);
+    let seq2seq_transcript = seq2seq_ids
+        .first()
+        .map(|ids| seq2seq_decode(ids, vocab))
         .unwrap_or_default();
     let prev_word_ids = argmax_ids(output.prev_word_logits);
     let current_word_ids = argmax_ids(output.current_word_logits);
@@ -3085,6 +3570,7 @@ pub fn stream_from_samples<B: Backend>(
     let repair_events = repair_supervision(&sentences);
     Ok(StreamEvent {
         partial_transcript: partial,
+        seq2seq_transcript,
         final_sentences: sentences,
         repair_events,
         previous_word: word_prediction(prev_word_ids.first(), word_vocab, phonemes.clone()),
@@ -3132,8 +3618,12 @@ fn edit_distance<T: Eq>(left: &[T], right: &[T]) -> usize {
 
 fn dataset_readme(config: &InterpretationConfig) -> String {
     format!(
-        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable log-Mel feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
-        config.dataset_id, config.subset
+        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\nFeature width: `{}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable acoustic feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. The default acoustic vector is `[log_mel_{}, delta_mel_{}, energy, vad, zcr, spectral_centroid, spectral_flux, f0, voiced_prob]`. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
+        config.dataset_id,
+        config.subset,
+        audio_feature_bins(config),
+        config.mel_bins,
+        config.mel_bins
     )
 }
 
@@ -3154,6 +3644,8 @@ mod tests {
         let mel = log_mel_features(&samples, &cfg);
         assert!(!mel.is_empty());
         assert_eq!(mel[0].len(), DEFAULT_MEL_BINS);
+        let compact = audio_features(&samples, &cfg);
+        assert_eq!(compact[0].len(), DEFAULT_COMPACT_AUDIO_FEATURE_BINS);
     }
 
     #[test]
@@ -3391,7 +3883,55 @@ mod tests {
         let vocab = build_word_vocab(&[row]);
         assert_eq!(vocab.tokens[0], WORD_BLANK);
         assert_eq!(vocab.tokens[1], WORD_UNK);
-        assert!(vocab.get_id("HELLO") > 1);
+        assert_eq!(vocab.tokens[2], WORD_NUM);
+        assert!(vocab.get_id("hello") > 1);
+    }
+
+    #[test]
+    fn word_vocab_normalizes_surface_words() {
+        assert_eq!(normalize_word_token("'Bye").as_deref(), Some("bye"));
+        assert_eq!(normalize_word_token("'Don't").as_deref(), Some("don't"));
+        assert_eq!(normalize_word_token("A").as_deref(), Some("a"));
+        assert_eq!(normalize_word_token("1258").as_deref(), Some(WORD_NUM));
+        assert_eq!(normalize_word_token("69th").as_deref(), Some(WORD_NUM));
+
+        let mut row = test_utterance("u", "features/u.mel.bin", 100);
+        row.word_supervision = vec![
+            WordSupervision {
+                word: "'Don't".into(),
+                word_index: 0,
+                sentence_index: 0,
+                sentence_word_index: 0,
+                start_char: 0,
+                end_char: 6,
+                start_frame: 0,
+                end_frame: 10,
+                phonemes: String::new(),
+                phones: String::new(),
+                previous_word: Some("A".into()),
+                next_word: Some("1258".into()),
+            },
+            WordSupervision {
+                word: "'Don't".into(),
+                word_index: 1,
+                sentence_index: 0,
+                sentence_word_index: 1,
+                start_char: 7,
+                end_char: 13,
+                start_frame: 10,
+                end_frame: 20,
+                phonemes: String::new(),
+                phones: String::new(),
+                previous_word: Some("'Don't".into()),
+                next_word: None,
+            },
+        ];
+        let vocab = build_word_vocab(&[row.clone()]);
+        assert!(vocab.get_id("don't") > 1);
+        assert!(!vocab.token_to_id.contains_key("'Don't"));
+        assert_eq!(word_id(&vocab, "'Don't"), vocab.get_id("don't"));
+        assert_eq!(word_id(&vocab, "1258"), vocab.get_id(WORD_NUM));
+        assert_eq!(word_id(&vocab, "BUFFALOKEKILLER"), vocab.get_id(WORD_UNK));
     }
 
     #[test]
@@ -3488,6 +4028,7 @@ mod tests {
 
         let config = InterpretationConfig {
             mel_bins: 3,
+            compact_audio_features: false,
             ..InterpretationConfig::default()
         };
         let rows = recover_utterance_rows(&rows_path, dir, &config).unwrap();

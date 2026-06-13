@@ -39,8 +39,26 @@ The CLI and crate layout are organized around model families rather than one mon
 - `g2p2g`: spelling <-> broad IPA;
 - `wiktionary`: multilingual orthography/phonology tasks;
 - `sentence-parser`: `speaking::syntax::SentenceSyntaxAnalysis` scaffold;
+- `interpretation`: LibriSpeech acoustic interpretation scaffold with compact
+  audio features, streaming CTC-style heads, frame-level auxiliary heads, and a
+  lightweight after-utterance transcript head;
 
 Each family can own its data preparation, task tags, training config, artifact metadata, and inference command while sharing common workspace infrastructure.
+
+## Interpretation Scaffold
+
+```text
+[log_mel, delta_mel, energy, vad, zcr, centroid, flux, f0, voiced_prob]
+  -> shared frame encoder
+       -> CTC-style transcript/phone/phoneme/word heads
+       -> boundary, repair, syntax, and masked-audio heads
+       -> after-utterance transcript head
+```
+
+The interpretation family is intentionally a scaffold rather than a finished
+ASR system. The streaming heads are meant to learn monotonic partial output and
+alignment. The after-utterance head is meant to learn correction with more
+context. Both share the same cheap acoustic frontend and model artifact layout.
 
 ## Sentence Parser Scaffold
 
