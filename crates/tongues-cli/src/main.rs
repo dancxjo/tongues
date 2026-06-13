@@ -2542,6 +2542,8 @@ fn cmd_wiktionary_train(
             out,
             config,
             task,
+            &format!("pie-etymology:{task}"),
+            None,
             learning_rate,
             weight_decay,
             dropout,
@@ -2554,6 +2556,26 @@ fn cmd_wiktionary_train(
     }
 
     let notations = resolve_wiktionary_train_notations(notation, config)?;
+    if wiktionary_prepared_splits_exist(data) {
+        let notation_label = wiktionary_notation_label(&notations);
+        return cmd_wiktionary_train_prepared_rows(
+            data,
+            out,
+            config,
+            task,
+            &format!("{notation_label}:{task}"),
+            Some(&notations),
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            epochs,
+            patience,
+            seed,
+            device_arg,
+        );
+    }
+
     let pb = status_spinner(format!(
         "Loading Wiktionary rows for {}",
         wiktionary_notation_label(&notations)
@@ -2668,6 +2690,8 @@ fn cmd_wiktionary_train_prepared_rows(
     out: &Path,
     config: &tongues_wiktionary::WiktionaryConfig,
     task: &str,
+    task_label: &str,
+    notations: Option<&[WiktionaryNotationArg]>,
     learning_rate: f64,
     weight_decay: f32,
     dropout: f64,
@@ -2695,8 +2719,14 @@ fn cmd_wiktionary_train_prepared_rows(
     );
 
     let pb = status_spinner(format!("Filtering prepared rows for task={task}"));
-    let train_rows = filter_wiktionary_examples(train_rows_raw, task)?;
-    let valid_rows = filter_wiktionary_examples(valid_rows_raw, task)?;
+    let train_rows = filter_wiktionary_examples(
+        filter_wiktionary_examples_by_notation(train_rows_raw, notations),
+        task,
+    )?;
+    let valid_rows = filter_wiktionary_examples(
+        filter_wiktionary_examples_by_notation(valid_rows_raw, notations),
+        task,
+    )?;
     finish_status(
         pb,
         format!(
@@ -2714,8 +2744,9 @@ fn cmd_wiktionary_train_prepared_rows(
         "no prepared Wiktionary validation examples found for task={task}"
     );
 
-    let pb = status_spinner("Building Wiktionary vocabulary and encoding seq2seq examples");
-    let vocab = build_wiktionary_vocab(&train_rows, &valid_rows);
+    let pb = status_spinner("Loading Wiktionary vocabulary and encoding seq2seq examples");
+    let (vocab, train_rows, valid_rows) =
+        load_or_build_wiktionary_vocab(data, out, train_rows, valid_rows)?;
     let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
     finish_status(
@@ -2739,7 +2770,7 @@ fn cmd_wiktionary_train_prepared_rows(
         data,
         out,
         config,
-        &format!("pie-etymology:{task}"),
+        task_label,
         learning_rate,
         weight_decay,
         dropout,
@@ -2752,6 +2783,86 @@ fn cmd_wiktionary_train_prepared_rows(
         train_examples,
         valid_examples,
     )
+}
+
+fn wiktionary_prepared_splits_exist(data: &Path) -> bool {
+    data.join("train.jsonl").exists() && data.join("valid.jsonl").exists()
+}
+
+fn filter_wiktionary_examples_by_notation(
+    examples: Vec<tongues_wiktionary::TrainingExample>,
+    notations: Option<&[WiktionaryNotationArg]>,
+) -> Vec<tongues_wiktionary::TrainingExample> {
+    let Some(notations) = notations else {
+        return examples;
+    };
+    let has_phonemic = notations
+        .iter()
+        .any(|notation| matches!(notation, WiktionaryNotationArg::Phonemes));
+    let has_phonetic = notations
+        .iter()
+        .any(|notation| matches!(notation, WiktionaryNotationArg::Phones));
+    examples
+        .into_iter()
+        .filter(|example| {
+            let notation = example.notation.as_deref();
+            if notation.is_none() {
+                return true;
+            }
+            if notation == Some("phonetic-realization") {
+                return has_phonemic && has_phonetic;
+            }
+            notations.iter().any(|selected| match selected {
+                WiktionaryNotationArg::All => true,
+                WiktionaryNotationArg::Phonemes => notation == Some("phonemic"),
+                WiktionaryNotationArg::Phones => notation == Some("phonetic"),
+            })
+        })
+        .collect()
+}
+
+fn load_or_build_wiktionary_vocab(
+    data: &Path,
+    out: &Path,
+    mut train_rows: Vec<tongues_wiktionary::TrainingExample>,
+    mut valid_rows: Vec<tongues_wiktionary::TrainingExample>,
+) -> Result<(
+    Vocab,
+    Vec<tongues_wiktionary::TrainingExample>,
+    Vec<tongues_wiktionary::TrainingExample>,
+)> {
+    let vocab_path = if out.join("vocab.json").exists() {
+        Some(out.join("vocab.json"))
+    } else if data.join("vocab.json").exists() {
+        Some(data.join("vocab.json"))
+    } else {
+        None
+    };
+
+    let Some(vocab_path) = vocab_path else {
+        return Ok((
+            build_wiktionary_vocab(&train_rows, &valid_rows),
+            train_rows,
+            valid_rows,
+        ));
+    };
+
+    println!("Reusing existing vocabulary from {}", vocab_path.display());
+    let vocab: Vocab = read_json_file(&vocab_path)?;
+    let before_train = train_rows.len();
+    let before_valid = valid_rows.len();
+    train_rows.retain(|row| wiktionary_example_fits_vocab(row, &vocab));
+    valid_rows.retain(|row| wiktionary_example_fits_vocab(row, &vocab));
+    let skipped_train = before_train.saturating_sub(train_rows.len());
+    let skipped_valid = before_valid.saturating_sub(valid_rows.len());
+    if skipped_train > 0 || skipped_valid > 0 {
+        println!(
+            "Skipped {} train / {} valid Wiktionary examples containing tokens outside the existing vocabulary.",
+            format_count(skipped_train),
+            format_count(skipped_valid)
+        );
+    }
+    Ok((vocab, train_rows, valid_rows))
 }
 
 #[allow(clippy::too_many_arguments)]

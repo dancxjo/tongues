@@ -350,6 +350,14 @@ mod tests {
     }
 
     #[test]
+    fn ipa_renderer_marks_every_syllable_boundary_once() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for("reflection")),
+            "ɹɪˈflɛk.ʃən"
+        );
+    }
+
+    #[test]
     fn rhotic_vowels_do_not_add_coda_r_in_syllables() {
         assert_eq!(syllables_to_ipa(&syllables_for("current")), "ˈkʰɝ.ənt");
         assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚˈaɪvd");

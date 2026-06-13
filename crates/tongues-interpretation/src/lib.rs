@@ -23,18 +23,17 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
-use speaking::data::notation::openepd::render_openepd_phonemes;
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{
     HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
     SyntacticLinkKind,
 };
 use speaking::{
-    EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack, SpeechBoundaryToken,
-    Syllable, VarietyId,
+    syllables_to_ipa, EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack,
+    SpeechBoundaryToken, Syllable, VarietyId,
 };
 use tongues_core::Vocab;
-use tongues_neural::{make_recorder, write_manifest, ModelArtifactManifest, TrainState};
+use tongues_neural::{make_recorder, write_manifest, ModelArtifactManifest};
 
 pub const FAMILY: &str = "interpretation";
 pub const ARCHITECTURE: &str = "streaming-mel-native-ctc";
@@ -578,7 +577,7 @@ fn prepare_dataset_inner(
     out: &Path,
     config: &InterpretationConfig,
     progress: &mut impl FnMut(PrepareProgress),
-    refresh_rows: bool,
+    _refresh_rows: bool,
     mut transcript_refiner: impl FnMut(&str, &Path, &[f32], &str) -> Result<TranscriptRefinement>,
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -633,23 +632,13 @@ fn prepare_dataset_inner(
         .collect::<BTreeSet<_>>();
     let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
     let utterances_path = out.join("utterances.jsonl");
-    if refresh_rows && utterances_path.exists() {
-        fs::remove_file(&utterances_path)
-            .with_context(|| format!("removing stale {}", utterances_path.display()))?;
-    }
-    let mut rows = if refresh_rows {
-        Vec::new()
-    } else {
-        recover_utterance_rows(&utterances_path, out, config)?
-    };
+    let mut rows = recover_utterance_rows(&utterances_path, out, config)?;
     rows.retain(|row| selected_ids.contains(&row.utterance_id));
     for row in &mut rows {
-        if !row_has_syntax(row) {
-            progress(PrepareProgress::Stage {
-                message: format!("Enriching recovered syntax for {}", row.utterance_id),
-            });
-            enrich_row_supervision(row, &detector, config)?;
-        }
+        progress(PrepareProgress::Stage {
+            message: format!("Refreshing recovered supervision for {}", row.utterance_id),
+        });
+        enrich_row_supervision(row, &detector, config)?;
     }
     if utterances_path.exists() {
         write_jsonl_atomic(&utterances_path, &rows, progress)?;
@@ -813,12 +802,6 @@ fn prepare_dataset_inner(
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
-}
-
-fn row_has_syntax(row: &LibriSpeechUtterance) -> bool {
-    row.sentences
-        .iter()
-        .any(|sentence| !sentence.syntax.words.is_empty() || !sentence.syntax.links.is_empty())
 }
 
 fn enrich_row_supervision(
@@ -1123,7 +1106,7 @@ fn sentence_supervision(
             start_frame,
             end_frame: end_frame.min(num_frames),
             boundary_label: BOUNDARY_EMIT.to_string(),
-            phonemes: render_openepd_phonemes(&phonemicized.phonemes),
+            phonemes: syllables_to_ipa(&phonemicized.syllables),
             phones: phones_string(&phonemicized.phones),
             phoneme_tokens: phonemicized.phonemes,
             phone_tokens: phonemicized.phones,
@@ -1149,7 +1132,7 @@ fn sentence_supervision(
             end_frame: num_frames,
             boundary_label: BOUNDARY_EMIT.to_string(),
             terminal: None,
-            phonemes: render_openepd_phonemes(&phonemicized.phonemes),
+            phonemes: syllables_to_ipa(&phonemicized.syllables),
             phones: phones_string(&phonemicized.phones),
             phoneme_tokens: phonemicized.phonemes,
             phone_tokens: phonemicized.phones,
@@ -1822,10 +1805,15 @@ where
     let state_path = out_dir.join("train_state.json");
     let mut start_epoch = 1usize;
     let mut best_val_loss = f32::INFINITY;
+    let mut best_epoch = None;
+    let mut last_finite_epoch = None;
     let mut model = if state_path.exists() {
-        let state: TrainState = serde_json::from_str(&fs::read_to_string(&state_path)?)?;
+        let state: InterpretationTrainState =
+            serde_json::from_str(&fs::read_to_string(&state_path)?)?;
         start_epoch = state.current_epoch + 1;
         best_val_loss = state.best_val_loss;
+        best_epoch = state.best_epoch;
+        last_finite_epoch = state.last_finite_epoch;
         let epoch_path = out_dir.join(format!("model-epoch-{}", state.current_epoch));
         if epoch_path.with_extension("bin").exists() {
             println!(
@@ -1833,11 +1821,97 @@ where
                 state.current_epoch,
                 epoch_path.with_extension("bin").display()
             );
-            model_config
-                .init(device)
-                .load_file(&epoch_path, &make_recorder(), device)?
+            let candidate =
+                model_config
+                    .init(device)
+                    .load_file(&epoch_path, &make_recorder(), device)?;
+            let resume_report = evaluate(
+                &candidate.valid(),
+                data_dir,
+                valid_rows,
+                vocab,
+                phoneme_vocab,
+                phone_vocab,
+                word_vocab,
+                syntax_pos_vocab,
+                syntax_link_vocab,
+                syntax_head_offset_vocab,
+                train_config,
+                device,
+            )?;
+            if report_is_finite(&resume_report) {
+                candidate
+            } else if model_path.with_extension("bin").exists() {
+                println!(
+                    "Checkpoint {} produced non-finite validation metrics; returning to best model {}",
+                    epoch_path.with_extension("bin").display(),
+                    model_path.with_extension("bin").display()
+                );
+                let recovered_epoch = if best_epoch.is_some() {
+                    best_epoch
+                } else {
+                    match recover_best_epoch(
+                        model_config,
+                        out_dir,
+                        state.current_epoch,
+                        best_val_loss,
+                        data_dir,
+                        valid_rows,
+                        vocab,
+                        phoneme_vocab,
+                        phone_vocab,
+                        word_vocab,
+                        syntax_pos_vocab,
+                        syntax_link_vocab,
+                        syntax_head_offset_vocab,
+                        train_config,
+                        device,
+                    ) {
+                        Ok(epoch) => epoch,
+                        Err(err) => {
+                            println!("Could not inspect older checkpoints for recovery: {err:#}");
+                            None
+                        }
+                    }
+                };
+                best_epoch = recovered_epoch;
+                last_finite_epoch = recovered_epoch.or(last_finite_epoch);
+                if let Some(epoch) = recovered_epoch {
+                    start_epoch = epoch + 1;
+                    write_interpretation_train_state(
+                        &state_path,
+                        epoch,
+                        best_val_loss,
+                        best_epoch,
+                        last_finite_epoch,
+                    )?;
+                }
+                model_config
+                    .init(device)
+                    .load_file(model_path, &make_recorder(), device)?
+            } else {
+                println!(
+                    "Checkpoint {} produced non-finite validation metrics and no best model exists; initializing new weights",
+                    epoch_path.with_extension("bin").display()
+                );
+                start_epoch = 1;
+                best_val_loss = f32::INFINITY;
+                best_epoch = None;
+                last_finite_epoch = None;
+                model_config.init(device)
+            }
         } else {
-            model_config.init(device)
+            if model_path.with_extension("bin").exists() {
+                println!(
+                    "Epoch checkpoint not found. Resuming training from best model: {}",
+                    model_path.with_extension("bin").display()
+                );
+                model_config
+                    .init(device)
+                    .load_file(model_path, &make_recorder(), device)?
+            } else {
+                model_config.init(device)
+            }
         }
     } else {
         model_config.init(device)
@@ -1867,6 +1941,27 @@ where
             rng,
             epoch,
         )?;
+        if !loss.is_finite() {
+            println!(
+                "Epoch {epoch} produced non-finite train_loss={loss}; not saving checkpoint or advancing train_state"
+            );
+            if model_path.with_extension("bin").exists() {
+                println!(
+                    "Preserving best model for the next run: {}",
+                    model_path.with_extension("bin").display()
+                );
+            }
+            if let Some(epoch) = best_epoch.or(last_finite_epoch) {
+                write_interpretation_train_state(
+                    &state_path,
+                    epoch,
+                    best_val_loss,
+                    best_epoch,
+                    last_finite_epoch,
+                )?;
+            }
+            break;
+        }
         let eval_model = model.valid();
         let report = evaluate(
             &eval_model,
@@ -1882,6 +1977,27 @@ where
             train_config,
             device,
         )?;
+        if !report_is_finite(&report) {
+            println!(
+                "Epoch {epoch} produced non-finite validation metrics; not saving checkpoint or advancing train_state"
+            );
+            if model_path.with_extension("bin").exists() {
+                println!(
+                    "Preserving best model for the next run: {}",
+                    model_path.with_extension("bin").display()
+                );
+            }
+            if let Some(epoch) = best_epoch.or(last_finite_epoch) {
+                write_interpretation_train_state(
+                    &state_path,
+                    epoch,
+                    best_val_loss,
+                    best_epoch,
+                    last_finite_epoch,
+                )?;
+            }
+            break;
+        }
         println!(
             "Epoch {:3} | train_loss={:.4} val_loss={:.4} wer={:.3} boundary_f1={:.3} repair_f1={:.3} phoneme_ter={:.3} phone_ter={:.3} audio_mse={:.4}",
             epoch,
@@ -1898,23 +2014,25 @@ where
             &out_dir.join(format!("model-epoch-{epoch}")),
             &make_recorder(),
         )?;
-        fs::write(
+        last_finite_epoch = Some(epoch);
+        write_interpretation_train_state(
             &state_path,
-            serde_json::to_string_pretty(&TrainState {
-                current_epoch: epoch,
-                best_val_loss,
-            })?,
+            epoch,
+            best_val_loss,
+            best_epoch,
+            last_finite_epoch,
         )?;
         if report.loss < best_val_loss - 1e-5 {
             best_val_loss = report.loss;
+            best_epoch = Some(epoch);
             patience = 0;
             eval_model.save_file(model_path, &make_recorder())?;
-            fs::write(
+            write_interpretation_train_state(
                 &state_path,
-                serde_json::to_string_pretty(&TrainState {
-                    current_epoch: epoch,
-                    best_val_loss,
-                })?,
+                epoch,
+                best_val_loss,
+                best_epoch,
+                last_finite_epoch,
             )?;
         } else {
             patience += 1;
@@ -1924,6 +2042,104 @@ where
         }
     }
     Ok(best_val_loss)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct InterpretationTrainState {
+    current_epoch: usize,
+    best_val_loss: f32,
+    #[serde(default)]
+    best_epoch: Option<usize>,
+    #[serde(default)]
+    last_finite_epoch: Option<usize>,
+}
+
+fn write_interpretation_train_state(
+    path: &Path,
+    current_epoch: usize,
+    best_val_loss: f32,
+    best_epoch: Option<usize>,
+    last_finite_epoch: Option<usize>,
+) -> Result<()> {
+    let state = InterpretationTrainState {
+        current_epoch,
+        best_val_loss,
+        best_epoch,
+        last_finite_epoch,
+    };
+    fs::write(path, serde_json::to_string_pretty(&state)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn report_is_finite(report: &EvalReport) -> bool {
+    report.loss.is_finite()
+        && report.token_error_rate.is_finite()
+        && report.word_error_rate.is_finite()
+        && report.boundary_f1.is_finite()
+        && report.repair_f1.is_finite()
+        && report.phoneme_token_error_rate.is_finite()
+        && report.phone_token_error_rate.is_finite()
+        && report.masked_audio_mse.is_finite()
+        && report.prev_word_accuracy.is_finite()
+        && report.current_word_accuracy.is_finite()
+        && report.next_word_accuracy.is_finite()
+        && report.masked_word_accuracy.is_finite()
+        && report.masked_word_phoneme_token_error_rate.is_finite()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_best_epoch<B: AutodiffBackend>(
+    model_config: &ModelConfig,
+    out_dir: &Path,
+    current_epoch: usize,
+    best_val_loss: f32,
+    data_dir: &Path,
+    valid_rows: &[LibriSpeechUtterance],
+    vocab: &Vocab,
+    phoneme_vocab: &Vocab,
+    phone_vocab: &Vocab,
+    word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
+    train_config: &InterpretationTrainConfig,
+    device: &B::Device,
+) -> Result<Option<usize>>
+where
+    <AsrModel<B> as Module<B>>::Record: Send,
+{
+    for epoch in (1..=current_epoch).rev() {
+        let checkpoint = out_dir.join(format!("model-epoch-{epoch}"));
+        if !checkpoint.with_extension("bin").exists() {
+            continue;
+        }
+        let model: AsrModel<B> =
+            model_config
+                .init(device)
+                .load_file(&checkpoint, &make_recorder(), device)?;
+        let report = evaluate(
+            &model.valid(),
+            data_dir,
+            valid_rows,
+            vocab,
+            phoneme_vocab,
+            phone_vocab,
+            word_vocab,
+            syntax_pos_vocab,
+            syntax_link_vocab,
+            syntax_head_offset_vocab,
+            train_config,
+            device,
+        )?;
+        if report_is_finite(&report) && report.loss <= best_val_loss + 1e-3 {
+            println!(
+                "Recovered best finite epoch {} with val_loss={:.4}",
+                epoch, report.loss
+            );
+            return Ok(Some(epoch));
+        }
+    }
+    Ok(None)
 }
 
 fn train_epoch<B: AutodiffBackend, R: Rng>(
@@ -1969,9 +2185,14 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
         )?;
         let output = model.forward(batch.mel.clone());
         let loss = weighted_loss(output, batch, config);
+        let loss_val = loss.clone().into_scalar().elem::<f32>();
+        if !loss_val.is_finite() {
+            pb.finish_and_clear();
+            return Ok(loss_val);
+        }
         let grads = GradientsParams::from_grads(loss.backward(), model);
         *model = optimizer.step(config.learning_rate, model.clone(), grads);
-        total += loss.into_scalar().elem::<f32>();
+        total += loss_val;
         n += 1;
         pb.set_message(format!("{:.4}", total / n as f32));
         pb.inc(1);
@@ -3014,6 +3235,56 @@ mod tests {
         assert!(!rows[0].syntax.words.is_empty());
         assert!(!rows[0].syntax.links.is_empty());
         assert!(rows[0].end_frame <= 100);
+    }
+
+    #[test]
+    fn sentence_supervision_places_stress_before_syllable_onset() {
+        let cfg = InterpretationConfig::default();
+        let detector = SentenceDetectorDialog::new().unwrap();
+        let rows = sentence_supervision(&detector, "Reflection.", 100, &cfg).unwrap();
+
+        assert!(
+            rows[0].phonemes.contains("ɹɪˈflɛk.ʃən"),
+            "stress should precede the stressed syllable onset: {}",
+            rows[0].phonemes
+        );
+        assert!(
+            !rows[0].phonemes.contains("ɹɪflˈɛ"),
+            "stress should not be anchored to the vowel: {}",
+            rows[0].phonemes
+        );
+    }
+
+    #[test]
+    fn enrich_row_supervision_repairs_recovered_phoneme_extents() {
+        let cfg = InterpretationConfig::default();
+        let detector = SentenceDetectorDialog::new().unwrap();
+        let mut row = test_utterance("u", "features/u.mel.bin", 100);
+        row.transcript = "Reflection.".into();
+        row.sentences = vec![SentenceSupervision {
+            text: "Reflection.".into(),
+            start_char: 0,
+            end_char: 11,
+            start_frame: 0,
+            end_frame: 100,
+            boundary_label: BOUNDARY_EMIT.into(),
+            terminal: Some('.'),
+            phonemes: "ɹɪflˈɛkʃʌn".into(),
+            phones: String::new(),
+            phoneme_tokens: Vec::new(),
+            phone_tokens: Vec::new(),
+            syllables: Vec::new(),
+            boundaries: Vec::new(),
+            prosody: ProsodyTrack::default(),
+            warnings: Vec::new(),
+            syntax: SyntaxSupervision::default(),
+        }];
+
+        enrich_row_supervision(&mut row, &detector, &cfg).unwrap();
+
+        assert!(row.sentences[0].phonemes.contains("ɹɪˈflɛk.ʃən"));
+        assert!(!row.sentences[0].phonemes.contains("ɹɪflˈɛ"));
+        assert!(!row.word_supervision.is_empty());
     }
 
     #[test]

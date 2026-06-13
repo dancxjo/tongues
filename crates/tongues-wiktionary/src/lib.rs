@@ -320,7 +320,7 @@ pub fn prepare_dataset_with_progress(
     }
 
     let dump_path = resolve_dump_path_with_progress(cache_dir, config, &mut progress)?;
-    let extracted = parse_dump_with_progress(&dump_path, config, &mut progress)?;
+    let extracted = load_or_parse_pronunciation_data(out, &dump_path, config, &mut progress)?;
     let phonemes = extracted.phonemes;
     let phones = extracted.phones;
     progress(PrepareProgress::Stage {
@@ -330,37 +330,12 @@ pub fn prepare_dataset_with_progress(
             phones.len()
         ),
     });
-    let expanded_path = out.join("expanded.jsonl.part");
-    progress(PrepareProgress::Stage {
-        message: format!(
-            "Writing expanded training examples to {}",
-            expanded_path.display()
-        ),
-    });
-    let mut expanded_file = BufWriter::new(
-        File::create(&expanded_path)
-            .with_context(|| format!("creating {}", expanded_path.display()))?,
-    );
-    let mut examples = Vec::new();
     let entries = phonemes
         .iter()
         .chain(phones.iter())
         .cloned()
         .collect::<Vec<_>>();
-    expand_training_examples_to(
-        &entries,
-        config,
-        &mut progress,
-        Some(&expanded_path),
-        |example| {
-            writeln!(expanded_file, "{}", serde_json::to_string(&example)?)?;
-            examples.push(example);
-            Ok(())
-        },
-    )?;
-    expanded_file
-        .flush()
-        .with_context(|| format!("flushing {}", expanded_path.display()))?;
+    let examples = load_or_expand_training_examples(out, &entries, config, &mut progress)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Splitting {} examples into train/valid/test",
@@ -373,33 +348,29 @@ pub fn prepare_dataset_with_progress(
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
     write_jsonl_with_progress(&out.join("test.jsonl"), &test, &mut progress)?;
-    write_jsonl_with_progress(
-        &out.join("patterns.jsonl"),
-        &extracted.patterns,
-        &mut progress,
-    )?;
-    write_jsonl_with_progress(&out.join("phonemes.jsonl"), &phonemes, &mut progress)?;
-    write_jsonl_with_progress(&out.join("phones.jsonl"), &phones, &mut progress)?;
-    write_jsonl_with_progress(
-        &out.join("supplemental_terms.jsonl"),
-        &extracted.supplemental_terms,
-        &mut progress,
-    )?;
     progress(PrepareProgress::Stage {
         message: "Building vocabulary".to_string(),
     });
-    write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
+    write_vocab_with_progress(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
     progress(PrepareProgress::Write {
         path: out.join("vocab.json").display().to_string(),
         rows: train.len() + valid.len() + test.len(),
     });
-    fs::write(
-        out.join("dataset_config.json"),
-        serde_json::to_string_pretty(config)?,
+    write_text_atomic(
+        &out.join("dataset_config.json"),
+        &serde_json::to_string_pretty(config)?,
     )?;
-    fs::write(out.join("README.md"), dataset_readme(config, &dump_path))?;
-    fs::remove_file(&expanded_path)
-        .with_context(|| format!("removing {}", expanded_path.display()))?;
+    write_text_atomic(&out.join("README.md"), &dataset_readme(config, &dump_path))?;
+    remove_stale_part_files(
+        out,
+        &[
+            "patterns.jsonl.part",
+            "phonemes.jsonl.part",
+            "phones.jsonl.part",
+            "supplemental_terms.jsonl.part",
+            "expanded.jsonl.part",
+        ],
+    )?;
 
     Ok(PrepareReport {
         dump_path: dump_path.display().to_string(),
@@ -411,6 +382,116 @@ pub fn prepare_dataset_with_progress(
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
+}
+
+fn load_or_parse_pronunciation_data(
+    out: &Path,
+    dump_path: &Path,
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<ExtractedWiktionaryData> {
+    let patterns_path = out.join("patterns.jsonl");
+    let phonemes_path = out.join("phonemes.jsonl");
+    let phones_path = out.join("phones.jsonl");
+    let supplemental_path = out.join("supplemental_terms.jsonl");
+    if [
+        &patterns_path,
+        &phonemes_path,
+        &phones_path,
+        &supplemental_path,
+    ]
+    .iter()
+    .all(|path| path.exists())
+    {
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Resuming from parsed Wiktionary artifacts in {}",
+                out.display()
+            ),
+        });
+        let data = ExtractedWiktionaryData {
+            patterns: read_jsonl(&patterns_path)?,
+            phonemes: read_jsonl(&phonemes_path)?,
+            phones: read_jsonl(&phones_path)?,
+            supplemental_terms: read_jsonl(&supplemental_path)?,
+            pie_roots: Vec::new(),
+        };
+        progress(PrepareProgress::Parse {
+            pages: 0,
+            patterns: data.patterns.len(),
+            phonemes: data.phonemes.len(),
+            phones: data.phones.len(),
+            pie_roots: data.pie_roots.len(),
+        });
+        return Ok(data);
+    }
+
+    let extracted = parse_dump_with_progress(dump_path, config, progress)?;
+    write_jsonl_with_progress(&patterns_path, &extracted.patterns, progress)?;
+    write_jsonl_with_progress(&phonemes_path, &extracted.phonemes, progress)?;
+    write_jsonl_with_progress(&phones_path, &extracted.phones, progress)?;
+    write_jsonl_with_progress(&supplemental_path, &extracted.supplemental_terms, progress)?;
+    Ok(extracted)
+}
+
+fn load_or_expand_training_examples(
+    out: &Path,
+    entries: &[PronunciationEntry],
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<Vec<TrainingExample>> {
+    let expanded_path = out.join("expanded.jsonl");
+    if expanded_path.exists() {
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Resuming from expanded training examples in {}",
+                expanded_path.display()
+            ),
+        });
+        let examples = read_jsonl(&expanded_path)?;
+        progress(PrepareProgress::Expand {
+            rows: entries.len(),
+            examples: examples.len(),
+            path: Some(expanded_path.display().to_string()),
+        });
+        return Ok(examples);
+    }
+
+    let expanded_part_path = expanded_path.with_file_name("expanded.jsonl.part");
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Writing expanded training examples to {}",
+            expanded_part_path.display()
+        ),
+    });
+    let mut expanded_file = BufWriter::new(
+        File::create(&expanded_part_path)
+            .with_context(|| format!("creating {}", expanded_part_path.display()))?,
+    );
+    let mut examples = Vec::new();
+    expand_training_examples_to(
+        entries,
+        config,
+        progress,
+        Some(&expanded_part_path),
+        |example| {
+            writeln!(expanded_file, "{}", serde_json::to_string(&example)?)?;
+            examples.push(example);
+            Ok(())
+        },
+    )?;
+    expanded_file
+        .flush()
+        .with_context(|| format!("flushing {}", expanded_part_path.display()))?;
+    drop(expanded_file);
+    fs::rename(&expanded_part_path, &expanded_path).with_context(|| {
+        format!(
+            "moving {} to {}",
+            expanded_part_path.display(),
+            expanded_path.display()
+        )
+    })?;
+    Ok(examples)
 }
 
 fn prepare_pie_dataset(
@@ -472,18 +553,18 @@ fn prepare_pie_dataset(
     progress(PrepareProgress::Stage {
         message: "Building vocabulary".to_string(),
     });
-    write_vocab(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
+    write_vocab_with_progress(out, [&train[..], &valid[..], &test[..]].concat().as_slice())?;
     progress(PrepareProgress::Write {
         path: out.join("vocab.json").display().to_string(),
         rows: train.len() + valid.len() + test.len(),
     });
-    fs::write(
-        out.join("dataset_config.json"),
-        serde_json::to_string_pretty(config)?,
+    write_text_atomic(
+        &out.join("dataset_config.json"),
+        &serde_json::to_string_pretty(config)?,
     )?;
-    fs::write(
-        out.join("README.md"),
-        pie_dataset_readme(config, &source_paths),
+    write_text_atomic(
+        &out.join("README.md"),
+        &pie_dataset_readme(config, &source_paths),
     )?;
 
     Ok(PrepareReport {
@@ -2505,10 +2586,17 @@ fn write_jsonl_with_progress<T: Serialize>(
     progress(PrepareProgress::Stage {
         message: format!("Writing {} rows to {}", examples.len(), path.display()),
     });
-    let mut file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let part_path = jsonl_part_path(path);
+    let mut file =
+        File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?;
     for example in examples {
         writeln!(file, "{}", serde_json::to_string(example)?)?;
     }
+    file.flush()
+        .with_context(|| format!("flushing {}", part_path.display()))?;
+    drop(file);
+    fs::rename(&part_path, path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
     progress(PrepareProgress::Write {
         path: path.display().to_string(),
         rows: examples.len(),
@@ -2516,7 +2604,23 @@ fn write_jsonl_with_progress<T: Serialize>(
     Ok(())
 }
 
-fn write_vocab(out: &Path, examples: &[TrainingExample]) -> Result<()> {
+fn read_jsonl<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut rows = Vec::new();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows.push(serde_json::from_str(&line).with_context(|| {
+            format!("parsing JSONL row {} in {}", line_index + 1, path.display())
+        })?);
+    }
+    Ok(rows)
+}
+
+fn write_vocab_with_progress(out: &Path, examples: &[TrainingExample]) -> Result<()> {
     let inputs = examples
         .iter()
         .map(|example| example.input.clone())
@@ -2526,10 +2630,47 @@ fn write_vocab(out: &Path, examples: &[TrainingExample]) -> Result<()> {
         .map(|example| example.output.clone())
         .collect::<Vec<_>>();
     let vocab = Vocab::build(&inputs, &outputs, &[]);
-    fs::write(
-        out.join("vocab.json"),
-        serde_json::to_string_pretty(&vocab)?,
-    )?;
+    write_text_atomic(
+        &out.join("vocab.json"),
+        &serde_json::to_string_pretty(&vocab)?,
+    )
+}
+
+fn write_text_atomic(path: &Path, contents: &str) -> Result<()> {
+    let part_path = path.with_file_name(format!(
+        "{}.part",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .context("path has no UTF-8 filename")?
+    ));
+    let mut file =
+        File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", part_path.display()))?;
+    file.flush()
+        .with_context(|| format!("flushing {}", part_path.display()))?;
+    drop(file);
+    fs::rename(&part_path, path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
+    Ok(())
+}
+
+fn jsonl_part_path(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
+        "{}.part",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("output.jsonl")
+    ))
+}
+
+fn remove_stale_part_files(out: &Path, filenames: &[&str]) -> Result<()> {
+    for filename in filenames {
+        let path = out.join(filename);
+        if path.exists() {
+            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -3034,5 +3175,64 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         assert_eq!(data.phones.len(), 1);
         assert_eq!(data.phonemes[0].ipa, "/fɹiː/");
         assert_eq!(data.phones[0].ipa, "[fɹɪi̯]");
+    }
+
+    #[test]
+    fn prepare_resumes_from_parsed_and_expanded_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "tongues-wiktionary-resume-test-{}",
+            std::process::id()
+        ));
+        let out = root.join("out");
+        let cache = root.join("cache");
+        fs::create_dir_all(&cache).expect("create cache");
+        let dump_path = cache.join("fixture.xml.bz2");
+        let xml = r#"<mediawiki>
+  <page>
+    <title>free</title>
+    <revision>
+      <text xml:space="preserve">==English==
+===Pronunciation===
+* {{IPA|en|/fɹiː/|[fɹɪi̯]|a=RP}}
+</text>
+    </revision>
+  </page>
+</mediawiki>
+"#;
+        let file = File::create(&dump_path).expect("create compressed fixture");
+        let mut encoder = bzip2::write::BzEncoder::new(file, bzip2::Compression::best());
+        encoder.write_all(xml.as_bytes()).expect("write fixture");
+        encoder.finish().expect("finish fixture");
+
+        let config = WiktionaryConfig {
+            dump_path: Some(dump_path.display().to_string()),
+            max_pages: Some(1),
+            ..WiktionaryConfig::default()
+        };
+        let first = prepare_dataset(&out, &cache, &config).expect("initial prepare");
+        assert!(out.join("phonemes.jsonl").exists());
+        assert!(out.join("phones.jsonl").exists());
+        assert!(out.join("expanded.jsonl").exists());
+
+        fs::remove_file(&dump_path).expect("remove source dump");
+        for filename in [
+            "train.jsonl",
+            "valid.jsonl",
+            "test.jsonl",
+            "vocab.json",
+            "dataset_config.json",
+            "README.md",
+        ] {
+            fs::remove_file(out.join(filename)).expect("remove final artifact");
+        }
+
+        let second = prepare_dataset(&out, &cache, &config).expect("resume prepare");
+        fs::remove_dir_all(&root).expect("clean temp dir");
+
+        assert_eq!(second.parsed_phonemes, first.parsed_phonemes);
+        assert_eq!(second.parsed_phones, first.parsed_phones);
+        assert_eq!(second.train_examples, first.train_examples);
+        assert_eq!(second.valid_examples, first.valid_examples);
+        assert_eq!(second.test_examples, first.test_examples);
     }
 }

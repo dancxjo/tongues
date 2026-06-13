@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "family": "wiktionary",
+  "architecture": "seq2seq-transformer",
+  "created_by": "tongues",
+  "data_id": "enwiktionary-2026-06-01-v0",
+  "task": "phonemic+phonetic:all"
+}

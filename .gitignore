@@ -34,17 +34,10 @@ target/
 Cargo.lock
 target_verify/
 crates/speaking/src/data/lexicons/cmudict.dict
-datasets/wiktionary/*
 
-# Prepared dataset payloads that are expensive or rebuildable. Keep compact
-# metadata/manifests and curated source fixtures trackable.
-/datasets/**/*.part
-/datasets/**/.*.swp
-/datasets/**/*.tar
-/datasets/**/*.tar.gz
-/datasets/**/*.zip
-/datasets/**/source/
-/datasets/**/source.part/
-/datasets/**/features/
-datasets/interpretation/mini-v0/.extract-complete
-datasets/interpretation/mini-v0/utterances.jsonl
+# Prepared datasets are generated and can be large. Keep only the placeholder
+# directories trackable by default; force-add curated fixtures when needed.
+/datasets/**
+!/datasets/
+!/datasets/*/
+!/datasets/*/.gitkeep
