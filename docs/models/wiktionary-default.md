@@ -121,3 +121,69 @@ cargo run --bin tongues -- wiktionary train
 ```
 
 The trainer should resume from epoch 12 using `model-epoch-11.bin`.
+
+## Race progress snapshot: June 13, 2026
+
+After one roughly five-hour Wiktionary epoch, the `just race` smoke test looked
+promising: the model completed all 44 inference demos without failures, and the
+remaining pronunciation/spelling errors are mostly plausible native-speaker
+spellings or approximations rather than random output.
+
+```text
+race: building tongues binary
+race: 23 forms, 8 configured Wiktionary languages, compact task coverage
+race: g2p2g=models/g2p2g/openepd-v0, wiktionary=models/wiktionary/enwiktionary-2026-06-01-v0-phones
+race plan: g2p2g=23 rt, wiktionary=11 rt, wiktionary task demos=9 + raw
+
+G2P2G round trips (compact stress sample)
+  ok  176ms +  186ms  have           -> hæv                -> have
+  ok  414ms +  336ms  children       -> ˈtʃɪl.dɹən         -> children
+  ok  197ms +  196ms  through        -> ˈθɹu               -> thru
+  ok  201ms +  153ms  queue          -> ˈkju               -> cue
+  ok  711ms +  578ms  Tyrannosaurus  -> tɪɹ.æ.nə.sɔɹ.əs    -> tyranosorous
+  ok  820ms +  674ms  Archaeopteryx  -> ˌɑɹ.kiˈɑp.təɹ.ɪks  -> archaeopterics
+  ok  787ms +  589ms  Velociraptor   -> vəˈlɑ.səɹˌæp.təɹ   -> velocerapter
+  ok  839ms +  743ms  Quetzalcoatlus -> kwɛt.sæl.koʊt.ləs  -> quetsalcoatless
+  ok  959ms +  705ms  Parasaurolophu... -> ˌpɛɹ.ə.sɔɹˈɑ.lə.fə... -> parasorolifous
+  ok 1203ms + 1053ms  Pachycephalosa... -> pæ.kɪ.sɛ.fə.lə.sɔɹ... -> packissephalosorou...
+  ok 1751ms +  919ms  Micropachyceph... -> ˌmaɪ.kɹoʊ.pəˌkaɪ.s... -> micropocycifolors
+  ok  610ms +  477ms  Coelophysis    -> ˌsi.ləˈfɪ.zɪs      -> sealifisis
+  ok  166ms +  173ms  Yi             -> ˈji                -> yee
+  ok  346ms +  290ms  mañana         -> məˈhɑ.nə           -> mahana
+  ok  565ms +  314ms  jalapeño       -> dʒɑ.lɑˈpɛ.noʊ      -> jalapeno
+  ok  376ms +  418ms  brötchen       -> ˈbɹʌ.tʃən          -> brutcheon
+  ok  464ms +  413ms  Kraftwerk      -> ˈkɹæf.twɚk         -> craftwork
+  ok  639ms +  430ms  Pteranodon     -> təɹ.æ.nə.ʊ.dɑn     -> teranodon
+  ok  267ms +  215ms  Łódź           -> ˈɛˈdeɪ             -> eday
+  ok  275ms +  240ms  Dvořák         -> dvəˈʊk             -> dvoke
+  ok  446ms +  310ms  São Paulo      -> ˌsu.pɔˈloʊ         -> supallo
+  ok  398ms +  276ms  ἄνθρωπος       -> ˈɛ.tʃəˌɡɑ          -> echiga
+  ok  257ms +  180ms  कर्म           -> ˈju.ɡə             -> uga
+
+Wiktionary orthography/phonology round trips (11 curated cases)
+  ok  852ms +  702ms  eng/phonemes Tyrannosaurus      -> taɪˈɹænəsɔːɹəs       -> tyranosorous
+  ok 1117ms +  830ms  eng/phones   Archaeopteryx      -> ɑɹˈt͡ʃɛə̯.ə.ptə.ɹɪks -> archaropterics
+  ok  884ms +  677ms  lat/phonemes Velociraptor       -> vɛloˈsiʁaptoːɐ̯      -> velosiraptor
+  ok  894ms +  759ms  eng/phones   Quetzalcoatlus     -> ˈkwɛtsəlˌkoʊtləs     -> quetzlecotless
+  ok 1117ms +  824ms  lat/phonemes Parasaurolophus    -> pa.ʁa.zaʊ̯.ʁoˈlo.fus -> parazaurolofus
+  ok  404ms +  372ms  spa/phonemes mañana             -> maˈɲana              -> mañana
+  ok  453ms +  435ms  spa/phones   jalapeño           -> xalaˈpeɲo            -> jalapeño
+  ok  506ms +  458ms  fra/phones   rendezvous         -> ʁɛnde.zvo            -> rendesvo
+  ok  511ms +  456ms  deu/phonemes brötchen           -> ˈbʁøːtçən            -> brötchen
+  ok  499ms +  455ms  grc/phonemes ἄνθρωπος           -> ˈanθropos            -> άνθροπος
+  ok  439ms +  311ms  san/phonemes कर्म               -> ˈʔa.fi.n             -> άφfηn
+
+Wiktionary task demos
+  ok 1051ms  orthography-to-phones --variety en-GB.RP Archaeopteryx -> ɑːˈtʃɛə̯.ə.ptə.ɹɪks
+  ok 1004ms  orthography-to-phonemes                Archaeopteryx -> ɑː(ɹ)ˈtʃiːəptəɹɪks
+  ok  710ms  phonemes-to-orthography                ɑː(ɹ)ˈtʃiːəptəɹɪks -> archioptorics
+  ok  783ms  phones-to-orthography                  ɑːˈtʃɛə̯.ə.ptə.ɹɪks -> archaropterics
+  ok  987ms  phonetic-realization                   ɑː(ɹ)ˈtʃiːəptəɹɪks -> ɑːɹˈtʃiːəptʰɹɪks
+  ok  788ms  normalize                              Archaeopteryx! -> archaeopteryxe
+  ok  254ms  guess-lang-from-orthography            Archaeopteryx -> deu
+  ok  241ms  guess-lang-from-phonology              ɑːˈtʃɛə̯.ə.ptə.ɹɪks -> eng
+  ok  287ms  guess-lang-from-orthography-and-phonology Archaeopteryx => ɑːˈtʃɛə̯.ə.... -> eng
+  ok 1157ms  --raw tagged source                    <task:orthography_to_phonolo... -> ɑɹˈt͡ʃɛə̯.ə.ptə.ɹɪks
+
+race: done in 43993ms wall; 44 successful inference demos, 0 failures, 43990ms summed inference time
+```

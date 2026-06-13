@@ -2275,18 +2275,21 @@ where
     let mut optimizer = AdamWConfig::new()
         .with_weight_decay(train_config.weight_decay)
         .init::<B, AsrModel<B>>();
+    let mut loaded_optimizer_checkpoint = None;
     if let Some(epoch) = optimizer_resume_epoch {
         let optimizer_path = out_dir.join(format!("optim-epoch-{epoch}"));
-        if optimizer_path.with_extension("bin").exists() {
+        let optimizer_bin = optimizer_path.with_extension("bin");
+        if optimizer_bin.exists() {
             let record = make_recorder()
                 .load(optimizer_path.clone(), device)
                 .with_context(|| {
                     format!("loading {}", optimizer_path.with_extension("bin").display())
                 })?;
             optimizer = optimizer.load_record(record);
+            loaded_optimizer_checkpoint = Some(optimizer_bin.clone());
             println!(
                 "Resuming optimizer state from {}",
-                optimizer_path.with_extension("bin").display()
+                optimizer_bin.display()
             );
         } else {
             resume_without_optimizer = true;
@@ -2333,6 +2336,9 @@ where
                     "Preserving best model for the next run: {}",
                     model_path.with_extension("bin").display()
                 );
+            }
+            if let Some(path) = loaded_optimizer_checkpoint.take() {
+                quarantine_optimizer_checkpoint(&path)?;
             }
             if let Some(epoch) = best_epoch.or(last_finite_epoch) {
                 write_interpretation_train_state(
@@ -2439,6 +2445,31 @@ where
         }
     }
     Ok(best_val_loss)
+}
+
+fn quarantine_optimizer_checkpoint(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut target = path.with_extension("nan.bin");
+    let mut suffix = 1usize;
+    while target.exists() {
+        target = path.with_extension(format!("nan-{suffix}.bin"));
+        suffix += 1;
+    }
+    fs::rename(path, &target).with_context(|| {
+        format!(
+            "quarantining non-finite optimizer checkpoint {} -> {}",
+            path.display(),
+            target.display()
+        )
+    })?;
+    println!(
+        "Quarantined optimizer checkpoint after non-finite loss: {} -> {}",
+        path.display(),
+        target.display()
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

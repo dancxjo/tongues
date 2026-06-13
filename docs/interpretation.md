@@ -140,6 +140,11 @@ and `train_config.input_feature_bins`. A compact-feature dataset should produce
 checkpoints before training so the new model cannot resume with an incompatible
 80-bin input layer.
 
+If a resumed optimizer state drives an epoch to `NaN`, training preserves the
+last best model and train state, quarantines the optimizer checkpoint as
+`optim-epoch-N.nan.bin`, and leaves the next run to resume from the model
+checkpoint with a fresh optimizer and reduced resume learning rate.
+
 The v1 model exposes streaming CTC-style greedy collapse, a seq-style transcript
 head, a sentence-boundary head, a repair class, phoneme and phone heads,
 word-context heads, masked-word cloze heads, syntax heads, and masked feature
