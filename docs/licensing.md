@@ -4,13 +4,13 @@ The source code in this repository is MIT licensed. Generated datasets, download
 
 Treat prepared data directories as local artifacts unless you have reviewed their generated `README.md`, `dataset_config.json`, and per-row provenance.
 
-## Speech-Manifold Sources
+## Data And Audio Sources
 
-| Source/backend | Use in `speech-manifold` | License/terms note |
+| Source/backend | Use | License/terms note |
 |---|---|---|
 | OpenEPD (`open-english-pronouncing-dictionary`) | Primary lexical source for spelling, IPA variants, rarity, and source labels. | OpenEPD is documented upstream as CC-BY-SA 4.0 because it includes WikiPron/Wiktionary-derived data. |
 | WikiPron/Wiktionary-derived labels | Preserved through OpenEPD source labels and used to add Wiktionary reference URLs. | WikiPron/Wiktionary material is share-alike; preserve attribution and license notes when redistributing generated data. |
-| `speech` crate phonemicizer | Derives narrow phones, syllables, stress, and placeholder acoustic features locally. | Project-local code under this repository's license. |
+| `speaking` crate phonemicizer | Derives narrow phones, syllables, stress, and placeholder acoustic features locally. | Project-local code under this repository's license. |
 | eSpeak NG | Optional local WAV generation with a small rotating voice set. | eSpeak NG is GPL-3-or-later; some data/docs mention CC-BY-SA components. Review eSpeak NG terms before redistributing generated audio. |
 | Google Translate TTS URL support (`tts-urls`) | Optional network audio backend; skipped when robots policy disallows the TTS path. | URL helper crate is MIT, but Google service output/access is governed by Google's terms and robots policy; this project is not affiliated with Google. |
 | Wiktionary/Wikimedia audio | Optional best-effort audio lookup through public file metadata/audio URLs, only when robots policy allows. | Individual media files may have their own licenses; keep source URLs/provenance with any redistributed audio. |

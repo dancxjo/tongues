@@ -28,7 +28,7 @@ cargo run --release -- g2p2g refine \
     --patience 2
 ```
 
-Refinement runs the model over held-out splits, looks up reference pronunciations in OpenEPD, normalizes them through the `speech` notation and syllabification layer, compares each prediction with that gold target using a broad comparison key, computes character-level edit distance on that key, writes every substantive mismatch to `discrepancies.jsonl`, and fine-tunes from the source model weights using only the mismatched lexemes.
+Refinement runs the model over held-out splits, looks up reference pronunciations in OpenEPD, normalizes them through the `speaking` notation and syllabification layer, compares each prediction with that gold target using a broad comparison key, computes character-level edit distance on that key, writes every substantive mismatch to `discrepancies.jsonl`, and fine-tunes from the source model weights using only the mismatched lexemes.
 
 Example discrepancy:
 

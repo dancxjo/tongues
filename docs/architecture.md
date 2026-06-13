@@ -38,8 +38,7 @@ The CLI and crate layout are organized around model families rather than one mon
 
 - `g2p2g`: spelling <-> broad IPA;
 - `wiktionary`: multilingual orthography/phonology tasks;
-- `sentence-parser`: `speech::syntax::SentenceSyntaxAnalysis` scaffold;
-- `speech-manifold`: multimodal speech representation scaffold.
+- `sentence-parser`: `speaking::syntax::SentenceSyntaxAnalysis` scaffold;
 
 Each family can own its data preparation, task tags, training config, artifact metadata, and inference command while sharing common workspace infrastructure.
 
@@ -52,7 +51,7 @@ cargo run --release -- sentence-parser eval --model models/sentence-parser/v0
 cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
 ```
 
-The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speech::syntax::SentenceSyntaxAnalysis`. Its current parser backend delegates to the existing heuristic parser until a neural architecture is implemented.
+The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. Its current parser backend delegates to the existing heuristic parser until a neural architecture is implemented.
 
 ## Rule-Based Speech Helpers
 

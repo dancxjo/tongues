@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-use speech::{
+use speaking::{
     phone_display_symbol, phoneme_default_phone_display_symbol, EnglishPhonemicizer,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
     PhonemicizeRequest, Phonemicizer, PronunciationWarning, PronunciationWarningKind, ProsodyTrack,
@@ -743,7 +743,7 @@ fn boundary_intonation_marker(boundary: &SpeechBoundaryToken) -> Option<&'static
     None
 }
 
-fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
+fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
     let value = features
         .values
         .get(&FeatureId("orthography.word_index".into()))?;
@@ -783,25 +783,25 @@ fn format_phonemes_with_features(output: &PhonemicizeOutput) -> String {
         .join(" ")
 }
 
-fn token_feature_category<'a>(token: &'a speech::PhonemeToken, name: &str) -> Option<&'a str> {
+fn token_feature_category<'a>(token: &'a speaking::PhonemeToken, name: &str) -> Option<&'a str> {
     let value = token
         .features
         .values
-        .get(&speech::FeatureId(format!("phonology.{name}")))?;
+        .get(&speaking::FeatureId(format!("phonology.{name}")))?;
     match value {
-        Spec::Known(speech::FeatureValue::Category(value)) => Some(value.as_str()),
-        Spec::Known(speech::FeatureValue::Text(value)) => Some(value.as_str()),
+        Spec::Known(speaking::FeatureValue::Category(value)) => Some(value.as_str()),
+        Spec::Known(speaking::FeatureValue::Text(value)) => Some(value.as_str()),
         _ => None,
     }
 }
 
-fn token_feature_bool(token: &speech::PhonemeToken, name: &str) -> Option<bool> {
+fn token_feature_bool(token: &speaking::PhonemeToken, name: &str) -> Option<bool> {
     let value = token
         .features
         .values
-        .get(&speech::FeatureId(format!("phonology.{name}")))?;
+        .get(&speaking::FeatureId(format!("phonology.{name}")))?;
     match value {
-        Spec::Known(speech::FeatureValue::Bool(value)) => Some(*value),
+        Spec::Known(speaking::FeatureValue::Bool(value)) => Some(*value),
         _ => None,
     }
 }

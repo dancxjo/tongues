@@ -16,7 +16,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
-use speech::data::spanish;
+use speaking::data::spanish;
 use tongues_core::Vocab;
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 use unicode_normalization::UnicodeNormalization;

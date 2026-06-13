@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use speech::{
+use speaking::{
     BoundaryKind, EvidenceSource, FeatureId, FeatureValue, LinguisticVariety, PauseKind,
     PhoneInventory, PhoneToken, PhonemeInventory, PhonemeToken, ProsodicLabelKind, ProsodyTrack,
     Spec, SpeechBoundaryToken, Syllable, TerminalPunctuation, UtterancePlan, data::arpabet,
@@ -1028,13 +1028,13 @@ trait AsRefId {
     fn as_ref_id(&self) -> &str;
 }
 
-impl AsRefId for speech::PhoneId {
+impl AsRefId for speaking::PhoneId {
     fn as_ref_id(&self) -> &str {
         self.as_str()
     }
 }
 
-impl AsRefId for speech::PhonemeId {
+impl AsRefId for speaking::PhonemeId {
     fn as_ref_id(&self) -> &str {
         &self.0
     }

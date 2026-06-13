@@ -1,4 +1,4 @@
-use speech::{
+use speaking::{
     BoundaryKind, EnglishPhonemicizer, EvidenceProvenance, EvidenceSource, FeatureBundle,
     PauseKind, PhoneId, PhoneToken, PhonemeId, PhonemeToken, PhonemicizeRequest, Phonemicizer,
     ProsodicLabel, ProsodicLabelKind, ProsodyTrack, SpeakerId, Spec, SpeechBoundaryToken, StyleRef,

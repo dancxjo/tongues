@@ -33,18 +33,15 @@ use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn::tensor::{Int, Tensor};
 use burn_cuda::{Cuda, CudaDevice};
 
-use speech::data::notation::openepd::normalize_openepd_ipa;
+use speaking::data::notation::openepd::normalize_openepd_ipa;
 use tongues_core::{Vocab, BOS_ID, EOS_ID, UNK_ID};
 use tongues_data::{Lexeme, Seq2SeqExample, Task};
 use tongues_g2p2g::{
     eval_report, load_model, predict, train, train_seq2seq_examples, ModelConfig, Seq2SeqModel,
     TrainConfig,
 };
-use tongues_librispeech_asr::{LibriSpeechAsrConfig, LibriSpeechAsrTrainConfig, LibriSpeechSubset};
+use tongues_interpretation::{InterpretationConfig, InterpretationTrainConfig, LibriSpeechSubset};
 use tongues_neural::{write_manifest, ModelArtifactManifest};
-use tongues_speech_manifold::{
-    SpeechManifoldConfig, SpeechManifoldTask, SpeechManifoldTrainConfig,
-};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -61,10 +58,8 @@ const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
 const DEFAULT_G2P2G_MODEL_DIR: &str = "models/g2p2g/openepd-v0";
 const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
 const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
-const DEFAULT_LIBRISPEECH_ASR_DATA_DIR: &str = "datasets/librispeech-asr/mini-v0";
-const DEFAULT_LIBRISPEECH_ASR_MODEL_DIR: &str = "models/librispeech-asr/mini-v0";
-const DEFAULT_SPEECH_MANIFOLD_DATA_DIR: &str = "datasets/speech-manifold/openepd-synth-v0";
-const DEFAULT_SPEECH_MANIFOLD_MODEL_DIR: &str = "models/speech-manifold/openepd-synth-v0";
+const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
+const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
@@ -141,17 +136,10 @@ enum Commands {
     },
 
     /// Prepare, train, evaluate, and stream LibriSpeech ASR models
-    #[command(name = "librispeech-asr")]
-    LibriSpeechAsr {
+    #[command(name = "interpretation")]
+    Interpretation {
         #[command(subcommand)]
-        command: LibriSpeechAsrCommands,
-    },
-
-    /// Prepare, train, and probe the shared multimodal speech manifold
-    #[command(name = "speech-manifold")]
-    SpeechManifold {
-        #[command(subcommand)]
-        command: SpeechManifoldCommands,
+        command: InterpretationCommands,
     },
 
     /// Prepare English Wiktionary pronunciation data
@@ -690,99 +678,7 @@ enum SentenceParserCommands {
 }
 
 #[derive(Subcommand, Debug)]
-enum SpeechManifoldCommands {
-    /// Archive selected default artifacts and recreate empty run directories
-    Clean(CleanArgs),
-
-    /// Prepare an OpenEPD-derived multimodal dataset
-    Prepare {
-        /// TOML config file for the speech-manifold pipeline
-        #[arg(long, default_value = "configs/speech-manifold/default.toml")]
-        config: PathBuf,
-
-        /// Output directory for prepared data
-        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
-        out: PathBuf,
-    },
-
-    /// Train the speech-manifold model
-    Train {
-        /// TOML config file for the speech-manifold pipeline
-        #[arg(long, default_value = "configs/speech-manifold/default.toml")]
-        config: PathBuf,
-
-        /// Prepared data directory
-        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
-        data: PathBuf,
-
-        /// Output directory for the model
-        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
-        out: PathBuf,
-
-        /// Maximum training epochs
-        #[arg(long)]
-        epochs: Option<usize>,
-
-        /// Mini-batch size
-        #[arg(long)]
-        batch_size: Option<usize>,
-
-        /// Random seed
-        #[arg(long)]
-        seed: Option<u64>,
-    },
-
-    /// Evaluate a speech-manifold model
-    Eval {
-        /// Directory containing the model
-        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
-        model: PathBuf,
-
-        /// Prepared data directory
-        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
-        data: PathBuf,
-
-        /// Split to evaluate on: train, valid, or test
-        #[arg(long, default_value = "test")]
-        split: String,
-
-        /// Explicit task to evaluate
-        #[arg(long, default_value = "spelling-to-ipa")]
-        task: String,
-    },
-
-    /// Run inference for one explicit speech-manifold task
-    Infer {
-        /// Directory containing the model
-        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
-        model: PathBuf,
-
-        /// Explicit task, e.g. spelling-to-ipa
-        #[arg(long)]
-        task: String,
-
-        /// Input sequence
-        input: String,
-    },
-
-    /// Summarize split modalities and provenance
-    Probe {
-        /// Directory containing the model
-        #[arg(long, default_value = "models/speech-manifold/openepd-synth-v0")]
-        model: PathBuf,
-
-        /// Prepared data directory
-        #[arg(long, default_value = "datasets/speech-manifold/openepd-synth-v0")]
-        data: PathBuf,
-
-        /// Split to probe: train, valid, or test
-        #[arg(long, default_value = "test")]
-        split: String,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum LibriSpeechAsrCommands {
+enum InterpretationCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
@@ -793,7 +689,7 @@ enum LibriSpeechAsrCommands {
         subset: String,
 
         /// Output directory for prepared data
-        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "datasets/interpretation/mini-v0")]
         out: PathBuf,
 
         /// Limit utterances for smoke tests
@@ -804,11 +700,11 @@ enum LibriSpeechAsrCommands {
     /// Train the LibriSpeech ASR model
     Train {
         /// Prepared data directory
-        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "datasets/interpretation/mini-v0")]
         data: PathBuf,
 
         /// Output directory for the model
-        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "models/interpretation/mini-v0")]
         out: PathBuf,
 
         /// Maximum training epochs
@@ -827,11 +723,11 @@ enum LibriSpeechAsrCommands {
     /// Evaluate a LibriSpeech ASR model
     Eval {
         /// Directory containing the model
-        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "models/interpretation/mini-v0")]
         model: PathBuf,
 
         /// Prepared data directory
-        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "datasets/interpretation/mini-v0")]
         data: PathBuf,
 
         /// Split to evaluate: train, valid, or test
@@ -842,7 +738,7 @@ enum LibriSpeechAsrCommands {
     /// Stream raw 16 kHz mono WAV audio from a file through the ASR model
     Stream {
         /// Directory containing the model
-        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        #[arg(long, default_value = "models/interpretation/mini-v0")]
         model: PathBuf,
 
         /// WAV file to stream for v1 smoke testing
@@ -1102,11 +998,8 @@ fn main() -> Result<()> {
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
-        Commands::LibriSpeechAsr { command } => {
-            run_librispeech_asr_command(command, device_arg, output_mode)
-        }
-        Commands::SpeechManifold { command } => {
-            run_speech_manifold_command(command, device_arg, output_mode)
+        Commands::Interpretation { command } => {
+            run_interpretation_command(command, device_arg, output_mode)
         }
         Commands::Wiktionary { command } => {
             run_wiktionary_command(command, device_arg, output_mode)
@@ -1233,17 +1126,11 @@ fn command_needs_device(command: &Commands) -> bool {
                 | G2p2gCommands::Infer { .. }
                 | G2p2gCommands::Repl { .. }
         ),
-        Commands::SpeechManifold { command } => matches!(
+        Commands::Interpretation { command } => matches!(
             command,
-            SpeechManifoldCommands::Train { .. }
-                | SpeechManifoldCommands::Eval { .. }
-                | SpeechManifoldCommands::Infer { .. }
-        ),
-        Commands::LibriSpeechAsr { command } => matches!(
-            command,
-            LibriSpeechAsrCommands::Train { .. }
-                | LibriSpeechAsrCommands::Eval { .. }
-                | LibriSpeechAsrCommands::Stream { .. }
+            InterpretationCommands::Train { .. }
+                | InterpretationCommands::Eval { .. }
+                | InterpretationCommands::Stream { .. }
         ),
         Commands::SentenceParser { command } => matches!(
             command,
@@ -1266,17 +1153,14 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         Commands::G2p2g {
             command: G2p2gCommands::Infer { .. },
         }
-        | Commands::SpeechManifold {
-            command: SpeechManifoldCommands::Infer { .. },
-        }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Infer { .. },
         }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Stream { .. },
         }
-        | Commands::LibriSpeechAsr {
-            command: LibriSpeechAsrCommands::Stream { .. },
+        | Commands::Interpretation {
+            command: InterpretationCommands::Stream { .. },
         }
         | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
@@ -1440,152 +1324,12 @@ struct G2p2gTrainConfig {
     task: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SpeechManifoldFileConfig {
-    dataset_id: Option<String>,
-    train_frac: Option<f64>,
-    valid_frac: Option<f64>,
-    seed: Option<u64>,
-    tasks: Option<Vec<SpeechManifoldTask>>,
-    synthesis_backends: Option<Vec<String>>,
-    allow_placeholder_acoustics: Option<bool>,
-    max_examples: Option<usize>,
-    max_audio_examples_per_backend: Option<usize>,
-    max_espeak_examples: Option<usize>,
-    max_google_translate_examples: Option<usize>,
-    max_wiktionary_audio_examples: Option<usize>,
-    max_styletts2_examples: Option<usize>,
-    max_piper_examples: Option<usize>,
-    max_anyspeak_examples: Option<usize>,
-    max_mock_examples: Option<usize>,
-    max_wikimedia_commons_examples: Option<usize>,
-    max_wikimedia_commons_lookup_attempts: Option<usize>,
-    anyspeak_dir: Option<String>,
-    anyspeak_python: Option<String>,
-    anyspeak_voice_tags: Option<Vec<String>>,
-    include_reference_uris: Option<bool>,
-    external_audio_manifests: Option<Vec<String>>,
-    espeak_voices: Option<Vec<String>>,
-    google_translate_speeds: Option<Vec<f32>>,
-    train: Option<SpeechManifoldFileTrainConfig>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct SpeechManifoldFileTrainConfig {
-    learning_rate: Option<f64>,
-    weight_decay: Option<f32>,
-    dropout: Option<f64>,
-    epochs: Option<usize>,
-    patience: Option<usize>,
-    batch_size: Option<usize>,
-    seed: Option<u64>,
-    tasks: Option<Vec<SpeechManifoldTask>>,
-}
-
 fn read_g2p2g_config(path: &Path) -> Result<G2p2gFileConfig> {
     if !path.exists() {
         return Ok(G2p2gFileConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn read_speech_manifold_file_config(path: &Path) -> Result<SpeechManifoldFileConfig> {
-    if !path.exists() {
-        return Ok(SpeechManifoldFileConfig::default());
-    }
-    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn speech_manifold_prepare_config(path: &Path) -> Result<SpeechManifoldConfig> {
-    let file = read_speech_manifold_file_config(path)?;
-    let default = SpeechManifoldConfig::default();
-    Ok(SpeechManifoldConfig {
-        dataset_id: file.dataset_id.unwrap_or(default.dataset_id),
-        train_frac: file.train_frac.unwrap_or(default.train_frac),
-        valid_frac: file.valid_frac.unwrap_or(default.valid_frac),
-        seed: file.seed.unwrap_or(default.seed),
-        tasks: file.tasks.unwrap_or(default.tasks),
-        synthesis_backends: file
-            .synthesis_backends
-            .unwrap_or(default.synthesis_backends),
-        allow_placeholder_acoustics: file
-            .allow_placeholder_acoustics
-            .unwrap_or(default.allow_placeholder_acoustics),
-        max_examples: file.max_examples.or(default.max_examples),
-        max_audio_examples_per_backend: file
-            .max_audio_examples_per_backend
-            .unwrap_or(default.max_audio_examples_per_backend),
-        max_espeak_examples: file
-            .max_espeak_examples
-            .unwrap_or(default.max_espeak_examples),
-        max_google_translate_examples: file
-            .max_google_translate_examples
-            .unwrap_or(default.max_google_translate_examples),
-        max_wiktionary_audio_examples: file
-            .max_wiktionary_audio_examples
-            .unwrap_or(default.max_wiktionary_audio_examples),
-        max_styletts2_examples: file
-            .max_styletts2_examples
-            .unwrap_or(default.max_styletts2_examples),
-        max_piper_examples: file
-            .max_piper_examples
-            .unwrap_or(default.max_piper_examples),
-        max_anyspeak_examples: file
-            .max_anyspeak_examples
-            .unwrap_or(default.max_anyspeak_examples),
-        max_mock_examples: file.max_mock_examples.unwrap_or(default.max_mock_examples),
-        max_wikimedia_commons_examples: file
-            .max_wikimedia_commons_examples
-            .unwrap_or(default.max_wikimedia_commons_examples),
-        max_wikimedia_commons_lookup_attempts: file
-            .max_wikimedia_commons_lookup_attempts
-            .unwrap_or(default.max_wikimedia_commons_lookup_attempts),
-        anyspeak_dir: file
-            .anyspeak_dir
-            .filter(|value| !value.trim().is_empty())
-            .or(default.anyspeak_dir),
-        anyspeak_python: file.anyspeak_python.unwrap_or(default.anyspeak_python),
-        anyspeak_voice_tags: file
-            .anyspeak_voice_tags
-            .unwrap_or(default.anyspeak_voice_tags),
-        include_reference_uris: file
-            .include_reference_uris
-            .unwrap_or(default.include_reference_uris),
-        external_audio_manifests: file
-            .external_audio_manifests
-            .unwrap_or(default.external_audio_manifests),
-        espeak_voices: file.espeak_voices.unwrap_or(default.espeak_voices),
-        google_translate_speeds: file
-            .google_translate_speeds
-            .unwrap_or(default.google_translate_speeds),
-    })
-}
-
-fn speech_manifold_train_config(
-    path: &Path,
-    epochs: Option<usize>,
-    batch_size: Option<usize>,
-    seed: Option<u64>,
-) -> Result<SpeechManifoldTrainConfig> {
-    let prepare = speech_manifold_prepare_config(path)?;
-    let file = read_speech_manifold_file_config(path)?;
-    let train = file.train.unwrap_or_default();
-    let default = SpeechManifoldTrainConfig::default();
-    Ok(SpeechManifoldTrainConfig {
-        learning_rate: train.learning_rate.unwrap_or(default.learning_rate),
-        weight_decay: train.weight_decay.unwrap_or(default.weight_decay),
-        dropout: train.dropout.unwrap_or(default.dropout),
-        batch_size: batch_size
-            .or(train.batch_size)
-            .unwrap_or(default.batch_size),
-        epochs: epochs.or(train.epochs).unwrap_or(default.epochs),
-        early_stopping_patience: train.patience.unwrap_or(default.early_stopping_patience),
-        seed: seed.or(train.seed).unwrap_or(default.seed),
-        tasks: train.tasks.unwrap_or(prepare.tasks),
-        allow_placeholder_acoustics: prepare.allow_placeholder_acoustics,
-    })
 }
 
 #[derive(Debug)]
@@ -3557,19 +3301,19 @@ fn run_wiktionary_infer<B: Backend>(
     Ok(())
 }
 
-fn run_librispeech_asr_command(
-    command: LibriSpeechAsrCommands,
+fn run_interpretation_command(
+    command: InterpretationCommands,
     device_arg: DeviceArg,
     _output_mode: OutputMode,
 ) -> Result<()> {
     match command {
-        LibriSpeechAsrCommands::Clean(args) => cmd_clean_family(
-            "librispeech-asr",
+        InterpretationCommands::Clean(args) => cmd_clean_family(
+            "interpretation",
             &args,
-            DEFAULT_LIBRISPEECH_ASR_DATA_DIR,
-            DEFAULT_LIBRISPEECH_ASR_MODEL_DIR,
+            DEFAULT_INTERPRETATION_DATA_DIR,
+            DEFAULT_INTERPRETATION_MODEL_DIR,
         ),
-        LibriSpeechAsrCommands::Prepare {
+        InterpretationCommands::Prepare {
             subset,
             out,
             max_utterances,
@@ -3579,21 +3323,21 @@ fn run_librispeech_asr_command(
                     "invalid LibriSpeech subset `{subset}`; supported: mini, train-clean-100"
                 )
             })?;
-            let mut config = LibriSpeechAsrConfig {
+            let mut config = InterpretationConfig {
                 subset,
                 dataset_id: subset.dataset_id().to_string(),
                 download_url: subset.archive_url().to_string(),
-                ..LibriSpeechAsrConfig::default()
+                ..InterpretationConfig::default()
             };
             config.max_utterances = max_utterances;
             let pb = status_spinner(format!(
                 "Preparing LibriSpeech ASR dataset at {}",
                 out.display()
             ));
-            let report = tongues_librispeech_asr::prepare_dataset_with_progress(&out, &config, {
+            let report = tongues_interpretation::prepare_dataset_with_progress(&out, &config, {
                 let pb = pb.clone();
                 move |progress| {
-                    pb.set_message(librispeech_prepare_progress_message(progress));
+                    pb.set_message(interpretation_prepare_progress_message(progress));
                 }
             })?;
             finish_status(
@@ -3608,7 +3352,7 @@ fn run_librispeech_asr_command(
             );
             Ok(())
         }
-        LibriSpeechAsrCommands::Train {
+        InterpretationCommands::Train {
             data,
             out,
             epochs,
@@ -3622,18 +3366,20 @@ fn run_librispeech_asr_command(
                 || !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
             {
-                let config = LibriSpeechAsrConfig::default();
+                let config = InterpretationConfig::default();
                 let pb = status_spinner(format!(
                     "Training data missing; preparing LibriSpeech ASR dataset at {}",
                     data.display()
                 ));
-                tongues_librispeech_asr::prepare_dataset_with_progress(&data, &config, {
+                tongues_interpretation::prepare_dataset_with_progress(&data, &config, {
                     let pb = pb.clone();
-                    move |progress| pb.set_message(librispeech_prepare_progress_message(progress))
+                    move |progress| {
+                        pb.set_message(interpretation_prepare_progress_message(progress))
+                    }
                 })?;
                 finish_status(pb, format!("Prepared {}", data.display()));
             }
-            let mut train_config = LibriSpeechAsrTrainConfig::default();
+            let mut train_config = InterpretationTrainConfig::default();
             if let Some(epochs) = epochs {
                 train_config.epochs = epochs;
             }
@@ -3643,23 +3389,23 @@ fn run_librispeech_asr_command(
             if let Some(seed) = seed {
                 train_config.seed = seed;
             }
-            cmd_librispeech_asr_train(&data, &out, &train_config, device_arg)
+            cmd_interpretation_train(&data, &out, &train_config, device_arg)
         }
-        LibriSpeechAsrCommands::Eval { model, data, split } => {
-            cmd_librispeech_asr_eval(&model, &data, &split, device_arg)
+        InterpretationCommands::Eval { model, data, split } => {
+            cmd_interpretation_eval(&model, &data, &split, device_arg)
         }
-        LibriSpeechAsrCommands::Stream { model, wav } => {
-            cmd_librispeech_asr_stream(&model, &wav, device_arg)
+        InterpretationCommands::Stream { model, wav } => {
+            cmd_interpretation_stream(&model, &wav, device_arg)
         }
     }
 }
 
-fn librispeech_prepare_progress_message(
-    progress: tongues_librispeech_asr::PrepareProgress,
+fn interpretation_prepare_progress_message(
+    progress: tongues_interpretation::PrepareProgress,
 ) -> String {
     match progress {
-        tongues_librispeech_asr::PrepareProgress::Stage { message } => message,
-        tongues_librispeech_asr::PrepareProgress::Download { url, path, bytes } => {
+        tongues_interpretation::PrepareProgress::Stage { message } => message,
+        tongues_interpretation::PrepareProgress::Download { url, path, bytes } => {
             format!(
                 "Downloading {} to {} ({} bytes)",
                 url,
@@ -3667,13 +3413,13 @@ fn librispeech_prepare_progress_message(
                 format_count(bytes)
             )
         }
-        tongues_librispeech_asr::PrepareProgress::Extract { path } => {
+        tongues_interpretation::PrepareProgress::Extract { path } => {
             format!("Extracting {}", path)
         }
-        tongues_librispeech_asr::PrepareProgress::Parse { transcripts } => {
+        tongues_interpretation::PrepareProgress::Parse { transcripts } => {
             format!("Parsed {} transcript rows", format_count(transcripts))
         }
-        tongues_librispeech_asr::PrepareProgress::Features {
+        tongues_interpretation::PrepareProgress::Features {
             utterance_id,
             rows,
             path,
@@ -3683,7 +3429,7 @@ fn librispeech_prepare_progress_message(
             utterance_id,
             path
         ),
-        tongues_librispeech_asr::PrepareProgress::Reuse {
+        tongues_interpretation::PrepareProgress::Reuse {
             utterance_id,
             rows,
             path,
@@ -3693,16 +3439,16 @@ fn librispeech_prepare_progress_message(
             utterance_id,
             path
         ),
-        tongues_librispeech_asr::PrepareProgress::Write { path, rows } => {
+        tongues_interpretation::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {}", format_count(rows), path)
         }
     }
 }
 
-fn cmd_librispeech_asr_train(
+fn cmd_interpretation_train(
     data: &Path,
     out: &Path,
-    train_config: &LibriSpeechAsrTrainConfig,
+    train_config: &InterpretationTrainConfig,
     device_arg: DeviceArg,
 ) -> Result<()> {
     let pb = status_spinner(format!(
@@ -3717,8 +3463,8 @@ fn cmd_librispeech_asr_train(
     let syntax_link_vocab: Vocab = read_json_file(&data.join("syntax_link_vocab.json"))?;
     let syntax_head_offset_vocab: Vocab =
         read_json_file(&data.join("syntax_head_offset_vocab.json"))?;
-    let train_rows = tongues_librispeech_asr::read_examples(&data.join("train.jsonl"))?;
-    let valid_rows = tongues_librispeech_asr::read_examples(&data.join("valid.jsonl"))?;
+    let train_rows = tongues_interpretation::read_examples(&data.join("train.jsonl"))?;
+    let valid_rows = tongues_interpretation::read_examples(&data.join("valid.jsonl"))?;
     finish_status(
         pb,
         format!(
@@ -3735,8 +3481,8 @@ fn cmd_librispeech_asr_train(
         ),
     );
     fs::create_dir_all(out).context("creating LibriSpeech ASR model directory")?;
-    let model_config = tongues_librispeech_asr::ModelConfig::new(
-        tongues_librispeech_asr::DEFAULT_MEL_BINS,
+    let model_config = tongues_interpretation::ModelConfig::new(
+        tongues_interpretation::DEFAULT_MEL_BINS,
         vocab.size(),
         phoneme_vocab.size(),
         phone_vocab.size(),
@@ -3746,7 +3492,7 @@ fn cmd_librispeech_asr_train(
     .with_syntax_link_vocab_size(syntax_link_vocab.size())
     .with_syntax_head_offset_vocab_size(syntax_head_offset_vocab.size())
     .with_dropout(train_config.dropout);
-    tongues_librispeech_asr::save_artifact_files(out, data, &model_config, train_config)?;
+    tongues_interpretation::save_artifact_files(out, data, &model_config, train_config)?;
     println!("LibriSpeech ASR checkpoint paths:");
     println!("  train_state: {}", out.join("train_state.json").display());
     println!(
@@ -3774,7 +3520,7 @@ fn cmd_librispeech_asr_train(
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
             let mut rng = StdRng::seed_from_u64(train_config.seed);
-            tongues_librispeech_asr::train::<CpuTrainBackend, _>(
+            tongues_interpretation::train::<CpuTrainBackend, _>(
                 &model_config,
                 train_config,
                 data,
@@ -3795,7 +3541,7 @@ fn cmd_librispeech_asr_train(
         DeviceArg::Cuda => {
             let device = CudaDevice::default();
             let mut rng = StdRng::seed_from_u64(train_config.seed);
-            tongues_librispeech_asr::train::<CudaTrainBackend, _>(
+            tongues_interpretation::train::<CudaTrainBackend, _>(
                 &model_config,
                 train_config,
                 data,
@@ -3821,7 +3567,7 @@ fn cmd_librispeech_asr_train(
     Ok(())
 }
 
-fn cmd_librispeech_asr_eval(
+fn cmd_interpretation_eval(
     model_dir: &Path,
     data: &Path,
     split: &str,
@@ -3835,20 +3581,20 @@ fn cmd_librispeech_asr_eval(
     let syntax_link_vocab: Vocab = read_json_file(&model_dir.join("syntax_link_vocab.json"))?;
     let syntax_head_offset_vocab: Vocab =
         read_json_file(&model_dir.join("syntax_head_offset_vocab.json"))?;
-    let model_config: tongues_librispeech_asr::ModelConfig =
+    let model_config: tongues_interpretation::ModelConfig =
         read_json_file(&model_dir.join("model_config.json"))?;
-    let train_config: LibriSpeechAsrTrainConfig =
+    let train_config: InterpretationTrainConfig =
         read_json_file(&model_dir.join("train_config.json"))?;
-    let rows = tongues_librispeech_asr::read_examples(&data.join(format!("{split}.jsonl")))?;
+    let rows = tongues_interpretation::read_examples(&data.join(format!("{split}.jsonl")))?;
     match device_arg {
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
-            let model = tongues_librispeech_asr::load_model::<CpuInferBackend>(
+            let model = tongues_interpretation::load_model::<CpuInferBackend>(
                 &model_config,
                 model_dir,
                 &device,
             )?;
-            let report = tongues_librispeech_asr::evaluate(
+            let report = tongues_interpretation::evaluate(
                 &model,
                 data,
                 &rows,
@@ -3866,12 +3612,12 @@ fn cmd_librispeech_asr_eval(
         }
         DeviceArg::Cuda => {
             let device = CudaDevice::default();
-            let model = tongues_librispeech_asr::load_model::<CudaInferBackend>(
+            let model = tongues_interpretation::load_model::<CudaInferBackend>(
                 &model_config,
                 model_dir,
                 &device,
             )?;
-            let report = tongues_librispeech_asr::evaluate(
+            let report = tongues_interpretation::evaluate(
                 &model,
                 data,
                 &rows,
@@ -3891,23 +3637,23 @@ fn cmd_librispeech_asr_eval(
     Ok(())
 }
 
-fn cmd_librispeech_asr_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg) -> Result<()> {
+fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg) -> Result<()> {
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
     let phoneme_vocab: Vocab = read_json_file(&model_dir.join("phoneme_vocab.json"))?;
     let word_vocab: Vocab = read_json_file(&model_dir.join("word_vocab.json"))?;
-    let model_config: tongues_librispeech_asr::ModelConfig =
+    let model_config: tongues_interpretation::ModelConfig =
         read_json_file(&model_dir.join("model_config.json"))?;
-    let config = LibriSpeechAsrConfig::default();
+    let config = InterpretationConfig::default();
     let samples = read_wav_mono_16k(wav)?;
     match device_arg {
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
-            let model = tongues_librispeech_asr::load_model::<CpuInferBackend>(
+            let model = tongues_interpretation::load_model::<CpuInferBackend>(
                 &model_config,
                 model_dir,
                 &device,
             )?;
-            let event = tongues_librispeech_asr::stream_from_samples(
+            let event = tongues_interpretation::stream_from_samples(
                 &model,
                 &samples,
                 &vocab,
@@ -3920,12 +3666,12 @@ fn cmd_librispeech_asr_stream(model_dir: &Path, wav: &Path, device_arg: DeviceAr
         }
         DeviceArg::Cuda => {
             let device = CudaDevice::default();
-            let model = tongues_librispeech_asr::load_model::<CudaInferBackend>(
+            let model = tongues_interpretation::load_model::<CudaInferBackend>(
                 &model_config,
                 model_dir,
                 &device,
             )?;
-            let event = tongues_librispeech_asr::stream_from_samples(
+            let event = tongues_interpretation::stream_from_samples(
                 &model,
                 &samples,
                 &vocab,
@@ -3979,241 +3725,6 @@ fn read_wav_mono_16k(path: &Path) -> Result<Vec<f32>> {
     Ok(out)
 }
 
-fn run_speech_manifold_command(
-    command: SpeechManifoldCommands,
-    device_arg: DeviceArg,
-    output_mode: OutputMode,
-) -> Result<()> {
-    match command {
-        SpeechManifoldCommands::Clean(args) => cmd_clean_family(
-            "speech-manifold",
-            &args,
-            DEFAULT_SPEECH_MANIFOLD_DATA_DIR,
-            DEFAULT_SPEECH_MANIFOLD_MODEL_DIR,
-        ),
-        SpeechManifoldCommands::Prepare { config, out } => {
-            let config = speech_manifold_prepare_config(&config)?;
-            tongues_speech_manifold::prepare_dataset(&out, &config)?;
-            println!("Speech-manifold dataset written to {}", out.display());
-            Ok(())
-        }
-        SpeechManifoldCommands::Train {
-            config,
-            data,
-            out,
-            epochs,
-            batch_size,
-            seed,
-        } => {
-            if !data.join("vocab.json").exists()
-                || !data.join("train.jsonl").exists()
-                || !data.join("valid.jsonl").exists()
-            {
-                let prepare = speech_manifold_prepare_config(&config)?;
-                let pb = status_spinner(format!(
-                    "Training data missing; preparing speech-manifold dataset at {}",
-                    data.display()
-                ));
-                tongues_speech_manifold::prepare_dataset(&data, &prepare)?;
-                finish_status(
-                    pb,
-                    format!("Prepared speech-manifold dataset at {}", data.display()),
-                );
-            }
-            let train_config = speech_manifold_train_config(&config, epochs, batch_size, seed)?;
-            cmd_speech_manifold_train(&data, &out, &train_config, device_arg)
-        }
-        SpeechManifoldCommands::Eval {
-            model,
-            data,
-            split,
-            task,
-        } => {
-            let task = parse_speech_manifold_task(&task)?;
-            cmd_speech_manifold_eval(&model, &data, &split, task, device_arg)
-        }
-        SpeechManifoldCommands::Infer { model, task, input } => {
-            let task = parse_speech_manifold_task(&task)?;
-            cmd_speech_manifold_infer(&model, task, &input, device_arg, output_mode)
-        }
-        SpeechManifoldCommands::Probe { model, data, split } => {
-            let _manifest =
-                tongues_neural::read_manifest(&model.join(tongues_neural::ARTIFACT_MANIFEST_FILE))
-                    .with_context(|| format!("reading manifest in {}", model.display()))?;
-            let train_config: SpeechManifoldTrainConfig =
-                read_json_file(&model.join("train_config.json"))?;
-            let examples =
-                tongues_speech_manifold::read_examples(&data.join(format!("{split}.jsonl")))?;
-            let report = tongues_speech_manifold::probe(&split, &examples, &train_config.tasks);
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            Ok(())
-        }
-    }
-}
-
-fn parse_speech_manifold_task(task: &str) -> Result<SpeechManifoldTask> {
-    SpeechManifoldTask::parse(task).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid speech-manifold task `{}`; supported: spelling-to-ipa, ipa-to-spelling, ipa-to-phones, stress, syllables, acoustic-to-ipa, ipa-to-acoustic",
-            task
-        )
-    })
-}
-
-fn cmd_speech_manifold_train(
-    data: &Path,
-    out: &Path,
-    train_config: &SpeechManifoldTrainConfig,
-    device_arg: DeviceArg,
-) -> Result<()> {
-    let pb = status_spinner(format!(
-        "Loading speech-manifold data from {}",
-        data.display()
-    ));
-    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
-    let train_examples = tongues_speech_manifold::read_examples(&data.join("train.jsonl"))?;
-    let valid_examples = tongues_speech_manifold::read_examples(&data.join("valid.jsonl"))?;
-    finish_status(
-        pb,
-        format!(
-            "Loaded {} train / {} valid examples with vocab size {}",
-            format_count(train_examples.len()),
-            format_count(valid_examples.len()),
-            format_count(vocab.size())
-        ),
-    );
-    fs::create_dir_all(out).context("creating speech-manifold model directory")?;
-    let model_config = ModelConfig::new(vocab.size()).with_dropout(train_config.dropout);
-    let pb = status_spinner(format!(
-        "Writing speech-manifold artifact files to {}",
-        out.display()
-    ));
-    tongues_speech_manifold::save_artifact_files(out, data, &model_config, train_config)?;
-    finish_status(pb, format!("Wrote artifact files to {}", out.display()));
-    let model_path = out.join("model");
-    match device_arg {
-        DeviceArg::Cpu => {
-            let device = NdArrayDevice::Cpu;
-            let mut rng = StdRng::seed_from_u64(train_config.seed);
-            tongues_speech_manifold::train::<CpuTrainBackend, _>(
-                &model_config,
-                train_config,
-                &train_examples,
-                &valid_examples,
-                &vocab,
-                &model_path,
-                &device,
-                &mut rng,
-            )?;
-        }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            let mut rng = StdRng::seed_from_u64(train_config.seed);
-            tongues_speech_manifold::train::<CudaTrainBackend, _>(
-                &model_config,
-                train_config,
-                &train_examples,
-                &valid_examples,
-                &vocab,
-                &model_path,
-                &device,
-                &mut rng,
-            )?;
-        }
-    }
-    println!("Speech-manifold model saved to {}", out.display());
-    Ok(())
-}
-
-fn cmd_speech_manifold_eval(
-    model_dir: &Path,
-    data: &Path,
-    split: &str,
-    task: SpeechManifoldTask,
-    device_arg: DeviceArg,
-) -> Result<()> {
-    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
-    let train_config: SpeechManifoldTrainConfig =
-        read_json_file(&model_dir.join("train_config.json"))?;
-    let examples = tongues_speech_manifold::read_examples(&data.join(format!("{split}.jsonl")))?;
-    match device_arg {
-        DeviceArg::Cpu => {
-            let device = NdArrayDevice::Cpu;
-            let model = tongues_speech_manifold::load_model::<CpuInferBackend>(
-                &model_config,
-                model_dir,
-                &device,
-            )?;
-            let report = tongues_speech_manifold::evaluate(
-                &model,
-                &examples,
-                &vocab,
-                task,
-                train_config.allow_placeholder_acoustics,
-                &device,
-            );
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            let model = tongues_speech_manifold::load_model::<CudaInferBackend>(
-                &model_config,
-                model_dir,
-                &device,
-            )?;
-            let report = tongues_speech_manifold::evaluate(
-                &model,
-                &examples,
-                &vocab,
-                task,
-                train_config.allow_placeholder_acoustics,
-                &device,
-            );
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-    }
-    Ok(())
-}
-
-fn cmd_speech_manifold_infer(
-    model_dir: &Path,
-    task: SpeechManifoldTask,
-    input: &str,
-    device_arg: DeviceArg,
-    _output_mode: OutputMode,
-) -> Result<()> {
-    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
-    match device_arg {
-        DeviceArg::Cpu => {
-            let device = NdArrayDevice::Cpu;
-            let model = tongues_speech_manifold::load_model::<CpuInferBackend>(
-                &model_config,
-                model_dir,
-                &device,
-            )?;
-            println!(
-                "{}",
-                tongues_speech_manifold::predict(&model, input, task, &vocab, &device)
-            );
-        }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            let model = tongues_speech_manifold::load_model::<CudaInferBackend>(
-                &model_config,
-                model_dir,
-                &device,
-            )?;
-            println!(
-                "{}",
-                tongues_speech_manifold::predict(&model, input, task, &vocab, &device)
-            );
-        }
-    }
-    Ok(())
-}
-
 fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
@@ -4255,7 +3766,7 @@ fn read_jsonl_as<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
 }
 
 fn cmd_phonemes(text: &str) -> Result<()> {
-    use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
     let phonemicizer = EnglishPhonemicizer;
     let phonemicized = phonemicizer
@@ -4266,7 +3777,7 @@ fn cmd_phonemes(text: &str) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
 
-    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
     for syllable in phonemicized.syllables.iter() {
         if let Some(first_phone) = syllable.phones.first() {
             if let Some(word_idx) = token_word_index(&first_phone.features) {
@@ -4298,7 +3809,7 @@ fn cmd_phonemes(text: &str) -> Result<()> {
 }
 
 fn cmd_phones(text: &str) -> Result<()> {
-    use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 
     let phonemicizer = EnglishPhonemicizer;
     let phonemicized = phonemicizer
@@ -4309,7 +3820,7 @@ fn cmd_phones(text: &str) -> Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
 
-    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
     for syllable in phonemicized.syllables.iter() {
         if let Some(first_phone) = syllable.phones.first() {
             if let Some(word_idx) = token_word_index(&first_phone.features) {
@@ -4337,16 +3848,16 @@ fn cmd_phones(text: &str) -> Result<()> {
 }
 
 fn find_phoneme_for_phone(
-    phone: &speech::PhoneToken,
-    phonemes: &[speech::PhonemeToken],
-) -> Option<speech::PhonemeId> {
+    phone: &speaking::PhoneToken,
+    phonemes: &[speaking::PhonemeToken],
+) -> Option<speaking::PhonemeId> {
     for phoneme_token in phonemes {
         for realized_phone in &phoneme_token.realized_as {
             if realized_phone.phone == phone.phone
                 && realized_phone.features == phone.features
                 && realized_phone.span == phone.span
             {
-                if let speech::Spec::Known(ref id) = phoneme_token.phoneme {
+                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
                     return Some(id.clone());
                 }
             }
@@ -4355,9 +3866,9 @@ fn find_phoneme_for_phone(
     None
 }
 
-fn phone_ipa(phone: &speech::PhoneToken) -> &str {
+fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
     match &phone.phone {
-        speech::Spec::Known(id) => id
+        speaking::Spec::Known(id) => id
             .as_str()
             .strip_prefix("ipa.phone.")
             .unwrap_or(id.as_str()),
@@ -4366,9 +3877,9 @@ fn phone_ipa(phone: &speech::PhoneToken) -> &str {
 }
 
 fn syllables_to_phonemes_ipa(
-    syllables: &[speech::Syllable],
-    phonemes: &[speech::PhonemeToken],
-    variety: &speech::VarietyId,
+    syllables: &[speaking::Syllable],
+    phonemes: &[speaking::PhonemeToken],
+    variety: &speaking::VarietyId,
 ) -> String {
     syllables
         .iter()
@@ -4377,11 +3888,11 @@ fn syllables_to_phonemes_ipa(
             let mut text = String::new();
             let mut has_stress_mark = false;
             let stress_char = match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => {
+                speaking::Spec::Known(speaking::Stress::Primary) => {
                     has_stress_mark = true;
                     Some('ˈ')
                 }
-                speech::Spec::Known(speech::Stress::Secondary) => {
+                speaking::Spec::Known(speaking::Stress::Secondary) => {
                     has_stress_mark = true;
                     Some('ˌ')
                 }
@@ -4396,7 +3907,8 @@ fn syllables_to_phonemes_ipa(
             }
             for phone in &syllable.phones {
                 if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
-                    let symbol = speech::phoneme_default_phone_display_symbol(&phoneme_id, variety);
+                    let symbol =
+                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
                     text.push_str(&symbol);
                 } else {
                     text.push_str(phone_ipa(phone));
@@ -4407,7 +3919,7 @@ fn syllables_to_phonemes_ipa(
         .collect()
 }
 
-fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
+fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
     syllables
         .iter()
         .enumerate()
@@ -4415,11 +3927,11 @@ fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
             let mut text = String::new();
             let mut has_stress_mark = false;
             let stress_char = match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => {
+                speaking::Spec::Known(speaking::Stress::Primary) => {
                     has_stress_mark = true;
                     Some('ˈ')
                 }
-                speech::Spec::Known(speech::Stress::Secondary) => {
+                speaking::Spec::Known(speaking::Stress::Secondary) => {
                     has_stress_mark = true;
                     Some('ˌ')
                 }
@@ -4440,12 +3952,12 @@ fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
         .collect()
 }
 
-fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
+fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
     let value = features
         .values
-        .get(&speech::FeatureId("orthography.word_index".into()))?;
+        .get(&speaking::FeatureId("orthography.word_index".into()))?;
     match value {
-        speech::Spec::Known(speech::FeatureValue::Number(value))
+        speaking::Spec::Known(speaking::FeatureValue::Number(value))
             if value.is_finite() && *value >= 0.0 =>
         {
             Some(*value as usize)
@@ -6772,28 +6284,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_speech_manifold_commands() {
-        let cli = Cli::try_parse_from([
-            "tongues",
-            "speech-manifold",
-            "infer",
-            "--model",
-            "models/speech-manifold/openepd-synth-v0",
-            "--task",
-            "spelling-to-ipa",
-            "tires",
-        ])
-        .expect("speech-manifold infer should parse");
-
-        assert!(matches!(
-            cli.command,
-            Some(Commands::SpeechManifold {
-                command: SpeechManifoldCommands::Infer { .. }
-            })
-        ));
-    }
-
-    #[test]
     fn cli_accepts_wiktionary_family_commands() {
         let cli = Cli::try_parse_from([
             "tongues",
@@ -6848,15 +6338,6 @@ mod tests {
             cli.command,
             Some(Commands::SentenceParser {
                 command: SentenceParserCommands::Clean(_)
-            })
-        ));
-
-        let cli = Cli::try_parse_from(["tongues", "speech-manifold", "clean", "--model"])
-            .expect("speech-manifold clean should parse");
-        assert!(matches!(
-            cli.command,
-            Some(Commands::SpeechManifold {
-                command: SpeechManifoldCommands::Clean(_)
             })
         ));
 

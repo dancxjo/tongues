@@ -1,0 +1,18 @@
+[package]
+name = "speaking"
+version = "0.1.0"
+edition = "2024"
+description = "Backend-free linguistic and acoustic speaking ontology"
+
+[lints.rust]
+warnings = "allow"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+dirs = "6"
+whisper-cpp-plus = { workspace = true, optional = true }
+
+[features]
+default = []
+asr-whisper = ["dep:whisper-cpp-plus"]

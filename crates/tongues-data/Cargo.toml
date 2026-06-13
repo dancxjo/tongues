@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tongues-core = { path = "../tongues-core" }
-speech = { path = "../speech" }
+speaking = { path = "../speaking" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }

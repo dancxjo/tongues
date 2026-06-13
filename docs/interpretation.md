@@ -1,24 +1,24 @@
-# LibriSpeech ASR
+# Interpretation
 
-`librispeech-asr` is an utterance-level streaming ASR model family. It prepares
+`interpretation` is an utterance-level streaming ASR model family. It prepares
 LibriSpeech FLAC/transcript pairs into durable log-Mel features, enriches each
 transcript with `seams` sentence boundaries, and phonemicizes each detected
-sentence with the `speech` crate.
+sentence with the `speaking` crate.
 
 ## Prepare
 
 ```sh
-just librispeech-asr prepare \
+just interpretation prepare \
   --subset mini \
-  --out datasets/librispeech-asr/mini-v0
+  --out datasets/interpretation/mini-v0
 ```
 
 For the larger baseline:
 
 ```sh
-just librispeech-asr prepare \
+just interpretation prepare \
   --subset train-clean-100 \
-  --out datasets/librispeech-asr/train-clean-100-v0
+  --out datasets/interpretation/train-clean-100-v0
 ```
 
 The prepare step downloads the selected OpenSLR archive, extracts transcripts
@@ -51,9 +51,9 @@ loss is skipped for that sentence.
 ## Train
 
 ```sh
-just librispeech-asr train \
-  --data datasets/librispeech-asr/mini-v0 \
-  --out models/librispeech-asr/mini-v0 \
+just interpretation train \
+  --data datasets/interpretation/mini-v0 \
+  --out models/interpretation/mini-v0 \
   --epochs 20 \
   --batch-size 8
 ```
@@ -89,9 +89,9 @@ greedy-collapse decoding. The artifact architecture records this as
 ## Eval
 
 ```sh
-just librispeech-asr eval \
-  --model models/librispeech-asr/mini-v0 \
-  --data datasets/librispeech-asr/mini-v0 \
+just interpretation eval \
+  --model models/interpretation/mini-v0 \
+  --data datasets/interpretation/mini-v0 \
   --split test
 ```
 
@@ -103,8 +103,8 @@ masked-word accuracy, and masked-word phoneme token error rate.
 ## Stream
 
 ```sh
-just librispeech-asr stream \
-  --model models/librispeech-asr/mini-v0 \
+just interpretation stream \
+  --model models/interpretation/mini-v0 \
   --wav /path/to/mono-16khz.wav
 ```
 

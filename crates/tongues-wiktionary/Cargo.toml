@@ -9,7 +9,7 @@ bzip2 = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-speech = { path = "../speech" }
+speaking = { path = "../speaking" }
 toml = { workspace = true }
 tongues-core = { path = "../tongues-core" }
 tongues-neural = { path = "../tongues-neural" }

@@ -112,12 +112,12 @@ mmm M
             dirs::data_local_dir()?.join("mortar-sea")
         };
 
-        let mut base_path = home.join("models/speech/en-us/cmudict.dict");
-        let mut vp_path = home.join("models/speech/en-us/cmudict.vp");
+        let mut base_path = home.join("models/speaking/en-us/cmudict.dict");
+        let mut vp_path = home.join("models/speaking/en-us/cmudict.vp");
 
         if !base_path.exists() {
-            base_path = home.join("models/speech/en-us/cmudict-0.7b");
-            vp_path = home.join("models/speech/en-us/cmudict-0.7b.vp");
+            base_path = home.join("models/speaking/en-us/cmudict-0.7b");
+            vp_path = home.join("models/speaking/en-us/cmudict-0.7b.vp");
         }
 
         if base_path.exists() {

@@ -23,20 +23,20 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
-use speech::data::notation::openepd::render_openepd_phonemes;
-use speech::segment::TerminalPunctuation;
-use speech::syntax::{
+use speaking::data::notation::openepd::render_openepd_phonemes;
+use speaking::segment::TerminalPunctuation;
+use speaking::syntax::{
     HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
     SyntacticLinkKind,
 };
-use speech::{
+use speaking::{
     EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack, SpeechBoundaryToken,
     Syllable, VarietyId,
 };
 use tongues_core::Vocab;
 use tongues_neural::{make_recorder, write_manifest, ModelArtifactManifest, TrainState};
 
-pub const FAMILY: &str = "librispeech-asr";
+pub const FAMILY: &str = "interpretation";
 pub const ARCHITECTURE: &str = "streaming-mel-native-ctc";
 pub const DEFAULT_DATASET_ID: &str = "librispeech-mini-v0";
 pub const DEFAULT_SAMPLE_RATE_HZ: u32 = 16_000;
@@ -80,7 +80,7 @@ impl LibriSpeechSubset {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LibriSpeechAsrConfig {
+pub struct InterpretationConfig {
     pub dataset_id: String,
     pub subset: LibriSpeechSubset,
     pub train_frac: f64,
@@ -95,7 +95,7 @@ pub struct LibriSpeechAsrConfig {
     pub download_url: String,
 }
 
-impl Default for LibriSpeechAsrConfig {
+impl Default for InterpretationConfig {
     fn default() -> Self {
         let subset = LibriSpeechSubset::Mini;
         Self {
@@ -116,7 +116,7 @@ impl Default for LibriSpeechAsrConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LibriSpeechAsrTrainConfig {
+pub struct InterpretationTrainConfig {
     pub learning_rate: f64,
     pub weight_decay: f32,
     pub dropout: f64,
@@ -202,7 +202,7 @@ fn default_mask_span_frames() -> usize {
     3
 }
 
-impl Default for LibriSpeechAsrTrainConfig {
+impl Default for InterpretationTrainConfig {
     fn default() -> Self {
         Self {
             learning_rate: 3e-4,
@@ -416,12 +416,12 @@ pub struct SentenceSupervision {
     pub terminal: Option<char>,
     pub phonemes: String,
     pub phones: String,
-    pub phoneme_tokens: Vec<speech::PhonemeToken>,
-    pub phone_tokens: Vec<speech::PhoneToken>,
+    pub phoneme_tokens: Vec<speaking::PhonemeToken>,
+    pub phone_tokens: Vec<speaking::PhoneToken>,
     pub syllables: Vec<Syllable>,
     pub boundaries: Vec<SpeechBoundaryToken>,
     pub prosody: ProsodyTrack,
-    pub warnings: Vec<speech::PronunciationWarning>,
+    pub warnings: Vec<speaking::PronunciationWarning>,
     #[serde(default)]
     pub syntax: SyntaxSupervision,
 }
@@ -530,13 +530,13 @@ pub struct WordPrediction {
     pub phonemes: Option<String>,
 }
 
-pub fn prepare_dataset(out: &Path, config: &LibriSpeechAsrConfig) -> Result<PrepareReport> {
+pub fn prepare_dataset(out: &Path, config: &InterpretationConfig) -> Result<PrepareReport> {
     prepare_dataset_with_progress(out, config, |_| {})
 }
 
 pub fn prepare_dataset_with_progress(
     out: &Path,
-    config: &LibriSpeechAsrConfig,
+    config: &InterpretationConfig,
     mut progress: impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -746,7 +746,7 @@ fn row_has_syntax(row: &LibriSpeechUtterance) -> bool {
 fn enrich_row_supervision(
     row: &mut LibriSpeechUtterance,
     detector: &SentenceDetectorDialog,
-    config: &LibriSpeechAsrConfig,
+    config: &InterpretationConfig,
 ) -> Result<()> {
     row.sentences = sentence_supervision(detector, &row.transcript, row.num_frames, config)?;
     row.repair_examples = repair_supervision(&row.sentences);
@@ -884,7 +884,7 @@ pub fn normalize_librispeech_text(text: &str) -> String {
         .join(" ")
 }
 
-pub fn log_mel_features(samples: &[f32], config: &LibriSpeechAsrConfig) -> Vec<Vec<f32>> {
+pub fn log_mel_features(samples: &[f32], config: &InterpretationConfig) -> Vec<Vec<f32>> {
     let window = ((config.sample_rate_hz as f32 * config.window_ms) / 1000.0).round() as usize;
     let hop = ((config.sample_rate_hz as f32 * config.hop_ms) / 1000.0).round() as usize;
     if samples.len() < window || window == 0 || hop == 0 {
@@ -996,7 +996,7 @@ fn sentence_supervision(
     detector: &SentenceDetectorDialog,
     transcript: &str,
     num_frames: usize,
-    config: &LibriSpeechAsrConfig,
+    config: &InterpretationConfig,
 ) -> Result<Vec<SentenceSupervision>> {
     let detected = detector
         .detect_sentences_borrowed(transcript)
@@ -1212,11 +1212,11 @@ fn syntax_phrase_boundary(
         )
 }
 
-fn phones_string(phones: &[speech::PhoneToken]) -> String {
+fn phones_string(phones: &[speaking::PhoneToken]) -> String {
     phones
         .iter()
         .filter_map(|token| match &token.phone {
-            speech::Spec::Known(id) => Some(
+            speaking::Spec::Known(id) => Some(
                 id.as_str()
                     .rsplit('.')
                     .next()
@@ -1452,7 +1452,7 @@ pub fn read_examples(path: &Path) -> Result<Vec<LibriSpeechUtterance>> {
 fn recover_utterance_rows(
     path: &Path,
     data_dir: &Path,
-    config: &LibriSpeechAsrConfig,
+    config: &InterpretationConfig,
 ) -> Result<Vec<LibriSpeechUtterance>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -1653,7 +1653,7 @@ pub fn save_artifact_files(
     out: &Path,
     data: &Path,
     model_config: &ModelConfig,
-    train_config: &LibriSpeechAsrTrainConfig,
+    train_config: &InterpretationTrainConfig,
 ) -> Result<()> {
     fs::create_dir_all(out)?;
     fs::copy(data.join("vocab.json"), out.join("vocab.json"))?;
@@ -1707,7 +1707,7 @@ where
 
 pub fn train<B: AutodiffBackend, R: Rng>(
     model_config: &ModelConfig,
-    train_config: &LibriSpeechAsrTrainConfig,
+    train_config: &InterpretationTrainConfig,
     data_dir: &Path,
     train_rows: &[LibriSpeechUtterance],
     valid_rows: &[LibriSpeechUtterance],
@@ -1836,7 +1836,7 @@ where
 fn train_epoch<B: AutodiffBackend, R: Rng>(
     model: &mut AsrModel<B>,
     optimizer: &mut impl Optimizer<AsrModel<B>, B>,
-    config: &LibriSpeechAsrTrainConfig,
+    config: &InterpretationTrainConfig,
     data_dir: &Path,
     rows: &[LibriSpeechUtterance],
     vocab: &Vocab,
@@ -1923,7 +1923,7 @@ fn make_batch<B: Backend>(
     syntax_pos_vocab: &Vocab,
     syntax_link_vocab: &Vocab,
     syntax_head_offset_vocab: &Vocab,
-    config: &LibriSpeechAsrTrainConfig,
+    config: &InterpretationTrainConfig,
     device: &B::Device,
 ) -> Result<AsrBatch<B>> {
     let max_frames = rows
@@ -2106,7 +2106,7 @@ fn make_batch<B: Backend>(
 fn weighted_loss<B: Backend>(
     output: AsrForward<B>,
     batch: AsrBatch<B>,
-    config: &LibriSpeechAsrTrainConfig,
+    config: &InterpretationTrainConfig,
 ) -> Tensor<B, 1> {
     let transcript_loss = ce_loss(output.transcript_logits, batch.transcript_labels, 0);
     let boundary_loss = ce_loss(output.boundary_logits, batch.boundary_labels, usize::MAX);
@@ -2215,7 +2215,7 @@ fn mse_loss<B: Backend>(predicted: Tensor<B, 3>, target: Tensor<B, 3>) -> Tensor
     (diff.clone() * diff).mean()
 }
 
-fn frame_is_masked(frame: usize, config: &LibriSpeechAsrTrainConfig) -> bool {
+fn frame_is_masked(frame: usize, config: &InterpretationTrainConfig) -> bool {
     let every = config.mask_every_n_frames.max(1);
     let span = config.mask_span_frames.min(every).max(1);
     frame % every < span
@@ -2224,7 +2224,7 @@ fn frame_is_masked(frame: usize, config: &LibriSpeechAsrTrainConfig) -> bool {
 fn frame_is_word_masked(
     row: &LibriSpeechUtterance,
     frame: usize,
-    config: &LibriSpeechAsrTrainConfig,
+    config: &InterpretationTrainConfig,
 ) -> bool {
     if config.word_mask_rate <= 0.0 {
         return false;
@@ -2472,7 +2472,7 @@ pub fn evaluate<B: Backend>(
     syntax_pos_vocab: &Vocab,
     syntax_link_vocab: &Vocab,
     syntax_head_offset_vocab: &Vocab,
-    config: &LibriSpeechAsrTrainConfig,
+    config: &InterpretationTrainConfig,
     device: &B::Device,
 ) -> Result<EvalReport> {
     let eval_rows = rows.iter().take(100).cloned().collect::<Vec<_>>();
@@ -2741,7 +2741,7 @@ pub fn stream_from_samples<B: Backend>(
     vocab: &Vocab,
     word_vocab: &Vocab,
     phoneme_vocab: &Vocab,
-    config: &LibriSpeechAsrConfig,
+    config: &InterpretationConfig,
     device: &B::Device,
 ) -> Result<StreamEvent> {
     let features = log_mel_features(samples, config);
@@ -2816,9 +2816,9 @@ fn edit_distance<T: Eq>(left: &[T], right: &[T]) -> usize {
     dp[right.len()]
 }
 
-fn dataset_readme(config: &LibriSpeechAsrConfig) -> String {
+fn dataset_readme(config: &InterpretationConfig) -> String {
     format!(
-        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\n\nPrepared by `tongues librispeech-asr prepare`. Rows contain FLAC provenance, durable log-Mel feature paths, seams sentence labels, and speech phonemicizer supervision.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
+        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable log-Mel feature paths, seams sentence labels, and speech phonemicizer supervision.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
         config.dataset_id, config.subset
     )
 }
@@ -2835,7 +2835,7 @@ mod tests {
 
     #[test]
     fn mel_shape_is_stable() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let samples = vec![0.0; 16_000];
         let mel = log_mel_features(&samples, &cfg);
         assert!(!mel.is_empty());
@@ -2910,7 +2910,7 @@ mod tests {
 
     #[test]
     fn sentence_supervision_includes_phonemes() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let rows = sentence_supervision(&detector, "HELLO WORLD.", 100, &cfg).unwrap();
         assert_eq!(rows.len(), 1);
@@ -2925,7 +2925,7 @@ mod tests {
 
     #[test]
     fn repair_supervision_generates_mishear_correction() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let rows = sentence_supervision(&detector, "I WENT TO TOWN.", 100, &cfg).unwrap();
         let repairs = repair_supervision(&rows);
@@ -2937,7 +2937,7 @@ mod tests {
 
     #[test]
     fn phone_vocab_uses_sentence_phone_strings() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let sentences = sentence_supervision(&detector, "HELLO WORLD.", 100, &cfg).unwrap();
         let word_supervision = word_supervision(&sentences);
@@ -2962,7 +2962,7 @@ mod tests {
 
     #[test]
     fn word_supervision_tracks_context_words() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let sentences = sentence_supervision(&detector, "ONE TWO THREE FOUR.", 120, &cfg).unwrap();
         let words = word_supervision(&sentences);
@@ -2975,7 +2975,7 @@ mod tests {
 
     #[test]
     fn masked_word_examples_choose_non_edge_word() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let sentences = sentence_supervision(&detector, "ONE TWO THREE FOUR.", 120, &cfg).unwrap();
         let words = word_supervision(&sentences);
@@ -3032,7 +3032,7 @@ mod tests {
 
     #[test]
     fn syntax_vocabs_and_labels_include_parser_targets() {
-        let cfg = LibriSpeechAsrConfig::default();
+        let cfg = InterpretationConfig::default();
         let detector = SentenceDetectorDialog::new().unwrap();
         let mut row = LibriSpeechUtterance {
             utterance_id: "u".into(),
@@ -3074,10 +3074,10 @@ mod tests {
 
     #[test]
     fn masking_marks_configured_frame_spans() {
-        let config = LibriSpeechAsrTrainConfig {
+        let config = InterpretationTrainConfig {
             mask_every_n_frames: 5,
             mask_span_frames: 2,
-            ..LibriSpeechAsrTrainConfig::default()
+            ..InterpretationTrainConfig::default()
         };
         assert!(frame_is_masked(0, &config));
         assert!(frame_is_masked(1, &config));
@@ -3087,7 +3087,7 @@ mod tests {
 
     #[test]
     fn mel_file_round_trips() {
-        let dir = Path::new("target/librispeech-asr-tests");
+        let dir = Path::new("target/interpretation-tests");
         fs::create_dir_all(dir).unwrap();
         let path = dir.join("roundtrip.mel.bin");
         let rows = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
@@ -3100,7 +3100,7 @@ mod tests {
 
     #[test]
     fn recovery_keeps_only_rows_with_valid_mel_files() {
-        let dir = Path::new("target/librispeech-asr-tests/recovery");
+        let dir = Path::new("target/interpretation-tests/recovery");
         let _ = fs::remove_dir_all(dir);
         fs::create_dir_all(dir.join("features")).unwrap();
         let good_mel = dir.join("features/good.mel.bin");
@@ -3122,9 +3122,9 @@ mod tests {
         )
         .unwrap();
 
-        let config = LibriSpeechAsrConfig {
+        let config = InterpretationConfig {
             mel_bins: 3,
-            ..LibriSpeechAsrConfig::default()
+            ..InterpretationConfig::default()
         };
         let rows = recover_utterance_rows(&rows_path, dir, &config).unwrap();
         assert_eq!(rows, vec![good]);
@@ -3138,7 +3138,7 @@ mod tests {
             audio_path: "audio.flac".to_string(),
             mel_path: mel_path.to_string(),
             num_frames: frames,
-            sample_rate_hz: LibriSpeechAsrConfig::default().sample_rate_hz,
+            sample_rate_hz: InterpretationConfig::default().sample_rate_hz,
             duration_ms: 100,
             transcript: "HELLO".to_string(),
             sentences: Vec::new(),

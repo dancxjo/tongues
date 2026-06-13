@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use speech::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────
@@ -75,12 +75,12 @@ pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
     if phonemicized
         .warnings
         .iter()
-        .any(|w| w.kind == speech::PronunciationWarningKind::GuessedWord)
+        .any(|w| w.kind == speaking::PronunciationWarningKind::GuessedWord)
     {
         return None;
     }
 
-    let mut words: Vec<(usize, Vec<speech::Syllable>)> = Vec::new();
+    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
     for syllable in phonemicized.syllables.iter() {
         if let Some(first_phone) = syllable.phones.first() {
             if let Some(word_idx) = token_word_index(&first_phone.features) {
@@ -167,16 +167,16 @@ pub fn phonemicize_lexemes(base_words: Vec<String>) -> Vec<Lexeme> {
 // ── Speech Crate IPA Formatter Helpers ─────────────────────────────────────
 
 fn find_phoneme_for_phone(
-    phone: &speech::PhoneToken,
-    phonemes: &[speech::PhonemeToken],
-) -> Option<speech::PhonemeId> {
+    phone: &speaking::PhoneToken,
+    phonemes: &[speaking::PhonemeToken],
+) -> Option<speaking::PhonemeId> {
     for phoneme_token in phonemes {
         for realized_phone in &phoneme_token.realized_as {
             if realized_phone.phone == phone.phone
                 && realized_phone.features == phone.features
                 && realized_phone.span == phone.span
             {
-                if let speech::Spec::Known(ref id) = phoneme_token.phoneme {
+                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
                     return Some(id.clone());
                 }
             }
@@ -185,9 +185,9 @@ fn find_phoneme_for_phone(
     None
 }
 
-fn phone_ipa(phone: &speech::PhoneToken) -> &str {
+fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
     match &phone.phone {
-        speech::Spec::Known(id) => id
+        speaking::Spec::Known(id) => id
             .as_str()
             .strip_prefix("ipa.phone.")
             .unwrap_or(id.as_str()),
@@ -196,9 +196,9 @@ fn phone_ipa(phone: &speech::PhoneToken) -> &str {
 }
 
 fn syllables_to_phonemes_ipa(
-    syllables: &[speech::Syllable],
-    phonemes: &[speech::PhonemeToken],
-    variety: &speech::VarietyId,
+    syllables: &[speaking::Syllable],
+    phonemes: &[speaking::PhonemeToken],
+    variety: &speaking::VarietyId,
 ) -> String {
     syllables
         .iter()
@@ -207,11 +207,11 @@ fn syllables_to_phonemes_ipa(
             let mut text = String::new();
             let mut has_stress_mark = false;
             let stress_char = match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => {
+                speaking::Spec::Known(speaking::Stress::Primary) => {
                     has_stress_mark = true;
                     Some('ˈ')
                 }
-                speech::Spec::Known(speech::Stress::Secondary) => {
+                speaking::Spec::Known(speaking::Stress::Secondary) => {
                     has_stress_mark = true;
                     Some('ˌ')
                 }
@@ -226,7 +226,8 @@ fn syllables_to_phonemes_ipa(
             }
             for phone in &syllable.phones {
                 if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
-                    let symbol = speech::phoneme_default_phone_display_symbol(&phoneme_id, variety);
+                    let symbol =
+                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
                     text.push_str(&symbol);
                 } else {
                     text.push_str(phone_ipa(phone));
@@ -237,7 +238,7 @@ fn syllables_to_phonemes_ipa(
         .collect()
 }
 
-fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
+fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
     syllables
         .iter()
         .enumerate()
@@ -245,11 +246,11 @@ fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
             let mut text = String::new();
             let mut has_stress_mark = false;
             let stress_char = match syllable.stress {
-                speech::Spec::Known(speech::Stress::Primary) => {
+                speaking::Spec::Known(speaking::Stress::Primary) => {
                     has_stress_mark = true;
                     Some('ˈ')
                 }
-                speech::Spec::Known(speech::Stress::Secondary) => {
+                speaking::Spec::Known(speaking::Stress::Secondary) => {
                     has_stress_mark = true;
                     Some('ˌ')
                 }
@@ -270,12 +271,12 @@ fn syllables_to_ipa_formatted(syllables: &[speech::Syllable]) -> String {
         .collect()
 }
 
-fn token_word_index(features: &speech::FeatureBundle) -> Option<usize> {
+fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
     let value = features
         .values
-        .get(&speech::FeatureId("orthography.word_index".into()))?;
+        .get(&speaking::FeatureId("orthography.word_index".into()))?;
     match value {
-        speech::Spec::Known(speech::FeatureValue::Number(value))
+        speaking::Spec::Known(speaking::FeatureValue::Number(value))
             if value.is_finite() && *value >= 0.0 =>
         {
             Some(*value as usize)

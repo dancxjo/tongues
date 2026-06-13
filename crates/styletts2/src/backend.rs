@@ -1,4 +1,4 @@
-use speech::{TerminalPunctuation, Utterance};
+use speaking::{TerminalPunctuation, Utterance};
 use thiserror::Error;
 
 use crate::config::StyleTts2ConfigError;

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use speech::{TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId};
+use speaking::{TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId};
 
 use crate::backend::StyleTts2Error;
 use crate::symbols::{

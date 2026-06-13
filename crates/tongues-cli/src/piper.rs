@@ -7,7 +7,7 @@ use ort::session::{builder::GraphOptimizationLevel, Session};
 #[cfg(feature = "piper-onnx")]
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 use serde_json::Value;
-use speech::{
+use speaking::{
     FeatureId, FeatureValue, PauseKind, PhoneToken, PhonemeToken, ProsodicLabelKind, Spec,
     SpeechBoundaryToken, TerminalPunctuation, UtterancePlan,
 };
@@ -297,7 +297,7 @@ fn piper_symbol_for_phoneme(token: &PhonemeToken) -> Option<String> {
     piper_arpabet_symbol_from_features(&token.features)
 }
 
-fn piper_arpabet_symbol_from_features(features: &speech::FeatureBundle) -> Option<String> {
+fn piper_arpabet_symbol_from_features(features: &speaking::FeatureBundle) -> Option<String> {
     let base = feature_category(features, "phonology.base_symbol")?;
     if !is_piper_arpabet_symbol(base) {
         return None;
@@ -1158,7 +1158,10 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
     Some(output)
 }
 
-fn feature_category<'a>(features: &'a speech::FeatureBundle, feature_id: &str) -> Option<&'a str> {
+fn feature_category<'a>(
+    features: &'a speaking::FeatureBundle,
+    feature_id: &str,
+) -> Option<&'a str> {
     let value = features.values.get(&FeatureId(feature_id.into()))?;
     match value {
         Spec::Known(FeatureValue::Category(val)) | Spec::Known(FeatureValue::Text(val)) => {

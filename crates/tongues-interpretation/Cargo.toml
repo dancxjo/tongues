@@ -1,22 +1,21 @@
 [package]
-name = "tongues-speech-manifold"
+name = "tongues-interpretation"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
 burn = { workspace = true }
+claxon = "0.4"
+flate2 = "1"
+hound = { workspace = true }
 indicatif = { workspace = true }
 rand = { workspace = true }
+seams = "0.1.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-speech = { path = "../speech" }
-thiserror = { workspace = true }
-tts-urls = "1.0.0"
-hound = { workspace = true }
+speaking = { path = "../speaking" }
+tar = "0.4"
 tongues-core = { path = "../tongues-core" }
-tongues-data = { path = "../tongues-data" }
-tongues-g2p2g = { path = "../tongues-g2p2g" }
 tongues-neural = { path = "../tongues-neural" }
 ureq = { workspace = true }
-open-english-pronouncing-dictionary = "0.1.0"

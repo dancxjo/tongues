@@ -11,7 +11,7 @@ use ort::session::{
     builder::{GraphOptimizationLevel, SessionBuilder},
 };
 use ort::value::{DynTensorValueType, Tensor};
-use speech::{StyleRef, StyleSource};
+use speaking::{StyleRef, StyleSource};
 
 use crate::backend::{
     StyleTts2AudioChunk, StyleTts2AudioSink, StyleTts2Backend, StyleTts2Error,

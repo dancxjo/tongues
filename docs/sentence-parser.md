@@ -92,4 +92,4 @@ cursor   = "Kennedy?"
 target   = "<boundary:repair>Who shot John F. Kennedy?"
 ```
 
-The legacy `sentence-parser parse` command still emits the existing rule-based `speech::syntax::SentenceSyntaxAnalysis` shape for compatibility.
+The legacy `sentence-parser parse` command still emits the existing rule-based `speaking::syntax::SentenceSyntaxAnalysis` shape for compatibility.

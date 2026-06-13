@@ -21,10 +21,8 @@ Tongues is also evolving into a broader speech research toolkit containing model
 - grapheme <-> phonology translation;
 - multilingual pronunciation modeling;
 - sentence parsing;
-- multimodal speech representations;
 - future TTS and ASR front-end work.
 
-The codebase is organized around model families (`g2p2g`, `wiktionary`, `sentence-parser`, `speech-manifold`) that share common infrastructure while remaining independently trainable.
 
 ## Features
 
@@ -34,7 +32,7 @@ The codebase is organized around model families (`g2p2g`, `wiktionary`, `sentenc
 - Spelling-to-phoneme and phoneme-to-spelling inference.
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
-- Rule-based phonemicization and realization helpers in the local `speech` crate.
+- Rule-based phonemicization and realization helpers in the local `speaking` crate.
 - Experimental StyleTTS2/Piper-adjacent speech plumbing.
 
 ## Quick Start
@@ -69,8 +67,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
 - [Sentence parser](docs/sentence-parser.md)
-- [LibriSpeech ASR](docs/librispeech-asr.md)
-- [Speech manifold](docs/speech-manifold.md)
+- [Interpretation](docs/interpretation.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
 - [Examples](docs/examples.md)
@@ -84,11 +81,10 @@ crates/tongues-data              lexicon parsing, IPA normalization, splits, col
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
-crates/tongues-librispeech-asr   utterance-level Mel ASR with sentence/phoneme supervision
-crates/tongues-speech-manifold   multimodal speech-manifold data/model family
+crates/tongues-interpretation   utterance-level Mel ASR with sentence/phoneme supervision
 crates/tongues-sentence-parser   cursor-boundary data and model-family code
 crates/tongues-cli               command-line routing and model/data wiring
-crates/speech                    rule-based phonemicization and realization pipeline
+crates/speaking                  rule-based phonemicization, realization, and ASR runtime pipeline
 crates/styletts2                 StyleTTS2 symbol lowering and backend experiments
 
 configs/                         default family config files
@@ -136,11 +132,8 @@ just sentence-parser clean --all
 | `g2p2g` | spelling <-> broad IPA | active |
 | `wiktionary` | multilingual orthography/phonology | active |
 | `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
-| `speech-manifold` | multimodal speech representations | experimental |
 
 Legacy verb-first commands still work for now, but the active CLI shape is model-family first: `tongues g2p2g ...`, `tongues wiktionary ...`, and so on.
-
-## Roadmap
 
 Current focus:
 
@@ -155,7 +148,6 @@ Planned work:
 - sentence boundary detection;
 - streaming text chunk repair;
 - prosody prediction;
-- multimodal speech representations;
 - ASR/TTS integration.
 
 ## Why This Exists

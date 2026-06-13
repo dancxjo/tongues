@@ -9,7 +9,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 seams = "0.1.2"
-speech = { path = "../speech" }
+speaking = { path = "../speaking" }
 thiserror = { workspace = true }
 tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }

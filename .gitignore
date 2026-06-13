@@ -29,13 +29,11 @@ target/
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/train_state.json
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/vocab.json
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/wiktionary_config.json
-/datasets/speech-manifold/*/audio/
 /archive/
 *.bin.gz
 Cargo.lock
 target_verify/
-speech/src/data/lexicons/cmudict.dict
-crates/speech/src/data/lexicons/cmudict.dict
+crates/speaking/src/data/lexicons/cmudict.dict
 datasets/wiktionary/*
 
 # Prepared dataset payloads that are expensive or rebuildable. Keep compact
@@ -48,6 +46,5 @@ datasets/wiktionary/*
 /datasets/**/source/
 /datasets/**/source.part/
 /datasets/**/features/
-datasets/librispeech-asr/mini-v0/.extract-complete
-datasets/librispeech-asr/mini-v0/utterances.jsonl
-datasets/librispeech-asr/mini-v0/utterances.jsonl
+datasets/interpretation/mini-v0/.extract-complete
+datasets/interpretation/mini-v0/utterances.jsonl

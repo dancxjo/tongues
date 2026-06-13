@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use speech::{ProsodyTrack, SpeakerId, StyleRef, UtterancePlan};
+use speaking::{ProsodyTrack, SpeakerId, StyleRef, UtterancePlan};
 
 use crate::plan::{BackendSynthesisPlan, StyleTts2PlanOptions, prepare_styletts2_plan};
 use crate::symbols::styletts2_en_us_symbol_set;

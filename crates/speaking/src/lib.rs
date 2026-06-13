@@ -5,6 +5,7 @@
 //! leaking backend-specific concepts into the core ontology.
 
 pub mod acoustics;
+pub mod asr;
 pub mod data;
 pub mod evidence;
 pub mod feature;
@@ -22,11 +23,17 @@ pub mod spec;
 pub mod streaming;
 pub mod syllabify;
 pub mod syntax;
+pub mod text_stability;
 pub mod time;
+pub mod transcript;
 pub mod utterance;
 pub mod variety;
+#[cfg(feature = "asr-whisper")]
+pub mod whisper;
+pub mod word_stream;
 
 pub use acoustics::*;
+pub use asr::*;
 pub use data::*;
 pub use evidence::*;
 pub use feature::*;
@@ -44,9 +51,14 @@ pub use spec::*;
 pub use streaming::*;
 pub use syllabify::*;
 pub use syntax::*;
+pub use text_stability::*;
 pub use time::*;
+pub use transcript::*;
 pub use utterance::*;
 pub use variety::*;
+#[cfg(feature = "asr-whisper")]
+pub use whisper::*;
+pub use word_stream::*;
 
 #[cfg(test)]
 mod tests {

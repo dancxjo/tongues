@@ -4,12 +4,11 @@ members = [
     "crates/tongues-data",
     "crates/tongues-neural",
     "crates/tongues-g2p2g",
-    "crates/tongues-librispeech-asr",
-    "crates/tongues-speech-manifold",
+    "crates/tongues-interpretation",
     "crates/tongues-sentence-parser",
     "crates/tongues-wiktionary",
     "crates/tongues-cli",
-    "crates/speech",
+    "crates/speaking",
     "crates/styletts2",
     "xtask",
 ]
@@ -36,3 +35,4 @@ indicatif = "0.17"
 toml = "0.8"
 bzip2 = "0.4"
 unicode-normalization = "0.1"
+whisper-cpp-plus = { version = "0.1.4", default-features = false }
