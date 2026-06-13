@@ -40,6 +40,14 @@ Rows also include word-level supervision and deterministic masked-word cloze
 examples for predicting previous/current/next words and reconstructing a hidden
 word plus phonemes.
 
+Each sentence is also enriched with the built-in link-grammar parser output.
+`syntax` contains parser words, POS-like tags, typed link labels, linked word
+indices, relative head offsets, parse rank/cost, confidence weight, phrase-ish
+boundary hints, and the raw serializable syntax analysis. Training adds low
+weight auxiliary heads for POS, link label, head offset, parse acceptability,
+and phrase boundary labels; failed parses leave syntax labels padded so syntax
+loss is skipped for that sentence.
+
 ## Train
 
 ```sh

@@ -48,3 +48,6 @@ datasets/wiktionary/*
 /datasets/**/source/
 /datasets/**/source.part/
 /datasets/**/features/
+datasets/librispeech-asr/mini-v0/.extract-complete
+datasets/librispeech-asr/mini-v0/utterances.jsonl
+datasets/librispeech-asr/mini-v0/utterances.jsonl

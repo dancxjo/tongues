@@ -3713,18 +3713,25 @@ fn cmd_librispeech_asr_train(
     let phoneme_vocab: Vocab = read_json_file(&data.join("phoneme_vocab.json"))?;
     let phone_vocab: Vocab = read_json_file(&data.join("phone_vocab.json"))?;
     let word_vocab: Vocab = read_json_file(&data.join("word_vocab.json"))?;
+    let syntax_pos_vocab: Vocab = read_json_file(&data.join("syntax_pos_vocab.json"))?;
+    let syntax_link_vocab: Vocab = read_json_file(&data.join("syntax_link_vocab.json"))?;
+    let syntax_head_offset_vocab: Vocab =
+        read_json_file(&data.join("syntax_head_offset_vocab.json"))?;
     let train_rows = tongues_librispeech_asr::read_examples(&data.join("train.jsonl"))?;
     let valid_rows = tongues_librispeech_asr::read_examples(&data.join("valid.jsonl"))?;
     finish_status(
         pb,
         format!(
-            "Loaded {} train / {} valid utterances, vocab={} phoneme_vocab={} phone_vocab={} word_vocab={}",
+            "Loaded {} train / {} valid utterances, vocab={} phoneme_vocab={} phone_vocab={} word_vocab={} syntax_pos_vocab={} syntax_link_vocab={} syntax_head_offset_vocab={}",
             format_count(train_rows.len()),
             format_count(valid_rows.len()),
             format_count(vocab.size()),
             format_count(phoneme_vocab.size()),
             format_count(phone_vocab.size()),
-            format_count(word_vocab.size())
+            format_count(word_vocab.size()),
+            format_count(syntax_pos_vocab.size()),
+            format_count(syntax_link_vocab.size()),
+            format_count(syntax_head_offset_vocab.size())
         ),
     );
     fs::create_dir_all(out).context("creating LibriSpeech ASR model directory")?;
@@ -3735,6 +3742,9 @@ fn cmd_librispeech_asr_train(
         phone_vocab.size(),
         word_vocab.size(),
     )
+    .with_syntax_pos_vocab_size(syntax_pos_vocab.size())
+    .with_syntax_link_vocab_size(syntax_link_vocab.size())
+    .with_syntax_head_offset_vocab_size(syntax_head_offset_vocab.size())
     .with_dropout(train_config.dropout);
     tongues_librispeech_asr::save_artifact_files(out, data, &model_config, train_config)?;
     println!("LibriSpeech ASR checkpoint paths:");
@@ -3745,7 +3755,7 @@ fn cmd_librispeech_asr_train(
     );
     println!("  best model: {}", out.join("model.bin").display());
     println!(
-        "  loss weights: transcript={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} masked_audio={}",
+        "  loss weights: transcript={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} syntax={} masked_audio={}",
         train_config.transcript_loss_weight,
         train_config.boundary_loss_weight,
         train_config.repair_loss_weight,
@@ -3756,6 +3766,7 @@ fn cmd_librispeech_asr_train(
         train_config.next_word_loss_weight,
         train_config.masked_word_loss_weight,
         train_config.masked_word_phoneme_loss_weight,
+        train_config.syntax_loss_weight,
         train_config.masked_audio_loss_weight
     );
     let model_path = out.join("model");
@@ -3773,6 +3784,9 @@ fn cmd_librispeech_asr_train(
                 &phoneme_vocab,
                 &phone_vocab,
                 &word_vocab,
+                &syntax_pos_vocab,
+                &syntax_link_vocab,
+                &syntax_head_offset_vocab,
                 &model_path,
                 &device,
                 &mut rng,
@@ -3791,6 +3805,9 @@ fn cmd_librispeech_asr_train(
                 &phoneme_vocab,
                 &phone_vocab,
                 &word_vocab,
+                &syntax_pos_vocab,
+                &syntax_link_vocab,
+                &syntax_head_offset_vocab,
                 &model_path,
                 &device,
                 &mut rng,
@@ -3814,6 +3831,10 @@ fn cmd_librispeech_asr_eval(
     let phoneme_vocab: Vocab = read_json_file(&model_dir.join("phoneme_vocab.json"))?;
     let phone_vocab: Vocab = read_json_file(&model_dir.join("phone_vocab.json"))?;
     let word_vocab: Vocab = read_json_file(&model_dir.join("word_vocab.json"))?;
+    let syntax_pos_vocab: Vocab = read_json_file(&model_dir.join("syntax_pos_vocab.json"))?;
+    let syntax_link_vocab: Vocab = read_json_file(&model_dir.join("syntax_link_vocab.json"))?;
+    let syntax_head_offset_vocab: Vocab =
+        read_json_file(&model_dir.join("syntax_head_offset_vocab.json"))?;
     let model_config: tongues_librispeech_asr::ModelConfig =
         read_json_file(&model_dir.join("model_config.json"))?;
     let train_config: LibriSpeechAsrTrainConfig =
@@ -3835,6 +3856,9 @@ fn cmd_librispeech_asr_eval(
                 &phoneme_vocab,
                 &phone_vocab,
                 &word_vocab,
+                &syntax_pos_vocab,
+                &syntax_link_vocab,
+                &syntax_head_offset_vocab,
                 &train_config,
                 &device,
             )?;
@@ -3855,6 +3879,9 @@ fn cmd_librispeech_asr_eval(
                 &phoneme_vocab,
                 &phone_vocab,
                 &word_vocab,
+                &syntax_pos_vocab,
+                &syntax_link_vocab,
+                &syntax_head_offset_vocab,
                 &train_config,
                 &device,
             )?;

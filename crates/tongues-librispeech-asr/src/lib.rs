@@ -23,12 +23,12 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
+use speech::data::notation::openepd::render_openepd_phonemes;
 use speech::segment::TerminalPunctuation;
 use speech::syntax::{
     HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
     SyntacticLinkKind,
 };
-use speech::data::notation::openepd::render_openepd_phonemes;
 use speech::{
     EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack, SpeechBoundaryToken,
     Syllable, VarietyId,
@@ -593,6 +593,14 @@ pub fn prepare_dataset_with_progress(
     let utterances_path = out.join("utterances.jsonl");
     let mut rows = recover_utterance_rows(&utterances_path, out, config)?;
     rows.retain(|row| selected_ids.contains(&row.utterance_id));
+    for row in &mut rows {
+        if !row_has_syntax(row) {
+            progress(PrepareProgress::Stage {
+                message: format!("Enriching recovered syntax for {}", row.utterance_id),
+            });
+            enrich_row_supervision(row, &detector, config)?;
+        }
+    }
     if utterances_path.exists() {
         write_jsonl_atomic(&utterances_path, &rows, &mut progress)?;
     }
@@ -727,6 +735,24 @@ pub fn prepare_dataset_with_progress(
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
+}
+
+fn row_has_syntax(row: &LibriSpeechUtterance) -> bool {
+    row.sentences
+        .iter()
+        .any(|sentence| !sentence.syntax.words.is_empty() || !sentence.syntax.links.is_empty())
+}
+
+fn enrich_row_supervision(
+    row: &mut LibriSpeechUtterance,
+    detector: &SentenceDetectorDialog,
+    config: &LibriSpeechAsrConfig,
+) -> Result<()> {
+    row.sentences = sentence_supervision(detector, &row.transcript, row.num_frames, config)?;
+    row.repair_examples = repair_supervision(&row.sentences);
+    row.word_supervision = word_supervision(&row.sentences);
+    row.masked_word_examples = masked_word_examples(&row.word_supervision, &row.transcript);
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1088,7 +1114,10 @@ fn syntax_supervision(
         .iter()
         .enumerate()
         .map(|(index, word)| {
-            let token = analysis.tokens.iter().find(|token| token.word_index == index);
+            let token = analysis
+                .tokens
+                .iter()
+                .find(|token| token.word_index == index);
             let mut link_labels = token
                 .map(|token| {
                     token
@@ -1107,8 +1136,13 @@ fn syntax_supervision(
                     .filter(|link| link.left == index || link.right == index)
                     .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
             });
-            let linked_word_index = primary_link
-                .map(|link| if link.left == index { link.right } else { link.left });
+            let linked_word_index = primary_link.map(|link| {
+                if link.left == index {
+                    link.right
+                } else {
+                    link.left
+                }
+            });
             let head_offset = linked_word_index
                 .map(|linked| linked as i32 - index as i32)
                 .unwrap_or(0);
@@ -1124,7 +1158,11 @@ fn syntax_supervision(
                 link_labels,
                 linked_word_index,
                 head_offset,
-                phrase_boundary: syntax_phrase_boundary(index, words.len(), primary_link.map(|l| l.kind)),
+                phrase_boundary: syntax_phrase_boundary(
+                    index,
+                    words.len(),
+                    primary_link.map(|l| l.kind),
+                ),
             }
         })
         .collect();
@@ -1156,7 +1194,11 @@ fn syntax_link_label(kind: SyntacticLinkKind) -> String {
     format!("{kind:?}").to_ascii_lowercase()
 }
 
-fn syntax_phrase_boundary(index: usize, words: usize, link_kind: Option<SyntacticLinkKind>) -> bool {
+fn syntax_phrase_boundary(
+    index: usize,
+    words: usize,
+    link_kind: Option<SyntacticLinkKind>,
+) -> bool {
     index + 1 == words
         || matches!(
             link_kind,
@@ -1532,6 +1574,81 @@ pub fn build_word_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
     }
 }
 
+pub fn build_syntax_pos_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
+    let mut tokens = vec!["<PAD>".to_string(), "unknown".to_string()];
+    let mut set = BTreeSet::new();
+    for row in rows {
+        for sentence in &row.sentences {
+            for word in &sentence.syntax.words {
+                set.insert(word.pos.clone());
+            }
+        }
+    }
+    tokens.extend(set);
+    let token_to_id = tokens
+        .iter()
+        .enumerate()
+        .map(|(idx, token)| (token.clone(), idx as u32))
+        .collect();
+    Vocab {
+        tokens,
+        token_to_id,
+    }
+}
+
+pub fn build_syntax_link_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
+    let mut tokens = vec!["<PAD>".to_string(), "none".to_string()];
+    let mut set = BTreeSet::new();
+    for row in rows {
+        for sentence in &row.sentences {
+            for word in &sentence.syntax.words {
+                set.insert(word.primary_link_label.clone());
+                set.extend(word.link_labels.iter().cloned());
+            }
+            for link in &sentence.syntax.links {
+                set.insert(link.label.clone());
+            }
+        }
+    }
+    tokens.extend(set);
+    let token_to_id = tokens
+        .iter()
+        .enumerate()
+        .map(|(idx, token)| (token.clone(), idx as u32))
+        .collect();
+    Vocab {
+        tokens,
+        token_to_id,
+    }
+}
+
+pub fn build_syntax_head_offset_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
+    let mut tokens = vec!["<PAD>".to_string()];
+    let mut set = BTreeSet::new();
+    set.insert("0".to_string());
+    for row in rows {
+        for sentence in &row.sentences {
+            for word in &sentence.syntax.words {
+                set.insert(syntax_head_offset_label(word.head_offset));
+            }
+        }
+    }
+    tokens.extend(set);
+    let token_to_id = tokens
+        .iter()
+        .enumerate()
+        .map(|(idx, token)| (token.clone(), idx as u32))
+        .collect();
+    Vocab {
+        tokens,
+        token_to_id,
+    }
+}
+
+fn syntax_head_offset_label(offset: i32) -> String {
+    offset.clamp(-7, 7).to_string()
+}
+
 pub fn save_artifact_files(
     out: &Path,
     data: &Path,
@@ -1546,6 +1663,18 @@ pub fn save_artifact_files(
     )?;
     fs::copy(data.join("phone_vocab.json"), out.join("phone_vocab.json"))?;
     fs::copy(data.join("word_vocab.json"), out.join("word_vocab.json"))?;
+    fs::copy(
+        data.join("syntax_pos_vocab.json"),
+        out.join("syntax_pos_vocab.json"),
+    )?;
+    fs::copy(
+        data.join("syntax_link_vocab.json"),
+        out.join("syntax_link_vocab.json"),
+    )?;
+    fs::copy(
+        data.join("syntax_head_offset_vocab.json"),
+        out.join("syntax_head_offset_vocab.json"),
+    )?;
     fs::write(
         out.join("model_config.json"),
         serde_json::to_string_pretty(model_config)?,
@@ -1586,6 +1715,9 @@ pub fn train<B: AutodiffBackend, R: Rng>(
     phoneme_vocab: &Vocab,
     phone_vocab: &Vocab,
     word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
     model_path: &Path,
     device: &B::Device,
     rng: &mut R,
@@ -1635,6 +1767,9 @@ where
             phoneme_vocab,
             phone_vocab,
             word_vocab,
+            syntax_pos_vocab,
+            syntax_link_vocab,
+            syntax_head_offset_vocab,
             device,
             rng,
             epoch,
@@ -1648,6 +1783,9 @@ where
             phoneme_vocab,
             phone_vocab,
             word_vocab,
+            syntax_pos_vocab,
+            syntax_link_vocab,
+            syntax_head_offset_vocab,
             train_config,
             device,
         )?;
@@ -1705,6 +1843,9 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     phoneme_vocab: &Vocab,
     phone_vocab: &Vocab,
     word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
     device: &B::Device,
     rng: &mut R,
     epoch: usize,
@@ -1727,6 +1868,9 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
             phoneme_vocab,
             phone_vocab,
             word_vocab,
+            syntax_pos_vocab,
+            syntax_link_vocab,
+            syntax_head_offset_vocab,
             config,
             device,
         )?;
@@ -1762,6 +1906,11 @@ struct AsrBatch<B: Backend> {
     masked_word_target_lengths: Tensor<B, 1, Int>,
     masked_word_phoneme_targets: Tensor<B, 2, Int>,
     masked_word_phoneme_target_lengths: Tensor<B, 1, Int>,
+    syntax_pos_labels: Tensor<B, 2, Int>,
+    syntax_link_labels: Tensor<B, 2, Int>,
+    syntax_head_offset_labels: Tensor<B, 2, Int>,
+    parse_ok_labels: Tensor<B, 2, Int>,
+    phrase_boundary_labels: Tensor<B, 2, Int>,
 }
 
 fn make_batch<B: Backend>(
@@ -1771,6 +1920,9 @@ fn make_batch<B: Backend>(
     phoneme_vocab: &Vocab,
     phone_vocab: &Vocab,
     word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
     config: &LibriSpeechAsrTrainConfig,
     device: &B::Device,
 ) -> Result<AsrBatch<B>> {
@@ -1788,6 +1940,11 @@ fn make_batch<B: Backend>(
     let mut boundary_labels = Vec::new();
     let mut phoneme_labels = Vec::new();
     let mut phone_labels = Vec::new();
+    let mut syntax_pos_labels = Vec::new();
+    let mut syntax_link_labels = Vec::new();
+    let mut syntax_head_offset_labels = Vec::new();
+    let mut parse_ok_labels = Vec::new();
+    let mut phrase_boundary_labels = Vec::new();
     let mut input_lengths = Vec::new();
     let mut prev_word_sequences = Vec::new();
     let mut current_word_sequences = Vec::new();
@@ -1811,6 +1968,15 @@ fn make_batch<B: Backend>(
         boundary_labels.extend(boundary_labels_for(row, max_frames));
         phoneme_labels.extend(proportional_phoneme_labels(row, phoneme_vocab, max_frames));
         phone_labels.extend(proportional_phone_labels(row, phone_vocab, max_frames));
+        syntax_pos_labels.extend(syntax_pos_labels_for(row, syntax_pos_vocab, max_frames));
+        syntax_link_labels.extend(syntax_link_labels_for(row, syntax_link_vocab, max_frames));
+        syntax_head_offset_labels.extend(syntax_head_offset_labels_for(
+            row,
+            syntax_head_offset_vocab,
+            max_frames,
+        ));
+        parse_ok_labels.extend(parse_ok_labels_for(row, max_frames));
+        phrase_boundary_labels.extend(phrase_boundary_labels_for(row, max_frames));
         prev_word_sequences.push(ctc_target_within_input(
             previous_word_targets(row, word_vocab),
             input_len,
@@ -1914,6 +2080,26 @@ fn make_batch<B: Backend>(
             TensorData::new(masked_word_phoneme_target_lengths, [rows.len()]),
             device,
         ),
+        syntax_pos_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(syntax_pos_labels, [rows.len(), max_frames]),
+            device,
+        ),
+        syntax_link_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(syntax_link_labels, [rows.len(), max_frames]),
+            device,
+        ),
+        syntax_head_offset_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(syntax_head_offset_labels, [rows.len(), max_frames]),
+            device,
+        ),
+        parse_ok_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(parse_ok_labels, [rows.len(), max_frames]),
+            device,
+        ),
+        phrase_boundary_labels: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(phrase_boundary_labels, [rows.len(), max_frames]),
+            device,
+        ),
     })
 }
 
@@ -1961,6 +2147,19 @@ fn weighted_loss<B: Backend>(
         batch.masked_word_phoneme_target_lengths,
         0,
     );
+    let syntax_loss = ce_loss(output.syntax_pos_logits, batch.syntax_pos_labels, 0)
+        + ce_loss(output.syntax_link_logits, batch.syntax_link_labels, 0)
+        + ce_loss(
+            output.syntax_head_offset_logits,
+            batch.syntax_head_offset_labels,
+            0,
+        )
+        + ce_loss(output.parse_ok_logits, batch.parse_ok_labels, 0)
+        + ce_loss(
+            output.phrase_boundary_logits,
+            batch.phrase_boundary_labels,
+            0,
+        );
     let audio_loss = mse_loss(output.mel_reconstruction, batch.mel_target);
     transcript_loss * config.transcript_loss_weight
         + boundary_loss * (config.boundary_loss_weight + config.repair_loss_weight)
@@ -1971,6 +2170,7 @@ fn weighted_loss<B: Backend>(
         + next_word_loss * config.next_word_loss_weight
         + masked_word_loss * config.masked_word_loss_weight
         + masked_word_phoneme_loss * config.masked_word_phoneme_loss_weight
+        + syntax_loss * config.syntax_loss_weight
         + audio_loss * config.masked_audio_loss_weight
 }
 
@@ -2183,6 +2383,84 @@ fn boundary_labels_for(row: &LibriSpeechUtterance, frames: usize) -> Vec<i32> {
     labels
 }
 
+fn syntax_pos_labels_for(row: &LibriSpeechUtterance, vocab: &Vocab, frames: usize) -> Vec<i32> {
+    syntax_word_labels_for(row, frames, |word| vocab.get_id(&word.pos) as i32)
+}
+
+fn syntax_link_labels_for(row: &LibriSpeechUtterance, vocab: &Vocab, frames: usize) -> Vec<i32> {
+    syntax_word_labels_for(row, frames, |word| {
+        vocab.get_id(&word.primary_link_label) as i32
+    })
+}
+
+fn syntax_head_offset_labels_for(
+    row: &LibriSpeechUtterance,
+    vocab: &Vocab,
+    frames: usize,
+) -> Vec<i32> {
+    syntax_word_labels_for(row, frames, |word| {
+        vocab.get_id(&syntax_head_offset_label(word.head_offset)) as i32
+    })
+}
+
+fn phrase_boundary_labels_for(row: &LibriSpeechUtterance, frames: usize) -> Vec<i32> {
+    syntax_word_labels_for(row, frames, |word| if word.phrase_boundary { 1 } else { 0 })
+}
+
+fn parse_ok_labels_for(row: &LibriSpeechUtterance, frames: usize) -> Vec<i32> {
+    let mut labels = vec![0; frames];
+    for sentence in &row.sentences {
+        if sentence.syntax.supervision_weight <= 0.0 {
+            continue;
+        }
+        let label = if sentence.syntax.parse_ok { 1 } else { 0 };
+        for frame in sentence.start_frame.min(frames)..sentence.end_frame.min(frames) {
+            labels[frame] = label;
+        }
+    }
+    labels
+}
+
+fn syntax_word_labels_for(
+    row: &LibriSpeechUtterance,
+    frames: usize,
+    label: impl Fn(&SyntaxWordSupervision) -> i32,
+) -> Vec<i32> {
+    let mut labels = vec![0; frames];
+    for sentence in &row.sentences {
+        if sentence.syntax.supervision_weight <= 0.0 {
+            continue;
+        }
+        let spans = word_spans(&sentence.text);
+        for word in &sentence.syntax.words {
+            let Some((start, end, _)) = spans.get(word.sentence_word_index) else {
+                continue;
+            };
+            let global_start = sentence.start_char + *start;
+            let global_end = sentence.start_char + *end;
+            let start_frame = char_to_frame(
+                global_start,
+                sentence.end_char.max(1),
+                sentence.end_frame.max(1),
+            )
+            .max(sentence.start_frame)
+            .min(frames);
+            let end_frame = char_to_frame(
+                global_end,
+                sentence.end_char.max(1),
+                sentence.end_frame.max(1),
+            )
+            .max(start_frame + 1)
+            .min(sentence.end_frame.max(start_frame + 1))
+            .min(frames);
+            for frame in start_frame..end_frame {
+                labels[frame] = label(word);
+            }
+        }
+    }
+    labels
+}
+
 pub fn evaluate<B: Backend>(
     model: &AsrModel<B>,
     data_dir: &Path,
@@ -2191,6 +2469,9 @@ pub fn evaluate<B: Backend>(
     phoneme_vocab: &Vocab,
     phone_vocab: &Vocab,
     word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
     config: &LibriSpeechAsrTrainConfig,
     device: &B::Device,
 ) -> Result<EvalReport> {
@@ -2248,6 +2529,9 @@ pub fn evaluate<B: Backend>(
             phoneme_vocab,
             phone_vocab,
             word_vocab,
+            syntax_pos_vocab,
+            syntax_link_vocab,
+            syntax_head_offset_vocab,
             config,
             device,
         )?;
@@ -2266,6 +2550,11 @@ pub fn evaluate<B: Backend>(
                 next_word_logits: output.next_word_logits.clone(),
                 masked_word_logits: output.masked_word_logits.clone(),
                 masked_word_phoneme_logits: output.masked_word_phoneme_logits.clone(),
+                syntax_pos_logits: output.syntax_pos_logits.clone(),
+                syntax_link_logits: output.syntax_link_logits.clone(),
+                syntax_head_offset_logits: output.syntax_head_offset_logits.clone(),
+                parse_ok_logits: output.parse_ok_logits.clone(),
+                phrase_boundary_logits: output.phrase_boundary_logits.clone(),
                 mel_reconstruction: output.mel_reconstruction.clone(),
             },
             batch,
@@ -2628,6 +2917,9 @@ mod tests {
         assert_eq!(rows[0].boundary_label, BOUNDARY_EMIT);
         assert!(!rows[0].phonemes.is_empty());
         assert!(!rows[0].phoneme_tokens.is_empty());
+        assert!(rows[0].syntax.parse_ok);
+        assert!(!rows[0].syntax.words.is_empty());
+        assert!(!rows[0].syntax.links.is_empty());
         assert!(rows[0].end_frame <= 100);
     }
 
@@ -2736,6 +3028,48 @@ mod tests {
         assert_eq!(vocab.tokens[0], WORD_BLANK);
         assert_eq!(vocab.tokens[1], WORD_UNK);
         assert!(vocab.get_id("HELLO") > 1);
+    }
+
+    #[test]
+    fn syntax_vocabs_and_labels_include_parser_targets() {
+        let cfg = LibriSpeechAsrConfig::default();
+        let detector = SentenceDetectorDialog::new().unwrap();
+        let mut row = LibriSpeechUtterance {
+            utterance_id: "u".into(),
+            speaker_id: "s".into(),
+            chapter_id: "c".into(),
+            audio_path: "a.flac".into(),
+            mel_path: "m.mel.bin".into(),
+            num_frames: 100,
+            sample_rate_hz: DEFAULT_SAMPLE_RATE_HZ,
+            duration_ms: 1000,
+            transcript: "THE QUICK FOX JUMPS.".into(),
+            sentences: Vec::new(),
+            repair_examples: Vec::new(),
+            word_supervision: Vec::new(),
+            masked_word_examples: Vec::new(),
+        };
+        enrich_row_supervision(&mut row, &detector, &cfg).unwrap();
+        let pos_vocab = build_syntax_pos_vocab(&[row.clone()]);
+        let link_vocab = build_syntax_link_vocab(&[row.clone()]);
+        let offset_vocab = build_syntax_head_offset_vocab(&[row.clone()]);
+
+        assert!(pos_vocab.size() > 2);
+        assert!(link_vocab.size() > 2);
+        assert!(offset_vocab.size() > 1);
+        assert!(syntax_pos_labels_for(&row, &pos_vocab, 100)
+            .into_iter()
+            .any(|id| id != 0));
+        assert!(syntax_link_labels_for(&row, &link_vocab, 100)
+            .into_iter()
+            .any(|id| id != 0));
+        assert!(syntax_head_offset_labels_for(&row, &offset_vocab, 100)
+            .into_iter()
+            .any(|id| id != 0));
+        assert!(parse_ok_labels_for(&row, 100).into_iter().any(|id| id != 0));
+        assert!(phrase_boundary_labels_for(&row, 100)
+            .into_iter()
+            .any(|id| id != 0));
     }
 
     #[test]
