@@ -27,6 +27,10 @@ writes `train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`,
 `phoneme_vocab.json`, `phone_vocab.json`, `word_vocab.json`,
 `dataset_config.json`, and `README.md`.
 
+Prepare is restartable. Completed Mel files are validated and reused, extraction
+is guarded by `.extract-complete`, and `utterances.jsonl` is flushed after each
+utterance so an interrupted run can rebuild final splits without starting over.
+
 Rows include utterance metadata, the Mel feature path, transcript text, sentence
 spans, approximate frame spans, boundary labels, rendered phonemes/phones, and
 serialized phonemicizer output. Each row also includes `repair_examples`:

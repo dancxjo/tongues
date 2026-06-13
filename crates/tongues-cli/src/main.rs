@@ -3683,6 +3683,16 @@ fn librispeech_prepare_progress_message(
             utterance_id,
             path
         ),
+        tongues_librispeech_asr::PrepareProgress::Reuse {
+            utterance_id,
+            rows,
+            path,
+        } => format!(
+            "Reusing {} Mel frames for {} -> {}",
+            format_count(rows),
+            utterance_id,
+            path
+        ),
         tongues_librispeech_asr::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {}", format_count(rows), path)
         }

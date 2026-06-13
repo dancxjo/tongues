@@ -7,7 +7,7 @@
 //! CTC loss over compact target sequences.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,11 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
+use speech::segment::TerminalPunctuation;
+use speech::syntax::{
+    HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
+    SyntacticLinkKind,
+};
 use speech::data::notation::openepd::render_openepd_phonemes;
 use speech::{
     EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack, SpeechBoundaryToken,
@@ -138,6 +143,8 @@ pub struct LibriSpeechAsrTrainConfig {
     pub repair_loss_weight: f32,
     #[serde(default = "default_masked_audio_loss_weight")]
     pub masked_audio_loss_weight: f32,
+    #[serde(default = "default_syntax_loss_weight")]
+    pub syntax_loss_weight: f32,
     #[serde(default = "default_word_mask_rate")]
     pub word_mask_rate: f32,
     #[serde(default = "default_mask_every_n_frames")]
@@ -179,6 +186,10 @@ fn default_masked_audio_loss_weight() -> f32 {
     0.35
 }
 
+fn default_syntax_loss_weight() -> f32 {
+    0.05
+}
+
 fn default_word_mask_rate() -> f32 {
     1.0
 }
@@ -212,6 +223,7 @@ impl Default for LibriSpeechAsrTrainConfig {
             masked_word_phoneme_loss_weight: 0.15,
             repair_loss_weight: 0.15,
             masked_audio_loss_weight: 0.35,
+            syntax_loss_weight: default_syntax_loss_weight(),
             word_mask_rate: default_word_mask_rate(),
             mask_every_n_frames: default_mask_every_n_frames(),
             mask_span_frames: default_mask_span_frames(),
@@ -227,6 +239,12 @@ pub struct ModelConfig {
     pub phoneme_vocab_size: usize,
     pub phone_vocab_size: usize,
     pub word_vocab_size: usize,
+    #[config(default = 8)]
+    pub syntax_pos_vocab_size: usize,
+    #[config(default = 16)]
+    pub syntax_link_vocab_size: usize,
+    #[config(default = 15)]
+    pub syntax_head_offset_vocab_size: usize,
     #[config(default = 192)]
     pub hidden_size: usize,
     #[config(default = 0.1)]
@@ -247,6 +265,17 @@ impl ModelConfig {
             masked_word: LinearConfig::new(self.hidden_size, self.word_vocab_size).init(device),
             masked_word_phoneme: LinearConfig::new(self.hidden_size, self.phoneme_vocab_size)
                 .init(device),
+            syntax_pos: LinearConfig::new(self.hidden_size, self.syntax_pos_vocab_size)
+                .init(device),
+            syntax_link: LinearConfig::new(self.hidden_size, self.syntax_link_vocab_size)
+                .init(device),
+            syntax_head_offset: LinearConfig::new(
+                self.hidden_size,
+                self.syntax_head_offset_vocab_size,
+            )
+            .init(device),
+            parse_ok: LinearConfig::new(self.hidden_size, 2).init(device),
+            phrase_boundary: LinearConfig::new(self.hidden_size, 2).init(device),
             mel_reconstruction: LinearConfig::new(self.hidden_size, self.mel_bins).init(device),
             dropout: DropoutConfig::new(self.dropout).init(),
         }
@@ -265,6 +294,11 @@ pub struct AsrModel<B: Backend> {
     next_word: Linear<B>,
     masked_word: Linear<B>,
     masked_word_phoneme: Linear<B>,
+    syntax_pos: Linear<B>,
+    syntax_link: Linear<B>,
+    syntax_head_offset: Linear<B>,
+    parse_ok: Linear<B>,
+    phrase_boundary: Linear<B>,
     mel_reconstruction: Linear<B>,
     dropout: Dropout,
 }
@@ -282,6 +316,11 @@ impl<B: Backend> AsrModel<B> {
             next_word_logits: self.next_word.forward(hidden.clone()),
             masked_word_logits: self.masked_word.forward(hidden.clone()),
             masked_word_phoneme_logits: self.masked_word_phoneme.forward(hidden.clone()),
+            syntax_pos_logits: self.syntax_pos.forward(hidden.clone()),
+            syntax_link_logits: self.syntax_link.forward(hidden.clone()),
+            syntax_head_offset_logits: self.syntax_head_offset.forward(hidden.clone()),
+            parse_ok_logits: self.parse_ok.forward(hidden.clone()),
+            phrase_boundary_logits: self.phrase_boundary.forward(hidden.clone()),
             mel_reconstruction: self.mel_reconstruction.forward(hidden),
         }
     }
@@ -298,6 +337,11 @@ pub struct AsrForward<B: Backend> {
     pub next_word_logits: Tensor<B, 3>,
     pub masked_word_logits: Tensor<B, 3>,
     pub masked_word_phoneme_logits: Tensor<B, 3>,
+    pub syntax_pos_logits: Tensor<B, 3>,
+    pub syntax_link_logits: Tensor<B, 3>,
+    pub syntax_head_offset_logits: Tensor<B, 3>,
+    pub parse_ok_logits: Tensor<B, 3>,
+    pub phrase_boundary_logits: Tensor<B, 3>,
     pub mel_reconstruction: Tensor<B, 3>,
 }
 
@@ -326,6 +370,11 @@ pub enum PrepareProgress {
         transcripts: usize,
     },
     Features {
+        utterance_id: String,
+        rows: usize,
+        path: String,
+    },
+    Reuse {
         utterance_id: String,
         rows: usize,
         path: String,
@@ -373,6 +422,39 @@ pub struct SentenceSupervision {
     pub boundaries: Vec<SpeechBoundaryToken>,
     pub prosody: ProsodyTrack,
     pub warnings: Vec<speech::PronunciationWarning>,
+    #[serde(default)]
+    pub syntax: SyntaxSupervision,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SyntaxSupervision {
+    pub words: Vec<SyntaxWordSupervision>,
+    pub links: Vec<SyntaxLinkSupervision>,
+    pub parse_ok: bool,
+    pub parse_rank: f32,
+    pub parse_cost: f32,
+    pub supervision_weight: f32,
+    pub analysis: SentenceSyntaxAnalysis,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyntaxWordSupervision {
+    pub word: String,
+    pub sentence_word_index: usize,
+    pub pos: String,
+    pub link_labels: Vec<String>,
+    pub primary_link_label: String,
+    pub linked_word_index: Option<usize>,
+    pub head_offset: i32,
+    pub phrase_boundary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SyntaxLinkSupervision {
+    pub left: usize,
+    pub right: usize,
+    pub label: String,
+    pub confidence: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -467,15 +549,31 @@ pub fn prepare_dataset_with_progress(
         download_to_part(&config.download_url, &archive, &mut progress)?;
     }
     let source_dir = out.join("source");
-    if !source_dir.exists() {
-        progress(PrepareProgress::Extract {
-            path: archive.display().to_string(),
-        });
-        fs::create_dir_all(&source_dir)?;
-        let tar_gz = File::open(&archive)?;
-        let decoder = flate2::read::GzDecoder::new(tar_gz);
-        let mut archive = tar::Archive::new(decoder);
-        archive.unpack(&source_dir)?;
+    let extract_marker = out.join(".extract-complete");
+    if !extract_marker.exists() {
+        if source_dir.exists() && !discover_transcripts(&source_dir)?.is_empty() {
+            fs::write(&extract_marker, b"ok\n")?;
+        } else {
+            progress(PrepareProgress::Extract {
+                path: archive.display().to_string(),
+            });
+            if source_dir.exists() {
+                fs::remove_dir_all(&source_dir)
+                    .with_context(|| format!("removing partial {}", source_dir.display()))?;
+            }
+            let source_part = out.join("source.part");
+            if source_part.exists() {
+                fs::remove_dir_all(&source_part)
+                    .with_context(|| format!("removing partial {}", source_part.display()))?;
+            }
+            fs::create_dir_all(&source_part)?;
+            let tar_gz = File::open(&archive)?;
+            let decoder = flate2::read::GzDecoder::new(tar_gz);
+            let mut archive = tar::Archive::new(decoder);
+            archive.unpack(&source_part)?;
+            fs::rename(&source_part, &source_dir)?;
+            fs::write(&extract_marker, b"ok\n")?;
+        }
     }
 
     let transcripts = discover_transcripts(&source_dir)?;
@@ -483,34 +581,76 @@ pub fn prepare_dataset_with_progress(
         transcripts: transcripts.len(),
     });
     anyhow::ensure!(!transcripts.is_empty(), "no LibriSpeech transcripts found");
-    let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
-    let mut rows = Vec::new();
-    for item in transcripts
+    let selected_transcripts = transcripts
         .into_iter()
         .take(config.max_utterances.unwrap_or(usize::MAX))
-    {
+        .collect::<Vec<_>>();
+    let selected_ids = selected_transcripts
+        .iter()
+        .map(|item| item.utterance_id.clone())
+        .collect::<BTreeSet<_>>();
+    let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
+    let utterances_path = out.join("utterances.jsonl");
+    let mut rows = recover_utterance_rows(&utterances_path, out, config)?;
+    rows.retain(|row| selected_ids.contains(&row.utterance_id));
+    if utterances_path.exists() {
+        write_jsonl_atomic(&utterances_path, &rows, &mut progress)?;
+    }
+    let mut row_by_id = rows
+        .iter()
+        .map(|row| (row.utterance_id.clone(), row.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut utterance_writer = BufWriter::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&utterances_path)
+            .with_context(|| format!("opening {}", utterances_path.display()))?,
+    );
+    for item in selected_transcripts {
+        if let Some(existing) = row_by_id.get(&item.utterance_id) {
+            progress(PrepareProgress::Reuse {
+                utterance_id: item.utterance_id,
+                rows: existing.num_frames,
+                path: out.join(&existing.mel_path).display().to_string(),
+            });
+            continue;
+        }
         let samples = read_flac_mono(&item.audio_path)?;
-        let features = log_mel_features(&samples, config);
         let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", item.utterance_id));
         let mel_path = out.join(&rel_mel);
-        write_mel_file(&mel_path, &features, config.mel_bins)?;
-        progress(PrepareProgress::Features {
-            utterance_id: item.utterance_id.clone(),
-            rows: features.len(),
-            path: mel_path.display().to_string(),
-        });
+        let frames = match valid_mel_frames(&mel_path, config.mel_bins)? {
+            Some(frames) => {
+                progress(PrepareProgress::Reuse {
+                    utterance_id: item.utterance_id.clone(),
+                    rows: frames,
+                    path: mel_path.display().to_string(),
+                });
+                frames
+            }
+            None => {
+                let features = log_mel_features(&samples, config);
+                write_mel_file(&mel_path, &features, config.mel_bins)?;
+                progress(PrepareProgress::Features {
+                    utterance_id: item.utterance_id.clone(),
+                    rows: features.len(),
+                    path: mel_path.display().to_string(),
+                });
+                features.len()
+            }
+        };
         let transcript = normalize_librispeech_text(&item.transcript);
-        let sentences = sentence_supervision(&detector, &transcript, features.len(), config)?;
+        let sentences = sentence_supervision(&detector, &transcript, frames, config)?;
         let repair_examples = repair_supervision(&sentences);
         let word_supervision = word_supervision(&sentences);
         let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
-        rows.push(LibriSpeechUtterance {
+        let row = LibriSpeechUtterance {
             utterance_id: item.utterance_id,
             speaker_id: item.speaker_id,
             chapter_id: item.chapter_id,
             audio_path: item.audio_path.display().to_string(),
             mel_path: rel_mel.display().to_string(),
-            num_frames: features.len(),
+            num_frames: frames,
             sample_rate_hz: config.sample_rate_hz,
             duration_ms: samples.len() as u64 * 1000 / config.sample_rate_hz as u64,
             transcript,
@@ -518,8 +658,13 @@ pub fn prepare_dataset_with_progress(
             repair_examples,
             word_supervision,
             masked_word_examples,
-        });
+        };
+        writeln!(utterance_writer, "{}", serde_json::to_string(&row)?)?;
+        utterance_writer.flush()?;
+        row_by_id.insert(row.utterance_id.clone(), row.clone());
+        rows.push(row);
     }
+    utterance_writer.flush()?;
 
     let mut shuffled = rows;
     shuffled.shuffle(&mut rand::rngs::StdRng::seed_from_u64(config.seed));
@@ -552,6 +697,24 @@ pub fn prepare_dataset_with_progress(
     fs::write(
         out.join("word_vocab.json"),
         serde_json::to_string_pretty(&word_vocab)?,
+    )?;
+    let syntax_pos_vocab =
+        build_syntax_pos_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
+    fs::write(
+        out.join("syntax_pos_vocab.json"),
+        serde_json::to_string_pretty(&syntax_pos_vocab)?,
+    )?;
+    let syntax_link_vocab =
+        build_syntax_link_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
+    fs::write(
+        out.join("syntax_link_vocab.json"),
+        serde_json::to_string_pretty(&syntax_link_vocab)?,
+    )?;
+    let syntax_head_offset_vocab =
+        build_syntax_head_offset_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
+    fs::write(
+        out.join("syntax_head_offset_vocab.json"),
+        serde_json::to_string_pretty(&syntax_head_offset_vocab)?,
     )?;
     fs::write(
         out.join("dataset_config.json"),
@@ -751,6 +914,37 @@ fn write_mel_file(path: &Path, features: &[Vec<f32>], mel_bins: usize) -> Result
     Ok(())
 }
 
+fn valid_mel_frames(path: &Path, mel_bins: usize) -> Result<Option<usize>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 12];
+    if reader.read_exact(&mut magic).is_err() {
+        return Ok(None);
+    }
+    if &magic != b"TONGUES_MEL1" {
+        return Ok(None);
+    }
+    let mut buf = [0u8; 4];
+    if reader.read_exact(&mut buf).is_err() {
+        return Ok(None);
+    }
+    let frames = u32::from_le_bytes(buf) as usize;
+    if reader.read_exact(&mut buf).is_err() {
+        return Ok(None);
+    }
+    let bins = u32::from_le_bytes(buf) as usize;
+    if bins != mel_bins {
+        return Ok(None);
+    }
+    let expected_len = 12_u64 + 4 + 4 + frames as u64 * bins as u64 * 4;
+    if fs::metadata(path)?.len() != expected_len {
+        return Ok(None);
+    }
+    Ok(Some(frames))
+}
+
 pub fn read_mel_file(path: &Path) -> Result<Vec<Vec<f32>>> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut magic = [0u8; 12];
@@ -782,6 +976,7 @@ fn sentence_supervision(
         .detect_sentences_borrowed(transcript)
         .context("detecting transcript sentences")?;
     let phonemicizer = EnglishPhonemicizer;
+    let syntax_parser = HeuristicLinkGrammarParser;
     let mut offset = 0usize;
     let mut out = Vec::new();
     for sentence in detected {
@@ -799,8 +994,10 @@ fn sentence_supervision(
             variety: VarietyId(config.variety.clone()),
             style: None,
         })?;
+        let terminal = text.chars().rev().find(|ch| matches!(ch, '.' | '?' | '!'));
+        let syntax = syntax_supervision(&syntax_parser, &text, terminal);
         out.push(SentenceSupervision {
-            terminal: text.chars().rev().find(|ch| matches!(ch, '.' | '?' | '!')),
+            terminal,
             text,
             start_char: start,
             end_char: end,
@@ -815,6 +1012,7 @@ fn sentence_supervision(
             boundaries: phonemicized.boundaries,
             prosody: phonemicized.prosody,
             warnings: phonemicized.warnings,
+            syntax,
         });
     }
     if out.is_empty() && !transcript.trim().is_empty() {
@@ -823,6 +1021,7 @@ fn sentence_supervision(
             variety: VarietyId(config.variety.clone()),
             style: None,
         })?;
+        let syntax = syntax_supervision(&syntax_parser, transcript, None);
         out.push(SentenceSupervision {
             text: transcript.to_string(),
             start_char: 0,
@@ -839,9 +1038,136 @@ fn sentence_supervision(
             boundaries: phonemicized.boundaries,
             prosody: phonemicized.prosody,
             warnings: phonemicized.warnings,
+            syntax,
         });
     }
     Ok(out)
+}
+
+fn syntax_supervision(
+    parser: &impl LinkGrammarParser,
+    sentence: &str,
+    terminal: Option<char>,
+) -> SyntaxSupervision {
+    let word_spans = word_spans(sentence);
+    let words = word_spans
+        .iter()
+        .map(|(_, _, word)| word.clone())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return SyntaxSupervision::default();
+    }
+    let analysis = parser.parse(&words, terminal_punctuation(terminal));
+    let primary = analysis.primary_parse();
+    let parse_rank = primary.map(|parse| parse.rank).unwrap_or(0.0);
+    let links = primary
+        .map(|parse| {
+            parse
+                .links
+                .iter()
+                .map(|link| SyntaxLinkSupervision {
+                    left: link.left,
+                    right: link.right,
+                    label: syntax_link_label(link.kind),
+                    confidence: link.confidence,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let parse_cost = links
+        .iter()
+        .map(|link| 1.0 - link.confidence.clamp(0.0, 1.0))
+        .sum::<f32>();
+    let parse_ok = !links.is_empty();
+    let supervision_weight = if parse_ok {
+        (parse_rank / (1.0 + parse_cost)).clamp(0.1, 1.0)
+    } else {
+        0.0
+    };
+    let syntax_words = words
+        .iter()
+        .enumerate()
+        .map(|(index, word)| {
+            let token = analysis.tokens.iter().find(|token| token.word_index == index);
+            let mut link_labels = token
+                .map(|token| {
+                    token
+                        .syntactic_links
+                        .iter()
+                        .map(|kind| syntax_link_label(*kind))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            link_labels.sort();
+            link_labels.dedup();
+            let primary_link = primary.and_then(|parse| {
+                parse
+                    .links
+                    .iter()
+                    .filter(|link| link.left == index || link.right == index)
+                    .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+            });
+            let linked_word_index = primary_link
+                .map(|link| if link.left == index { link.right } else { link.left });
+            let head_offset = linked_word_index
+                .map(|linked| linked as i32 - index as i32)
+                .unwrap_or(0);
+            SyntaxWordSupervision {
+                word: word.clone(),
+                sentence_word_index: index,
+                pos: token
+                    .map(|token| syntax_pos_label(token.pos))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                primary_link_label: primary_link
+                    .map(|link| syntax_link_label(link.kind))
+                    .unwrap_or_else(|| "none".to_string()),
+                link_labels,
+                linked_word_index,
+                head_offset,
+                phrase_boundary: syntax_phrase_boundary(index, words.len(), primary_link.map(|l| l.kind)),
+            }
+        })
+        .collect();
+    SyntaxSupervision {
+        words: syntax_words,
+        links,
+        parse_ok,
+        parse_rank,
+        parse_cost,
+        supervision_weight,
+        analysis,
+    }
+}
+
+fn terminal_punctuation(terminal: Option<char>) -> Option<TerminalPunctuation> {
+    match terminal {
+        Some('.') => Some(TerminalPunctuation::Period),
+        Some('?') => Some(TerminalPunctuation::Question),
+        Some('!') => Some(TerminalPunctuation::Exclamation),
+        _ => None,
+    }
+}
+
+fn syntax_pos_label(pos: PartOfSpeech) -> String {
+    format!("{pos:?}").to_ascii_lowercase()
+}
+
+fn syntax_link_label(kind: SyntacticLinkKind) -> String {
+    format!("{kind:?}").to_ascii_lowercase()
+}
+
+fn syntax_phrase_boundary(index: usize, words: usize, link_kind: Option<SyntacticLinkKind>) -> bool {
+    index + 1 == words
+        || matches!(
+            link_kind,
+            Some(
+                SyntacticLinkKind::Preposition
+                    | SyntacticLinkKind::Coordination
+                    | SyntacticLinkKind::ContrastPair
+                    | SyntacticLinkKind::Apposition
+                    | SyntacticLinkKind::Parenthetical
+            )
+        )
 }
 
 fn phones_string(phones: &[speech::PhoneToken]) -> String {
@@ -1076,6 +1402,39 @@ pub fn read_examples(path: &Path) -> Result<Vec<LibriSpeechUtterance>> {
         let line = line?;
         if !line.trim().is_empty() {
             rows.push(serde_json::from_str(&line)?);
+        }
+    }
+    Ok(rows)
+}
+
+fn recover_utterance_rows(
+    path: &Path,
+    data_dir: &Path,
+    config: &LibriSpeechAsrConfig,
+) -> Result<Vec<LibriSpeechUtterance>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<LibriSpeechUtterance>(&line) else {
+            continue;
+        };
+        if !seen.insert(row.utterance_id.clone()) {
+            continue;
+        }
+        let mel_path = data_dir.join(&row.mel_path);
+        let Some(frames) = valid_mel_frames(&mel_path, config.mel_bins)? else {
+            continue;
+        };
+        if frames == row.num_frames && row.sample_rate_hz == config.sample_rate_hz {
+            rows.push(row);
         }
     }
     Ok(rows)
@@ -2399,7 +2758,59 @@ mod tests {
         let path = dir.join("roundtrip.mel.bin");
         let rows = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
         write_mel_file(&path, &rows, 3).unwrap();
+        assert_eq!(valid_mel_frames(&path, 3).unwrap(), Some(2));
+        assert_eq!(valid_mel_frames(&path, 4).unwrap(), None);
         assert_eq!(read_mel_file(&path).unwrap(), rows);
         assert!(!path.with_extension("mel.bin.part").exists());
+    }
+
+    #[test]
+    fn recovery_keeps_only_rows_with_valid_mel_files() {
+        let dir = Path::new("target/librispeech-asr-tests/recovery");
+        let _ = fs::remove_dir_all(dir);
+        fs::create_dir_all(dir.join("features")).unwrap();
+        let good_mel = dir.join("features/good.mel.bin");
+        write_mel_file(&good_mel, &[vec![1.0, 2.0, 3.0]], 3).unwrap();
+        fs::write(dir.join("features/bad.mel.bin"), b"partial").unwrap();
+
+        let good = test_utterance("good", "features/good.mel.bin", 1);
+        let bad = test_utterance("bad", "features/bad.mel.bin", 1);
+        let missing = test_utterance("missing", "features/missing.mel.bin", 1);
+        let rows_path = dir.join("utterances.jsonl");
+        fs::write(
+            &rows_path,
+            format!(
+                "{}\n{}\n{}\n{{not-json\n",
+                serde_json::to_string(&good).unwrap(),
+                serde_json::to_string(&bad).unwrap(),
+                serde_json::to_string(&missing).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let config = LibriSpeechAsrConfig {
+            mel_bins: 3,
+            ..LibriSpeechAsrConfig::default()
+        };
+        let rows = recover_utterance_rows(&rows_path, dir, &config).unwrap();
+        assert_eq!(rows, vec![good]);
+    }
+
+    fn test_utterance(id: &str, mel_path: &str, frames: usize) -> LibriSpeechUtterance {
+        LibriSpeechUtterance {
+            utterance_id: id.to_string(),
+            speaker_id: "speaker".to_string(),
+            chapter_id: "chapter".to_string(),
+            audio_path: "audio.flac".to_string(),
+            mel_path: mel_path.to_string(),
+            num_frames: frames,
+            sample_rate_hz: LibriSpeechAsrConfig::default().sample_rate_hz,
+            duration_ms: 100,
+            transcript: "HELLO".to_string(),
+            sentences: Vec::new(),
+            repair_examples: Vec::new(),
+            word_supervision: Vec::new(),
+            masked_word_examples: Vec::new(),
+        }
     }
 }

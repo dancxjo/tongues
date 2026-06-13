@@ -46,4 +46,5 @@ datasets/wiktionary/*
 /datasets/**/*.tar.gz
 /datasets/**/*.zip
 /datasets/**/source/
+/datasets/**/source.part/
 /datasets/**/features/
