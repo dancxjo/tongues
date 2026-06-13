@@ -942,8 +942,9 @@ pub fn extract_page_data(
             Some(lang) => lang.to_string(),
             None => continue,
         };
-        let accent =
-            template_named_param(&params, "a").or_else(|| template_named_param(&params, "aa"));
+        let accent = template_named_param(&params, "a")
+            .or_else(|| template_named_param(&params, "aa"))
+            .and_then(|accent| sanitize_accent_label(&accent));
         let values = params
             .iter()
             .skip(2)
@@ -965,7 +966,10 @@ pub fn extract_page_data(
         if !kind.eq_ignore_ascii_case("IPA") {
             continue;
         }
-        for value in values {
+        for value in values
+            .iter()
+            .filter_map(|value| sanitize_ipa_template_value(value))
+        {
             let value = value.trim();
             let Some(notation) = ipa_notation(value) else {
                 continue;
@@ -1788,6 +1792,7 @@ fn clean_wikitext_cell(cell: &str) -> String {
     text = remove_between(&text, "<!--", "-->");
     text = remove_refs(&text);
     text = replace_lang_templates(&text);
+    text = replace_label_templates(&text);
     text = replace_note_templates(&text);
     text = replace_links(&text);
     text = strip_markup(&text);
@@ -1834,6 +1839,17 @@ fn replace_lang_templates(text: &str) -> String {
     replace_templates_by(text, |parts| {
         let name = parts.first()?.trim().to_ascii_lowercase();
         if name == "lang" || name == "langx" {
+            parts.last().map(|part| part.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn replace_label_templates(text: &str) -> String {
+    replace_templates_by(text, |parts| {
+        let name = parts.first()?.trim().to_ascii_lowercase();
+        if matches!(name.as_str(), "w" | "wikipedia") {
             parts.last().map(|part| part.trim().to_string())
         } else {
             None
@@ -2460,7 +2476,8 @@ fn etymology_translation_input(source_lang: &str, target_lang: &str, word: &str)
 }
 
 pub fn normalize_ipa_for_training(ipa: &str) -> String {
-    let trimmed = ipa.trim();
+    let sanitized = sanitize_ipa_text(ipa);
+    let trimmed = sanitized.trim();
     let payload = if (trimmed.starts_with('/') && trimmed.ends_with('/'))
         || (trimmed.starts_with('[') && trimmed.ends_with(']'))
     {
@@ -2476,19 +2493,35 @@ pub fn normalize_orthography_for_training(orthography: &str) -> String {
 }
 
 pub fn canonicalize_accent(lang: &str, accent: &str) -> String {
-    let trimmed = accent.trim();
+    let Some(trimmed) = sanitize_accent_label(accent) else {
+        return String::new();
+    };
+    let normalized = canonical_tag_fragment(&trimmed);
     if lang == "eng" {
-        match trimmed {
+        match normalized.as_str() {
             "GA" | "GenAm" => "en-US.GenAm".to_string(),
+            "GAm" | "General.American" | "Received.Pronunciation.General.American" => {
+                "en-US.GenAm".to_string()
+            }
             "RP" => "en-GB.RP".to_string(),
+            "Received.Pronunciation" | "en-GB.RP" => "en-GB.RP".to_string(),
             "SSB" => "en-GB.SSB".to_string(),
+            "SSBE" | "Standard.Southern.British" => "en-GB.SSB".to_string(),
             "IE" => "en-IE".to_string(),
             "Dublin / East" => "en-IE.Dublin.East".to_string(),
+            "Dublin.East" => "en-IE.Dublin.East".to_string(),
             "Local Dublin" => "en-IE.Dublin.Local".to_string(),
-            _ => canonical_tag_fragment(trimmed),
+            "Dublin.Local" => "en-IE.Dublin.Local".to_string(),
+            "US" | "USA" | "United.States" | "American" => "en-US".to_string(),
+            "UK" | "British" => "en-GB".to_string(),
+            "Australia" | "Australian" | "AU" | "Aus" | "AuE" | "AusE" => "en-AU".to_string(),
+            "Canada" | "Canadian" | "CA" | "CanE" => "en-CA".to_string(),
+            "New.Zealand" | "NZ" | "NZE" => "en-NZ".to_string(),
+            "Scotland" | "Scottish" | "ScE" => "en-GB.ScotE".to_string(),
+            _ => normalized,
         }
     } else {
-        canonical_tag_fragment(trimmed)
+        normalized
     }
 }
 
@@ -2518,11 +2551,73 @@ pub fn normalize_spelling_for_training(spelling: &str) -> String {
 }
 
 fn canonical_tag_fragment(value: &str) -> String {
-    value
-        .split(|c: char| c.is_whitespace() || matches!(c, '/' | ',' | ';' | '|'))
+    let cleaned = clean_wikitext_cell(value)
+        .replace('&', " and ")
+        .replace('_', " ")
+        .replace('–', "-")
+        .replace('—', "-")
+        .replace('’', "'");
+    let parts = cleaned
+        .split(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '/' | ',' | ';' | '|' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+                )
+        })
+        .filter_map(canonical_tag_part)
         .filter(|part| !part.is_empty())
+        .take(8)
+        .collect::<Vec<_>>();
+    if parts.len() == 8 && cleaned.split_whitespace().count() > 8 {
+        String::new()
+    } else {
+        parts.join(".")
+    }
+}
+
+fn canonical_tag_part(part: &str) -> Option<String> {
+    let normalized = part
+        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '.' | '-' | '!' | '?'))
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '.'))
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn sanitize_accent_label(value: &str) -> Option<String> {
+    let cleaned = clean_wikitext_cell(value);
+    let cleaned = cleaned
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '<' | '>' | '[' | ']' | '{' | '}' | '|'))
+        .split_whitespace()
         .collect::<Vec<_>>()
-        .join(".")
+        .join(" ");
+    if cleaned.is_empty()
+        || cleaned.len() > 160
+        || cleaned.contains("<!--")
+        || cleaned.contains("-->")
+        || cleaned
+            .to_ascii_lowercase()
+            .contains("foot break should go here")
+    {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn sanitize_ipa_template_value(value: &str) -> Option<String> {
+    let cleaned = sanitize_ipa_text(value);
+    let trimmed = cleaned.trim();
+    ipa_notation(trimmed).map(|_| trimmed.to_string())
+}
+
+fn sanitize_ipa_text(value: &str) -> String {
+    let mut text = remove_between(value, "<!--", "-->");
+    text = remove_refs(&text);
+    text = strip_markup(&text);
+    text.nfc().collect()
 }
 
 fn wiktionary_training_controls(
@@ -3006,6 +3101,67 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             canonicalize_training_tag_value("Dublin / East"),
             "Dublin_East"
         );
+    }
+
+    #[test]
+    fn strips_wiktionary_comments_and_markup_before_vocab_controls() {
+        let config = WiktionaryConfig {
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+        let data = extract_page_data(
+            "break",
+            r#"==English==
+===Pronunciation===
+* {{IPA|en|/bɹ<!--foot break should go here, but it's written as an ASCII pipe which is reserved in wiki syntax-->eɪk/|a=[[w:General American|GA]]}}
+"#,
+            &config,
+        );
+
+        assert_eq!(data.phonemes.len(), 1);
+        assert_eq!(data.phonemes[0].ipa, "/bɹeɪk/");
+        assert_eq!(data.phonemes[0].accent.as_deref(), Some("GA"));
+
+        let examples = expand_training_examples(&data.phonemes, &config);
+        let forward = examples
+            .iter()
+            .find(|example| example.task == WiktionaryTask::OrthographyToPhonology)
+            .expect("forward example");
+        assert_eq!(
+            forward.input,
+            "<task:orthography_to_phonology> <lang:eng> <variety:en-US.GenAm> <repr:phonemes> break"
+        );
+        assert_eq!(forward.output, "bɹeɪk");
+
+        let vocab_inputs = examples
+            .iter()
+            .map(|example| example.input.clone())
+            .collect::<Vec<_>>();
+        let vocab_outputs = examples
+            .iter()
+            .map(|example| example.output.clone())
+            .collect::<Vec<_>>();
+        let vocab = Vocab::build(&vocab_inputs, &vocab_outputs, &[]);
+        assert!(!vocab
+            .tokens
+            .iter()
+            .any(|token| token.contains("foot break should go here")));
+        assert!(!vocab.tokens.iter().any(|token| token == "<!--"));
+    }
+
+    #[test]
+    fn canonicalizes_common_english_accent_aliases() {
+        assert_eq!(canonicalize_accent("eng", "USA"), "en-US");
+        assert_eq!(canonicalize_accent("eng", "United States"), "en-US");
+        assert_eq!(
+            canonicalize_accent("eng", "[[w:Received Pronunciation|RP]]"),
+            "en-GB.RP"
+        );
+        assert_eq!(
+            canonicalize_accent("eng", "{{w|General American}}"),
+            "en-US.GenAm"
+        );
+        assert_eq!(canonicalize_accent("eng", "foot break should go here"), "");
     }
 
     #[test]
