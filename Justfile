@@ -31,6 +31,10 @@ sentence-parser *args:
 interpretation *args:
     cargo run --bin tongues -- interpretation "$@"
 
+# Common typo for the interpretation recipe
+interpreation *args:
+    cargo run --bin tongues -- interpretation "$@"
+
 # Forward a model-family command to the tongues CLI
 # Prepare OpenEPD data splits and build vocabulary (runs prepare)
 prepare *args:

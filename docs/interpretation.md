@@ -22,14 +22,26 @@ just interpretation prepare \
 ```
 
 The prepare step downloads the selected OpenSLR archive, extracts transcripts
-and FLAC audio, writes `features/*.mel.bin` through `.part` files, and then
-writes `train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`,
+and FLAC audio, writes `features/*.mel.bin` through `.part` files, recases and
+repunctuates transcripts with the default Whisper ASR model, and then writes
+`train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`,
 `phoneme_vocab.json`, `phone_vocab.json`, `word_vocab.json`,
 `dataset_config.json`, and `README.md`.
+
+Whisper transcript refinement is enabled by default to turn the original
+all-caps LibriSpeech text into sentence-like text. Each Whisper transcript is
+compared against the original transcript after case and punctuation are stripped;
+utterances above `--max-whisper-wer` are omitted with a progress warning instead
+of silently poisoning the dataset. Use `--no-whisper-transcripts` to keep the
+original LibriSpeech text, `--whisper-model` to point at a specific ggml model,
+or `--max-whisper-wer` to adjust the divergence threshold.
 
 Prepare is restartable. Completed Mel files are validated and reused, extraction
 is guarded by `.extract-complete`, and `utterances.jsonl` is flushed after each
 utterance so an interrupted run can rebuild final splits without starting over.
+When Whisper transcript refinement is enabled, existing `utterances.jsonl` rows
+are rebuilt so older all-caps prepared data is refreshed while reusable Mel files
+stay in place.
 
 Rows include utterance metadata, the Mel feature path, transcript text, sentence
 spans, approximate frame spans, boundary labels, rendered phonemes/phones, and

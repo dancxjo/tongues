@@ -374,6 +374,14 @@ pub enum PrepareProgress {
         rows: usize,
         path: String,
     },
+    Transcribe {
+        utterance_id: String,
+        path: String,
+    },
+    Omit {
+        utterance_id: String,
+        reason: String,
+    },
     Reuse {
         utterance_id: String,
         rows: usize,
@@ -383,6 +391,13 @@ pub enum PrepareProgress {
         path: String,
         rows: usize,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptRefinement {
+    Use(String),
+    KeepOriginal,
+    Omit { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -539,6 +554,33 @@ pub fn prepare_dataset_with_progress(
     config: &InterpretationConfig,
     mut progress: impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
+    prepare_dataset_inner(out, config, &mut progress, false, |_, _, _, _| {
+        Ok(TranscriptRefinement::KeepOriginal)
+    })
+}
+
+pub fn prepare_dataset_with_progress_and_transcript_refiner(
+    out: &Path,
+    config: &InterpretationConfig,
+    mut progress: impl FnMut(PrepareProgress),
+    mut transcript_refiner: impl FnMut(&str, &Path, &[f32], &str) -> Result<TranscriptRefinement>,
+) -> Result<PrepareReport> {
+    prepare_dataset_inner(
+        out,
+        config,
+        &mut progress,
+        true,
+        |id, path, samples, seed| transcript_refiner(id, path, samples, seed),
+    )
+}
+
+fn prepare_dataset_inner(
+    out: &Path,
+    config: &InterpretationConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+    refresh_rows: bool,
+    mut transcript_refiner: impl FnMut(&str, &Path, &[f32], &str) -> Result<TranscriptRefinement>,
+) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(out.join("features")).context("creating features directory")?;
     let archive = out.join("source.tar.gz");
@@ -546,7 +588,7 @@ pub fn prepare_dataset_with_progress(
         progress(PrepareProgress::Stage {
             message: format!("Downloading {}", config.download_url),
         });
-        download_to_part(&config.download_url, &archive, &mut progress)?;
+        download_to_part(&config.download_url, &archive, progress)?;
     }
     let source_dir = out.join("source");
     let extract_marker = out.join(".extract-complete");
@@ -591,7 +633,15 @@ pub fn prepare_dataset_with_progress(
         .collect::<BTreeSet<_>>();
     let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
     let utterances_path = out.join("utterances.jsonl");
-    let mut rows = recover_utterance_rows(&utterances_path, out, config)?;
+    if refresh_rows && utterances_path.exists() {
+        fs::remove_file(&utterances_path)
+            .with_context(|| format!("removing stale {}", utterances_path.display()))?;
+    }
+    let mut rows = if refresh_rows {
+        Vec::new()
+    } else {
+        recover_utterance_rows(&utterances_path, out, config)?
+    };
     rows.retain(|row| selected_ids.contains(&row.utterance_id));
     for row in &mut rows {
         if !row_has_syntax(row) {
@@ -602,7 +652,7 @@ pub fn prepare_dataset_with_progress(
         }
     }
     if utterances_path.exists() {
-        write_jsonl_atomic(&utterances_path, &rows, &mut progress)?;
+        write_jsonl_atomic(&utterances_path, &rows, progress)?;
     }
     let mut row_by_id = rows
         .iter()
@@ -647,7 +697,31 @@ pub fn prepare_dataset_with_progress(
                 features.len()
             }
         };
-        let transcript = normalize_librispeech_text(&item.transcript);
+        progress(PrepareProgress::Transcribe {
+            utterance_id: item.utterance_id.clone(),
+            path: item.audio_path.display().to_string(),
+        });
+        let transcript = match transcript_refiner(
+            &item.utterance_id,
+            &item.audio_path,
+            &samples,
+            &item.transcript,
+        )? {
+            TranscriptRefinement::Use(text) => normalize_asr_transcript(&text),
+            TranscriptRefinement::KeepOriginal => normalize_librispeech_text(&item.transcript),
+            TranscriptRefinement::Omit { reason } => {
+                progress(PrepareProgress::Omit {
+                    utterance_id: item.utterance_id,
+                    reason,
+                });
+                continue;
+            }
+        };
+        let transcript = if transcript.trim().is_empty() {
+            normalize_librispeech_text(&item.transcript)
+        } else {
+            transcript
+        };
         let sentences = sentence_supervision(&detector, &transcript, frames, config)?;
         let repair_examples = repair_supervision(&sentences);
         let word_supervision = word_supervision(&sentences);
@@ -675,6 +749,10 @@ pub fn prepare_dataset_with_progress(
     utterance_writer.flush()?;
 
     let mut shuffled = rows;
+    anyhow::ensure!(
+        !shuffled.is_empty(),
+        "no usable utterances remained after transcript preparation"
+    );
     shuffled.shuffle(&mut rand::rngs::StdRng::seed_from_u64(config.seed));
     let n = shuffled.len();
     let train_end = ((n as f64) * config.train_frac).round().min(n as f64) as usize;
@@ -682,9 +760,9 @@ pub fn prepare_dataset_with_progress(
     let train = shuffled[..train_end].to_vec();
     let valid = shuffled[train_end..valid_end].to_vec();
     let test = shuffled[valid_end..].to_vec();
-    write_jsonl_atomic(&out.join("train.jsonl"), &train, &mut progress)?;
-    write_jsonl_atomic(&out.join("valid.jsonl"), &valid, &mut progress)?;
-    write_jsonl_atomic(&out.join("test.jsonl"), &test, &mut progress)?;
+    write_jsonl_atomic(&out.join("train.jsonl"), &train, progress)?;
+    write_jsonl_atomic(&out.join("valid.jsonl"), &valid, progress)?;
+    write_jsonl_atomic(&out.join("test.jsonl"), &test, progress)?;
     let vocab = build_text_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
     fs::write(
         out.join("vocab.json"),
@@ -877,6 +955,21 @@ pub fn normalize_librispeech_text(text: &str) -> String {
             'A'..='Z' | '\'' | ' ' | '.' | '?' | '!' => ch,
             ',' | ';' | ':' => ' ',
             _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn normalize_asr_transcript(text: &str) -> String {
+    text.chars()
+        .filter_map(|ch| match ch {
+            ch if ch.is_control() => Some(' '),
+            '\u{2018}' | '\u{2019}' => Some('\''),
+            '\u{201c}' | '\u{201d}' => Some('"'),
+            '\u{2013}' | '\u{2014}' => Some('-'),
+            ch => Some(ch),
         })
         .collect::<String>()
         .split_whitespace()
@@ -2818,7 +2911,7 @@ fn edit_distance<T: Eq>(left: &[T], right: &[T]) -> usize {
 
 fn dataset_readme(config: &InterpretationConfig) -> String {
     format!(
-        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable log-Mel feature paths, seams sentence labels, and speech phonemicizer supervision.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
+        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable log-Mel feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
         config.dataset_id, config.subset
     )
 }

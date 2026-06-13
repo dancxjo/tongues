@@ -34,13 +34,16 @@ use burn::tensor::{Int, Tensor};
 use burn_cuda::{Cuda, CudaDevice};
 
 use speaking::data::notation::openepd::normalize_openepd_ipa;
+use speaking::{AudioFrame, SpeechRecognizer, WhisperSpeechRecognizer};
 use tongues_core::{Vocab, BOS_ID, EOS_ID, UNK_ID};
 use tongues_data::{Lexeme, Seq2SeqExample, Task};
 use tongues_g2p2g::{
     eval_report, load_model, predict, train, train_seq2seq_examples, ModelConfig, Seq2SeqModel,
     TrainConfig,
 };
-use tongues_interpretation::{InterpretationConfig, InterpretationTrainConfig, LibriSpeechSubset};
+use tongues_interpretation::{
+    InterpretationConfig, InterpretationTrainConfig, LibriSpeechSubset, TranscriptRefinement,
+};
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 
 // ── Backend aliases ────────────────────────────────────────────────────────
@@ -60,6 +63,7 @@ const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
 const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
 const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
 const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
+const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.35;
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
@@ -695,6 +699,18 @@ enum InterpretationCommands {
         /// Limit utterances for smoke tests
         #[arg(long)]
         max_utterances: Option<usize>,
+
+        /// Whisper ggml model path for transcript recasing/punctuation.
+        #[arg(long)]
+        whisper_model: Option<PathBuf>,
+
+        /// Keep original LibriSpeech transcript text instead of Whisper recasing.
+        #[arg(long)]
+        no_whisper_transcripts: bool,
+
+        /// Maximum word error rate allowed between Whisper text and the original transcript.
+        #[arg(long, default_value_t = DEFAULT_WHISPER_TRANSCRIPT_MAX_WER)]
+        max_whisper_wer: f64,
     },
 
     /// Train the LibriSpeech ASR model
@@ -3317,12 +3333,19 @@ fn run_interpretation_command(
             subset,
             out,
             max_utterances,
+            whisper_model,
+            no_whisper_transcripts,
+            max_whisper_wer,
         } => {
             let subset = LibriSpeechSubset::parse(&subset).ok_or_else(|| {
                 anyhow::anyhow!(
                     "invalid LibriSpeech subset `{subset}`; supported: mini, train-clean-100"
                 )
             })?;
+            anyhow::ensure!(
+                (0.0..=1.0).contains(&max_whisper_wer),
+                "--max-whisper-wer must be between 0.0 and 1.0"
+            );
             let mut config = InterpretationConfig {
                 subset,
                 dataset_id: subset.dataset_id().to_string(),
@@ -3334,12 +3357,63 @@ fn run_interpretation_command(
                 "Preparing LibriSpeech ASR dataset at {}",
                 out.display()
             ));
-            let report = tongues_interpretation::prepare_dataset_with_progress(&out, &config, {
+            let progress = {
                 let pb = pb.clone();
                 move |progress| {
-                    pb.set_message(interpretation_prepare_progress_message(progress));
+                    update_interpretation_prepare_progress(&pb, progress);
                 }
-            })?;
+            };
+            let report = if no_whisper_transcripts {
+                tongues_interpretation::prepare_dataset_with_progress(&out, &config, progress)?
+            } else {
+                let model_path = match whisper_model {
+                    Some(path) => path,
+                    None => models::ensure_asr_whisper_model_available()?,
+                };
+                pb.set_message(format!(
+                    "Loading Whisper transcript model from {}",
+                    model_path.display()
+                ));
+                let mut recognizer = WhisperSpeechRecognizer::new_quiet(&model_path)
+                    .with_context(|| format!("loading Whisper model {}", model_path.display()))?;
+                tongues_interpretation::prepare_dataset_with_progress_and_transcript_refiner(
+                    &out,
+                    &config,
+                    progress,
+                    move |utterance_id, audio_path, samples, original_transcript| {
+                        recognizer.push_frame(&AudioFrame {
+                            sample_rate_hz: tongues_interpretation::DEFAULT_SAMPLE_RATE_HZ,
+                            channels: 1,
+                            samples: samples.to_vec(),
+                        })?;
+                        let recognition = recognizer
+                            .poll_timed_transcript_with_finality(true)
+                            .with_context(|| {
+                                format!(
+                                    "Whisper transcription failed for {} ({})",
+                                    utterance_id,
+                                    audio_path.display()
+                                )
+                            })?;
+                        let whisper_text = recognition.text.trim();
+                        if whisper_text.is_empty() {
+                            return Ok(TranscriptRefinement::Omit {
+                                reason: "Whisper returned an empty transcript".to_string(),
+                            });
+                        }
+                        let wer = transcript_word_error_rate(original_transcript, whisper_text);
+                        if wer > max_whisper_wer {
+                            return Ok(TranscriptRefinement::Omit {
+                                reason: format!(
+                                    "Whisper transcript diverged from source transcript (WER {:.2} > {:.2})",
+                                    wer, max_whisper_wer
+                                ),
+                            });
+                        }
+                        Ok(TranscriptRefinement::Use(whisper_text.to_string()))
+                    },
+                )?
+            };
             finish_status(
                 pb,
                 format!(
@@ -3371,12 +3445,54 @@ fn run_interpretation_command(
                     "Training data missing; preparing LibriSpeech ASR dataset at {}",
                     data.display()
                 ));
-                tongues_interpretation::prepare_dataset_with_progress(&data, &config, {
+                let progress = {
                     let pb = pb.clone();
-                    move |progress| {
-                        pb.set_message(interpretation_prepare_progress_message(progress))
-                    }
-                })?;
+                    move |progress| update_interpretation_prepare_progress(&pb, progress)
+                };
+                let model_path = models::ensure_asr_whisper_model_available()?;
+                pb.set_message(format!(
+                    "Loading Whisper transcript model from {}",
+                    model_path.display()
+                ));
+                let mut recognizer = WhisperSpeechRecognizer::new_quiet(&model_path)
+                    .with_context(|| format!("loading Whisper model {}", model_path.display()))?;
+                tongues_interpretation::prepare_dataset_with_progress_and_transcript_refiner(
+                    &data,
+                    &config,
+                    progress,
+                    move |utterance_id, audio_path, samples, original_transcript| {
+                        recognizer.push_frame(&AudioFrame {
+                            sample_rate_hz: tongues_interpretation::DEFAULT_SAMPLE_RATE_HZ,
+                            channels: 1,
+                            samples: samples.to_vec(),
+                        })?;
+                        let recognition = recognizer
+                            .poll_timed_transcript_with_finality(true)
+                            .with_context(|| {
+                                format!(
+                                    "Whisper transcription failed for {} ({})",
+                                    utterance_id,
+                                    audio_path.display()
+                                )
+                            })?;
+                        let whisper_text = recognition.text.trim();
+                        if whisper_text.is_empty() {
+                            return Ok(TranscriptRefinement::Omit {
+                                reason: "Whisper returned an empty transcript".to_string(),
+                            });
+                        }
+                        let wer = transcript_word_error_rate(original_transcript, whisper_text);
+                        if wer > DEFAULT_WHISPER_TRANSCRIPT_MAX_WER {
+                            return Ok(TranscriptRefinement::Omit {
+                                reason: format!(
+                                    "Whisper transcript diverged from source transcript (WER {:.2} > {:.2})",
+                                    wer, DEFAULT_WHISPER_TRANSCRIPT_MAX_WER
+                                ),
+                            });
+                        }
+                        Ok(TranscriptRefinement::Use(whisper_text.to_string()))
+                    },
+                )?;
                 finish_status(pb, format!("Prepared {}", data.display()));
             }
             let mut train_config = InterpretationTrainConfig::default();
@@ -3439,10 +3555,83 @@ fn interpretation_prepare_progress_message(
             utterance_id,
             path
         ),
+        tongues_interpretation::PrepareProgress::Transcribe { utterance_id, path } => {
+            format!("Whisper-transcribing {} from {}", utterance_id, path)
+        }
+        tongues_interpretation::PrepareProgress::Omit {
+            utterance_id,
+            reason,
+        } => {
+            format!("Omitting {}: {}", utterance_id, reason)
+        }
         tongues_interpretation::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {}", format_count(rows), path)
         }
     }
+}
+
+fn update_interpretation_prepare_progress(
+    pb: &indicatif::ProgressBar,
+    progress: tongues_interpretation::PrepareProgress,
+) {
+    let warning = match &progress {
+        tongues_interpretation::PrepareProgress::Omit {
+            utterance_id,
+            reason,
+        } => Some(format!("omitting {utterance_id}: {reason}")),
+        _ => None,
+    };
+    pb.set_message(interpretation_prepare_progress_message(progress));
+    if let Some(warning) = warning {
+        if !quiet_output() {
+            pb.suspend(|| eprintln!("warning: {warning}"));
+        }
+    }
+}
+
+fn transcript_word_error_rate(reference: &str, candidate: &str) -> f64 {
+    let reference_words = comparable_transcript_words(reference);
+    let candidate_words = comparable_transcript_words(candidate);
+    if reference_words.is_empty() {
+        return if candidate_words.is_empty() { 0.0 } else { 1.0 };
+    }
+    edit_distance_words(&reference_words, &candidate_words) as f64 / reference_words.len() as f64
+}
+
+fn comparable_transcript_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|word| {
+            let normalized = word
+                .chars()
+                .filter_map(|ch| {
+                    if ch.is_ascii_alphanumeric() {
+                        Some(ch.to_ascii_uppercase())
+                    } else if matches!(ch, '\'' | '\u{2019}') {
+                        Some('\'')
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>();
+            (!normalized.is_empty()).then_some(normalized)
+        })
+        .collect()
+}
+
+fn edit_distance_words(reference: &[String], candidate: &[String]) -> usize {
+    let mut previous = (0..=candidate.len()).collect::<Vec<_>>();
+    let mut current = vec![0; candidate.len() + 1];
+    for (i, reference_word) in reference.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, candidate_word) in candidate.iter().enumerate() {
+            let substitution = previous[j] + usize::from(reference_word != candidate_word);
+            let insertion = current[j] + 1;
+            let deletion = previous[j + 1] + 1;
+            current[j + 1] = substitution.min(insertion).min(deletion);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[candidate.len()]
 }
 
 fn cmd_interpretation_train(
@@ -6054,6 +6243,24 @@ mod tests {
         assert_eq!(format_count(999), "999");
         assert_eq!(format_count(1_000), "1,000");
         assert_eq!(format_count(12_345_678), "12,345,678");
+    }
+
+    #[test]
+    fn transcript_wer_accepts_case_and_punctuation_cleanup() {
+        let wer = transcript_word_error_rate(
+            "THE SECRET GARDEN WAS FIRST PUBLISHED IN NINETEEN ELEVEN",
+            "The Secret Garden was first published in nineteen eleven.",
+        );
+        assert_eq!(wer, 0.0);
+    }
+
+    #[test]
+    fn transcript_wer_rejects_different_wording() {
+        let wer = transcript_word_error_rate(
+            "THE SECRET GARDEN WAS FIRST PUBLISHED IN NINETEEN ELEVEN",
+            "This recording is from LibriVox and has nothing to do with that sentence.",
+        );
+        assert!(wer > DEFAULT_WHISPER_TRANSCRIPT_MAX_WER);
     }
 
     #[test]
