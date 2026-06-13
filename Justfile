@@ -28,6 +28,10 @@ sentence-parser *args:
     cargo run --bin tongues -- sentence-parser "$@"
 
 # Forward a model-family command to the tongues CLI
+librispeech-asr *args:
+    cargo run --bin tongues -- librispeech-asr "$@"
+
+# Forward a model-family command to the tongues CLI
 speech-manifold *args:
     cargo run --bin tongues -- speech-manifold "$@"
 

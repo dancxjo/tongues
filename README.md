@@ -69,6 +69,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
 - [Sentence parser](docs/sentence-parser.md)
+- [LibriSpeech ASR](docs/librispeech-asr.md)
 - [Speech manifold](docs/speech-manifold.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
@@ -83,6 +84,7 @@ crates/tongues-data              lexicon parsing, IPA normalization, splits, col
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
+crates/tongues-librispeech-asr   utterance-level Mel ASR with sentence/phoneme supervision
 crates/tongues-speech-manifold   multimodal speech-manifold data/model family
 crates/tongues-sentence-parser   cursor-boundary data and model-family code
 crates/tongues-cli               command-line routing and model/data wiring

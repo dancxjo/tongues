@@ -40,6 +40,7 @@ use tongues_g2p2g::{
     eval_report, load_model, predict, train, train_seq2seq_examples, ModelConfig, Seq2SeqModel,
     TrainConfig,
 };
+use tongues_librispeech_asr::{LibriSpeechAsrConfig, LibriSpeechAsrTrainConfig, LibriSpeechSubset};
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 use tongues_speech_manifold::{
     SpeechManifoldConfig, SpeechManifoldTask, SpeechManifoldTrainConfig,
@@ -60,6 +61,8 @@ const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
 const DEFAULT_G2P2G_MODEL_DIR: &str = "models/g2p2g/openepd-v0";
 const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
 const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
+const DEFAULT_LIBRISPEECH_ASR_DATA_DIR: &str = "datasets/librispeech-asr/mini-v0";
+const DEFAULT_LIBRISPEECH_ASR_MODEL_DIR: &str = "models/librispeech-asr/mini-v0";
 const DEFAULT_SPEECH_MANIFOLD_DATA_DIR: &str = "datasets/speech-manifold/openepd-synth-v0";
 const DEFAULT_SPEECH_MANIFOLD_MODEL_DIR: &str = "models/speech-manifold/openepd-synth-v0";
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
@@ -135,6 +138,13 @@ enum Commands {
     SentenceParser {
         #[command(subcommand)]
         command: SentenceParserCommands,
+    },
+
+    /// Prepare, train, evaluate, and stream LibriSpeech ASR models
+    #[command(name = "librispeech-asr")]
+    LibriSpeechAsr {
+        #[command(subcommand)]
+        command: LibriSpeechAsrCommands,
     },
 
     /// Prepare, train, and probe the shared multimodal speech manifold
@@ -772,6 +782,76 @@ enum SpeechManifoldCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum LibriSpeechAsrCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
+    /// Prepare LibriSpeech ASR data with Mel, sentence, and phoneme supervision
+    Prepare {
+        /// LibriSpeech subset: mini or train-clean-100
+        #[arg(long, default_value = "mini")]
+        subset: String,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        out: PathBuf,
+
+        /// Limit utterances for smoke tests
+        #[arg(long)]
+        max_utterances: Option<usize>,
+    },
+
+    /// Train the LibriSpeech ASR model
+    Train {
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        out: PathBuf,
+
+        /// Maximum training epochs
+        #[arg(long)]
+        epochs: Option<usize>,
+
+        /// Mini-batch size
+        #[arg(long)]
+        batch_size: Option<usize>,
+
+        /// Random seed
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Evaluate a LibriSpeech ASR model
+    Eval {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/librispeech-asr/mini-v0")]
+        data: PathBuf,
+
+        /// Split to evaluate: train, valid, or test
+        #[arg(long, default_value = "test")]
+        split: String,
+    },
+
+    /// Stream raw 16 kHz mono WAV audio from a file through the ASR model
+    Stream {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/librispeech-asr/mini-v0")]
+        model: PathBuf,
+
+        /// WAV file to stream for v1 smoke testing
+        #[arg(long)]
+        wav: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum WiktionaryCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
@@ -1022,6 +1102,9 @@ fn main() -> Result<()> {
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
+        Commands::LibriSpeechAsr { command } => {
+            run_librispeech_asr_command(command, device_arg, output_mode)
+        }
         Commands::SpeechManifold { command } => {
             run_speech_manifold_command(command, device_arg, output_mode)
         }
@@ -1156,6 +1239,12 @@ fn command_needs_device(command: &Commands) -> bool {
                 | SpeechManifoldCommands::Eval { .. }
                 | SpeechManifoldCommands::Infer { .. }
         ),
+        Commands::LibriSpeechAsr { command } => matches!(
+            command,
+            LibriSpeechAsrCommands::Train { .. }
+                | LibriSpeechAsrCommands::Eval { .. }
+                | LibriSpeechAsrCommands::Stream { .. }
+        ),
         Commands::SentenceParser { command } => matches!(
             command,
             SentenceParserCommands::Train { .. }
@@ -1185,6 +1274,9 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Stream { .. },
+        }
+        | Commands::LibriSpeechAsr {
+            command: LibriSpeechAsrCommands::Stream { .. },
         }
         | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
@@ -3463,6 +3555,391 @@ fn run_wiktionary_infer<B: Backend>(
         println!("{output}");
     }
     Ok(())
+}
+
+fn run_librispeech_asr_command(
+    command: LibriSpeechAsrCommands,
+    device_arg: DeviceArg,
+    _output_mode: OutputMode,
+) -> Result<()> {
+    match command {
+        LibriSpeechAsrCommands::Clean(args) => cmd_clean_family(
+            "librispeech-asr",
+            &args,
+            DEFAULT_LIBRISPEECH_ASR_DATA_DIR,
+            DEFAULT_LIBRISPEECH_ASR_MODEL_DIR,
+        ),
+        LibriSpeechAsrCommands::Prepare {
+            subset,
+            out,
+            max_utterances,
+        } => {
+            let subset = LibriSpeechSubset::parse(&subset).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid LibriSpeech subset `{subset}`; supported: mini, train-clean-100"
+                )
+            })?;
+            let mut config = LibriSpeechAsrConfig {
+                subset,
+                dataset_id: subset.dataset_id().to_string(),
+                download_url: subset.archive_url().to_string(),
+                ..LibriSpeechAsrConfig::default()
+            };
+            config.max_utterances = max_utterances;
+            let pb = status_spinner(format!(
+                "Preparing LibriSpeech ASR dataset at {}",
+                out.display()
+            ));
+            let report = tongues_librispeech_asr::prepare_dataset_with_progress(&out, &config, {
+                let pb = pb.clone();
+                move |progress| {
+                    pb.set_message(librispeech_prepare_progress_message(progress));
+                }
+            })?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared LibriSpeech ASR dataset at {}: {} train / {} valid / {} test utterances",
+                    out.display(),
+                    format_count(report.train_examples),
+                    format_count(report.valid_examples),
+                    format_count(report.test_examples)
+                ),
+            );
+            Ok(())
+        }
+        LibriSpeechAsrCommands::Train {
+            data,
+            out,
+            epochs,
+            batch_size,
+            seed,
+        } => {
+            if !data.join("vocab.json").exists()
+                || !data.join("phoneme_vocab.json").exists()
+                || !data.join("phone_vocab.json").exists()
+                || !data.join("word_vocab.json").exists()
+                || !data.join("train.jsonl").exists()
+                || !data.join("valid.jsonl").exists()
+            {
+                let config = LibriSpeechAsrConfig::default();
+                let pb = status_spinner(format!(
+                    "Training data missing; preparing LibriSpeech ASR dataset at {}",
+                    data.display()
+                ));
+                tongues_librispeech_asr::prepare_dataset_with_progress(&data, &config, {
+                    let pb = pb.clone();
+                    move |progress| pb.set_message(librispeech_prepare_progress_message(progress))
+                })?;
+                finish_status(pb, format!("Prepared {}", data.display()));
+            }
+            let mut train_config = LibriSpeechAsrTrainConfig::default();
+            if let Some(epochs) = epochs {
+                train_config.epochs = epochs;
+            }
+            if let Some(batch_size) = batch_size {
+                train_config.batch_size = batch_size;
+            }
+            if let Some(seed) = seed {
+                train_config.seed = seed;
+            }
+            cmd_librispeech_asr_train(&data, &out, &train_config, device_arg)
+        }
+        LibriSpeechAsrCommands::Eval { model, data, split } => {
+            cmd_librispeech_asr_eval(&model, &data, &split, device_arg)
+        }
+        LibriSpeechAsrCommands::Stream { model, wav } => {
+            cmd_librispeech_asr_stream(&model, &wav, device_arg)
+        }
+    }
+}
+
+fn librispeech_prepare_progress_message(
+    progress: tongues_librispeech_asr::PrepareProgress,
+) -> String {
+    match progress {
+        tongues_librispeech_asr::PrepareProgress::Stage { message } => message,
+        tongues_librispeech_asr::PrepareProgress::Download { url, path, bytes } => {
+            format!(
+                "Downloading {} to {} ({} bytes)",
+                url,
+                path,
+                format_count(bytes)
+            )
+        }
+        tongues_librispeech_asr::PrepareProgress::Extract { path } => {
+            format!("Extracting {}", path)
+        }
+        tongues_librispeech_asr::PrepareProgress::Parse { transcripts } => {
+            format!("Parsed {} transcript rows", format_count(transcripts))
+        }
+        tongues_librispeech_asr::PrepareProgress::Features {
+            utterance_id,
+            rows,
+            path,
+        } => format!(
+            "Extracted {} Mel frames for {} -> {}",
+            format_count(rows),
+            utterance_id,
+            path
+        ),
+        tongues_librispeech_asr::PrepareProgress::Write { path, rows } => {
+            format!("Wrote {} rows to {}", format_count(rows), path)
+        }
+    }
+}
+
+fn cmd_librispeech_asr_train(
+    data: &Path,
+    out: &Path,
+    train_config: &LibriSpeechAsrTrainConfig,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let pb = status_spinner(format!(
+        "Loading LibriSpeech ASR data from {}",
+        data.display()
+    ));
+    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
+    let phoneme_vocab: Vocab = read_json_file(&data.join("phoneme_vocab.json"))?;
+    let phone_vocab: Vocab = read_json_file(&data.join("phone_vocab.json"))?;
+    let word_vocab: Vocab = read_json_file(&data.join("word_vocab.json"))?;
+    let train_rows = tongues_librispeech_asr::read_examples(&data.join("train.jsonl"))?;
+    let valid_rows = tongues_librispeech_asr::read_examples(&data.join("valid.jsonl"))?;
+    finish_status(
+        pb,
+        format!(
+            "Loaded {} train / {} valid utterances, vocab={} phoneme_vocab={} phone_vocab={} word_vocab={}",
+            format_count(train_rows.len()),
+            format_count(valid_rows.len()),
+            format_count(vocab.size()),
+            format_count(phoneme_vocab.size()),
+            format_count(phone_vocab.size()),
+            format_count(word_vocab.size())
+        ),
+    );
+    fs::create_dir_all(out).context("creating LibriSpeech ASR model directory")?;
+    let model_config = tongues_librispeech_asr::ModelConfig::new(
+        tongues_librispeech_asr::DEFAULT_MEL_BINS,
+        vocab.size(),
+        phoneme_vocab.size(),
+        phone_vocab.size(),
+        word_vocab.size(),
+    )
+    .with_dropout(train_config.dropout);
+    tongues_librispeech_asr::save_artifact_files(out, data, &model_config, train_config)?;
+    println!("LibriSpeech ASR checkpoint paths:");
+    println!("  train_state: {}", out.join("train_state.json").display());
+    println!(
+        "  epoch checkpoints: {}",
+        out.join("model-epoch-N.bin").display()
+    );
+    println!("  best model: {}", out.join("model.bin").display());
+    println!(
+        "  loss weights: transcript={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} masked_audio={}",
+        train_config.transcript_loss_weight,
+        train_config.boundary_loss_weight,
+        train_config.repair_loss_weight,
+        train_config.phoneme_loss_weight,
+        train_config.phone_loss_weight,
+        train_config.prev_word_loss_weight,
+        train_config.current_word_loss_weight,
+        train_config.next_word_loss_weight,
+        train_config.masked_word_loss_weight,
+        train_config.masked_word_phoneme_loss_weight,
+        train_config.masked_audio_loss_weight
+    );
+    let model_path = out.join("model");
+    let best = match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let mut rng = StdRng::seed_from_u64(train_config.seed);
+            tongues_librispeech_asr::train::<CpuTrainBackend, _>(
+                &model_config,
+                train_config,
+                data,
+                &train_rows,
+                &valid_rows,
+                &vocab,
+                &phoneme_vocab,
+                &phone_vocab,
+                &word_vocab,
+                &model_path,
+                &device,
+                &mut rng,
+            )?
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let mut rng = StdRng::seed_from_u64(train_config.seed);
+            tongues_librispeech_asr::train::<CudaTrainBackend, _>(
+                &model_config,
+                train_config,
+                data,
+                &train_rows,
+                &valid_rows,
+                &vocab,
+                &phoneme_vocab,
+                &phone_vocab,
+                &word_vocab,
+                &model_path,
+                &device,
+                &mut rng,
+            )?
+        }
+    };
+    println!(
+        "LibriSpeech ASR training complete. Best validation loss: {:.4}",
+        best
+    );
+    Ok(())
+}
+
+fn cmd_librispeech_asr_eval(
+    model_dir: &Path,
+    data: &Path,
+    split: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let phoneme_vocab: Vocab = read_json_file(&model_dir.join("phoneme_vocab.json"))?;
+    let phone_vocab: Vocab = read_json_file(&model_dir.join("phone_vocab.json"))?;
+    let word_vocab: Vocab = read_json_file(&model_dir.join("word_vocab.json"))?;
+    let model_config: tongues_librispeech_asr::ModelConfig =
+        read_json_file(&model_dir.join("model_config.json"))?;
+    let train_config: LibriSpeechAsrTrainConfig =
+        read_json_file(&model_dir.join("train_config.json"))?;
+    let rows = tongues_librispeech_asr::read_examples(&data.join(format!("{split}.jsonl")))?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model = tongues_librispeech_asr::load_model::<CpuInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let report = tongues_librispeech_asr::evaluate(
+                &model,
+                data,
+                &rows,
+                &vocab,
+                &phoneme_vocab,
+                &phone_vocab,
+                &word_vocab,
+                &train_config,
+                &device,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model = tongues_librispeech_asr::load_model::<CudaInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let report = tongues_librispeech_asr::evaluate(
+                &model,
+                data,
+                &rows,
+                &vocab,
+                &phoneme_vocab,
+                &phone_vocab,
+                &word_vocab,
+                &train_config,
+                &device,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_librispeech_asr_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg) -> Result<()> {
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let phoneme_vocab: Vocab = read_json_file(&model_dir.join("phoneme_vocab.json"))?;
+    let word_vocab: Vocab = read_json_file(&model_dir.join("word_vocab.json"))?;
+    let model_config: tongues_librispeech_asr::ModelConfig =
+        read_json_file(&model_dir.join("model_config.json"))?;
+    let config = LibriSpeechAsrConfig::default();
+    let samples = read_wav_mono_16k(wav)?;
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model = tongues_librispeech_asr::load_model::<CpuInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let event = tongues_librispeech_asr::stream_from_samples(
+                &model,
+                &samples,
+                &vocab,
+                &word_vocab,
+                &phoneme_vocab,
+                &config,
+                &device,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&event)?);
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model = tongues_librispeech_asr::load_model::<CudaInferBackend>(
+                &model_config,
+                model_dir,
+                &device,
+            )?;
+            let event = tongues_librispeech_asr::stream_from_samples(
+                &model,
+                &samples,
+                &vocab,
+                &word_vocab,
+                &phoneme_vocab,
+                &config,
+                &device,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&event)?);
+        }
+    }
+    Ok(())
+}
+
+fn read_wav_mono_16k(path: &Path) -> Result<Vec<f32>> {
+    let mut reader =
+        hound::WavReader::open(path).with_context(|| format!("opening WAV {}", path.display()))?;
+    let spec = reader.spec();
+    anyhow::ensure!(spec.sample_rate == 16_000, "stream WAV must be 16 kHz");
+    let channels = spec.channels.max(1) as usize;
+    let mut out = Vec::new();
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            let mut acc = 0.0f32;
+            let mut ch = 0usize;
+            for sample in reader.samples::<f32>() {
+                acc += sample?;
+                ch += 1;
+                if ch == channels {
+                    out.push(acc / channels as f32);
+                    acc = 0.0;
+                    ch = 0;
+                }
+            }
+        }
+        hound::SampleFormat::Int => {
+            let denom = ((1i64 << (spec.bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
+            let mut acc = 0.0f32;
+            let mut ch = 0usize;
+            for sample in reader.samples::<i32>() {
+                acc += sample? as f32 / denom;
+                ch += 1;
+                if ch == channels {
+                    out.push(acc / channels as f32);
+                    acc = 0.0;
+                    ch = 0;
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn run_speech_manifold_command(

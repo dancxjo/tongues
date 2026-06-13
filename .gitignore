@@ -37,3 +37,13 @@ target_verify/
 speech/src/data/lexicons/cmudict.dict
 crates/speech/src/data/lexicons/cmudict.dict
 datasets/wiktionary/*
+
+# Prepared dataset payloads that are expensive or rebuildable. Keep compact
+# metadata/manifests and curated source fixtures trackable.
+/datasets/**/*.part
+/datasets/**/.*.swp
+/datasets/**/*.tar
+/datasets/**/*.tar.gz
+/datasets/**/*.zip
+/datasets/**/source/
+/datasets/**/features/

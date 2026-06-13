@@ -4,6 +4,7 @@ members = [
     "crates/tongues-data",
     "crates/tongues-neural",
     "crates/tongues-g2p2g",
+    "crates/tongues-librispeech-asr",
     "crates/tongues-speech-manifold",
     "crates/tongues-sentence-parser",
     "crates/tongues-wiktionary",

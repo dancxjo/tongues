@@ -11,6 +11,7 @@ path = "src/main.rs"
 tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }
 tongues-g2p2g = { path = "../tongues-g2p2g" }
+tongues-librispeech-asr = { path = "../tongues-librispeech-asr" }
 tongues-neural = { path = "../tongues-neural" }
 tongues-sentence-parser = { path = "../tongues-sentence-parser" }
 tongues-speech-manifold = { path = "../tongues-speech-manifold" }
