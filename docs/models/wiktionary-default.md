@@ -187,3 +187,52 @@ Wiktionary task demos
 
 race: done in 43993ms wall; 44 successful inference demos, 0 failures, 43990ms summed inference time
 ```
+
+## Expanded race snapshot: June 15, 2026
+
+After expanding `just race` to 54 G2P2G forms and 29 curated Wiktionary
+round-trip cases, the smoke test completed all 93 inference demos without a
+runtime failure:
+
+```text
+race: 54 forms, 8 configured Wiktionary languages, compact task coverage
+race plan: g2p2g=54 rt, wiktionary=29 rt, wiktionary task demos=9 + raw
+race: done in 102037ms wall; 93 successful inference demos, 0 failures, 102032ms summed inference time
+```
+
+The G2P2G model remains notably adept at English. Common sight words and compact
+irregulars round-tripped cleanly, including `the -> ði -> the`,
+`said -> ˈsɛd -> said`, `one -> ˈwʌn -> one`, `two -> ˈtu -> two`, and
+`laugh -> ˈlæf -> laugh`. Longer compositional forms also held together:
+`unhelpfulness`, `rediscovering`, `reclassification`, `microbiological`,
+`internationalization`, and `hyperconnected` all came back recognizably or
+exactly. The English nonce probes were especially encouraging:
+`glimmerthorn`, `brindlewise`, `sprockleton`, and `mindlecrate` produced
+plausible English stress patterns and returned exactly.
+
+The Wiktionary model shows a different, more diagnostic behavior. The added
+sight-word probes look like a learner applying spelling-to-sound rules:
+`said -> seɪd -> said` and `where -> ˈʍɛː -> whear`. This is useful rather than
+bad news: it exposes regularization pressure where the model has not memorized
+the irregular spelling-pronunciation pair. At the same time, language-conditioned
+multi-morphemic and nonce forms are becoming disciplined. Examples include
+`unhelpfulness`, `glimmerthorn`, `brindlewise`, `desafortunadamente`,
+`lumivrage`, `Wiedervereinigung`, `Sonnenklangerei`, `ventoribus`, `φιλοσοφία`,
+and `νεφελόφως`.
+
+The phoneme/phone distinction is visibly being observed. `phones` outputs tend
+to carry the expected extra phonetic detail: aspiration, length, syllabicity,
+labialization, rhotic coloring, tie bars, and offglide marks show up in outputs
+such as `ˈʍɛː`, `ˈbɹʷɪndl̩ˌwaɪz`, `ˈkʰwɛtsəlkʰoʊ̯tʰl̩s`,
+`ˈviːdɐfɛɐ̯ˌaɪ̯nɪɡʊŋ`, and `pɹae̯ˈfʊl.d͡ʒi.oʊ̯`. The `phonemes` rows are usually
+broader and cleaner, for example `maˈɲana`, `desafoɾtunadaˈmente`,
+`ˈbʁøːtçən`, `ne.feˈlo.fos`, and `kɐɾ.m̩`.
+
+The main remaining failure flavors are informative. G2P2G treats non-English
+scripts and names through an English lens, producing regular but Anglicized
+forms such as Greek and Sanskrit probes collapsing toward `yuggiga`/`yuggaga`.
+The Wiktionary model handles several target-language probes well, but still has
+case artifacts, spelling normalization drift, and occasional script/language
+leakage: `jalapeño` as `Mantipeño`, `praefulgeo` as `prefulgio`,
+`कर्म` as `कर्`, and mixed-script Sanskrit outputs. These are exactly the kinds
+of qualitative errors the expanded race is meant to surface.

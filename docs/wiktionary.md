@@ -113,8 +113,8 @@ just race --cpu
 just race --skip-build Archaeopteryx Quetzalcoatlus mañana brötchen
 ```
 
-The default list is deliberately short and jagged: common English irregulars, dinosaur and taxonomic names, and Unicode-heavy forms such as `mañana`, `brötchen`, `Łódź`, `Dvořák`, `ἄνθρωπος`, and `कर्म`.
+The default list is deliberately jagged: sight words, common English irregulars, regular multi-morphemic English words, plausible nonce words, dinosaur and taxonomic names, and Unicode-heavy forms such as `mañana`, `brötchen`, `Łódź`, `Dvořák`, `ἄνθρωπος`, and `कर्म`. The Wiktionary round-trip sample also includes real and imaginary-looking probes across the default target languages: English, Spanish, French, German, Latin, Greek, and Sanskrit.
 
-The race output prints abbreviated counts up front, for example `g2p2g=23 rt`, `wiktionary=11 rt`, and `wiktionary task demos=9 + raw`. "Successful" means the inference command completed; it is not an exact-match score.
+The race output prints abbreviated counts up front, for example `g2p2g=54 rt`, `wiktionary=29 rt`, and `wiktionary task demos=9 + raw`. "Successful" means the inference command completed; it is not an exact-match score.
 
 The run is useful mostly as a smoke test and terminology check. It exercises phonemes and phones as distinct representations, runs phonetic realization from phonemes to phones, and keeps the raw-control example visible so vocabulary/control-token regressions are easy to spot.

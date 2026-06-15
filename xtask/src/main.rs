@@ -407,6 +407,12 @@ fn wiktionary_round_trip_cases(
     let sanskrit = preferred_lang(languages, "san");
 
     for (word, lang, notation) in [
+        ("said", english.as_deref(), "phonemes"),
+        ("where", english.as_deref(), "phones"),
+        ("unhelpfulness", english.as_deref(), "phonemes"),
+        ("internationalization", english.as_deref(), "phones"),
+        ("glimmerthorn", english.as_deref(), "phonemes"),
+        ("brindlewise", english.as_deref(), "phones"),
         ("Tyrannosaurus", english.as_deref(), "phonemes"),
         ("Archaeopteryx", english.as_deref(), "phones"),
         (
@@ -422,10 +428,22 @@ fn wiktionary_round_trip_cases(
         ),
         ("mañana", spanish.as_deref(), "phonemes"),
         ("jalapeño", spanish.as_deref(), "phones"),
+        ("desafortunadamente", spanish.as_deref(), "phonemes"),
+        ("clarolumbre", spanish.as_deref(), "phones"),
         ("rendezvous", french.as_deref(), "phones"),
+        ("déshumanisation", french.as_deref(), "phonemes"),
+        ("lumivrage", french.as_deref(), "phones"),
         ("brötchen", german.as_deref(), "phonemes"),
+        ("Wiedervereinigung", german.as_deref(), "phones"),
+        ("Sonnenklangerei", german.as_deref(), "phonemes"),
+        ("ventoribus", latin.as_deref(), "phonemes"),
+        ("praefulgeo", latin.as_deref(), "phones"),
         ("ἄνθρωπος", greek.as_deref(), "phonemes"),
+        ("φιλοσοφία", greek.as_deref(), "phones"),
+        ("νεφελόφως", greek.as_deref(), "phonemes"),
         ("कर्म", sanskrit.as_deref(), "phonemes"),
+        ("धर्मक्षेत्र", sanskrit.as_deref(), "phones"),
+        ("सुगमनिका", sanskrit.as_deref(), "phonemes"),
     ] {
         if let Some(lang) = lang {
             cases.push(WiktionaryRoundTripCase {
@@ -746,10 +764,32 @@ fn parse_toml_string_array(value: &str) -> Option<Vec<String>> {
 
 fn default_race_words() -> Vec<String> {
     [
+        // Sight words and compact irregulars.
+        "the",
+        "and",
+        "said",
+        "one",
+        "two",
         "have",
+        "come",
+        "where",
+        "laugh",
+        // Regular multi-morphemic English stress tests.
         "children",
         "through",
         "queue",
+        "unhelpfulness",
+        "rediscovering",
+        "reclassification",
+        "microbiological",
+        "internationalization",
+        "hyperconnected",
+        // English nonce words that should still look pronounceable.
+        "glimmerthorn",
+        "brindlewise",
+        "sprockleton",
+        "mindlecrate",
+        // Taxonomic and dinosaur-heavy forms.
         "Tyrannosaurus",
         "Archaeopteryx",
         "Velociraptor",
@@ -759,16 +799,31 @@ fn default_race_words() -> Vec<String> {
         "Micropachycephalosaurus",
         "Coelophysis",
         "Yi",
+        // Romance/Germanic real and nonce forms.
+        "rendezvous",
         "mañana",
         "jalapeño",
+        "desafortunadamente",
+        "clarolumbre",
+        "déshumanisation",
+        "lumivrage",
         "brötchen",
+        "Wiedervereinigung",
+        "Sonnenklangerei",
         "Kraftwerk",
         "Pteranodon",
         "Łódź",
         "Dvořák",
         "São Paulo",
+        // Classical and Indic script probes, including plausible nonce forms.
+        "ventoribus",
+        "praefulgeo",
         "ἄνθρωπος",
+        "φιλοσοφία",
+        "νεφελόφως",
         "कर्म",
+        "धर्मक्षेत्र",
+        "सुगमनिका",
     ]
     .into_iter()
     .map(str::to_string)
