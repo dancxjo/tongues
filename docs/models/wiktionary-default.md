@@ -233,7 +233,6 @@ eng/phones   where                   -> ˈʍɛɹ̩                        -> whe
 eng/phonemes unhelpfulness           -> ʌnˈhɛlpfəlnəs                -> unhelpfulness
 eng/phones   internationalization    -> ˌɪn.tɚˈneɪ.ʃnə.lɪˈze...      -> internationalization
 eng/phones   brindlewise             -> ˈbɹɪndɫ̩ˌwaɪz                -> brindlewise
-eng/phones   Archaeopteryx           -> ˌɑɹ.kiˈɑp.tə.ɹɪks            -> archiopterics
 ```
 
 `said -> seɪd -> sayed` is useful rather than merely bad: it shows the model applying a regular sound-to-spelling rule where the dedicated G2P2G model has already memorized the irregular English word. `where`, `internationalization`, and `brindlewise` show that the Wiktionary task model can still recover exact English spellings when the task conditioning and representation line up.
@@ -294,7 +293,6 @@ lat/phones   praefulgeo     -> pʁefʊlˈd͡ʒio         -> prefulgio
 san/phonemes कर्म           -> kɐɾm                 -> क्रम
 san/phones   धर्मक्षेत्र    -> juː.ɐ́.mɐ.ki.ɡɐ.t͡sɐ -> URक्GACATSA
 san/phonemes सुगमनिका       -> sú.ɡɐ.ni.ko          -> स्ूनκo
-normalize Archaeopteryx!    -> archaeopteryxá
 ```
 
 These failures suggest that the model has learned a shared multilingual orthography/phonology space, but still needs stronger task boundaries, script locking, and casing policy.

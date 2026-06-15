@@ -93,6 +93,15 @@ struct WiktionaryRoundTripCase {
     notation: &'static str,
 }
 
+struct WiktionaryTaskDemoInputs<'a> {
+    pronunciation_word: &'a str,
+    normalize_word: &'a str,
+    orthography_guess_word: &'a str,
+    phonology_guess_input: &'static str,
+    combined_guess_word: &'a str,
+    combined_guess_phonology: &'static str,
+}
+
 impl RaceStats {
     fn new() -> Self {
         Self {
@@ -215,11 +224,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
         .iter()
         .find(|lang| lang.as_str() == "eng")
         .unwrap_or(&languages[0]);
-    let demo_word = words
-        .iter()
-        .find(|word| word.as_str() == "Archaeopteryx")
-        .or_else(|| words.iter().find(|word| word.as_str() == "Tyrannosaurus"))
-        .unwrap_or(&words[0]);
+    let demo_inputs = wiktionary_task_demo_inputs(&words);
     match run_wiktionary_infer(
         &tongues,
         &config,
@@ -228,7 +233,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
         "phones",
         Some("en-GB.RP"),
         false,
-        demo_word,
+        demo_inputs.pronunciation_word,
     ) {
         Ok(pronunciation) => {
             stats.record(pronunciation.elapsed);
@@ -236,7 +241,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                 "  ok {:>6}  {:<38} {} -> {}",
                 fmt_ms(pronunciation.elapsed),
                 "orthography-to-phones --variety en-GB.RP",
-                clip(demo_word, 14),
+                clip(demo_inputs.pronunciation_word, 14),
                 clip(&pronunciation.output, 28)
             );
 
@@ -248,7 +253,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                 "phonemes",
                 None,
                 false,
-                demo_word,
+                demo_inputs.pronunciation_word,
             ) {
                 Ok(result) => {
                     stats.record(result.elapsed);
@@ -256,7 +261,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                         "  ok {:>6}  {:<38} {} -> {}",
                         fmt_ms(result.elapsed),
                         "orthography-to-phonemes",
-                        clip(demo_word, 28),
+                        clip(demo_inputs.pronunciation_word, 28),
                         clip(&result.output, 28)
                     );
                     Some(result.output)
@@ -304,7 +309,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     notation: "phones",
                     variety: None,
                     raw: false,
-                    input: format!("{demo_word}!"),
+                    input: format!("{}!", demo_inputs.normalize_word),
                 },
                 WiktionaryInferDemo {
                     label: "guess-lang-from-orthography",
@@ -313,7 +318,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     notation: "phones",
                     variety: None,
                     raw: false,
-                    input: demo_word.to_string(),
+                    input: demo_inputs.orthography_guess_word.to_string(),
                 },
                 WiktionaryInferDemo {
                     label: "guess-lang-from-phonology",
@@ -322,7 +327,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     notation: "phones",
                     variety: None,
                     raw: false,
-                    input: pronunciation.output.clone(),
+                    input: demo_inputs.phonology_guess_input.to_string(),
                 },
                 WiktionaryInferDemo {
                     label: "guess-lang-from-orthography-and-phonology",
@@ -331,7 +336,10 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     notation: "phones",
                     variety: None,
                     raw: false,
-                    input: format!("{demo_word} => {}", pronunciation.output),
+                    input: format!(
+                        "{} => {}",
+                        demo_inputs.combined_guess_word, demo_inputs.combined_guess_phonology
+                    ),
                 },
                 WiktionaryInferDemo {
                     label: "--raw tagged source",
@@ -341,7 +349,8 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     variety: None,
                     raw: true,
                     input: format!(
-                        "<task:orthography_to_phonology> <lang:{demo_lang}> <repr:phones> {demo_word}"
+                        "<task:orthography_to_phonology> <lang:{demo_lang}> <repr:phones> {}",
+                        demo_inputs.pronunciation_word
                     ),
                 },
             ] {
@@ -414,7 +423,7 @@ fn wiktionary_round_trip_cases(
         ("glimmerthorn", english.as_deref(), "phonemes"),
         ("brindlewise", english.as_deref(), "phones"),
         ("Tyrannosaurus", english.as_deref(), "phonemes"),
-        ("Archaeopteryx", english.as_deref(), "phones"),
+        ("Pachycephalosaurus", english.as_deref(), "phones"),
         (
             "Velociraptor",
             latin.as_deref().or(english.as_deref()),
@@ -454,6 +463,17 @@ fn wiktionary_round_trip_cases(
         }
     }
     cases
+}
+
+fn wiktionary_task_demo_inputs(words: &[String]) -> WiktionaryTaskDemoInputs<'_> {
+    WiktionaryTaskDemoInputs {
+        pronunciation_word: pick_word(words, "through"),
+        normalize_word: pick_word(words, "déshumanisation"),
+        orthography_guess_word: pick_word(words, "brötchen"),
+        phonology_guess_input: "maˈɲana",
+        combined_guess_word: pick_word(words, "धर्मक्षेत्र"),
+        combined_guess_phonology: "dʱɐɾmɐkʂeːt̪ɾɐ",
+    }
 }
 
 fn preferred_lang(languages: &[String], target: &str) -> Option<String> {
@@ -708,7 +728,7 @@ fn extract_prediction(stdout: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_prediction;
+    use super::{extract_prediction, wiktionary_round_trip_cases, wiktionary_task_demo_inputs};
 
     #[test]
     fn extracts_prediction_from_verbose_output() {
@@ -724,6 +744,35 @@ mod tests {
     #[test]
     fn rejects_unlabeled_multi_line_output() {
         assert_eq!(extract_prediction("one\ntwo\n"), None);
+    }
+
+    #[test]
+    fn wiktionary_race_cases_use_diverse_language_probes() {
+        let words = super::default_race_words();
+        let languages = ["eng", "spa", "fra", "deu", "lat", "grc", "san"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let cases = wiktionary_round_trip_cases(&words, &languages);
+
+        assert!(cases
+            .iter()
+            .any(|case| case.lang == "san" && case.word == "धर्मक्षेत्र"));
+        assert!(cases
+            .iter()
+            .any(|case| case.lang == "deu" && case.word == "brötchen"));
+        assert!(cases.iter().all(|case| case.word != "Archaeopteryx"));
+    }
+
+    #[test]
+    fn wiktionary_task_demos_do_not_reuse_international_words_for_language_guessing() {
+        let words = super::default_race_words();
+        let demos = wiktionary_task_demo_inputs(&words);
+
+        assert_eq!(demos.pronunciation_word, "through");
+        assert_eq!(demos.orthography_guess_word, "brötchen");
+        assert_eq!(demos.phonology_guess_input, "maˈɲana");
+        assert_eq!(demos.combined_guess_word, "धर्मक्षेत्र");
     }
 }
 
