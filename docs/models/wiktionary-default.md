@@ -150,7 +150,7 @@ Wiktionary:
   san/phonemes कर्म         -> ˈʔa.fi.n             -> άφfηn
 ```
 
-## Expanded training snapshot: June 14, 2026
+## Expanded training snapshot: June 14-15, 2026
 
 A fresh expanded run rebuilt the Wiktionary task set with 8 configured languages and a larger vocabulary:
 
@@ -160,7 +160,7 @@ Encoded 5,732,554 train / 716,569 valid examples with vocab size 4,945
 lr=0.0003 wd=0.0001 dropout=0.1 epochs=20 patience=5 batch_size=64
 ```
 
-Validation improved strongly through epoch 6, then began to flatten:
+Validation improved strongly through epoch 6, appeared to flatten at epochs 7-8, then found a new best at epoch 9:
 
 ```text
 Epoch 1 | train_loss=0.0603  val_loss=0.0397  val_exact_match=0.890  val_token_acc=0.970
@@ -171,9 +171,10 @@ Epoch 5 | train_loss=0.0307  val_loss=0.0322  val_exact_match=0.902  val_token_a
 Epoch 6 | train_loss=0.0300  val_loss=0.0320  val_exact_match=0.906  val_token_acc=0.977
 Epoch 7 | train_loss=0.0294  val_loss=0.0323  val_exact_match=0.904  val_token_acc=0.975
 Epoch 8 | train_loss=0.0290  val_loss=0.0324  val_exact_match=0.905  val_token_acc=0.976
+Epoch 9 | train_loss=0.0286  val_loss=0.0302  val_exact_match=0.906  val_token_acc=0.976
 ```
 
-Epoch 6 is the best checkpoint reported so far. Later checkpoints keep reducing training loss but show the first signs of a validation shelf.
+Epoch 9 is the best checkpoint reported so far by validation loss. Exact match did not jump with the loss improvement, which suggests the model may be getting more confident and better calibrated on examples it already mostly gets right, while still making similar sequence-level errors on hard cases.
 
 ## Expanded race snapshot: June 15, 2026
 
@@ -233,6 +234,7 @@ eng/phones   where                   -> ˈʍɛɹ̩                        -> whe
 eng/phonemes unhelpfulness           -> ʌnˈhɛlpfəlnəs                -> unhelpfulness
 eng/phones   internationalization    -> ˌɪn.tɚˈneɪ.ʃnə.lɪˈze...      -> internationalization
 eng/phones   brindlewise             -> ˈbɹɪndɫ̩ˌwaɪz                -> brindlewise
+eng/phones   Pachycephalosaurus      -> ˌpæk.əˈsɛf.ə.loʊˌsɔː...      -> pacasephalosaurus
 ```
 
 `said -> seɪd -> sayed` is useful rather than merely bad: it shows the model applying a regular sound-to-spelling rule where the dedicated G2P2G model has already memorized the irregular English word. `where`, `internationalization`, and `brindlewise` show that the Wiktionary task model can still recover exact English spellings when the task conditioning and representation line up.
@@ -280,6 +282,30 @@ grc/phonemes νεφελόφως          -> ne.feˈlo.fos         -> νεφελ�
 
 These are not all exact or ideal outputs, but the regularities are clearly language-shaped. German compounds and Greek phonology look especially promising.
 
+### Task-demo probes and language guessing
+
+The task-demo section is useful because it exercises individual task heads directly. With `through`, the Wiktionary model regularizes aggressively:
+
+```text
+orthography-to-phones --variety en-GB.RP through -> θɹʌʊ
+orthography-to-phonemes                through -> θɹʌf
+phonemes-to-orthography                θɹʌf -> thruff
+phones-to-orthography                  θɹʌʊ -> throw
+phonetic-realization                   θɹʌf -> θɹʌf
+```
+
+This is not the dedicated English G2P2G behavior, where `through -> ˈθɹu -> thru` is stable. It shows the multilingual Wiktionary model still balancing memorized English irregulars against cross-language spelling-sound regularization.
+
+Language guessing shows the value of combined evidence:
+
+```text
+guess-lang-from-orthography            brötchen -> deu
+guess-lang-from-phonology              maˈɲana -> ell
+guess-lang-from-orthography-and-phonology धर्मक्षेत्र => dʱɐɾmɐkʂeːt̪ɾ... -> san
+```
+
+Orthography alone can be strong when the script or diacritics are distinctive. Phonology alone can still misfire, as with Spanish `maˈɲana` guessed as `ell`. Combined orthography+phonology is much more reliable, especially when the script provides a strong anchor.
+
 ### Structured failures remain valuable
 
 The remaining failures are no longer just noise. They show language leakage, script drift, casing artifacts, and overgeneralized phonology:
@@ -293,6 +319,7 @@ lat/phones   praefulgeo     -> pʁefʊlˈd͡ʒio         -> prefulgio
 san/phonemes कर्म           -> kɐɾm                 -> क्रम
 san/phones   धर्मक्षेत्र    -> juː.ɐ́.mɐ.ki.ɡɐ.t͡sɐ -> URक्GACATSA
 san/phonemes सुगमनिका       -> sú.ɡɐ.ni.ko          -> स्ूनκo
+normalize déshumanisation!  -> déshumanisationá
 ```
 
 These failures suggest that the model has learned a shared multilingual orthography/phonology space, but still needs stronger task boundaries, script locking, and casing policy.
@@ -302,7 +329,7 @@ These failures suggest that the model has learned a shared multilingual orthogra
 - G2P2G is already a strong English orthography-to-phonology-to-orthography model.
 - The expanded Wiktionary model is learning cross-task structure rather than merely memorizing rows.
 - The phone/phoneme distinction is visible in qualitative outputs.
-- Validation performance is strong: best reported exact match 90.6%, token accuracy 97.7% over 716,569 validation examples.
+- Validation performance is strong: best reported validation loss 0.0302, exact match 90.6%, token accuracy 97.6% over 716,569 validation examples.
 - The most useful next improvements are likely curriculum and scoping changes: language batches, explicit script tags, explicit casing tags, and separate normalized-orthography vs entry-title reconstruction tasks.
 
 The headline: this run shows structured linguistic behavior. The model is wrong in increasingly informative ways, which is exactly the kind of failure pattern worth studying.
