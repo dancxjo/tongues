@@ -124,115 +124,187 @@ The trainer should resume from epoch 12 using `model-epoch-11.bin`.
 
 ## Race progress snapshot: June 13, 2026
 
-After one roughly five-hour Wiktionary epoch, the `just race` smoke test looked
-promising: the model completed all 44 inference demos without failures, and the
-remaining pronunciation/spelling errors are mostly plausible native-speaker
-spellings or approximations rather than random output.
+After one roughly five-hour Wiktionary epoch, the `just race` smoke test looked promising: the model completed all 44 inference demos without failures, and the remaining pronunciation/spelling errors are mostly plausible native-speaker spellings or approximations rather than random output.
 
 ```text
-race: building tongues binary
 race: 23 forms, 8 configured Wiktionary languages, compact task coverage
-race: g2p2g=models/g2p2g/openepd-v0, wiktionary=models/wiktionary/enwiktionary-2026-06-01-v0-phones
 race plan: g2p2g=23 rt, wiktionary=11 rt, wiktionary task demos=9 + raw
-
-G2P2G round trips (compact stress sample)
-  ok  176ms +  186ms  have           -> hæv                -> have
-  ok  414ms +  336ms  children       -> ˈtʃɪl.dɹən         -> children
-  ok  197ms +  196ms  through        -> ˈθɹu               -> thru
-  ok  201ms +  153ms  queue          -> ˈkju               -> cue
-  ok  711ms +  578ms  Tyrannosaurus  -> tɪɹ.æ.nə.sɔɹ.əs    -> tyranosorous
-  ok  820ms +  674ms  Archaeopteryx  -> ˌɑɹ.kiˈɑp.təɹ.ɪks  -> archaeopterics
-  ok  787ms +  589ms  Velociraptor   -> vəˈlɑ.səɹˌæp.təɹ   -> velocerapter
-  ok  839ms +  743ms  Quetzalcoatlus -> kwɛt.sæl.koʊt.ləs  -> quetsalcoatless
-  ok  959ms +  705ms  Parasaurolophu... -> ˌpɛɹ.ə.sɔɹˈɑ.lə.fə... -> parasorolifous
-  ok 1203ms + 1053ms  Pachycephalosa... -> pæ.kɪ.sɛ.fə.lə.sɔɹ... -> packissephalosorou...
-  ok 1751ms +  919ms  Micropachyceph... -> ˌmaɪ.kɹoʊ.pəˌkaɪ.s... -> micropocycifolors
-  ok  610ms +  477ms  Coelophysis    -> ˌsi.ləˈfɪ.zɪs      -> sealifisis
-  ok  166ms +  173ms  Yi             -> ˈji                -> yee
-  ok  346ms +  290ms  mañana         -> məˈhɑ.nə           -> mahana
-  ok  565ms +  314ms  jalapeño       -> dʒɑ.lɑˈpɛ.noʊ      -> jalapeno
-  ok  376ms +  418ms  brötchen       -> ˈbɹʌ.tʃən          -> brutcheon
-  ok  464ms +  413ms  Kraftwerk      -> ˈkɹæf.twɚk         -> craftwork
-  ok  639ms +  430ms  Pteranodon     -> təɹ.æ.nə.ʊ.dɑn     -> teranodon
-  ok  267ms +  215ms  Łódź           -> ˈɛˈdeɪ             -> eday
-  ok  275ms +  240ms  Dvořák         -> dvəˈʊk             -> dvoke
-  ok  446ms +  310ms  São Paulo      -> ˌsu.pɔˈloʊ         -> supallo
-  ok  398ms +  276ms  ἄνθρωπος       -> ˈɛ.tʃəˌɡɑ          -> echiga
-  ok  257ms +  180ms  कर्म           -> ˈju.ɡə             -> uga
-
-Wiktionary orthography/phonology round trips (11 curated cases)
-  ok  852ms +  702ms  eng/phonemes Tyrannosaurus      -> taɪˈɹænəsɔːɹəs       -> tyranosorous
-  ok 1117ms +  830ms  eng/phones   Archaeopteryx      -> ɑɹˈt͡ʃɛə̯.ə.ptə.ɹɪks -> archaropterics
-  ok  884ms +  677ms  lat/phonemes Velociraptor       -> vɛloˈsiʁaptoːɐ̯      -> velosiraptor
-  ok  894ms +  759ms  eng/phones   Quetzalcoatlus     -> ˈkwɛtsəlˌkoʊtləs     -> quetzlecotless
-  ok 1117ms +  824ms  lat/phonemes Parasaurolophus    -> pa.ʁa.zaʊ̯.ʁoˈlo.fus -> parazaurolofus
-  ok  404ms +  372ms  spa/phonemes mañana             -> maˈɲana              -> mañana
-  ok  453ms +  435ms  spa/phones   jalapeño           -> xalaˈpeɲo            -> jalapeño
-  ok  506ms +  458ms  fra/phones   rendezvous         -> ʁɛnde.zvo            -> rendesvo
-  ok  511ms +  456ms  deu/phonemes brötchen           -> ˈbʁøːtçən            -> brötchen
-  ok  499ms +  455ms  grc/phonemes ἄνθρωπος           -> ˈanθropos            -> άνθροπος
-  ok  439ms +  311ms  san/phonemes कर्म               -> ˈʔa.fi.n             -> άφfηn
-
-Wiktionary task demos
-  ok 1051ms  orthography-to-phones --variety en-GB.RP Archaeopteryx -> ɑːˈtʃɛə̯.ə.ptə.ɹɪks
-  ok 1004ms  orthography-to-phonemes                Archaeopteryx -> ɑː(ɹ)ˈtʃiːəptəɹɪks
-  ok  710ms  phonemes-to-orthography                ɑː(ɹ)ˈtʃiːəptəɹɪks -> archioptorics
-  ok  783ms  phones-to-orthography                  ɑːˈtʃɛə̯.ə.ptə.ɹɪks -> archaropterics
-  ok  987ms  phonetic-realization                   ɑː(ɹ)ˈtʃiːəptəɹɪks -> ɑːɹˈtʃiːəptʰɹɪks
-  ok  788ms  normalize                              Archaeopteryx! -> archaeopteryxe
-  ok  254ms  guess-lang-from-orthography            Archaeopteryx -> deu
-  ok  241ms  guess-lang-from-phonology              ɑːˈtʃɛə̯.ə.ptə.ɹɪks -> eng
-  ok  287ms  guess-lang-from-orthography-and-phonology Archaeopteryx => ɑːˈtʃɛə̯.ə.... -> eng
-  ok 1157ms  --raw tagged source                    <task:orthography_to_phonolo... -> ɑɹˈt͡ʃɛə̯.ə.ptə.ɹɪks
-
 race: done in 43993ms wall; 44 successful inference demos, 0 failures, 43990ms summed inference time
 ```
 
+Representative rows:
+
+```text
+G2P2G:
+  have           -> hæv                -> have
+  children       -> ˈtʃɪl.dɹən         -> children
+  through        -> ˈθɹu               -> thru
+  queue          -> ˈkju               -> cue
+  Tyrannosaurus  -> tɪɹ.æ.nə.sɔɹ.əs    -> tyranosorous
+
+Wiktionary:
+  spa/phonemes mañana       -> maˈɲana              -> mañana
+  spa/phones   jalapeño     -> xalaˈpeɲo            -> jalapeño
+  deu/phonemes brötchen     -> ˈbʁøːtçən            -> brötchen
+  grc/phonemes ἄνθρωπος     -> ˈanθropos            -> άνθροπος
+  san/phonemes कर्म         -> ˈʔa.fi.n             -> άφfηn
+```
+
+## Expanded training snapshot: June 14, 2026
+
+A fresh expanded run rebuilt the Wiktionary task set with 8 configured languages and a larger vocabulary:
+
+```text
+Loaded 5,732,554 train / 716,569 valid prepared rows
+Encoded 5,732,554 train / 716,569 valid examples with vocab size 4,945
+lr=0.0003 wd=0.0001 dropout=0.1 epochs=20 patience=5 batch_size=64
+```
+
+Validation improved strongly through epoch 6, then began to flatten:
+
+```text
+Epoch 1 | train_loss=0.0603  val_loss=0.0397  val_exact_match=0.890  val_token_acc=0.970
+Epoch 2 | train_loss=0.0364  val_loss=0.0373  val_exact_match=0.899  val_token_acc=0.973
+Epoch 3 | train_loss=0.0334  val_loss=0.0351  val_exact_match=0.900  val_token_acc=0.974
+Epoch 4 | train_loss=0.0318  val_loss=0.0340  val_exact_match=0.900  val_token_acc=0.974
+Epoch 5 | train_loss=0.0307  val_loss=0.0322  val_exact_match=0.902  val_token_acc=0.975
+Epoch 6 | train_loss=0.0300  val_loss=0.0320  val_exact_match=0.906  val_token_acc=0.977
+Epoch 7 | train_loss=0.0294  val_loss=0.0323  val_exact_match=0.904  val_token_acc=0.975
+Epoch 8 | train_loss=0.0290  val_loss=0.0324  val_exact_match=0.905  val_token_acc=0.976
+```
+
+Epoch 6 is the best checkpoint reported so far. Later checkpoints keep reducing training loss but show the first signs of a validation shelf.
+
 ## Expanded race snapshot: June 15, 2026
 
-After expanding `just race` to 54 G2P2G forms and 29 curated Wiktionary
-round-trip cases, the smoke test completed all 93 inference demos without a
-runtime failure:
+After expanding `just race --cpu` to 54 G2P2G forms and 29 curated Wiktionary round-trip cases, the smoke test completed all 93 inference demos without a runtime failure:
 
 ```text
 race: 54 forms, 8 configured Wiktionary languages, compact task coverage
 race plan: g2p2g=54 rt, wiktionary=29 rt, wiktionary task demos=9 + raw
-race: done in 102037ms wall; 93 successful inference demos, 0 failures, 102032ms summed inference time
+race: done in ~102s wall; 93 successful inference demos, 0 failures
 ```
 
-The G2P2G model remains notably adept at English. Common sight words and compact
-irregulars round-tripped cleanly, including `the -> ði -> the`,
-`said -> ˈsɛd -> said`, `one -> ˈwʌn -> one`, `two -> ˈtu -> two`, and
-`laugh -> ˈlæf -> laugh`. Longer compositional forms also held together:
-`unhelpfulness`, `rediscovering`, `reclassification`, `microbiological`,
-`internationalization`, and `hyperconnected` all came back recognizably or
-exactly. The English nonce probes were especially encouraging:
-`glimmerthorn`, `brindlewise`, `sprockleton`, and `mindlecrate` produced
-plausible English stress patterns and returned exactly.
+### G2P2G: English sight-word and nonce-word strength
 
-The Wiktionary model shows a different, more diagnostic behavior. The added
-sight-word probes look like a learner applying spelling-to-sound rules:
-`said -> seɪd -> said` and `where -> ˈʍɛː -> whear`. This is useful rather than
-bad news: it exposes regularization pressure where the model has not memorized
-the irregular spelling-pronunciation pair. At the same time, language-conditioned
-multi-morphemic and nonce forms are becoming disciplined. Examples include
-`unhelpfulness`, `glimmerthorn`, `brindlewise`, `desafortunadamente`,
-`lumivrage`, `Wiedervereinigung`, `Sonnenklangerei`, `ventoribus`, `φιλοσοφία`,
-and `νεφελόφως`.
+The dedicated G2P2G model remains notably adept at English. Common sight words and compact irregulars round-trip cleanly:
 
-The phoneme/phone distinction is visibly being observed. `phones` outputs tend
-to carry the expected extra phonetic detail: aspiration, length, syllabicity,
-labialization, rhotic coloring, tie bars, and offglide marks show up in outputs
-such as `ˈʍɛː`, `ˈbɹʷɪndl̩ˌwaɪz`, `ˈkʰwɛtsəlkʰoʊ̯tʰl̩s`,
-`ˈviːdɐfɛɐ̯ˌaɪ̯nɪɡʊŋ`, and `pɹae̯ˈfʊl.d͡ʒi.oʊ̯`. The `phonemes` rows are usually
-broader and cleaner, for example `maˈɲana`, `desafoɾtunadaˈmente`,
-`ˈbʁøːtçən`, `ne.feˈlo.fos`, and `kɐɾ.m̩`.
+```text
+the    -> ði     -> the
+and    -> ænd    -> and
+said   -> ˈsɛd   -> said
+one    -> ˈwʌn   -> one
+two    -> ˈtu    -> two
+have   -> hæv    -> have
+come   -> ˈkʌm   -> come
+where  -> ˌwɛɹ   -> where
+laugh  -> ˈlæf   -> laugh
+```
 
-The main remaining failure flavors are informative. G2P2G treats non-English
-scripts and names through an English lens, producing regular but Anglicized
-forms such as Greek and Sanskrit probes collapsing toward `yuggiga`/`yuggaga`.
-The Wiktionary model handles several target-language probes well, but still has
-case artifacts, spelling normalization drift, and occasional script/language
-leakage: `jalapeño` as `Mantipeño`, `praefulgeo` as `prefulgio`,
-`कर्म` as `कर्`, and mixed-script Sanskrit outputs. These are exactly the kinds
-of qualitative errors the expanded race is meant to surface.
+Longer compositional forms also hold together:
+
+```text
+unhelpfulness        -> ʌnˈhɛlp.fəl.nəs       -> unhelpfulness
+rediscovering        -> ˌɹi.dɪˈskʌ.vəɹ.ɪŋ     -> rediscovering
+reclassification     -> ɹəˌklæ.sə.fəˈkeɪ.ʃ... -> reclassification
+microbiological      -> ˌmaɪ.kɹoʊˌbaɪ.əˈlɑ... -> microbiological
+internationalization -> ˌɪn.təɹˌnæ.ʃə.nə.l... -> internationalizati...
+hyperconnected       -> ˌhaɪ.pəɹ.kəˈnɛk.tɪ... -> hyperconnected
+```
+
+English nonce probes are especially encouraging:
+
+```text
+glimmerthorn  -> ˈɡlɪ.məɹˌθɔɹn   -> glimmerthorn
+brindlewise   -> ˈbɹɪn.dəlˌwaɪz  -> brindlewise
+sprockleton   -> ˈspɹɑ.kəl.tən   -> sprockleton
+mindlecrate   -> ˈmɪn.dəlˌkɹeɪt  -> mindlecrate
+```
+
+The sight-word behavior is striking: high-frequency English forms are recovered cleanly, while unfamiliar or invented words are sounded out according to learned English regularities. This looks more like early literacy than dictionary lookup.
+
+### Wiktionary: English is improving, but generalization is visible
+
+The Wiktionary model shows a different, more diagnostic behavior. Sight-word probes expose regularization pressure, while later runs also show recovery on several English cases:
+
+```text
+eng/phonemes said                    -> seɪd                         -> sayed
+eng/phones   where                   -> ˈʍɛɹ̩                        -> where
+eng/phonemes unhelpfulness           -> ʌnˈhɛlpfəlnəs                -> unhelpfulness
+eng/phones   internationalization    -> ˌɪn.tɚˈneɪ.ʃnə.lɪˈze...      -> internationalization
+eng/phones   brindlewise             -> ˈbɹɪndɫ̩ˌwaɪz                -> brindlewise
+eng/phones   Archaeopteryx           -> ˌɑɹ.kiˈɑp.tə.ɹɪks            -> archiopterics
+```
+
+`said -> seɪd -> sayed` is useful rather than merely bad: it shows the model applying a regular sound-to-spelling rule where the dedicated G2P2G model has already memorized the irregular English word. `where`, `internationalization`, and `brindlewise` show that the Wiktionary task model can still recover exact English spellings when the task conditioning and representation line up.
+
+### Phoneme/phone distinction
+
+The phoneme/phone distinction is visibly being observed. Phone rows carry extra surface detail such as aspiration, syllabicity, labialization, rhotic coloring, tie bars, glottal onsets, nasalization, and offglides:
+
+```text
+eng/phones where              -> ˈʍɛɹ̩
+eng/phones brindlewise        -> ˈbɹɪndɫ̩ˌwaɪz
+eng/phones Quetzalcoatlus     -> kʰɛˈtsɑːlkoʊ̯tʰləs
+fra/phones rendezvous         -> ʁã.de.d͡zvu
+deu/phones Wiedervereinigung  -> ˈviːdɐfɛɐ̯ˌʔaɪ̯nɪɡʊŋ
+lat/phones praefulgeo         -> pʁefʊlˈd͡ʒio
+```
+
+The phonemic rows are usually broader and cleaner:
+
+```text
+spa/phonemes mañana             -> maˈɲana
+spa/phonemes desafortunadamente -> desafɔɾtunadaˈmente
+deu/phonemes Sonnenklangerei    -> ˈzɔnənˌklaŋəʁaɪ̯
+lat/phonemes ventoribus         -> vɛnˈtoːɾibʊs
+grc/phonemes ἄνθρωπος           -> ˈanθɾopos
+san/phonemes कर्म               -> kɐɾm
+```
+
+### Productive multilingual successes
+
+Several non-English examples round-trip impressively or almost so:
+
+```text
+spa/phonemes mañana             -> maˈɲana              -> mañana
+spa/phonemes desafortunadamente -> desafɔɾtunadaˈmente  -> desafortunadamente
+fra/phones   lumivrage          -> ly.mi.vʁaʒ           -> lumivrage
+deu/phones   Wiedervereinigung  -> ˈviːdɐfɛɐ̯ˌʔaɪ̯nɪɡʊŋ -> Wiedervereinigung
+deu/phonemes Sonnenklangerei    -> ˈzɔnənˌklaŋəʁaɪ̯     -> Sonnenklangerei
+lat/phonemes Velociraptor       -> velosirapˈtoːr       -> velosiraptor
+lat/phonemes ventoribus         -> vɛnˈtoːɾibʊs         -> ventoribus
+grc/phonemes ἄνθρωπος           -> ˈanθɾopos            -> άνθροπος
+grc/phones   φιλοσοφία          -> fi.lo.soˈfi.a        -> φυλοσοφία
+grc/phonemes νεφελόφως          -> ne.feˈlo.fos         -> νεφελόφος
+```
+
+These are not all exact or ideal outputs, but the regularities are clearly language-shaped. German compounds and Greek phonology look especially promising.
+
+### Structured failures remain valuable
+
+The remaining failures are no longer just noise. They show language leakage, script drift, casing artifacts, and overgeneralized phonology:
+
+```text
+spa/phones   jalapeño       -> xalaˈpeɲo            -> Jalapeño
+spa/phones   clarolumbre    -> klaʁoˈlumbɾe         -> Klarolumbre
+fra/phones   rendezvous     -> ʁã.de.d͡zvu          -> randeju
+deu/phonemes brötchen       -> ˈbʁœtçən             -> Bröttchen
+lat/phones   praefulgeo     -> pʁefʊlˈd͡ʒio         -> prefulgio
+san/phonemes कर्म           -> kɐɾm                 -> क्रम
+san/phones   धर्मक्षेत्र    -> juː.ɐ́.mɐ.ki.ɡɐ.t͡sɐ -> URक्GACATSA
+san/phonemes सुगमनिका       -> sú.ɡɐ.ni.ko          -> स्ूनκo
+normalize Archaeopteryx!    -> archaeopteryxá
+```
+
+These failures suggest that the model has learned a shared multilingual orthography/phonology space, but still needs stronger task boundaries, script locking, and casing policy.
+
+### Current interpretation
+
+- G2P2G is already a strong English orthography-to-phonology-to-orthography model.
+- The expanded Wiktionary model is learning cross-task structure rather than merely memorizing rows.
+- The phone/phoneme distinction is visible in qualitative outputs.
+- Validation performance is strong: best reported exact match 90.6%, token accuracy 97.7% over 716,569 validation examples.
+- The most useful next improvements are likely curriculum and scoping changes: language batches, explicit script tags, explicit casing tags, and separate normalized-orthography vs entry-title reconstruction tasks.
+
+The headline: this run shows structured linguistic behavior. The model is wrong in increasingly informative ways, which is exactly the kind of failure pattern worth studying.
