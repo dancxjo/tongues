@@ -174,17 +174,19 @@ Epoch 8 | train_loss=0.0290  val_loss=0.0324  val_exact_match=0.905  val_token_a
 Epoch 9 | train_loss=0.0286  val_loss=0.0302  val_exact_match=0.906  val_token_acc=0.976
 ```
 
-Epoch 9 is the best checkpoint reported so far by validation loss. Exact match did not jump with the loss improvement, which suggests the model may be getting more confident and better calibrated on examples it already mostly gets right, while still making similar sequence-level errors on hard cases.
+Epoch 9 is the best checkpoint reported so far by validation loss. Exact match barely moved from epoch 6, but the validation-loss drop is substantial. That suggests the model became more confident and better calibrated on examples it already mostly gets right, while still making similar sequence-level errors on hard cases.
 
 ## Expanded race snapshot: June 15, 2026
 
-After expanding `just race --cpu` to 54 G2P2G forms and 29 curated Wiktionary round-trip cases, the smoke test completed all 93 inference demos without a runtime failure:
+After expanding `just race --cpu` to 54 G2P2G forms and 29 curated Wiktionary round-trip cases, the smoke test completed all 94 inference demos without a runtime failure:
 
 ```text
 race: 54 forms, 8 configured Wiktionary languages, compact task coverage
-race plan: g2p2g=54 rt, wiktionary=29 rt, wiktionary task demos=9 + raw
-race: done in ~102s wall; 93 successful inference demos, 0 failures
+race plan: g2p2g=54 rt, wiktionary=29 rt, wiktionary task demos=10 + raw
+race: done in ~102s wall; 94 successful inference demos, 0 failures
 ```
+
+`just race` now also appends a Wiktionary behavior scorecard derived from the same inference rows. It groups round trips into categories such as English sight words, English nonce words, German compounds, Greek, Sanskrit, and script discipline. Category scores accept exact matches plus close same-script reconstructions; script discipline and language-ID probes remain strict. The adversarial orthography probe includes `Archaeopteryx`; `eng` or `lat` are treated as acceptable, while `deu` remains a visible warning sign.
 
 ### G2P2G: English sight-word and nonce-word strength
 

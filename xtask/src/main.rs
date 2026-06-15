@@ -77,6 +77,26 @@ struct RaceStats {
     total: Duration,
 }
 
+#[derive(Debug)]
+struct Scorecard {
+    rows: Vec<ScorecardRow>,
+}
+
+#[derive(Debug)]
+struct ScorecardRow {
+    behavior: &'static str,
+    passed: usize,
+    total: usize,
+    notes: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ScorecardProbe {
+    behavior: &'static str,
+    passed: bool,
+    note: String,
+}
+
 struct WiktionaryInferDemo<'a> {
     label: &'a str,
     task: &'a str,
@@ -91,12 +111,14 @@ struct WiktionaryRoundTripCase {
     word: String,
     lang: String,
     notation: &'static str,
+    behavior: &'static str,
 }
 
 struct WiktionaryTaskDemoInputs<'a> {
     pronunciation_word: &'a str,
     normalize_word: &'a str,
     orthography_guess_word: &'a str,
+    adversarial_orthography_word: &'a str,
     phonology_guess_input: &'static str,
     combined_guess_word: &'a str,
     combined_guess_phonology: &'static str,
@@ -118,6 +140,98 @@ impl RaceStats {
 
     fn fail(&mut self) {
         self.failures += 1;
+    }
+}
+
+impl Scorecard {
+    fn new() -> Self {
+        let rows = [
+            "English sight words",
+            "English nonce words",
+            "Long English morphology",
+            "German compounds",
+            "Spanish",
+            "Latin",
+            "Greek",
+            "Sanskrit",
+            "Script discipline",
+            "Language ID from phonology",
+            "Language ID from orthography",
+        ]
+        .into_iter()
+        .map(|behavior| ScorecardRow {
+            behavior,
+            passed: 0,
+            total: 0,
+            notes: Vec::new(),
+        })
+        .collect();
+        Self { rows }
+    }
+
+    fn record(&mut self, probe: ScorecardProbe) {
+        let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.behavior == probe.behavior)
+        else {
+            return;
+        };
+        row.total += 1;
+        if probe.passed {
+            row.passed += 1;
+        }
+        if row.notes.len() < 3 {
+            row.notes.push(probe.note);
+        }
+    }
+
+    fn print(&self) {
+        println!();
+        println!("Wiktionary behavior scorecard");
+        println!("  {:<32} {:<14} {:<8} Notes", "Behavior", "Status", "Score");
+        for row in &self.rows {
+            let status = row.status();
+            let score = if row.total == 0 {
+                "-".to_string()
+            } else {
+                format!("{}/{}", row.passed, row.total)
+            };
+            let notes = if row.notes.is_empty() {
+                "-".to_string()
+            } else {
+                row.notes.join("; ")
+            };
+            println!(
+                "  {:<32} {:<14} {:<8} {}",
+                row.behavior,
+                status,
+                score,
+                clip(&notes, 84)
+            );
+        }
+    }
+}
+
+impl ScorecardRow {
+    fn status(&self) -> &'static str {
+        if self.total == 0 {
+            return "Untested";
+        }
+        let ratio = self.passed as f64 / self.total as f64;
+        if ratio >= 0.90 {
+            "Excellent"
+        } else if ratio >= 0.75 {
+            "Very good"
+        } else if ratio >= 0.60 {
+            "Good"
+        } else if ratio >= 0.40 {
+            "Mixed"
+        } else if self.passed > 0 {
+            "Weak"
+        } else {
+            "Still haunted"
+        }
     }
 }
 
@@ -156,9 +270,10 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
 
     let total_start = Instant::now();
     let mut stats = RaceStats::new();
+    let mut scorecard = Scorecard::new();
     let wiktionary_cases = wiktionary_round_trip_cases(&words, &languages);
     println!(
-        "race plan: g2p2g={} rt, wiktionary={} rt, wiktionary task demos=9 + raw",
+        "race plan: g2p2g={} rt, wiktionary={} rt, wiktionary task demos=10 + raw",
         words.len(),
         wiktionary_cases.len()
     );
@@ -194,6 +309,7 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
         match round_trip_wiktionary(&tongues, &config, &case.word, &case.lang, case.notation) {
             Ok((forward, reverse)) => {
                 stats.record(forward.elapsed + reverse.elapsed);
+                record_round_trip_scorecard(&mut scorecard, case, &forward.output, &reverse.output);
                 println!(
                     "  ok {:>6} + {:>6}  {:<3}/{:<8} {:<18} -> {:<20} -> {}",
                     fmt_ms(forward.elapsed),
@@ -321,6 +437,15 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                     input: demo_inputs.orthography_guess_word.to_string(),
                 },
                 WiktionaryInferDemo {
+                    label: "guess-lang-from-orthography adversarial",
+                    task: "guess-lang-from-orthography",
+                    lang: demo_lang,
+                    notation: "phones",
+                    variety: None,
+                    raw: false,
+                    input: demo_inputs.adversarial_orthography_word.to_string(),
+                },
+                WiktionaryInferDemo {
                     label: "guess-lang-from-phonology",
                     task: "guess-lang-from-phonology",
                     lang: demo_lang,
@@ -366,6 +491,9 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
                 ) {
                     Ok(result) => {
                         stats.record(result.elapsed);
+                        if let Some(probe) = scorecard_probe_for_demo(&demo, &result.output) {
+                            scorecard.record(probe);
+                        }
                         println!(
                             "  ok {:>6}  {:<38} {} -> {}",
                             fmt_ms(result.elapsed),
@@ -389,6 +517,8 @@ fn race(raw_args: Vec<String>) -> Result<(), String> {
             );
         }
     }
+
+    scorecard.print();
 
     println!();
     println!(
@@ -415,54 +545,294 @@ fn wiktionary_round_trip_cases(
     let greek = preferred_lang(languages, "grc").or_else(|| preferred_lang(languages, "ell"));
     let sanskrit = preferred_lang(languages, "san");
 
-    for (word, lang, notation) in [
-        ("said", english.as_deref(), "phonemes"),
-        ("where", english.as_deref(), "phones"),
-        ("unhelpfulness", english.as_deref(), "phonemes"),
-        ("internationalization", english.as_deref(), "phones"),
-        ("glimmerthorn", english.as_deref(), "phonemes"),
-        ("brindlewise", english.as_deref(), "phones"),
-        ("Tyrannosaurus", english.as_deref(), "phonemes"),
-        ("Pachycephalosaurus", english.as_deref(), "phones"),
+    for (word, lang, notation, behavior) in [
+        (
+            "said",
+            english.as_deref(),
+            "phonemes",
+            "English sight words",
+        ),
+        ("where", english.as_deref(), "phones", "English sight words"),
+        (
+            "unhelpfulness",
+            english.as_deref(),
+            "phonemes",
+            "Long English morphology",
+        ),
+        (
+            "internationalization",
+            english.as_deref(),
+            "phones",
+            "Long English morphology",
+        ),
+        (
+            "glimmerthorn",
+            english.as_deref(),
+            "phonemes",
+            "English nonce words",
+        ),
+        (
+            "brindlewise",
+            english.as_deref(),
+            "phones",
+            "English nonce words",
+        ),
+        (
+            "Tyrannosaurus",
+            english.as_deref(),
+            "phonemes",
+            "Long English morphology",
+        ),
+        (
+            "Pachycephalosaurus",
+            english.as_deref(),
+            "phones",
+            "Long English morphology",
+        ),
         (
             "Velociraptor",
             latin.as_deref().or(english.as_deref()),
             "phonemes",
+            "Latin",
         ),
-        ("Quetzalcoatlus", english.as_deref(), "phones"),
+        (
+            "Quetzalcoatlus",
+            english.as_deref(),
+            "phones",
+            "Long English morphology",
+        ),
         (
             "Parasaurolophus",
             latin.as_deref().or(english.as_deref()),
             "phonemes",
+            "Latin",
         ),
-        ("mañana", spanish.as_deref(), "phonemes"),
-        ("jalapeño", spanish.as_deref(), "phones"),
-        ("desafortunadamente", spanish.as_deref(), "phonemes"),
-        ("clarolumbre", spanish.as_deref(), "phones"),
-        ("rendezvous", french.as_deref(), "phones"),
-        ("déshumanisation", french.as_deref(), "phonemes"),
-        ("lumivrage", french.as_deref(), "phones"),
-        ("brötchen", german.as_deref(), "phonemes"),
-        ("Wiedervereinigung", german.as_deref(), "phones"),
-        ("Sonnenklangerei", german.as_deref(), "phonemes"),
-        ("ventoribus", latin.as_deref(), "phonemes"),
-        ("praefulgeo", latin.as_deref(), "phones"),
-        ("ἄνθρωπος", greek.as_deref(), "phonemes"),
-        ("φιλοσοφία", greek.as_deref(), "phones"),
-        ("νεφελόφως", greek.as_deref(), "phonemes"),
-        ("कर्म", sanskrit.as_deref(), "phonemes"),
-        ("धर्मक्षेत्र", sanskrit.as_deref(), "phones"),
-        ("सुगमनिका", sanskrit.as_deref(), "phonemes"),
+        ("mañana", spanish.as_deref(), "phonemes", "Spanish"),
+        ("jalapeño", spanish.as_deref(), "phones", "Spanish"),
+        (
+            "desafortunadamente",
+            spanish.as_deref(),
+            "phonemes",
+            "Spanish",
+        ),
+        ("clarolumbre", spanish.as_deref(), "phones", "Spanish"),
+        ("rendezvous", french.as_deref(), "phones", "French"),
+        ("déshumanisation", french.as_deref(), "phonemes", "French"),
+        ("lumivrage", french.as_deref(), "phones", "French"),
+        (
+            "brötchen",
+            german.as_deref(),
+            "phonemes",
+            "German compounds",
+        ),
+        (
+            "Wiedervereinigung",
+            german.as_deref(),
+            "phones",
+            "German compounds",
+        ),
+        (
+            "Sonnenklangerei",
+            german.as_deref(),
+            "phonemes",
+            "German compounds",
+        ),
+        ("ventoribus", latin.as_deref(), "phonemes", "Latin"),
+        ("praefulgeo", latin.as_deref(), "phones", "Latin"),
+        ("ἄνθρωπος", greek.as_deref(), "phonemes", "Greek"),
+        ("φιλοσοφία", greek.as_deref(), "phones", "Greek"),
+        ("νεφελόφως", greek.as_deref(), "phonemes", "Greek"),
+        ("कर्म", sanskrit.as_deref(), "phonemes", "Sanskrit"),
+        ("धर्मक्षेत्र", sanskrit.as_deref(), "phones", "Sanskrit"),
+        ("सुगमनिका", sanskrit.as_deref(), "phonemes", "Sanskrit"),
     ] {
         if let Some(lang) = lang {
             cases.push(WiktionaryRoundTripCase {
                 word: pick_word(words, word).to_string(),
                 lang: lang.to_string(),
                 notation,
+                behavior,
             });
         }
     }
     cases
+}
+
+fn record_round_trip_scorecard(
+    scorecard: &mut Scorecard,
+    case: &WiktionaryRoundTripCase,
+    forward: &str,
+    reverse: &str,
+) {
+    let pass = round_trip_score_pass(&case.word, reverse);
+    scorecard.record(ScorecardProbe {
+        behavior: case.behavior,
+        passed: pass,
+        note: format!(
+            "{} -> {} -> {}",
+            clip(&case.word, 18),
+            clip(forward, 18),
+            clip(reverse, 18)
+        ),
+    });
+
+    let script_ok = same_primary_script(&case.word, reverse);
+    scorecard.record(ScorecardProbe {
+        behavior: "Script discipline",
+        passed: script_ok,
+        note: format!(
+            "{}:{}->{}",
+            case.lang,
+            script_name(primary_script(&case.word)),
+            script_name(primary_script(reverse))
+        ),
+    });
+}
+
+fn round_trip_score_pass(expected: &str, actual: &str) -> bool {
+    let expected = canonical_orthography(expected);
+    let actual = canonical_orthography(actual);
+    if expected == actual {
+        return true;
+    }
+
+    let expected_script = primary_script(&expected);
+    if expected_script == Script::Unknown || expected_script != primary_script(&actual) {
+        return false;
+    }
+
+    let threshold = match expected_script {
+        Script::Latin => 0.80,
+        Script::Greek => 0.70,
+        Script::Devanagari => 0.85,
+        Script::Mixed | Script::Unknown => return false,
+    };
+    normalized_similarity(&expected, &actual) >= threshold
+}
+
+fn normalized_similarity(left: &str, right: &str) -> f64 {
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
+    let max_len = left.len().max(right.len());
+    if max_len == 0 {
+        return 1.0;
+    }
+    1.0 - (levenshtein_distance(&left, &right) as f64 / max_len as f64)
+}
+
+fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right.len() + 1];
+    for (left_index, left_ch) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_ch) in right.iter().enumerate() {
+            let deletion = previous[right_index + 1] + 1;
+            let insertion = current[right_index] + 1;
+            let substitution = previous[right_index] + usize::from(left_ch != right_ch);
+            current[right_index + 1] = deletion.min(insertion).min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
+fn scorecard_probe_for_demo(
+    demo: &WiktionaryInferDemo<'_>,
+    output: &str,
+) -> Option<ScorecardProbe> {
+    match demo.label {
+        "guess-lang-from-orthography" => Some(ScorecardProbe {
+            behavior: "Language ID from orthography",
+            passed: output.trim() == "deu",
+            note: format!("{} -> {}", clip(&demo.input, 18), clip(output, 18)),
+        }),
+        "guess-lang-from-orthography adversarial" => Some(ScorecardProbe {
+            behavior: "Language ID from orthography",
+            passed: output.trim() == "eng" || output.trim() == "lat",
+            note: format!("{} -> {}", clip(&demo.input, 18), clip(output, 18)),
+        }),
+        "guess-lang-from-phonology" => Some(ScorecardProbe {
+            behavior: "Language ID from phonology",
+            passed: output.trim() == "spa",
+            note: format!("{} -> {}", clip(&demo.input, 18), clip(output, 18)),
+        }),
+        "guess-lang-from-orthography-and-phonology" => Some(ScorecardProbe {
+            behavior: "Language ID from phonology",
+            passed: output.trim() == "san",
+            note: format!("{} -> {}", clip(&demo.input, 18), clip(output, 18)),
+        }),
+        _ => None,
+    }
+}
+
+fn canonical_orthography(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !is_ascii_punctuation(*ch))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_ascii_punctuation(ch: char) -> bool {
+    ch.is_ascii_punctuation()
+}
+
+fn same_primary_script(left: &str, right: &str) -> bool {
+    let left = primary_script(left);
+    let right = primary_script(right);
+    left != Script::Unknown && left == right
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Script {
+    Latin,
+    Greek,
+    Devanagari,
+    Mixed,
+    Unknown,
+}
+
+fn primary_script(value: &str) -> Script {
+    let mut latin = 0usize;
+    let mut greek = 0usize;
+    let mut devanagari = 0usize;
+    for ch in value.chars() {
+        if ch.is_alphabetic() {
+            match ch as u32 {
+                0x0041..=0x007A | 0x00C0..=0x024F | 0x1E00..=0x1EFF => latin += 1,
+                0x0370..=0x03FF | 0x1F00..=0x1FFF => greek += 1,
+                0x0900..=0x097F => devanagari += 1,
+                _ => {}
+            }
+        }
+    }
+    let scripts = [
+        (Script::Latin, latin),
+        (Script::Greek, greek),
+        (Script::Devanagari, devanagari),
+    ];
+    let non_zero = scripts.iter().filter(|(_, count)| *count > 0).count();
+    if non_zero == 0 {
+        return Script::Unknown;
+    }
+    if non_zero > 1 {
+        return Script::Mixed;
+    }
+    scripts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(script, _)| script)
+        .unwrap_or(Script::Unknown)
+}
+
+fn script_name(script: Script) -> &'static str {
+    match script {
+        Script::Latin => "Latin",
+        Script::Greek => "Greek",
+        Script::Devanagari => "Devanagari",
+        Script::Mixed => "Mixed",
+        Script::Unknown => "Unknown",
+    }
 }
 
 fn wiktionary_task_demo_inputs(words: &[String]) -> WiktionaryTaskDemoInputs<'_> {
@@ -470,6 +840,7 @@ fn wiktionary_task_demo_inputs(words: &[String]) -> WiktionaryTaskDemoInputs<'_>
         pronunciation_word: pick_word(words, "through"),
         normalize_word: pick_word(words, "déshumanisation"),
         orthography_guess_word: pick_word(words, "brötchen"),
+        adversarial_orthography_word: pick_word(words, "Archaeopteryx"),
         phonology_guess_input: "maˈɲana",
         combined_guess_word: pick_word(words, "धर्मक्षेत्र"),
         combined_guess_phonology: "dʱɐɾmɐkʂeːt̪ɾɐ",
@@ -728,7 +1099,10 @@ fn extract_prediction(stdout: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_prediction, wiktionary_round_trip_cases, wiktionary_task_demo_inputs};
+    use super::{
+        extract_prediction, primary_script, round_trip_score_pass, same_primary_script,
+        wiktionary_round_trip_cases, wiktionary_task_demo_inputs, Script,
+    };
 
     #[test]
     fn extracts_prediction_from_verbose_output() {
@@ -771,8 +1145,26 @@ mod tests {
 
         assert_eq!(demos.pronunciation_word, "through");
         assert_eq!(demos.orthography_guess_word, "brötchen");
+        assert_eq!(demos.adversarial_orthography_word, "Archaeopteryx");
         assert_eq!(demos.phonology_guess_input, "maˈɲana");
         assert_eq!(demos.combined_guess_word, "धर्मक्षेत्र");
+    }
+
+    #[test]
+    fn scorecard_script_detection_flags_mixed_script_drift() {
+        assert_eq!(primary_script("ἄνθρωπος"), Script::Greek);
+        assert_eq!(primary_script("कर्म"), Script::Devanagari);
+        assert_eq!(primary_script("URक्GACATSA"), Script::Mixed);
+        assert!(same_primary_script("कर्म", "क्रम"));
+        assert!(!same_primary_script("धर्मक्षेत्र", "URक्GACATSA"));
+    }
+
+    #[test]
+    fn scorecard_round_trip_scoring_allows_close_same_script_misses() {
+        assert!(round_trip_score_pass("ἄνθρωπος", "άνθροπος"));
+        assert!(round_trip_score_pass("brötchen", "Bröttchen"));
+        assert!(!round_trip_score_pass("कर्म", "क्रम"));
+        assert!(!round_trip_score_pass("धर्मक्षेत्र", "URक्GACATSA"));
     }
 }
 
