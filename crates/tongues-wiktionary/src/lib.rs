@@ -31,6 +31,7 @@ pub const DEFAULT_PIE_DATASET_ID: &str = "enwiktionary-pie-roots-2026-06-01-v0";
 pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
     "https://en.wikipedia.org/w/index.php?title=Indo-European_vocabulary&action=raw";
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
+const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
@@ -446,20 +447,34 @@ fn load_or_expand_training_examples(
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<Vec<TrainingExample>> {
     let expanded_path = out.join("expanded.jsonl");
+    let expanded_schema_path = out.join("expanded.schema");
     if expanded_path.exists() {
-        progress(PrepareProgress::Stage {
-            message: format!(
-                "Resuming from expanded training examples in {}",
-                expanded_path.display()
-            ),
-        });
-        let examples = read_jsonl(&expanded_path)?;
-        progress(PrepareProgress::Expand {
-            rows: entries.len(),
-            examples: examples.len(),
-            path: Some(expanded_path.display().to_string()),
-        });
-        return Ok(examples);
+        if !expanded_schema_is_current(&expanded_schema_path)? {
+            progress(PrepareProgress::Stage {
+                message: format!(
+                    "Archiving stale expanded examples before rebuilding normalized metadata: {}",
+                    expanded_path.display()
+                ),
+            });
+            archive_stale_artifact(&expanded_path)?;
+            if expanded_schema_path.exists() {
+                archive_stale_artifact(&expanded_schema_path)?;
+            }
+        } else {
+            progress(PrepareProgress::Stage {
+                message: format!(
+                    "Resuming from expanded training examples in {}",
+                    expanded_path.display()
+                ),
+            });
+            let examples = read_jsonl(&expanded_path)?;
+            progress(PrepareProgress::Expand {
+                rows: entries.len(),
+                examples: examples.len(),
+                path: Some(expanded_path.display().to_string()),
+            });
+            return Ok(examples);
+        }
     }
 
     let expanded_part_path = jsonl_part_path(&expanded_path);
@@ -497,7 +512,16 @@ fn load_or_expand_training_examples(
             expanded_path.display()
         )
     })?;
+    write_text_atomic(&expanded_schema_path, EXPANDED_METADATA_SCHEMA)?;
     Ok(examples)
+}
+
+fn expanded_schema_is_current(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let schema = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(schema.trim() == EXPANDED_METADATA_SCHEMA)
 }
 
 fn prepare_pie_dataset(
@@ -2173,14 +2197,14 @@ fn expand_training_examples_to(
             WiktionaryTask::OrthographyToPhonology,
             &entry.lang,
             Some(row.representation),
-            row.variety.as_deref(),
+            &row.metadata,
         );
         let source = pronunciation_entry_source(entry);
         emit(TrainingExample {
             task: WiktionaryTask::OrthographyToPhonology,
             lang: Some(entry.lang.clone()),
             notation: Some(entry.notation.clone()),
-            accent: row.variety.clone(),
+            accent: row.metadata.label(),
             input: format!("{controls} {}", row.orthography),
             output: row.pronunciation.clone(),
             source: source.clone(),
@@ -2191,13 +2215,13 @@ fn expand_training_examples_to(
                 WiktionaryTask::PhonologyToOrthography,
                 &entry.lang,
                 Some(row.representation),
-                row.variety.as_deref(),
+                &row.metadata,
             );
             emit(TrainingExample {
                 task: WiktionaryTask::PhonologyToOrthography,
                 lang: Some(entry.lang.clone()),
                 notation: Some(entry.notation.clone()),
-                accent: row.variety.clone(),
+                accent: row.metadata.label(),
                 input: format!("{controls} {}", row.pronunciation),
                 output: row.orthography.clone(),
                 source: source.clone(),
@@ -2226,7 +2250,7 @@ fn expand_training_examples_to(
                 task: WiktionaryTask::GuessLangFromOrthography,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: row.variety.clone(),
+                accent: row.metadata.label(),
                 input: format!(
                     "{} {} {}",
                     WiktionaryTask::GuessLangFromOrthography.token(),
@@ -2241,7 +2265,7 @@ fn expand_training_examples_to(
                 task: WiktionaryTask::GuessLangFromPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: row.variety.clone(),
+                accent: row.metadata.label(),
                 input: format!(
                     "{} {} {}",
                     WiktionaryTask::GuessLangFromPhonology.token(),
@@ -2256,7 +2280,7 @@ fn expand_training_examples_to(
                 task: WiktionaryTask::GuessLangFromOrthographyAndPhonology,
                 lang: None,
                 notation: Some(entry.notation.clone()),
-                accent: row.variety.clone(),
+                accent: row.metadata.label(),
                 input: format!(
                     "{} {} {} => {}",
                     WiktionaryTask::GuessLangFromOrthographyAndPhonology.token(),
@@ -2283,17 +2307,16 @@ fn expand_training_examples_to(
                 && entry.entry.lang == phonemes.entry.lang
                 && entry.orthography == phonemes.orthography
         }) {
-            let Some(variety) = compatible_realization_variety(
-                phonemes.variety.as_deref(),
-                phones.variety.as_deref(),
-            ) else {
+            let Some(variety) =
+                compatible_realization_variety(&phonemes.metadata, &phones.metadata)
+            else {
                 continue;
             };
             let key = format!(
                 "{}\t{}\t{}\t{}\t{}",
                 phonemes.entry.lang,
                 phonemes.orthography,
-                variety.unwrap_or(""),
+                variety.key(),
                 phonemes.pronunciation,
                 phones.pronunciation
             );
@@ -2310,7 +2333,7 @@ fn expand_training_examples_to(
                 task: WiktionaryTask::PhoneticRealization,
                 lang: Some(phonemes.entry.lang.clone()),
                 notation: Some("phonetic-realization".to_string()),
-                accent: variety.map(str::to_string),
+                accent: variety.label(),
                 input: format!("{controls} {}", phonemes.pronunciation),
                 output: phones.pronunciation.clone(),
                 source: format!(
@@ -2357,7 +2380,7 @@ struct NormalizedPronunciationEntry<'a> {
     orthography: String,
     pronunciation: String,
     representation: &'static str,
-    variety: Option<String>,
+    metadata: NormalizedMetadata,
 }
 
 impl<'a> From<&'a PronunciationEntry> for NormalizedPronunciationEntry<'a> {
@@ -2367,25 +2390,65 @@ impl<'a> From<&'a PronunciationEntry> for NormalizedPronunciationEntry<'a> {
             orthography: normalize_orthography_for_training(&entry.spelling),
             pronunciation: normalize_ipa_for_training(&entry.ipa),
             representation: wiktionary_representation_token(&entry.notation),
-            variety: entry
+            metadata: entry
                 .accent
                 .as_deref()
-                .map(|accent| canonicalize_accent(&entry.lang, accent))
-                .filter(|accent| !accent.is_empty()),
+                .map(|accent| normalize_metadata_controls(&entry.lang, accent))
+                .unwrap_or_default(),
         }
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NormalizedMetadata {
+    tokens: Vec<String>,
+}
+
+impl NormalizedMetadata {
+    fn new(mut tokens: Vec<String>) -> Self {
+        tokens.sort();
+        tokens.dedup();
+        if tokens.iter().any(|token| {
+            matches!(
+                token.as_str(),
+                "<region:southern_us>"
+                    | "<region:midland_us>"
+                    | "<region:mid_atlantic>"
+                    | "<region:nyc>"
+            )
+        }) {
+            tokens.retain(|token| token != "<region:us>");
+        }
+        Self { tokens }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+
+    fn key(&self) -> String {
+        self.tokens.join("\x1f")
+    }
+
+    fn label(&self) -> Option<String> {
+        (!self.tokens.is_empty()).then(|| self.tokens.join(" "))
+    }
+
+    fn controls(&self) -> String {
+        self.tokens.join(" ")
+    }
+}
+
 fn compatible_realization_variety<'a>(
-    phonemes: Option<&'a str>,
-    phones: Option<&'a str>,
-) -> Option<Option<&'a str>> {
-    match (phonemes, phones) {
-        (Some(phonemes), Some(phones)) if phonemes == phones => Some(Some(phones)),
-        (Some(_), Some(_)) => None,
-        (Some(phonemes), None) => Some(Some(phonemes)),
-        (None, Some(phones)) => Some(Some(phones)),
-        (None, None) => Some(None),
+    phonemes: &'a NormalizedMetadata,
+    phones: &'a NormalizedMetadata,
+) -> Option<&'a NormalizedMetadata> {
+    match (phonemes.is_empty(), phones.is_empty()) {
+        (false, false) if phonemes == phones => Some(phones),
+        (false, false) => None,
+        (false, true) => Some(phonemes),
+        (true, false) => Some(phones),
+        (true, true) => Some(phonemes),
     }
 }
 
@@ -2536,6 +2599,205 @@ pub fn canonicalize_accent(lang: &str, accent: &str) -> String {
     }
 }
 
+pub fn normalize_metadata_controls(lang: &str, value: &str) -> NormalizedMetadata {
+    let Some(cleaned) = sanitize_accent_label(value) else {
+        return NormalizedMetadata::default();
+    };
+    let phrases = metadata_phrases(&cleaned);
+    let mut tokens = Vec::new();
+    let mut consumed = vec![false; phrases.len()];
+
+    for pattern in [
+        &["general", "american"][..],
+        &["received", "pronunciation"][..],
+        &["standard", "southern", "british"][..],
+        &["southern", "american", "english"][..],
+        &["african", "american", "vernacular", "english"][..],
+        &["australian", "english"][..],
+        &["new", "zealand"][..],
+        &["south", "africa"][..],
+        &["southern", "us"][..],
+        &["midland", "us"][..],
+        &["mid", "atlantic"][..],
+        &["new", "york", "city"][..],
+        &["northern", "england"][..],
+        &["southern", "england"][..],
+        &["northern", "ireland"][..],
+        &["south", "wales"][..],
+        &["north", "america"][..],
+        &["united", "states"][..],
+        &["united", "kingdom"][..],
+        &["non", "foot", "strut", "split"][..],
+        &["foot", "strut", "split"][..],
+        &["non", "cot", "caught"][..],
+        &["cot", "caught"][..],
+        &["non", "wine", "whine"][..],
+        &["wine", "whine"][..],
+        &["non", "mary", "marry", "merry"][..],
+        &["mary", "marry", "merry"][..],
+        &["lot", "cloth", "split"][..],
+        &["salary", "celery"][..],
+        &["non", "ae", "tensing"][..],
+        &["ae", "tensing"][..],
+        &["non", "ae", "raising"][..],
+        &["ae", "raising"][..],
+        &["happy", "tensing"][..],
+        &["yod", "dropping"][..],
+        &["yod", "coalescence"][..],
+        &["t", "glottalisation"][..],
+        &["t", "glottalization"][..],
+        &["weak", "vowel"][..],
+        &["weak", "form"][..],
+    ] {
+        consume_metadata_pattern(&phrases, &mut consumed, pattern, &mut tokens);
+    }
+
+    for (index, phrase) in phrases.iter().enumerate() {
+        if consumed[index] {
+            continue;
+        }
+        if let Some(token) = metadata_token_for_phrase(lang, phrase) {
+            tokens.push(token);
+        }
+    }
+
+    NormalizedMetadata::new(tokens)
+}
+
+fn metadata_phrases(value: &str) -> Vec<String> {
+    let cleaned = clean_wikitext_cell(value)
+        .replace('æ', " ae ")
+        .replace('Æ', " ae ")
+        .replace('ɡ', " g ")
+        .replace('_', " ")
+        .replace('&', " and ")
+        .replace('–', "-")
+        .replace('—', "-");
+    let mut phrases = Vec::new();
+    let mut current = String::new();
+    for ch in cleaned.chars().flat_map(char::to_lowercase) {
+        if ch.is_alphanumeric() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            phrases.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        phrases.push(current);
+    }
+    phrases
+}
+
+fn consume_metadata_pattern(
+    phrases: &[String],
+    consumed: &mut [bool],
+    pattern: &[&str],
+    tokens: &mut Vec<String>,
+) {
+    if pattern.is_empty() || phrases.len() < pattern.len() {
+        return;
+    }
+    for start in 0..=phrases.len() - pattern.len() {
+        if consumed[start..start + pattern.len()]
+            .iter()
+            .any(|value| *value)
+        {
+            continue;
+        }
+        if phrases[start..start + pattern.len()]
+            .iter()
+            .map(String::as_str)
+            .eq(pattern.iter().copied())
+        {
+            if let Some(token) = metadata_token_for_phrase("eng", &pattern.join("_")) {
+                tokens.push(token);
+                for consumed in &mut consumed[start..start + pattern.len()] {
+                    *consumed = true;
+                }
+            }
+        }
+    }
+}
+
+fn metadata_token_for_phrase(lang: &str, phrase: &str) -> Option<String> {
+    let phrase = phrase.trim_matches('_');
+    let token = match phrase {
+        "ga" | "gam" | "genam" | "general_american" if lang == "eng" => "<accent:genam>",
+        "rp" | "received_pronunciation" if lang == "eng" => "<accent:rp>",
+        "ssb" | "ssbe" | "standard_southern_british" if lang == "eng" => "<accent:ssb>",
+        "aave" | "aae" | "african_american_vernacular_english" if lang == "eng" => "<accent:aave>",
+        "mle" if lang == "eng" => "<accent:mle>",
+        "castilian" if lang == "spa" => "<accent:castilian>",
+        "latam" if lang == "spa" => "<accent:latam>",
+        "greekname" => "<usage:greek_name>",
+        "latin" => "<usage:latin>",
+        "neolatinscientific" => "<usage:neo_latin_scientific>",
+        "legallatin" => "<usage:legal_latin>",
+        "us" | "usa" | "american" | "united_states" if lang == "eng" => "<region:us>",
+        "uk" | "british" | "united_kingdom" if lang == "eng" => "<region:uk>",
+        "ca" | "canada" | "canadian" | "cane" if lang == "eng" => "<region:canada>",
+        "au" | "aus" | "aue" | "ause" | "australia" | "australian" | "australian_english"
+            if lang == "eng" =>
+        {
+            "<region:australia>"
+        }
+        "nz" | "nze" | "new_zealand" if lang == "eng" => "<region:new_zealand>",
+        "ie" | "ireland" if lang == "eng" => "<region:ireland>",
+        "scotland" | "scottish" | "sce" if lang == "eng" => "<region:scotland>",
+        "wales" | "welsh" if lang == "eng" => "<region:wales>",
+        "za" | "south_africa" if lang == "eng" => "<region:south_africa>",
+        "nyc" | "new_york_city" if lang == "eng" => "<region:nyc>",
+        "southern_us" if lang == "eng" => "<region:southern_us>",
+        "midland_us" if lang == "eng" => "<region:midland_us>",
+        "mid_atlantic" if lang == "eng" => "<region:mid_atlantic>",
+        "northern_england" if lang == "eng" => "<region:northern_england>",
+        "southern_england" if lang == "eng" => "<region:southern_england>",
+        "northern_ireland" if lang == "eng" => "<region:northern_ireland>",
+        "south_wales" if lang == "eng" => "<region:south_wales>",
+        "north_america" if lang == "eng" => "<region:north_america>",
+        "de" | "germany" | "german" if lang == "deu" => "<region:germany>",
+        "austria" if lang == "deu" => "<region:austria>",
+        "switzerland" | "swiss" if lang == "deu" => "<region:switzerland>",
+        "bavaria" | "bavarian" if lang == "deu" => "<region:bavaria>",
+        "fronting" | "aʊ_fronting" => "<feature:fronting>",
+        "monophthongization" | "ungliding" => "<feature:monophthongization>",
+        "cot_caught" => "<feature:cot_caught>",
+        "non_cot_caught" => "<feature:non_cot_caught>",
+        "foot_strut_split" => "<feature:foot_strut_split>",
+        "non_foot_strut_split" => "<feature:non_foot_strut_split>",
+        "wine_whine" => "<feature:wine_whine>",
+        "non_wine_whine" => "<feature:non_wine_whine>",
+        "mary_marry_merry" => "<feature:mary_marry_merry>",
+        "non_mary_marry_merry" => "<feature:non_mary_marry_merry>",
+        "lot_cloth_split" => "<feature:lot_cloth_split>",
+        "ae_tensing" => "<feature:ae_tensing>",
+        "non_ae_tensing" => "<feature:non_ae_tensing>",
+        "ae_raising" => "<feature:ae_raising>",
+        "non_ae_raising" => "<feature:non_ae_raising>",
+        "happy_tensing" => "<feature:happy_tensing>",
+        "salary_celery" => "<feature:salary_celery>",
+        "weak_vowel" => "<feature:weak_vowel>",
+        "weak_form" => "<feature:weak_form>",
+        "yod_dropping" => "<feature:yod_dropping>",
+        "yod_coalescence" => "<feature:yod_coalescence>",
+        "t_glottalisation" | "t_glottalization" => "<feature:t_glottalization>",
+        "rhotic" => "<feature:rhotic>",
+        "non_rhotic" => "<feature:non_rhotic>",
+        "archaic" => "<usage:archaic>",
+        "dated" => "<usage:dated>",
+        "obsolete" => "<usage:obsolete>",
+        "colloquial" => "<usage:colloquial>",
+        "dialectal" => "<usage:dialectal>",
+        "nonstandard" | "non_standard" => "<usage:nonstandard>",
+        "proscribed" => "<usage:proscribed>",
+        "rare" | "uncommon" => "<usage:rare>",
+        "plural" | "singular" | "nominative" | "dative" | "accusative" | "genitive" | "gentive"
+        | "verb" | "noun" | "adjective" => "<usage:grammatical_note>",
+        _ => return None,
+    };
+    Some(token.to_string())
+}
+
 pub fn canonicalize_training_tag_value(value: &str) -> String {
     value
         .trim()
@@ -2635,12 +2897,14 @@ fn wiktionary_training_controls(
     task: WiktionaryTask,
     lang: &str,
     representation: Option<&str>,
-    variety: Option<&str>,
+    metadata: &NormalizedMetadata,
 ) -> String {
     let mut controls = format!("{} <lang:{lang}>", task.token());
-    if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+    if !metadata.is_empty() {
         controls.push(' ');
-        controls.push_str(&format!("<variety:{variety}>"));
+        controls.push_str("<META> ");
+        controls.push_str(&metadata.controls());
+        controls.push_str(" </META>");
     }
     if let Some(representation) = representation.filter(|representation| !representation.is_empty())
     {
@@ -2660,7 +2924,34 @@ pub fn wiktionary_representation_token(notation: &str) -> &'static str {
 }
 
 pub fn normalize_wiktionary_control_tokens(input: &str) -> String {
-    input.to_string()
+    let lang = extract_control_value(input, "lang").unwrap_or("eng");
+    let mut out = String::new();
+    let mut offset = 0;
+    while let Some(relative_start) = input[offset..].find("<variety:") {
+        let start = offset + relative_start;
+        out.push_str(&input[offset..start]);
+        let Some(end) = input[start..].find('>').map(|end| start + end) else {
+            out.push_str(&input[start..]);
+            return out;
+        };
+        let value = &input[start + "<variety:".len()..end];
+        let metadata = normalize_metadata_controls(lang, value);
+        if !metadata.is_empty() {
+            out.push_str("<META> ");
+            out.push_str(&metadata.controls());
+            out.push_str(" </META>");
+        }
+        offset = end + 1;
+    }
+    out.push_str(&input[offset..]);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn extract_control_value<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let open = format!("<{key}:");
+    let start = input.find(&open)? + open.len();
+    let end = input[start..].find('>')? + start;
+    Some(&input[start..end])
 }
 
 fn split_examples(
@@ -2795,6 +3086,28 @@ fn archive_interrupted_part(path: &Path) -> Result<()> {
     })
 }
 
+fn archive_stale_artifact(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    let archive = path.with_file_name(format!("{file_name}.stale-{stamp}"));
+    fs::rename(path, &archive).with_context(|| {
+        format!(
+            "archiving stale artifact {} -> {}",
+            path.display(),
+            archive.display()
+        )
+    })
+}
+
 fn write_prepare_state(
     out: &Path,
     status: &str,
@@ -2815,7 +3128,7 @@ fn write_prepare_state(
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     format!(
-        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve raw orthography, IPA text, notation, accent/variety metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those rows into NFC-normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease => dəˈziːz\n<task:orthography_to_phonology> <lang:eng> <variety:en-GB.RP> <repr:phones> Ireland => ˈɑɪələnd\n<task:orthography_to_phonology> <lang:deu> <repr:phones> Honduras => hɔnˈduːʁas\n<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz => disease\n<task:phonetic_realization> <lang:eng> <variety:en-GB.RP> <repr:phonemes> ˈaɪələnd => ˈɑɪələnd\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nRepresentation tokens preserve the phonemes/phones distinction while targets omit only the outer visual delimiters. Variety tags are compact token-safe labels such as `en-US.GenAm`, `en-GB.RP`, and `Castilian`. Phonetic-realization rows are emitted only when matched phonemic and phonetic source rows exist for the same normalized orthography, language, and compatible variety metadata. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
+        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve raw orthography, IPA text, notation, accent/variety metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those rows into NFC-normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease => dəˈziːz\n<task:orthography_to_phonology> <lang:eng> <META> <accent:rp> </META> <repr:phones> Ireland => ˈɑɪələnd\n<task:orthography_to_phonology> <lang:deu> <repr:phones> Honduras => hɔnˈduːʁas\n<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz => disease\n<task:phonetic_realization> <lang:eng> <META> <accent:rp> </META> <repr:phonemes> ˈaɪələnd => ˈɑɪələnd\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nRepresentation tokens preserve the phonemes/phones distinction while targets omit only the outer visual delimiters. Wiktionary variety prose is normalized into reusable metadata controls such as `<accent:genam>`, `<region:canada>`, and `<feature:non_ae_tensing>` inside `<META>...</META>`; unrecognized prose is dropped instead of becoming a vocabulary token. Phonetic-realization rows are emitted only when matched phonemic and phonetic source rows exist for the same normalized orthography, language, and compatible metadata. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
         dump_path.display(),
         config.languages.join(", ")
     )
@@ -3117,11 +3430,11 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .expect("forward example");
         assert_eq!(
             forward.input,
-            "<task:orthography_to_phonology> <lang:eng> <variety:en-US.GenAm> <repr:phones> Ireland"
+            "<task:orthography_to_phonology> <lang:eng> <META> <accent:genam> </META> <repr:phones> Ireland"
         );
         assert_eq!(forward.output, "ˈäɪɚɫɪ̈nd");
         assert_eq!(forward.notation.as_deref(), Some("phonetic"));
-        assert_eq!(forward.accent.as_deref(), Some("en-US.GenAm"));
+        assert_eq!(forward.accent.as_deref(), Some("<accent:genam>"));
 
         let reverse = examples
             .iter()
@@ -3129,7 +3442,7 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .expect("reverse example");
         assert_eq!(
             reverse.input,
-            "<task:phonology_to_orthography> <lang:eng> <variety:en-US.GenAm> <repr:phones> ˈäɪɚɫɪ̈nd"
+            "<task:phonology_to_orthography> <lang:eng> <META> <accent:genam> </META> <repr:phones> ˈäɪɚɫɪ̈nd"
         );
         assert_eq!(reverse.output, "Ireland");
 
@@ -3173,7 +3486,7 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .expect("forward example");
         assert_eq!(
             forward.input,
-            "<task:orthography_to_phonology> <lang:eng> <variety:en-US.GenAm> <repr:phonemes> break"
+            "<task:orthography_to_phonology> <lang:eng> <META> <accent:genam> </META> <repr:phonemes> break"
         );
         assert_eq!(forward.output, "bɹeɪk");
 
@@ -3191,6 +3504,10 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .iter()
             .any(|token| token.contains("foot break should go here")));
         assert!(!vocab.tokens.iter().any(|token| token == "<!--"));
+        assert!(!vocab
+            .tokens
+            .iter()
+            .any(|token| token.starts_with("<variety:")));
     }
 
     #[test]
@@ -3206,6 +3523,39 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             "en-US.GenAm"
         );
         assert_eq!(canonicalize_accent("eng", "foot break should go here"), "");
+    }
+
+    #[test]
+    fn normalizes_wiktionary_metadata_into_reusable_controls() {
+        let metadata = normalize_metadata_controls("eng", "GA.CA.non-æ-tensing");
+        assert_eq!(
+            metadata.label().as_deref(),
+            Some("<accent:genam> <feature:non_ae_tensing> <region:canada>")
+        );
+
+        let metadata =
+            normalize_metadata_controls("eng", "Southern.US.Midland.US.Mid-Atlantic.US.NYC.AU.NZ");
+        assert_eq!(
+            metadata.label().as_deref(),
+            Some(
+                "<region:australia> <region:mid_atlantic> <region:midland_us> <region:new_zealand> <region:nyc> <region:southern_us>"
+            )
+        );
+
+        let metadata =
+            normalize_metadata_controls("eng", "AU.NZ.[[w:Fronting (sound change)|aʊ-fronting]]");
+        assert_eq!(
+            metadata.label().as_deref(),
+            Some("<feature:fronting> <region:australia> <region:new_zealand>")
+        );
+
+        let normalized = normalize_wiktionary_control_tokens(
+            "<task:orthography_to_phonology> <lang:eng> <variety:GA.CA.non-æ-tensing> <repr:phones> test",
+        );
+        assert_eq!(
+            normalized,
+            "<task:orthography_to_phonology> <lang:eng> <META> <accent:genam> <feature:non_ae_tensing> <region:canada> </META> <repr:phones> test"
+        );
     }
 
     #[test]
@@ -3244,10 +3594,10 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             .expect("phonetic realization example");
         assert_eq!(
             realization.input,
-            "<task:phonetic_realization> <lang:eng> <variety:en-US.GenAm> <repr:phonemes> ˈaɪərlənd"
+            "<task:phonetic_realization> <lang:eng> <META> <accent:genam> </META> <repr:phonemes> ˈaɪərlənd"
         );
         assert_eq!(realization.output, "ˈäɪɚɫɪ̈nd");
-        assert_eq!(realization.accent.as_deref(), Some("en-US.GenAm"));
+        assert_eq!(realization.accent.as_deref(), Some("<accent:genam>"));
     }
 
     #[test]
@@ -3335,7 +3685,7 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         assert!(examples.iter().any(|example| {
             example.task == WiktionaryTask::OrthographyToPhonology
                 && example.input
-                    == "<task:orthography_to_phonology> <lang:spa> <variety:Castilian> <repr:phonemes> zapato"
+                    == "<task:orthography_to_phonology> <lang:spa> <META> <accent:castilian> </META> <repr:phonemes> zapato"
                 && example.output == "θaˈpato"
                 && example.source == "synthetic-spanish-orthography+enwiktionary-title"
         }));
@@ -3447,5 +3797,71 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         assert_eq!(second.train_examples, first.train_examples);
         assert_eq!(second.valid_examples, first.valid_examples);
         assert_eq!(second.test_examples, first.test_examples);
+    }
+
+    #[test]
+    fn archives_expanded_rows_without_current_metadata_schema() {
+        let root = std::env::temp_dir().join(format!(
+            "tongues-wiktionary-stale-expanded-test-{}",
+            std::process::id()
+        ));
+        let out = root.join("out");
+        fs::create_dir_all(&out).expect("create out");
+        let stale = TrainingExample {
+            task: WiktionaryTask::OrthographyToPhonology,
+            lang: Some("eng".to_string()),
+            notation: Some("phonetic".to_string()),
+            accent: Some("GA.CA.non-æ-tensing".to_string()),
+            input: "<task:orthography_to_phonology> <lang:eng> <variety:GA.CA.non-æ-tensing> <repr:phones> test".to_string(),
+            output: "tɛst".to_string(),
+            source: "test".to_string(),
+        };
+        fs::write(
+            out.join("expanded.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::to_string(&stale).expect("serialize stale row")
+            ),
+        )
+        .expect("write stale expanded rows");
+
+        let config = WiktionaryConfig {
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+        let examples = load_or_expand_training_examples(
+            &out,
+            &[PronunciationEntry {
+                lang: "eng".to_string(),
+                wiktionary_lang: "en".to_string(),
+                spelling: "test".to_string(),
+                ipa: "[tɛst]".to_string(),
+                notation: "phonetic".to_string(),
+                accent: Some("GA.CA.non-æ-tensing".to_string()),
+                raw_template: "{{IPA|en|[tɛst]|a=GA.CA.non-æ-tensing}}".to_string(),
+            }],
+            &config,
+            &mut |_| {},
+        )
+        .expect("rebuild stale expanded rows");
+
+        assert!(out.join("expanded.schema").exists());
+        assert!(fs::read_dir(&out)
+            .expect("read out")
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("expanded.jsonl.stale-")));
+        assert!(examples
+            .iter()
+            .all(|example| !example.input.contains("<variety:")));
+        assert!(examples.iter().any(|example| {
+            example
+                .input
+                .contains("<META> <accent:genam> <feature:non_ae_tensing> <region:canada> </META>")
+        }));
+
+        fs::remove_dir_all(&root).expect("clean temp dir");
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
 use crate::data::notation::arpabet::{self, split_stress};
+use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -516,6 +517,7 @@ fn tokenize_words(text: &str) -> Vec<WordToken> {
     }
 
     mark_spaced_letter_name_runs(&mut words);
+    mark_conjoined_letter_name_runs(&mut words);
     words
 }
 
@@ -1174,8 +1176,28 @@ fn mark_spaced_letter_name_runs(words: &mut [WordToken]) {
     }
 }
 
+fn mark_conjoined_letter_name_runs(words: &mut [WordToken]) {
+    if words.len() < 3 {
+        return;
+    }
+    for index in 1..words.len() - 1 {
+        if words[index].normalized != "and" {
+            continue;
+        }
+        if is_uppercase_single_letter_word(&words[index - 1])
+            && is_uppercase_single_letter_word(&words[index + 1])
+        {
+            words[index - 1].kind = OrthographicTokenKind::LetterName;
+            words[index + 1].kind = OrthographicTokenKind::LetterName;
+        }
+    }
+}
+
 fn is_uppercase_single_letter_word(word: &WordToken) -> bool {
-    if !matches!(word.kind, OrthographicTokenKind::Word) {
+    if !matches!(
+        word.kind,
+        OrthographicTokenKind::Word | OrthographicTokenKind::LetterName
+    ) {
         return false;
     }
     let mut characters = word.text.chars();
@@ -1321,130 +1343,6 @@ struct CandidateSelection {
     applied_pos: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PosSensitivePronunciation {
-    word: &'static str,
-    part_of_speech: PartOfSpeech,
-    symbols: &'static [&'static str],
-}
-
-const POS_SENSITIVE_PRONUNCIATIONS: &[PosSensitivePronunciation] = &[
-    pos_pronunciation("close", PartOfSpeech::Adjective, &["K", "L", "OW1", "S"]),
-    pos_pronunciation("close", PartOfSpeech::Verb, &["K", "L", "OW1", "Z"]),
-    pos_pronunciation(
-        "conduct",
-        PartOfSpeech::Noun,
-        &["K", "AA1", "N", "D", "AH0", "K", "T"],
-    ),
-    pos_pronunciation(
-        "conduct",
-        PartOfSpeech::Verb,
-        &["K", "AA0", "N", "D", "AH1", "K", "T"],
-    ),
-    pos_pronunciation(
-        "console",
-        PartOfSpeech::Noun,
-        &["K", "AA1", "N", "S", "OW0", "L"],
-    ),
-    pos_pronunciation(
-        "console",
-        PartOfSpeech::Verb,
-        &["K", "AH0", "N", "S", "OW1", "L"],
-    ),
-    pos_pronunciation(
-        "object",
-        PartOfSpeech::Noun,
-        &["AA1", "B", "JH", "EH0", "K", "T"],
-    ),
-    pos_pronunciation(
-        "object",
-        PartOfSpeech::Verb,
-        &["AH0", "B", "JH", "EH1", "K", "T"],
-    ),
-    pos_pronunciation("permit", PartOfSpeech::Noun, &["P", "ER1", "M", "IH2", "T"]),
-    pos_pronunciation("permit", PartOfSpeech::Verb, &["P", "ER0", "M", "IH1", "T"]),
-    pos_pronunciation(
-        "present",
-        PartOfSpeech::Adjective,
-        &["P", "R", "EH1", "Z", "AH0", "N", "T"],
-    ),
-    pos_pronunciation(
-        "present",
-        PartOfSpeech::Noun,
-        &["P", "R", "EH1", "Z", "AH0", "N", "T"],
-    ),
-    pos_pronunciation(
-        "present",
-        PartOfSpeech::Verb,
-        &["P", "R", "IY0", "Z", "EH1", "N", "T"],
-    ),
-    pos_pronunciation(
-        "produce",
-        PartOfSpeech::Noun,
-        &["P", "R", "OW1", "D", "UW0", "S"],
-    ),
-    pos_pronunciation(
-        "produce",
-        PartOfSpeech::Verb,
-        &["P", "R", "AH0", "D", "UW1", "S"],
-    ),
-    pos_pronunciation(
-        "project",
-        PartOfSpeech::Noun,
-        &["P", "R", "AA1", "JH", "EH0", "K", "T"],
-    ),
-    pos_pronunciation(
-        "project",
-        PartOfSpeech::Verb,
-        &["P", "R", "AH0", "JH", "EH1", "K", "T"],
-    ),
-    pos_pronunciation("rebel", PartOfSpeech::Noun, &["R", "EH1", "B", "AH0", "L"]),
-    pos_pronunciation("rebel", PartOfSpeech::Verb, &["R", "IH0", "B", "EH1", "L"]),
-    pos_pronunciation("record", PartOfSpeech::Noun, &["R", "EH1", "K", "ER0", "D"]),
-    pos_pronunciation(
-        "record",
-        PartOfSpeech::Verb,
-        &["R", "AH0", "K", "AO1", "R", "D"],
-    ),
-    pos_pronunciation(
-        "refuse",
-        PartOfSpeech::Noun,
-        &["R", "EH1", "F", "Y", "UW2", "Z"],
-    ),
-    pos_pronunciation(
-        "refuse",
-        PartOfSpeech::Verb,
-        &["R", "AH0", "F", "Y", "UW1", "Z"],
-    ),
-    pos_pronunciation(
-        "subject",
-        PartOfSpeech::Noun,
-        &["S", "AH1", "B", "JH", "IH0", "K", "T"],
-    ),
-    pos_pronunciation(
-        "subject",
-        PartOfSpeech::Verb,
-        &["S", "AH0", "B", "JH", "EH1", "K", "T"],
-    ),
-    pos_pronunciation("wind", PartOfSpeech::Noun, &["W", "IH1", "N", "D"]),
-    pos_pronunciation("wind", PartOfSpeech::Verb, &["W", "AY1", "N", "D"]),
-    pos_pronunciation("lead", PartOfSpeech::Noun, &["L", "EH1", "D"]),
-    pos_pronunciation("lead", PartOfSpeech::Adjective, &["L", "EH1", "D"]),
-    pos_pronunciation("lead", PartOfSpeech::Verb, &["L", "IY1", "D"]),
-];
-
-const fn pos_pronunciation(
-    word: &'static str,
-    part_of_speech: PartOfSpeech,
-    symbols: &'static [&'static str],
-) -> PosSensitivePronunciation {
-    PosSensitivePronunciation {
-        word,
-        part_of_speech,
-        symbols,
-    }
-}
-
 fn choose_context_sensitive_candidates(
     lookup: &str,
     candidates: Vec<Vec<CmuPhoneme>>,
@@ -1510,9 +1408,9 @@ fn choose_matching_candidate(
 fn pos_sensitive_pronunciation(
     lookup: &str,
     part_of_speech: PartOfSpeech,
-) -> Option<&'static PosSensitivePronunciation> {
+) -> Option<&'static english_normalization::PosSensitivePronunciationSpec> {
     let part_of_speech = canonical_pronunciation_pos(part_of_speech);
-    POS_SENSITIVE_PRONUNCIATIONS
+    english_normalization::POS_SENSITIVE_PRONUNCIATIONS
         .iter()
         .find(|entry| entry.word == lookup && entry.part_of_speech == part_of_speech)
 }
@@ -2093,122 +1991,8 @@ pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     split_stress(symbol).0
 }
 
-const PREFIX: &[&str] = &[
-    "",
-    "m",
-    "b",
-    "tr",
-    "quadr",
-    "quint",
-    "sext",
-    "sept",
-    "oct",
-    "non",
-    "dec",
-    "undec",
-    "duodec",
-    "tredec",
-    "quattuordec",
-    "quindec",
-    "sexdec",
-    "septendec",
-    "octodec",
-    "novemdec",
-    "vigint",
-];
-
-fn power_name(p: usize) -> Result<String, &'static str> {
-    if p == 0 {
-        return Ok("thousand".to_string());
-    }
-    if p == 100 {
-        return Ok("centillion".to_string());
-    }
-    if p >= PREFIX.len() {
-        return Err("The number is too large to be represented in text.");
-    }
-    Ok(format!("{}illion", PREFIX[p]))
-}
-
-fn ilog10_u128(mut n: u128) -> u32 {
-    let mut count = 0;
-    while n >= 10 {
-        n /= 10;
-        count += 1;
-    }
-    count
-}
-
 fn spell_out(i: u128) -> String {
-    match i {
-        0 => "zero".to_string(),
-        1 => "one".to_string(),
-        2 => "two".to_string(),
-        3 => "three".to_string(),
-        4 => "four".to_string(),
-        5 => "five".to_string(),
-        6 => "six".to_string(),
-        7 => "seven".to_string(),
-        8 => "eight".to_string(),
-        9 => "nine".to_string(),
-        10 => "ten".to_string(),
-        11 => "eleven".to_string(),
-        12 => "twelve".to_string(),
-        13 => "thirteen".to_string(),
-        14 => "fourteen".to_string(),
-        15 => "fifteen".to_string(),
-        16 => "sixteen".to_string(),
-        17 => "seventeen".to_string(),
-        18 => "eighteen".to_string(),
-        19 => "nineteen".to_string(),
-        20 => "twenty".to_string(),
-        30 => "thirty".to_string(),
-        40 => "forty".to_string(),
-        50 => "fifty".to_string(),
-        60 => "sixty".to_string(),
-        70 => "seventy".to_string(),
-        80 => "eighty".to_string(),
-        90 => "ninety".to_string(),
-        _ => {
-            let l = ilog10_u128(i);
-            match l {
-                1 => {
-                    let head = i / 10;
-                    let tail = i % 10;
-                    format!("{}-{}", spell_out(head * 10), spell_out(tail))
-                }
-                2 => {
-                    let head = i / 100;
-                    let tail = i % 100;
-                    if tail > 0 {
-                        format!("{} hundred {}", spell_out(head), spell_out(tail))
-                    } else {
-                        format!("{} hundred", spell_out(head))
-                    }
-                }
-                _ => {
-                    let p = (l / 3) - 1;
-                    let num_digits = l - (l % 3);
-                    let divisor = 10u128.pow(num_digits);
-                    let head = i / divisor;
-                    let tail = i % divisor;
-
-                    let power_name_str = match power_name(p as usize) {
-                        Ok(name) => name,
-                        Err(_) => {
-                            return i.to_string();
-                        }
-                    };
-
-                    if tail > 0 {
-                        format!("{} {} {}", spell_out(head), power_name_str, spell_out(tail))
-                    } else {
-                        format!("{} {}", spell_out(head), power_name_str)
-                    }
-                }
-            }
-        }
-    }
+    english_normalization::spell_cardinal(i)
 }
 
 fn spell_digit_sequence(digits: &str) -> String {
@@ -2248,13 +2032,75 @@ fn spell_dotted_number(first: u128, segments: &[String]) -> String {
 }
 
 fn spell_year(year: u128) -> String {
-    if (2000..=2009).contains(&year) {
-        format!("two thousand {}", spell_out(year - 2000))
-    } else if (2010..=2099).contains(&year) {
-        format!("twenty {}", spell_out(year - 2000))
-    } else {
-        spell_out(year)
+    english_normalization::spell_year(year)
+}
+
+fn spell_ordinal(value: u128) -> String {
+    english_normalization::spell_ordinal(value)
+}
+
+fn ordinal_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut index = start;
+    let mut digits = String::new();
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        digits.push(characters[index]);
+        index += 1;
     }
+    if digits.is_empty() || index + 1 >= characters.len() {
+        return None;
+    }
+    let suffix = [characters[index], characters[index + 1]]
+        .iter()
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !matches!(suffix.as_str(), "st" | "nd" | "rd" | "th") {
+        return None;
+    }
+    let end = index + 2;
+    if end < characters.len() && characters[end].is_alphanumeric() {
+        return None;
+    }
+    Some((spell_ordinal(digits.parse::<u128>().ok()?), end))
+}
+
+fn leading_decimal_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    if characters.get(start).copied() != Some('.') {
+        return None;
+    }
+    let mut index = start + 1;
+    let mut digits = String::new();
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        digits.push(characters[index]);
+        index += 1;
+    }
+    if digits.is_empty() {
+        return None;
+    }
+
+    let mut suffix_temp = index;
+    while suffix_temp < characters.len() && characters[suffix_temp] == ' ' {
+        suffix_temp += 1;
+    }
+    let mut suffix_word = String::new();
+    while suffix_temp < characters.len() && characters[suffix_temp].is_alphabetic() {
+        suffix_word.push(characters[suffix_temp]);
+        suffix_temp += 1;
+    }
+    if !suffix_word.is_empty()
+        && is_known_unit(&suffix_word.to_lowercase())
+        && (suffix_temp >= characters.len() || !characters[suffix_temp].is_alphanumeric())
+    {
+        return Some((
+            format!(
+                "point {} {}",
+                spell_digit_sequence(&digits),
+                spell_unit(2, &suffix_word.to_lowercase())
+            ),
+            suffix_temp,
+        ));
+    }
+
+    Some((format!("point {}", spell_digit_sequence(&digits)), index))
 }
 
 fn numeric_product_at(characters: &[char], start: usize) -> Option<(String, usize)> {
@@ -2285,6 +2131,110 @@ fn numeric_product_at(characters: &[char], start: usize) -> Option<(String, usiz
         format!("{} by {}", spell_out(left), spell_out(right)),
         index,
     ))
+}
+
+fn quoted_height_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut feet = String::new();
+    let mut index = start;
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        feet.push(characters[index]);
+        index += 1;
+    }
+    if feet.is_empty() || characters.get(index).copied() != Some('\'') {
+        return None;
+    }
+    index += 1;
+    let mut inches = String::new();
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        inches.push(characters[index]);
+        index += 1;
+    }
+    if inches.is_empty() {
+        return None;
+    }
+    if matches!(characters.get(index), Some('"') | Some('”')) {
+        index += 1;
+    }
+    let feet = feet.parse::<u128>().ok()?;
+    let inches = inches.parse::<u128>().ok()?;
+    Some((
+        format!("{} foot {}", spell_out(feet), spell_out(inches)),
+        index,
+    ))
+}
+
+fn dashed_number_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut groups = Vec::new();
+    let mut index = start;
+    loop {
+        let group_start = index;
+        while index < characters.len() && characters[index].is_ascii_digit() {
+            index += 1;
+        }
+        if group_start == index {
+            return None;
+        }
+        groups.push(characters[group_start..index].iter().collect::<String>());
+        if index >= characters.len() || characters[index] != '-' {
+            break;
+        }
+        index += 1;
+    }
+    if groups.len() < 2 || (index < characters.len() && characters[index].is_ascii_digit()) {
+        return None;
+    }
+    let mut suffix_temp = index;
+    while suffix_temp < characters.len() && characters[suffix_temp] == ' ' {
+        suffix_temp += 1;
+    }
+    let mut suffix_word = String::new();
+    while suffix_temp < characters.len() && characters[suffix_temp].is_alphabetic() {
+        suffix_word.push(characters[suffix_temp]);
+        suffix_temp += 1;
+    }
+    let suffix = if !suffix_word.is_empty()
+        && is_known_unit(&suffix_word.to_lowercase())
+        && (suffix_temp >= characters.len() || !characters[suffix_temp].is_alphanumeric())
+    {
+        Some((spell_unit(2, &suffix_word.to_lowercase()), suffix_temp))
+    } else {
+        None
+    };
+
+    if groups
+        .iter()
+        .map(String::len)
+        .collect::<Vec<_>>()
+        .as_slice()
+        == [4, 2, 2]
+    {
+        let year = groups[0].parse::<u128>().ok()?;
+        let day = groups[2].parse::<u128>().ok()?;
+        let day_spelled = if groups[2].starts_with('0') {
+            spell_digit_sequence(&groups[2])
+        } else {
+            spell_out(day)
+        };
+        let parts = [
+            spell_year(year),
+            spell_digit_sequence(&groups[1]),
+            day_spelled,
+        ];
+        return Some((parts.join(" dash "), index));
+    }
+    let parts = groups
+        .iter()
+        .map(|group| Some(spell_out(group.parse::<u128>().ok()?)))
+        .collect::<Option<Vec<_>>>()?;
+    let mut text = parts.join(" to ");
+    let end = if let Some((unit, suffix_end)) = suffix {
+        text.push(' ');
+        text.push_str(unit);
+        suffix_end
+    } else {
+        index
+    };
+    Some((text, end))
 }
 
 fn slash_number_at(characters: &[char], start: usize) -> Option<(String, usize)> {
@@ -2361,108 +2311,15 @@ fn phone_number_digits_at(characters: &[char], start: usize) -> Option<(String, 
 }
 
 fn is_scale_word(word: &str) -> bool {
-    matches!(
-        word,
-        "thousand"
-            | "million"
-            | "billion"
-            | "trillion"
-            | "quadrillion"
-            | "quintillion"
-            | "sextillion"
-            | "septillion"
-            | "octillion"
-            | "nonillion"
-            | "decillion"
-    )
+    english_normalization::is_scale_word(word)
 }
 
 fn is_known_unit(word: &str) -> bool {
-    matches!(
-        word,
-        "ft" | "feet"
-            | "foot"
-            | "in"
-            | "inch"
-            | "inches"
-            | "mph"
-            | "lb"
-            | "lbs"
-            | "pound"
-            | "pounds"
-            | "kg"
-            | "kilo"
-            | "kilos"
-            | "kilograms"
-            | "mg"
-            | "milligram"
-            | "milligrams"
-            | "cm"
-            | "centimeter"
-            | "centimeters"
-            | "m"
-            | "meter"
-            | "meters"
-            | "%"
-            | "percent"
-    )
+    english_normalization::is_known_unit(word)
 }
 
 fn spell_unit(val: u128, unit: &str) -> &'static str {
-    match unit {
-        "ft" | "feet" | "foot" => {
-            if val == 1 {
-                "foot"
-            } else {
-                "feet"
-            }
-        }
-        "in" | "inch" | "inches" => {
-            if val == 1 {
-                "inch"
-            } else {
-                "inches"
-            }
-        }
-        "mph" => "miles per hour",
-        "lb" | "lbs" | "pound" | "pounds" => {
-            if val == 1 {
-                "pound"
-            } else {
-                "pounds"
-            }
-        }
-        "kg" | "kilo" | "kilos" | "kilograms" => {
-            if val == 1 {
-                "kilogram"
-            } else {
-                "kilograms"
-            }
-        }
-        "mg" | "milligram" | "milligrams" => {
-            if val == 1 {
-                "milligram"
-            } else {
-                "milligrams"
-            }
-        }
-        "cm" | "centimeter" | "centimeters" => {
-            if val == 1 {
-                "centimeter"
-            } else {
-                "centimeters"
-            }
-        }
-        "m" | "meter" | "meters" => {
-            if val == 1 {
-                "meter"
-            } else {
-                "meters"
-            }
-        }
-        "%" | "percent" => "percent",
-        _ => "",
-    }
+    english_normalization::unit_spoken_form(val, unit).unwrap_or("")
 }
 
 fn is_number_or_scale_word(word: &str) -> bool {
@@ -2637,10 +2494,16 @@ pub fn english_normalize_numbers(text: &str) -> String {
                             if let Ok(cents_val) = cents_str.parse::<u128>() {
                                 let cents_spelled = spell_out(cents_val);
                                 let cents_unit = if cents_val == 1 { "cent" } else { "cents" };
-                                format!(
-                                    "{} {} and {} {}",
-                                    base, dollars_unit, cents_spelled, cents_unit
-                                )
+                                if dollars_val == 0 {
+                                    format!("{} {}", cents_spelled, cents_unit)
+                                } else if cents_val == 0 {
+                                    format!("{} {}", base, dollars_unit)
+                                } else {
+                                    format!(
+                                        "{} {} and {} {}",
+                                        base, dollars_unit, cents_spelled, cents_unit
+                                    )
+                                }
                             } else {
                                 format!("{} {}", base, dollars_unit)
                             }
@@ -2656,8 +2519,24 @@ pub fn english_normalize_numbers(text: &str) -> String {
             }
         }
 
+        if let Some((decimal, decimal_end)) = leading_decimal_at(&char_vec, idx) {
+            result.push_str(&decimal);
+            idx = decimal_end;
+            continue;
+        }
+
         // Check cardinal number or measurement at `idx`
         if char_vec[idx].is_ascii_digit() {
+            if let Some((ordinal, ordinal_end)) = ordinal_at(&char_vec, idx) {
+                result.push_str(&ordinal);
+                idx = ordinal_end;
+                continue;
+            }
+            if let Some((height, height_end)) = quoted_height_at(&char_vec, idx) {
+                result.push_str(&height);
+                idx = height_end;
+                continue;
+            }
             if let Some((product, product_end)) = numeric_product_at(&char_vec, idx) {
                 result.push_str(&product);
                 idx = product_end;
@@ -2711,6 +2590,18 @@ pub fn english_normalize_numbers(text: &str) -> String {
             }
 
             let clean_int: String = int_part.chars().filter(|&c| c != ',').collect();
+            if clean_int == "911"
+                && (temp_idx >= char_vec.len() || !char_vec[temp_idx].is_alphanumeric())
+            {
+                result.push_str("nine one one");
+                idx = temp_idx;
+                continue;
+            }
+            if let Some((dashed_number, dashed_end)) = dashed_number_at(&char_vec, idx) {
+                result.push_str(&dashed_number);
+                idx = dashed_end;
+                continue;
+            }
             let commas_valid = if int_part.contains(',') {
                 let groups: Vec<&str> = int_part.split(',').collect();
                 groups.first().is_some_and(|g| {
@@ -2882,33 +2773,8 @@ pub fn english_normalize_numbers(text: &str) -> String {
 
 pub fn english_spoken_form(text: &str) -> String {
     let mut out = text.to_string();
-    for (from, to) in [
-        ("Dr.", "Doctor"),
-        ("Mr.", "Mister"),
-        ("Mrs.", "Missus"),
-        ("Ms.", "Miz"),
-        ("Rep.", "Representative"),
-        ("Sen.", "Senator"),
-        ("Gov.", "Governor"),
-        ("Prof.", "Professor"),
-        ("Sr.", "Senior"),
-        ("Jr.", "Junior"),
-        ("e.g.", "e g"),
-        ("E.g.", "e g"),
-        ("i.e.", "i e"),
-        ("I.e.", "i e"),
-        ("a.m.", "a m"),
-        ("A.M.", "a m"),
-        ("p.m.", "p m"),
-        ("P.M.", "p m"),
-        ("Loadstone", "Lodestone"),
-        ("loadstone", "lodestone"),
-        ("D.", "D"),
-        ("R.", "R"),
-        ("NY.", "New York"),
-        ("N.Y.", "New York"),
-    ] {
-        out = out.replace(from, to);
+    for rewrite in english_normalization::SPOKEN_FORM_REWRITES {
+        out = out.replace(rewrite.from, rewrite.to);
     }
     replace_number_abbreviation(&out)
 }
@@ -2988,14 +2854,61 @@ mod tests {
             english_normalize_numbers("The dose was 2.0 mg."),
             "The dose was two point zero milligrams."
         );
+        assert_eq!(
+            english_normalize_numbers("Take .5 mg daily."),
+            "Take point five milligrams daily."
+        );
+        assert_eq!(
+            english_normalize_numbers("He is 6'4\"."),
+            "He is six foot four."
+        );
         assert_eq!(english_normalize_numbers("2x4"), "two by four");
+        assert_eq!(
+            english_normalize_numbers("Pages 3-5 are missing."),
+            "Pages three to five are missing."
+        );
+        assert_eq!(
+            english_normalize_numbers("The range is 10-12 mg."),
+            "The range is ten to twelve milligrams."
+        );
         assert_eq!(
             english_normalize_numbers("5/6/2026"),
             "five slash six slash twenty twenty-six"
         );
         assert_eq!(
+            english_normalize_numbers("2026-06-16"),
+            "twenty twenty-six dash zero six dash sixteen"
+        );
+        assert_eq!(
             english_normalize_numbers("$12.50"),
             "twelve dollars and fifty cents"
+        );
+        assert_eq!(english_normalize_numbers("$0.99"), "ninety-nine cents");
+        assert_eq!(english_normalize_numbers("$1.00"), "one dollar");
+        assert_eq!(
+            english_normalize_numbers("Call 911 now."),
+            "Call nine one one now."
+        );
+        assert_eq!(
+            english_normalize_numbers("She finished 1st."),
+            "She finished first."
+        );
+        assert_eq!(english_normalize_numbers("He came 2nd."), "He came second.");
+        assert_eq!(
+            english_normalize_numbers("They ranked 3rd."),
+            "They ranked third."
+        );
+        assert_eq!(
+            english_normalize_numbers("This is the 21st case."),
+            "This is the twenty-first case."
+        );
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("It was 70°F outside."),
+            "It was seventy degrees Fahrenheit outside."
+        );
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("The CPU ran at 3.5GHz."),
+            "The CPU ran at three point five gigahertz."
         );
         assert_eq!(EnglishPhonemicizer.text_normalizer("No. 5"), "Number five");
         assert_eq!(
@@ -3499,6 +3412,19 @@ mod tests {
                 .windows(3)
                 .any(|window| window == ["R", "EH1", "D"]),
             "read/read tense remains ambiguous without stronger syntax"
+        );
+
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("AT&T called."),
+            "A T and T called."
+        );
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("R&D approved it."),
+            "R and D approved it."
+        );
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("C++ is different from C#."),
+            "C plus plus is different from C sharp."
         );
     }
 

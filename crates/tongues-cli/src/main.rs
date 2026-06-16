@@ -3937,7 +3937,9 @@ fn wiktionary_infer_source(
             "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
         ),
     };
-    Ok(source)
+    Ok(tongues_wiktionary::normalize_wiktionary_control_tokens(
+        &source,
+    ))
 }
 
 fn wiktionary_infer_representation_token(notation: WiktionaryNotationArg) -> Result<&'static str> {
