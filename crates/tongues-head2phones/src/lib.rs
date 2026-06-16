@@ -85,6 +85,18 @@ pub struct Head2PhonesConfig {
     pub min_head_graphemes: usize,
     #[serde(default = "default_max_head_graphemes")]
     pub max_head_graphemes: usize,
+    #[serde(default)]
+    pub verify_with_ollama: bool,
+    #[serde(default = "default_ollama_url")]
+    pub ollama_url: String,
+    #[serde(default = "default_ollama_model")]
+    pub ollama_model: String,
+    #[serde(default = "default_ollama_verify_rows")]
+    pub ollama_verify_rows: usize,
+    #[serde(default = "default_ollama_verify_max_chars")]
+    pub ollama_verify_max_chars: usize,
+    #[serde(default)]
+    pub ollama_verify_strict: bool,
 }
 
 impl Default for Head2PhonesConfig {
@@ -108,6 +120,12 @@ impl Default for Head2PhonesConfig {
             seed: default_seed(),
             min_head_graphemes: default_min_head_graphemes(),
             max_head_graphemes: default_max_head_graphemes(),
+            verify_with_ollama: true,
+            ollama_url: default_ollama_url(),
+            ollama_model: default_ollama_model(),
+            ollama_verify_rows: default_ollama_verify_rows(),
+            ollama_verify_max_chars: default_ollama_verify_max_chars(),
+            ollama_verify_strict: false,
         }
     }
 }
@@ -175,6 +193,22 @@ fn default_max_head_graphemes() -> usize {
     220
 }
 
+fn default_ollama_url() -> String {
+    "http://localhost:11434".to_string()
+}
+
+fn default_ollama_model() -> String {
+    "gpt-oss:20b".to_string()
+}
+
+fn default_ollama_verify_rows() -> usize {
+    32
+}
+
+fn default_ollama_verify_max_chars() -> usize {
+    12000
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Head2PhonesTrainingExample {
     #[serde(default = "default_training_row_source")]
@@ -224,6 +258,17 @@ pub struct PrepareReport {
     pub train_examples: usize,
     pub valid_examples: usize,
     pub test_examples: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaVerificationReport {
+    pub model: String,
+    pub url: String,
+    pub rows: usize,
+    pub sane: bool,
+    pub issue: Option<String>,
+    pub raw_response: String,
+    pub report_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +323,11 @@ pub enum PrepareProgress {
     Build {
         complete: usize,
         no_head: usize,
+    },
+    Verify {
+        model: String,
+        url: String,
+        rows: usize,
     },
     Write {
         path: String,
@@ -520,6 +570,34 @@ pub fn prepare_dataset_with_progress(
     let valid = examples[train_end.min(n)..valid_end].to_vec();
     let test = examples[valid_end..].to_vec();
 
+    if config.verify_with_ollama {
+        let report_path = out.join("ollama_verification.json");
+        let rows = train.len().min(config.ollama_verify_rows);
+        progress(PrepareProgress::Verify {
+            model: config.ollama_model.clone(),
+            url: config.ollama_url.clone(),
+            rows,
+        });
+        let mut verification = verify_training_chunk_with_ollama(config, &train)?;
+        verification.report_path = Some(report_path.clone());
+        write_json_file_atomic(&report_path, &verification)?;
+        progress(PrepareProgress::Write {
+            path: report_path.display().to_string(),
+            rows: verification.rows,
+        });
+        if config.ollama_verify_strict {
+            anyhow::ensure!(
+                verification.sane,
+                "Ollama verification failed for {} sampled head2phones training rows: {}",
+                verification.rows,
+                verification
+                    .issue
+                    .as_deref()
+                    .unwrap_or("model reported the data is not sane without a specific issue")
+            );
+        }
+    }
+
     write_jsonl_with_progress(&out.join("examples.jsonl"), &examples, &mut progress)?;
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
@@ -685,7 +763,14 @@ fn write_prepare_state(
 }
 
 fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
-    let json = serde_json::to_string(config)?;
+    let mut dataset_config = config.clone();
+    dataset_config.verify_with_ollama = false;
+    dataset_config.ollama_url = default_ollama_url();
+    dataset_config.ollama_model = default_ollama_model();
+    dataset_config.ollama_verify_rows = default_ollama_verify_rows();
+    dataset_config.ollama_verify_max_chars = default_ollama_verify_max_chars();
+    dataset_config.ollama_verify_strict = false;
+    let json = serde_json::to_string(&dataset_config)?;
     Ok(format!("{:016x}", stable_hash(json.as_bytes())))
 }
 
@@ -2302,6 +2387,125 @@ fn write_jsonl_with_progress<T: Serialize>(
     Ok(())
 }
 
+pub fn verify_prepared_training_data_with_ollama(
+    data_dir: &Path,
+    config: &Head2PhonesConfig,
+) -> Result<OllamaVerificationReport> {
+    let train_path = data_dir.join("train.jsonl");
+    let rows: Vec<Head2PhonesTrainingExample> = read_jsonl(&train_path)?;
+    let mut report = verify_training_chunk_with_ollama(config, &rows)
+        .with_context(|| format!("verifying {}", train_path.display()))?;
+    let report_path = data_dir.join("ollama_verification.json");
+    report.report_path = Some(report_path.clone());
+    write_json_file_atomic(&report_path, &report)?;
+    Ok(report)
+}
+
+pub fn verify_training_chunk_with_ollama(
+    config: &Head2PhonesConfig,
+    rows: &[Head2PhonesTrainingExample],
+) -> Result<OllamaVerificationReport> {
+    anyhow::ensure!(
+        !config.ollama_model.trim().is_empty(),
+        "ollama_model must be set for head2phones verification"
+    );
+    anyhow::ensure!(
+        !config.ollama_url.trim().is_empty(),
+        "ollama_url must be set for head2phones verification"
+    );
+    let sample_rows = rows.len().min(config.ollama_verify_rows);
+    anyhow::ensure!(sample_rows > 0, "no head2phones training rows to verify");
+
+    let prompt = ollama_verification_prompt(config, &rows[..sample_rows])?;
+    let url = format!(
+        "{}/api/generate",
+        config.ollama_url.trim().trim_end_matches('/')
+    );
+    let body = serde_json::to_string(&serde_json::json!({
+        "model": config.ollama_model,
+        "prompt": prompt,
+        "stream": false,
+        "format": "json"
+    }))?;
+    let response = ureq::post(&url)
+        .header("Content-Type", "application/json")
+        .send(body)
+        .with_context(|| format!("POST {url}"))?;
+    let raw = response
+        .into_body()
+        .read_to_string()
+        .with_context(|| format!("reading Ollama response from {url}"))?;
+    let generated: OllamaGenerateResponse =
+        serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
+    let judgement = parse_ollama_verification_judgement(&generated.response)?;
+    if !judgement.sane {
+        anyhow::ensure!(
+            judgement
+                .issue
+                .as_deref()
+                .is_some_and(|issue| !issue.trim().is_empty()),
+            "Ollama reported unsane head2phones data but did not provide an exact issue"
+        );
+    }
+    Ok(OllamaVerificationReport {
+        model: config.ollama_model.clone(),
+        url: config.ollama_url.clone(),
+        rows: sample_rows,
+        sane: judgement.sane,
+        issue: judgement.issue,
+        raw_response: generated.response,
+        report_path: None,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaVerificationJudgement {
+    sane: bool,
+    #[serde(default)]
+    issue: Option<String>,
+}
+
+fn ollama_verification_prompt(
+    config: &Head2PhonesConfig,
+    rows: &[Head2PhonesTrainingExample],
+) -> Result<String> {
+    let mut jsonl = String::new();
+    for row in rows {
+        let line = serde_json::to_string(row)?;
+        if !jsonl.is_empty() && jsonl.len() + line.len() + 1 > config.ollama_verify_max_chars {
+            break;
+        }
+        jsonl.push_str(&line);
+        jsonl.push('\n');
+    }
+    Ok(format!(
+        "You are auditing head2phones seq2seq training rows. Each JSONL row has an input rolling text buffer and an output. A sane row must obey these rules:\n\
+         - output is exactly {NO_HEAD}, or {PHONES_OPEN} phone text {PHONES_CLOSE} plus {SPLIT_AFTER} and a Unicode grapheme split offset, or an {ERROR_REPAIR} repair row.\n\
+         - if head is present, split_after should identify the end of that head in grapheme clusters in input.\n\
+         - {NO_HEAD} rows should not contain a complete speakable head chunk.\n\
+         - phone text should look like plausible broad IPA or serialized speaking IR for the row variety, not English spelling or unrelated text.\n\
+         - report data-shape, offset, label, transcription, escaping, or consistency problems.\n\n\
+         Return only compact JSON with this exact schema: {{\"sane\":true,\"issue\":null}} or {{\"sane\":false,\"issue\":\"exact issue with row evidence\"}}.\n\n\
+         JSONL rows to audit:\n{jsonl}"
+    ))
+}
+
+fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJudgement> {
+    if let Ok(judgement) = serde_json::from_str::<OllamaVerificationJudgement>(raw) {
+        return Ok(judgement);
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(raw).with_context(|| format!("parsing verifier JSON: {raw}"))?;
+    let judgement: OllamaVerificationJudgement = serde_json::from_value(value)
+        .with_context(|| format!("parsing verifier judgement: {raw}"))?;
+    Ok(judgement)
+}
+
 fn dataset_readme(
     config: &Head2PhonesConfig,
     train: &[Head2PhonesTrainingExample],
@@ -2914,6 +3118,41 @@ mod tests {
     }
 
     #[test]
+    fn ollama_verification_prompt_contains_bounded_jsonl_rows() {
+        let rows = vec![Head2PhonesTrainingExample {
+            row_source: TrainingRowSource::SourceText,
+            variety: "en-US".to_string(),
+            input: "Hello there. More text".to_string(),
+            output: format!("{PHONES_OPEN}həloʊ ðɛɹ{PHONES_CLOSE} {SPLIT_AFTER} 12"),
+            head: Some("Hello there.".to_string()),
+            split_after: Some(12),
+            source: "test".to_string(),
+        }];
+        let config = Head2PhonesConfig {
+            ollama_verify_max_chars: 512,
+            ..Head2PhonesConfig::default()
+        };
+        let prompt = ollama_verification_prompt(&config, &rows).expect("prompt");
+        assert!(prompt.contains("Return only compact JSON"));
+        assert!(prompt.contains("\"input\":\"Hello there. More text\""));
+        assert!(prompt.contains(PHONES_OPEN));
+    }
+
+    #[test]
+    fn parses_ollama_verification_judgement() {
+        let ok = parse_ollama_verification_judgement(r#"{"sane":true,"issue":null}"#)
+            .expect("ok judgement");
+        assert!(ok.sane);
+        assert!(ok.issue.is_none());
+
+        let bad =
+            parse_ollama_verification_judgement(r#"{"sane":false,"issue":"row 3 offset wrong"}"#)
+                .expect("bad judgement");
+        assert!(!bad.sane);
+        assert_eq!(bad.issue.as_deref(), Some("row 3 offset wrong"));
+    }
+
+    #[test]
     fn prepare_reuses_checkpoints_and_does_not_touch_legacy_parts() {
         let out = tempfile_path("head2phones-resume");
         let _ = fs::remove_dir_all(&out);
@@ -2931,6 +3170,7 @@ mod tests {
             no_head_cuts_per_head: 1,
             include_exceptional: false,
             include_naive_seams_discrepancies: false,
+            verify_with_ollama: false,
             ..Head2PhonesConfig::default()
         };
 

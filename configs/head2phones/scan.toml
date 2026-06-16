@@ -15,3 +15,12 @@ valid_frac = 0.1
 seed = 42
 min_head_graphemes = 4
 max_head_graphemes = 220
+
+# Passive scan mode: ask a local Ollama model to audit a bounded sample and
+# write ollama_verification.json, but do not fail unless strict is enabled.
+verify_with_ollama = true
+ollama_url = "http://localhost:11434"
+ollama_model = "gpt-oss:20b"
+ollama_verify_rows = 32
+ollama_verify_max_chars = 12000
+ollama_verify_strict = false

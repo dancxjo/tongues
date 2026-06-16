@@ -758,6 +758,62 @@ enum Head2PhonesCommands {
         /// Output directory for prepared data
         #[arg(long, default_value = "datasets/head2phones/v0")]
         out: PathBuf,
+
+        /// Ask an Ollama model to passively verify a sample of prepared train rows
+        #[arg(long)]
+        verify_ollama: bool,
+
+        /// Ollama model name for head2phones data verification
+        #[arg(long)]
+        ollama_model: Option<String>,
+
+        /// Ollama server URL for head2phones data verification
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Number of train rows to pass to Ollama
+        #[arg(long)]
+        ollama_rows: Option<usize>,
+
+        /// Maximum JSONL characters to include in the Ollama prompt
+        #[arg(long)]
+        ollama_max_chars: Option<usize>,
+
+        /// Fail prepare if Ollama reports the sampled data is not sane
+        #[arg(long)]
+        ollama_strict: bool,
+    },
+
+    /// Passively verify an existing prepared head2phones train split with Ollama
+    #[command(alias = "scan")]
+    Verify {
+        /// TOML config file for the head2phones pipeline
+        #[arg(long, default_value = "configs/head2phones/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory containing train.jsonl
+        #[arg(long, default_value = "datasets/head2phones/v0")]
+        data: PathBuf,
+
+        /// Ollama model name for head2phones data verification
+        #[arg(long)]
+        ollama_model: Option<String>,
+
+        /// Ollama server URL for head2phones data verification
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Number of train rows to pass to Ollama
+        #[arg(long)]
+        ollama_rows: Option<usize>,
+
+        /// Maximum JSONL characters to include in the Ollama prompt
+        #[arg(long)]
+        ollama_max_chars: Option<usize>,
+
+        /// Exit non-zero if Ollama reports the sampled data is not sane
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Train the head2phones seq2seq model
@@ -781,6 +837,30 @@ enum Head2PhonesCommands {
         /// Prepare data before training
         #[arg(long)]
         prepare: bool,
+
+        /// Ask an Ollama model to passively verify a sample when preparing data
+        #[arg(long)]
+        verify_ollama: bool,
+
+        /// Ollama model name for head2phones data verification
+        #[arg(long)]
+        ollama_model: Option<String>,
+
+        /// Ollama server URL for head2phones data verification
+        #[arg(long)]
+        ollama_url: Option<String>,
+
+        /// Number of train rows to pass to Ollama
+        #[arg(long)]
+        ollama_rows: Option<usize>,
+
+        /// Maximum JSONL characters to include in the Ollama prompt
+        #[arg(long)]
+        ollama_max_chars: Option<usize>,
+
+        /// Fail prepare if Ollama reports the sampled data is not sane
+        #[arg(long)]
+        ollama_strict: bool,
 
         /// Wait for an in-progress prepare in --data to finish, then start training
         #[arg(long, visible_alias = "while-preparing")]
@@ -2222,10 +2302,79 @@ fn head2phones_prepare_progress_message(progress: tongues_head2phones::PreparePr
             format_count(complete),
             format_count(no_head)
         ),
+        tongues_head2phones::PrepareProgress::Verify { model, url, rows } => format!(
+            "Asking Ollama model {model} at {url} to verify {} head2phones train rows",
+            format_count(rows)
+        ),
         tongues_head2phones::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {path}", format_count(rows))
         }
     }
+}
+
+fn apply_head2phones_ollama_overrides(
+    config: &mut tongues_head2phones::Head2PhonesConfig,
+    enable: bool,
+    model: Option<String>,
+    url: Option<String>,
+    rows: Option<usize>,
+    max_chars: Option<usize>,
+    strict: bool,
+) {
+    if enable || model.is_some() || url.is_some() || rows.is_some() || max_chars.is_some() {
+        config.verify_with_ollama = true;
+    }
+    if let Some(model) = model {
+        config.ollama_model = model;
+    }
+    if let Some(url) = url {
+        config.ollama_url = url;
+    }
+    if let Some(rows) = rows {
+        config.ollama_verify_rows = rows;
+    }
+    if let Some(max_chars) = max_chars {
+        config.ollama_verify_max_chars = max_chars;
+    }
+    if strict {
+        config.ollama_verify_strict = true;
+    }
+}
+
+fn print_head2phones_ollama_report(report: &tongues_head2phones::OllamaVerificationReport) {
+    let path = report
+        .report_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "not written".to_string());
+    if report.sane {
+        println!(
+            "Ollama verification passed: model={} rows={} report={}",
+            report.model,
+            format_count(report.rows),
+            path
+        );
+    } else {
+        println!(
+            "Ollama verification reported an issue: model={} rows={} report={}\n{}",
+            report.model,
+            format_count(report.rows),
+            path,
+            report
+                .issue
+                .as_deref()
+                .unwrap_or("model reported the data is not sane without a specific issue")
+        );
+    }
+}
+
+fn maybe_print_head2phones_ollama_report(data: &Path) -> Result<()> {
+    let path = data.join("ollama_verification.json");
+    if path.exists() {
+        let report: tongues_head2phones::OllamaVerificationReport = read_json_file(&path)?;
+        print_head2phones_ollama_report(&report);
+    }
+    Ok(())
 }
 
 fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) -> Result<()> {
@@ -2240,11 +2389,26 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             config,
             inputs,
             out,
+            verify_ollama,
+            ollama_model,
+            ollama_url,
+            ollama_rows,
+            ollama_max_chars,
+            ollama_strict,
         } => {
             let mut config = read_head2phones_config(&config)?;
             if !inputs.is_empty() {
                 config.source_paths = inputs;
             }
+            apply_head2phones_ollama_overrides(
+                &mut config,
+                verify_ollama,
+                ollama_model,
+                ollama_url,
+                ollama_rows,
+                ollama_max_chars,
+                ollama_strict,
+            );
             let pb = status_spinner(format!(
                 "Preparing head2phones dataset at {}",
                 out.display()
@@ -2268,6 +2432,65 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                     format_count(report.naive_seams_discrepancies)
                 ),
             );
+            if config.verify_with_ollama {
+                maybe_print_head2phones_ollama_report(&out)?;
+            }
+            Ok(())
+        }
+        Head2PhonesCommands::Verify {
+            config,
+            data,
+            ollama_model,
+            ollama_url,
+            ollama_rows,
+            ollama_max_chars,
+            strict,
+        } => {
+            let mut config = read_head2phones_config(&config)?;
+            apply_head2phones_ollama_overrides(
+                &mut config,
+                true,
+                ollama_model,
+                ollama_url,
+                ollama_rows,
+                ollama_max_chars,
+                strict,
+            );
+            let pb = status_spinner(format!(
+                "Verifying existing head2phones train rows in {}",
+                data.display()
+            ));
+            let report =
+                tongues_head2phones::verify_prepared_training_data_with_ollama(&data, &config)?;
+            if report.sane {
+                finish_status(
+                    pb,
+                    format!(
+                        "Ollama verification passed for {} sampled head2phones train rows",
+                        format_count(report.rows)
+                    ),
+                );
+            } else {
+                finish_status(
+                    pb,
+                    format!(
+                        "Ollama verification found an issue in {} sampled head2phones train rows",
+                        format_count(report.rows)
+                    ),
+                );
+            }
+            print_head2phones_ollama_report(&report);
+            if strict {
+                anyhow::ensure!(
+                    report.sane,
+                    "Ollama verification failed for {} sampled head2phones training rows: {}",
+                    report.rows,
+                    report
+                        .issue
+                        .as_deref()
+                        .unwrap_or("model reported the data is not sane without a specific issue")
+                );
+            }
             Ok(())
         }
         Head2PhonesCommands::Train {
@@ -2276,6 +2499,12 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             inputs,
             out,
             prepare,
+            verify_ollama,
+            ollama_model,
+            ollama_url,
+            ollama_rows,
+            ollama_max_chars,
+            ollama_strict,
             learning_rate,
             weight_decay,
             dropout,
@@ -2301,6 +2530,15 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                 if !inputs.is_empty() {
                     config_data.source_paths = inputs;
                 }
+                apply_head2phones_ollama_overrides(
+                    &mut config_data,
+                    verify_ollama,
+                    ollama_model,
+                    ollama_url,
+                    ollama_rows,
+                    ollama_max_chars,
+                    ollama_strict,
+                );
                 let pb = status_spinner(format!(
                     "Preparing head2phones dataset at {}",
                     data.display()
@@ -2327,6 +2565,9 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                         format_count(report.naive_seams_discrepancies)
                     ),
                 );
+                if config_data.verify_with_ollama {
+                    maybe_print_head2phones_ollama_report(&data)?;
+                }
             }
             let config = read_head2phones_config(&config)?;
             cmd_head2phones_train(
