@@ -4661,13 +4661,15 @@ fn read_jsonl_as<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
 }
 
 fn cmd_phonemes(text: &str) -> Result<()> {
-    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+    use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId("en-US".to_string());
+    let phonemicizer = phonemicizer_for_variety(&variety)
+        .map_err(|e| anyhow::anyhow!("Failed to load phonemicizer: {e}"))?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: text.to_string(),
-            variety: VarietyId("en-US".to_string()),
+            variety,
             style: None,
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
@@ -4704,13 +4706,15 @@ fn cmd_phonemes(text: &str) -> Result<()> {
 }
 
 fn cmd_phones(text: &str) -> Result<()> {
-    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+    use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId("en-US".to_string());
+    let phonemicizer = phonemicizer_for_variety(&variety)
+        .map_err(|e| anyhow::anyhow!("Failed to load phonemicizer: {e}"))?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: text.to_string(),
-            variety: VarietyId("en-US".to_string()),
+            variety,
             style: None,
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
@@ -5243,13 +5247,15 @@ fn load_seq2seq_model_and_vocab<B: Backend>(
 }
 
 fn phonemicized_first_word_phones(text: &str) -> Result<String> {
-    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+    use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId("en-US".to_string());
+    let phonemicizer = phonemicizer_for_variety(&variety)
+        .map_err(|e| anyhow::anyhow!("Failed to load phonemicizer: {e}"))?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: text.to_string(),
-            variety: VarietyId("en-US".to_string()),
+            variety,
             style: None,
         })
         .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;

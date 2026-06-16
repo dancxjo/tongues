@@ -3,10 +3,10 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use speaking::{
-    phone_display_symbol, phoneme_default_phone_display_symbol, EnglishPhonemicizer,
+    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
-    PhonemicizeRequest, Phonemicizer, PronunciationWarning, PronunciationWarningKind, ProsodyTrack,
-    Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
+    PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, Spec,
+    SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
 use styletts2::{
     prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
@@ -427,10 +427,13 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             return Ok(());
         }
 
-        let phonemicized = EnglishPhonemicizer
+        let variety = VarietyId(command.variety.clone());
+        let phonemicizer = phonemicizer_for_variety(&variety)
+            .map_err(|e| anyhow::anyhow!("failed to load phonemicizer: {e}"))?;
+        let phonemicized = phonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: text_chunk.to_string(),
-                variety: VarietyId(command.variety.clone()),
+                variety,
                 style: None,
             })
             .context("failed to phonemicize text into a speech plan")?;

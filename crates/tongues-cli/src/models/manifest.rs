@@ -124,7 +124,7 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         sha256: None,
         size_bytes: None,
         license: Some("MIT"),
-        source: Some("speaking::EnglishPhonemicizer"),
+        source: Some("speaking::data::varieties::english"),
         notes: Some("Built-in CMUdict-style seed lexicon plus explicit unknown-word fallback."),
     },
     ModelAsset {
@@ -135,7 +135,7 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         sha256: None,
         size_bytes: None,
         license: Some("MIT"),
-        source: Some("speaking::EnglishPhonemicizer"),
+        source: Some("speaking::data::varieties::english"),
         notes: Some("Small deterministic built-in lexicon used by default tests and smoke runs."),
     },
     ModelAsset {

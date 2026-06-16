@@ -1597,14 +1597,17 @@ fn phones_string(phones: &[speaking::PhoneToken]) -> String {
     phones
         .iter()
         .filter_map(|token| match &token.phone {
-            speaking::Spec::Known(id) => {
-                let raw: &str = &id.0;
-                Some(raw.rsplit('.').next().unwrap_or(raw).to_string())
-            }
+            speaking::Spec::Known(id) => phone_training_symbol(id).map(str::to_string),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn phone_training_symbol(id: &speaking::PhoneId) -> Option<&str> {
+    id.as_str()
+        .strip_prefix("ipa.phone.")
+        .filter(|symbol| !symbol.is_empty())
 }
 
 fn repair_supervision(sentences: &[SentenceSupervision]) -> Vec<RepairSupervision> {
@@ -1782,7 +1785,9 @@ fn chunks_from_phone_tokens(tokens: &[speaking::PhoneToken], words: usize) -> Ve
             continue;
         };
         if let speaking::Spec::Known(id) = &token.phone {
-            chunk.push(speaking::phone_display_symbol(id).to_string());
+            if let Some(symbol) = phone_training_symbol(id) {
+                chunk.push(symbol.to_string());
+            }
         }
     }
     chunks
@@ -3908,6 +3913,8 @@ mod tests {
         assert!(!rows[0].syntax.words.is_empty());
         assert!(!rows[0].syntax.links.is_empty());
         assert!(rows[0].end_frame <= 100);
+        assert!(!rows[0].phones.split_whitespace().any(|token| token == "word"));
+        assert!(!rows[0].phones.split_whitespace().any(|token| token == "|"));
     }
 
     #[test]
@@ -4022,8 +4029,12 @@ mod tests {
         assert_eq!(words[1].word, "WORLD");
         assert_eq!(words[0].phonemes, "h ʌ l oʊ");
         assert_eq!(words[1].phonemes, "w ɝ l d");
+        assert_eq!(words[0].phones, "h ə l oʊ");
+        assert_eq!(words[1].phones, "w ɝ ɫ d");
         assert_ne!(words[0].phonemes, sentences[0].phonemes);
         assert_ne!(words[1].phonemes, sentences[0].phonemes);
+        assert!(!words.iter().any(|word| word.phones.contains("word")));
+        assert!(!words.iter().any(|word| word.phones.contains('|')));
     }
 
     #[test]
