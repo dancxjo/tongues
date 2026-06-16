@@ -794,6 +794,8 @@ fn spoken_form_for_head(text: &str) -> String {
         ("A.M.", "a m"),
         ("p.m.", "p m"),
         ("P.M.", "p m"),
+        ("Loadstone", "Lodestone"),
+        ("loadstone", "lodestone"),
         ("D.", "D"),
         ("R.", "R"),
         ("NY.", "New York"),
@@ -1586,6 +1588,15 @@ mod tests {
         let symbols = speech_symbols_for_text("arrived").expect("symbols");
         assert!(symbols.contains("əˈɹaɪvd"), "{symbols}");
         assert!(!symbols.contains("ɚˈaɪvd"), "{symbols}");
+    }
+
+    #[test]
+    fn loadstone_is_pronounced_like_lodestone() {
+        let symbols = speech_symbols_for_text("The Loadstone Rock was drawing him.")
+            .expect("symbols");
+        assert!(symbols.contains("ˈloʊdˌstoʊn"), "{symbols}");
+        assert!(!symbols.contains("ˈlʌəd.stə.nɪ"), "{symbols}");
+        assert!(!symbols.contains("ˈləəd.stə.nɪ"), "{symbols}");
     }
 
     #[test]
