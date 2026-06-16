@@ -637,7 +637,7 @@ fn speech_spine_lowers_to_ipa_text_without_lexical_stress_for_styletts2() {
             "aɪv tɹævəld ðə wɝld ənd ðə sɛvən siːz↘.",
         ),
         ("current", "kɝənt"),
-        ("derived", "dɚaɪvd"),
+        ("derived", "dəɹaɪvd"),
         ("surface", "sɝfəs"),
         ("service", "sɚvəs"),
         (

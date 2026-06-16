@@ -1,9 +1,24 @@
 dataset_id = "v0"
+# Optional local Project Gutenberg-style .txt files/directories. If this is
+# empty, prepare uses the default Gutenberg URLs below plus synthetic cases.
+source_paths = []
 include_synthetic = true
+include_default_gutenberg = true
+gutenberg_urls = [
+  "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+  "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+  "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+  "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+  "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+  "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+  "https://www.gutenberg.org/cache/epub/345/pg345.txt",
+]
 synthetic_buffers = 4096
 random_cuts_per_buffer = 8
 no_head_cuts_per_head = 8
 include_exceptional = true
+include_naive_seams_discrepancies = true
+max_naive_seams_discrepancies_per_file = 1024
 train_frac = 0.8
 valid_frac = 0.1
 seed = 42

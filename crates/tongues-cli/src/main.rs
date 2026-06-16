@@ -2086,9 +2086,23 @@ fn read_head2phones_config(path: &Path) -> Result<tongues_head2phones::Head2Phon
 fn head2phones_prepare_progress_message(progress: tongues_head2phones::PrepareProgress) -> String {
     match progress {
         tongues_head2phones::PrepareProgress::Stage { message } => message,
-        tongues_head2phones::PrepareProgress::Read { path, buffers } => {
-            format!("Read {} source buffers from {path}", format_count(buffers))
+        tongues_head2phones::PrepareProgress::Download { url, path, bytes } => {
+            format!(
+                "Downloaded {} from {} -> {}",
+                format_bytes(bytes),
+                url,
+                path
+            )
         }
+        tongues_head2phones::PrepareProgress::Read {
+            path,
+            buffers,
+            naive_seams_discrepancies,
+        } => format!(
+            "Read {} source buffers and {} naive/seams discrepancies from {path}",
+            format_count(buffers),
+            format_count(naive_seams_discrepancies)
+        ),
         tongues_head2phones::PrepareProgress::Synthesize { path, buffers } => {
             format!(
                 "Synthesized {} rolling buffers -> {path}",
@@ -2134,14 +2148,15 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             finish_status(
                 pb,
                 format!(
-                    "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional)",
+                    "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional, {} naive/seams discrepancies)",
                     out.display(),
                     format_count(report.train_examples),
                     format_count(report.valid_examples),
                     format_count(report.test_examples),
                     format_count(report.complete_examples),
                     format_count(report.no_head_examples),
-                    format_count(report.exceptional_examples)
+                    format_count(report.exceptional_examples),
+                    format_count(report.naive_seams_discrepancies)
                 ),
             );
             Ok(())
@@ -2183,14 +2198,15 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                 finish_status(
                     pb,
                     format!(
-                        "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional)",
+                        "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional, {} naive/seams discrepancies)",
                         data.display(),
                         format_count(report.train_examples),
                         format_count(report.valid_examples),
                         format_count(report.test_examples),
                         format_count(report.complete_examples),
                         format_count(report.no_head_examples),
-                        format_count(report.exceptional_examples)
+                        format_count(report.exceptional_examples),
+                        format_count(report.naive_seams_discrepancies)
                     ),
                 );
             }

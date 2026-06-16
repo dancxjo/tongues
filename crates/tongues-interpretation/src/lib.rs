@@ -2287,10 +2287,7 @@ where
                 })?;
             optimizer = optimizer.load_record(record);
             loaded_optimizer_checkpoint = Some(optimizer_bin.clone());
-            println!(
-                "Resuming optimizer state from {}",
-                optimizer_bin.display()
-            );
+            println!("Resuming optimizer state from {}", optimizer_bin.display());
         } else {
             resume_without_optimizer = true;
             println!(

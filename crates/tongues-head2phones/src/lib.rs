@@ -15,10 +15,9 @@ use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::{
-    EnglishPhonemicizer, EvidenceProvenance, EvidenceSource, PhonemicizeOutput, PhonemicizeRequest,
-    Phonemicizer, UtteranceId, UtterancePlan, VarietyId,
+    EnglishPhonemicizer, PauseKind, PhonemicizeOutput, PhonemicizeRequest, Phonemicizer,
+    SpeechBoundaryToken, TerminalPunctuation, VarietyId,
 };
-use styletts2::{prepare_styletts2_plan, styletts2_en_us_symbol_set, StyleTts2PlanOptions};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::Seq2SeqExample;
 use tongues_neural::{write_manifest, ModelArtifactManifest};
@@ -32,12 +31,26 @@ pub const PHONES_CLOSE: &str = "</PHONES>";
 pub const SPLIT_AFTER: &str = "<SPLIT_AFTER>";
 pub const NO_HEAD: &str = "<NO_HEAD>";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
+const USER_AGENT: &str = "tongues-head2phones/0.1";
+const DEFAULT_GUTENBERG_URLS: &[&str] = &[
+    "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+    "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+    "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+    "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+    "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+    "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+    "https://www.gutenberg.org/cache/epub/345/pg345.txt",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Head2PhonesConfig {
     pub dataset_id: String,
     #[serde(default)]
     pub source_paths: Vec<PathBuf>,
+    #[serde(default = "default_include_default_gutenberg")]
+    pub include_default_gutenberg: bool,
+    #[serde(default = "default_gutenberg_urls")]
+    pub gutenberg_urls: Vec<String>,
     #[serde(default = "default_include_synthetic")]
     pub include_synthetic: bool,
     #[serde(default = "default_synthetic_buffers")]
@@ -48,6 +61,10 @@ pub struct Head2PhonesConfig {
     pub no_head_cuts_per_head: usize,
     #[serde(default = "default_include_exceptional")]
     pub include_exceptional: bool,
+    #[serde(default = "default_include_naive_seams_discrepancies")]
+    pub include_naive_seams_discrepancies: bool,
+    #[serde(default = "default_max_naive_seams_discrepancies_per_file")]
+    pub max_naive_seams_discrepancies_per_file: usize,
     #[serde(default = "default_train_frac")]
     pub train_frac: f64,
     #[serde(default = "default_valid_frac")]
@@ -65,11 +82,16 @@ impl Default for Head2PhonesConfig {
         Self {
             dataset_id: "v0".to_string(),
             source_paths: Vec::new(),
+            include_default_gutenberg: default_include_default_gutenberg(),
+            gutenberg_urls: default_gutenberg_urls(),
             include_synthetic: default_include_synthetic(),
             synthetic_buffers: default_synthetic_buffers(),
             random_cuts_per_buffer: default_random_cuts_per_buffer(),
             no_head_cuts_per_head: default_no_head_cuts_per_head(),
             include_exceptional: default_include_exceptional(),
+            include_naive_seams_discrepancies: default_include_naive_seams_discrepancies(),
+            max_naive_seams_discrepancies_per_file: default_max_naive_seams_discrepancies_per_file(
+            ),
             train_frac: default_train_frac(),
             valid_frac: default_valid_frac(),
             seed: default_seed(),
@@ -77,6 +99,17 @@ impl Default for Head2PhonesConfig {
             max_head_graphemes: default_max_head_graphemes(),
         }
     }
+}
+
+fn default_include_default_gutenberg() -> bool {
+    true
+}
+
+fn default_gutenberg_urls() -> Vec<String> {
+    DEFAULT_GUTENBERG_URLS
+        .iter()
+        .map(|url| (*url).to_string())
+        .collect()
 }
 
 fn default_include_synthetic() -> bool {
@@ -97,6 +130,14 @@ fn default_no_head_cuts_per_head() -> usize {
 
 fn default_include_exceptional() -> bool {
     true
+}
+
+fn default_include_naive_seams_discrepancies() -> bool {
+    true
+}
+
+fn default_max_naive_seams_discrepancies_per_file() -> usize {
+    1024
 }
 
 fn default_train_frac() -> f64 {
@@ -144,8 +185,16 @@ pub enum TrainingRowSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NaiveSeamsDiscrepancy {
+    pub source: String,
+    pub seams_sentence: String,
+    pub naive_sentences: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepareReport {
     pub source_buffers: usize,
+    pub naive_seams_discrepancies: usize,
     pub complete_examples: usize,
     pub no_head_examples: usize,
     pub exceptional_examples: usize,
@@ -156,11 +205,31 @@ pub struct PrepareReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
-    Stage { message: String },
-    Read { path: String, buffers: usize },
-    Synthesize { path: String, buffers: usize },
-    Build { complete: usize, no_head: usize },
-    Write { path: String, rows: usize },
+    Stage {
+        message: String,
+    },
+    Download {
+        url: String,
+        path: String,
+        bytes: u64,
+    },
+    Read {
+        path: String,
+        buffers: usize,
+        naive_seams_discrepancies: usize,
+    },
+    Synthesize {
+        path: String,
+        buffers: usize,
+    },
+    Build {
+        complete: usize,
+        no_head: usize,
+    },
+    Write {
+        path: String,
+        rows: usize,
+    },
 }
 
 pub fn prepare_dataset(out: &Path, config: &Head2PhonesConfig) -> Result<PrepareReport> {
@@ -179,14 +248,20 @@ pub fn prepare_dataset_with_progress(
 
     let mut rng = StdRng::seed_from_u64(config.seed);
     let examples_part_path = out.join("examples.jsonl.part");
+    let discrepancies_part_path = out.join("naive_seams_discrepancies.jsonl.part");
     let mut examples_part = BufWriter::new(
         File::create(&examples_part_path)
             .with_context(|| format!("creating {}", examples_part_path.display()))?,
     );
+    let mut discrepancies_part = BufWriter::new(
+        File::create(&discrepancies_part_path)
+            .with_context(|| format!("creating {}", discrepancies_part_path.display()))?,
+    );
     let mut examples = Vec::new();
+    let mut naive_seams_discrepancies = Vec::new();
     let mut source_buffers = 0usize;
 
-    let mut temporary_parts = vec![examples_part_path.clone()];
+    let mut temporary_parts = vec![examples_part_path.clone(), discrepancies_part_path.clone()];
 
     if config.include_synthetic {
         let synthetic_path = out.join("synthetic_buffers.jsonl.part");
@@ -233,10 +308,29 @@ pub fn prepare_dataset_with_progress(
         }
     }
 
-    for path in &config.source_paths {
+    let source_files = resolve_source_files_with_progress(out, config, &mut progress)?;
+    for path in &source_files {
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let buffers = source_buffers_from_text(&raw);
+        let seams_sentences = seams_sentences_from_text(&raw);
+        let file_discrepancies = if config.include_naive_seams_discrepancies {
+            build_naive_seams_discrepancies(
+                &seams_sentences,
+                &path.display().to_string(),
+                config.max_naive_seams_discrepancies_per_file,
+            )
+        } else {
+            Vec::new()
+        };
+        for discrepancy in &file_discrepancies {
+            writeln!(
+                discrepancies_part,
+                "{}",
+                serde_json::to_string(discrepancy)?
+            )?;
+        }
+        naive_seams_discrepancies.extend(file_discrepancies);
+        let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
         for buffer in &buffers {
             source_buffers += 1;
             add_examples_for_buffer(
@@ -252,13 +346,18 @@ pub fn prepare_dataset_with_progress(
         progress(PrepareProgress::Read {
             path: path.display().to_string(),
             buffers: buffers.len(),
+            naive_seams_discrepancies: naive_seams_discrepancies.len(),
         });
     }
 
     examples_part
         .flush()
         .with_context(|| format!("flushing {}", examples_part_path.display()))?;
+    discrepancies_part
+        .flush()
+        .with_context(|| format!("flushing {}", discrepancies_part_path.display()))?;
     drop(examples_part);
+    drop(discrepancies_part);
 
     let complete_examples = examples
         .iter()
@@ -291,6 +390,11 @@ pub fn prepare_dataset_with_progress(
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
     write_jsonl_with_progress(&out.join("test.jsonl"), &test, &mut progress)?;
+    write_jsonl_with_progress(
+        &out.join("naive_seams_discrepancies.jsonl"),
+        &naive_seams_discrepancies,
+        &mut progress,
+    )?;
 
     progress(PrepareProgress::Stage {
         message: "Building head2phones vocabulary".to_string(),
@@ -310,7 +414,13 @@ pub fn prepare_dataset_with_progress(
     )?;
     fs::write(
         out.join("README.md"),
-        dataset_readme(config, &train, &valid, &test),
+        dataset_readme(
+            config,
+            &train,
+            &valid,
+            &test,
+            naive_seams_discrepancies.len(),
+        ),
     )?;
     for part in temporary_parts {
         if part.exists() {
@@ -320,6 +430,7 @@ pub fn prepare_dataset_with_progress(
 
     Ok(PrepareReport {
         source_buffers,
+        naive_seams_discrepancies: naive_seams_discrepancies.len(),
         complete_examples,
         no_head_examples,
         exceptional_examples,
@@ -658,25 +769,6 @@ fn speech_symbols_for_text(text: &str) -> Option<String> {
             style: None,
         })
         .ok()?;
-    let plan = utterance_plan_from_phonemicized(&phonemicized);
-    let styletts2_plan = prepare_styletts2_plan(
-        &plan,
-        &styletts2_en_us_symbol_set(),
-        StyleTts2PlanOptions {
-            max_symbols_per_chunk: 512,
-            chunking_enabled: false,
-        },
-    )
-    .ok()?;
-    let symbols = styletts2_plan
-        .chunks
-        .iter()
-        .flat_map(|chunk| chunk.symbols.iter().map(|token| token.symbol.clone()))
-        .collect::<Vec<_>>();
-    if !symbols.is_empty() {
-        return Some(symbols.join(" "));
-    }
-
     phones_for_phonemicized(&phonemicized)
 }
 
@@ -735,28 +827,6 @@ fn replace_number_abbreviation(text: &str) -> String {
     out
 }
 
-fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
-    UtterancePlan {
-        id: UtteranceId("head2phones.training.utterance".into()),
-        variety: output.variety.clone(),
-        speaker: None,
-        intended_text: Some(output.text.clone()),
-        intended_morphemes: Vec::new(),
-        intended_phonemes: output.phonemes.clone(),
-        target_phones: output.phones.clone(),
-        target_syllables: output.syllables.clone(),
-        boundaries: output.boundaries.clone(),
-        target_prosody: output.prosody.clone(),
-        target_acoustics: Vec::new(),
-        style: None,
-        provenance: EvidenceProvenance {
-            source: EvidenceSource::TtsPlan,
-            method: "head2phones training StyleTTS2 lowering".into(),
-            version: Some("0.1".into()),
-        },
-    }
-}
-
 fn phones_for_phonemicized(phonemicized: &PhonemicizeOutput) -> Option<String> {
     let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
     for syllable in phonemicized.syllables.iter() {
@@ -774,12 +844,52 @@ fn phones_for_phonemicized(phonemicized: &PhonemicizeOutput) -> Option<String> {
         }
         words.push((word_idx, vec![syllable.clone()]));
     }
-    let ipa_words = words
-        .into_iter()
-        .map(|(_, syllables)| syllables_to_ipa_formatted(&syllables))
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    (!ipa_words.is_empty()).then(|| ipa_words.join(" "))
+    let mut symbols = Vec::new();
+    let last_index = words.len().saturating_sub(1);
+    for (position, (word_index, syllables)) in words.into_iter().enumerate() {
+        let word =
+            syllables_to_phonemes_ipa(&syllables, &phonemicized.phonemes, &phonemicized.variety);
+        if word.is_empty() {
+            continue;
+        }
+        symbols.push(word);
+        let boundary_symbols = boundary_symbols_after_word(&phonemicized.boundaries, word_index);
+        if boundary_symbols.is_empty() {
+            if position != last_index {
+                symbols.push("|".to_string());
+            }
+        } else {
+            symbols.extend(boundary_symbols.into_iter().map(str::to_string));
+        }
+    }
+    (!symbols.is_empty()).then(|| symbols.join(" "))
+}
+
+fn boundary_symbols_after_word(
+    boundaries: &[SpeechBoundaryToken],
+    word_index: usize,
+) -> Vec<&'static str> {
+    let Some(boundary) = boundaries
+        .iter()
+        .filter(|boundary| boundary.terminal.is_some() || boundary.pause.is_some())
+        .find(|boundary| boundary.after_grapheme_index == word_index)
+    else {
+        return Vec::new();
+    };
+    if let Some(terminal) = boundary.terminal {
+        return match terminal {
+            TerminalPunctuation::Question => vec!["↗", "?"],
+            TerminalPunctuation::Period => vec!["↘", "."],
+            TerminalPunctuation::Exclamation => vec!["↘", "!"],
+        };
+    }
+    if let Some(pause) = boundary.pause {
+        return match pause {
+            PauseKind::Comma => vec!["→", ","],
+            PauseKind::AlternativeQuestionRise => vec!["↗", ","],
+        };
+    }
+    Vec::new()
 }
 
 fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
@@ -806,7 +916,30 @@ fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
     }
 }
 
-fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
+fn find_phoneme_for_phone(
+    phone: &speaking::PhoneToken,
+    phonemes: &[speaking::PhonemeToken],
+) -> Option<speaking::PhonemeId> {
+    for phoneme_token in phonemes {
+        for realized_phone in &phoneme_token.realized_as {
+            if realized_phone.phone == phone.phone
+                && realized_phone.features == phone.features
+                && realized_phone.span == phone.span
+            {
+                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
+                    return Some(id.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn syllables_to_phonemes_ipa(
+    syllables: &[speaking::Syllable],
+    phonemes: &[speaking::PhonemeToken],
+    variety: &speaking::VarietyId,
+) -> String {
     syllables
         .iter()
         .enumerate()
@@ -831,7 +964,13 @@ fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
                 text.push(c);
             }
             for phone in &syllable.phones {
-                text.push_str(phone_ipa(phone));
+                if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
+                    let symbol =
+                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
+                    text.push_str(&symbol);
+                } else {
+                    text.push_str(phone_ipa(phone));
+                }
             }
             text
         })
@@ -842,8 +981,12 @@ fn synthetic_buffers(count: usize, rng: &mut StdRng) -> Vec<String> {
     let heads = [
         "Dr. Smith went home.",
         "This is the next sentence; and then the next.",
+        "What happened next?",
+        "Stop right there!",
         "Wait... really?",
         "\"No.\" she said.",
+        "\"Are you sure?\" Mina asked.",
+        "(Really?) That was the whole answer.",
         "Mr. Jones arrived after lunch.",
         "The package is ready, but the driver is late.",
         "First, open the small panel.",
@@ -851,6 +994,13 @@ fn synthetic_buffers(count: usize, rng: &mut StdRng) -> Vec<String> {
         "I saw 3.14 written on the board.",
         "Use e.g. this example carefully.",
         "In short: the answer changed.",
+        "A sudden pause — then the lamp went out.",
+        "Chapter One\nThe letter arrived before breakfast.",
+        "Editor's Note\nThis page was left in the archive.",
+        "Appendix A\nMeasurements and notes follow.",
+        "Hidden Letter",
+        "Editor Notes",
+        "Appendix Materials",
     ];
     let remainders = [
         " Then he slept.",
@@ -876,17 +1026,32 @@ fn exceptional_buffers() -> &'static [&'static str] {
         "Ms. Hart said e.g. this example matters.",
         "Use i.e. this case as the control.",
         "I saw 3.14 written on the board. Then I erased it.",
+        "What happened next? Nobody answered.",
+        "Stop right there! The guard shouted again.",
         "Wait... really? I thought that was done.",
         "\"No.\" she said. Then she closed the book.",
+        "\"Are you sure?\" Mina asked. The door stayed shut.",
         "\"No,\" she said, \"not yet.\" The room went quiet.",
         "(Really?) That was the whole answer.",
         "- Bring the blue folder.\n- Leave the red folder.",
+        "Chapter One\nThe letter arrived before breakfast.",
+        "Editor's Note\nThis page was left in the archive.",
+        "Appendix A\nMeasurements and notes follow.",
+        "Chapter One",
+        "Editor's Note",
+        "Appendix A",
+        "Hidden Letter",
+        "Editor Notes",
+        "Appendix Materials",
         "First line complete.\nSecond line is still arriving",
         "Prof. Adams arrived at 4:30 p.m. sharp.",
         "A. B. Carter signed the note. Then he left.",
         "The package is ready, but the driver is late.",
         "This is the next sentence; and then the next.",
         "In short: the answer changed. The stream keeps moving.",
+        "A sudden pause — then the lamp went out.",
+        "The signal was green; the bridge stayed closed.",
+        "Pack the ledger, seal the box, and wait.",
         "No. 5 was missing from the list. Then it appeared.",
         "After the meeting, Rep. Susan Smith (D. NY.) said she didn't know what the meeting was about.",
         "After the meeting, Rep.",
@@ -897,24 +1062,28 @@ fn exceptional_buffers() -> &'static [&'static str] {
     ]
 }
 
-fn source_buffers_from_text(raw: &str) -> Vec<String> {
-    let mut buffers = Vec::new();
+fn seams_sentences_from_text(raw: &str) -> Vec<String> {
     if let Ok(detector) = SentenceDetectorDialog::new() {
         if let Ok(sentences) = detector.detect_sentences_borrowed(raw) {
-            let sentences = sentences
+            return sentences
                 .into_iter()
                 .map(|sentence| sentence.normalize().trim().to_string())
                 .filter(|sentence| !sentence.is_empty())
-                .collect::<Vec<_>>();
-            for (index, sentence) in sentences.iter().enumerate() {
-                let mut buffer = sentence.clone();
-                if let Some(next) = sentences.get(index + 1) {
-                    buffer.push(' ');
-                    buffer.push_str(next);
-                }
-                buffers.push(buffer);
-            }
+                .collect();
         }
+    }
+    Vec::new()
+}
+
+fn source_buffers_from_sentences(raw: &str, seams_sentences: &[String]) -> Vec<String> {
+    let mut buffers = Vec::new();
+    for (index, sentence) in seams_sentences.iter().enumerate() {
+        let mut buffer = sentence.clone();
+        if let Some(next) = seams_sentences.get(index + 1) {
+            buffer.push(' ');
+            buffer.push_str(next);
+        }
+        buffers.push(buffer);
     }
     buffers.extend(
         raw.split("\n\n")
@@ -925,6 +1094,178 @@ fn source_buffers_from_text(raw: &str) -> Vec<String> {
     buffers.sort();
     buffers.dedup();
     buffers
+}
+
+pub fn naive_split_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    for (index, ch) in text.char_indices() {
+        if matches!(ch, '.' | '?' | '!') {
+            let end = index + ch.len_utf8();
+            let sentence = normalize_sentence(&text[start..end]);
+            if !sentence.is_empty() {
+                sentences.push(sentence);
+            }
+            start = end;
+        }
+    }
+    let tail = normalize_sentence(&text[start..]);
+    if !tail.is_empty() {
+        sentences.push(tail);
+    }
+    sentences
+}
+
+fn build_naive_seams_discrepancies(
+    seams_sentences: &[String],
+    source: &str,
+    max_per_file: usize,
+) -> Vec<NaiveSeamsDiscrepancy> {
+    let mut discrepancies = Vec::new();
+    for seams_sentence in seams_sentences {
+        if discrepancies.len() >= max_per_file {
+            break;
+        }
+        let naive_sentences = naive_split_sentences(seams_sentence);
+        if naive_sentences.len() <= 1 {
+            continue;
+        }
+        discrepancies.push(NaiveSeamsDiscrepancy {
+            source: source.to_string(),
+            seams_sentence: seams_sentence.clone(),
+            naive_sentences,
+        });
+    }
+    discrepancies
+}
+
+fn normalize_sentence(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn resolve_source_files_with_progress(
+    out: &Path,
+    config: &Head2PhonesConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<Vec<PathBuf>> {
+    let configured = discover_source_files(&config.source_paths)?;
+    if !configured.is_empty() {
+        return Ok(configured);
+    }
+
+    let default_dir = out.join("sources");
+    fs::create_dir_all(&default_dir)
+        .with_context(|| format!("creating {}", default_dir.display()))?;
+    let mut generated_paths = Vec::new();
+
+    if config.include_default_gutenberg {
+        let urls = if config.gutenberg_urls.is_empty() {
+            default_gutenberg_urls()
+        } else {
+            config.gutenberg_urls.clone()
+        };
+        for (index, url) in urls.iter().enumerate() {
+            match download_gutenberg_source(&default_dir, index, url, progress) {
+                Ok(path) => generated_paths.push(path),
+                Err(error) => {
+                    progress(PrepareProgress::Stage {
+                        message: format!("Skipping default Gutenberg source {url}: {error}"),
+                    });
+                }
+            }
+        }
+    }
+
+    generated_paths.sort();
+    Ok(generated_paths)
+}
+
+fn download_gutenberg_source(
+    dir: &Path,
+    index: usize,
+    url: &str,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<PathBuf> {
+    let path = dir.join(format!("{index:02}-{}", gutenberg_filename(url)));
+    if path.exists() && path.metadata()?.len() > 0 {
+        progress(PrepareProgress::Stage {
+            message: format!("Using cached Gutenberg source {}", path.display()),
+        });
+        return Ok(path);
+    }
+
+    let part_path = path.with_extension("txt.part");
+    progress(PrepareProgress::Stage {
+        message: format!("Downloading default Gutenberg source {url}"),
+    });
+    let response = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("GET {url}"))?;
+    let raw = response
+        .into_body()
+        .read_to_string()
+        .with_context(|| format!("reading {url}"))?;
+    progress(PrepareProgress::Download {
+        url: url.to_string(),
+        path: path.display().to_string(),
+        bytes: raw.len() as u64,
+    });
+    let stripped = strip_gutenberg_boilerplate(&raw);
+    fs::write(&part_path, stripped).with_context(|| format!("writing {}", part_path.display()))?;
+    fs::rename(&part_path, &path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
+    Ok(path)
+}
+
+fn gutenberg_filename(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("gutenberg.txt")
+        .replace(['/', '\\', ':', '?', '&', '='], "_")
+}
+
+fn strip_gutenberg_boilerplate(raw: &str) -> String {
+    let start = raw
+        .find("*** START OF")
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .unwrap_or(0);
+    let after_start = &raw[start..];
+    let end = after_start.find("*** END OF").unwrap_or(after_start.len());
+    after_start[..end].trim().to_string()
+}
+
+fn discover_source_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_file() {
+            files.push(path.clone());
+        } else if path.is_dir() {
+            discover_source_files_in_dir(path, &mut files)?;
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn discover_source_files_in_dir(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            discover_source_files_in_dir(&path, files)?;
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.ends_with("-0.txt") || name.ends_with(".txt"))
+            .unwrap_or(false)
+        {
+            files.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn random_complete_buffers(
@@ -1017,13 +1358,15 @@ fn dataset_readme(
     train: &[Head2PhonesTrainingExample],
     valid: &[Head2PhonesTrainingExample],
     test: &[Head2PhonesTrainingExample],
+    naive_seams_discrepancies: usize,
 ) -> String {
     format!(
-        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\n\nOutputs are exactly `{}` or `{}` StyleTTS2-lowered speech symbols `{}` plus `{}` and a Unicode grapheme-cluster offset. The speech symbols include phones/phonemes, word boundaries, punctuation, stress, and intonation markers used by the synthesizer.\n",
+        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}` or `{}` broad IPA phone text `{}` plus `{}` and a Unicode grapheme-cluster offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
         config.dataset_id,
         train.len(),
         valid.len(),
         test.len(),
+        naive_seams_discrepancies,
         NO_HEAD,
         PHONES_OPEN,
         PHONES_CLOSE,
@@ -1090,6 +1433,51 @@ mod tests {
     }
 
     #[test]
+    fn questions_exclamations_and_closing_punctuation_are_complete_heads() {
+        for (text, expected) in [
+            (
+                "What happened next? Nobody answered.",
+                "What happened next?",
+            ),
+            (
+                "Stop right there! The guard shouted again.",
+                "Stop right there!",
+            ),
+            ("\"Are you sure?\" Mina asked.", "\"Are you sure?\""),
+            ("(Really?) That was the whole answer.", "(Really?)"),
+        ] {
+            let head = first_complete_head(text).expect("complete head");
+            assert_eq!(&text[..head.end_byte], expected);
+        }
+    }
+
+    #[test]
+    fn punctuation_boundaries_cover_colons_semicolons_commas_dashes_and_titles() {
+        for (text, expected) in [
+            ("In short: the answer changed.", "In short:"),
+            (
+                "The signal was green; the bridge stayed closed.",
+                "The signal was green;",
+            ),
+            (
+                "Pack the ledger, seal the box, and wait.",
+                "Pack the ledger, seal the box,",
+            ),
+            (
+                "A sudden pause — then the lamp went out.",
+                "A sudden pause —",
+            ),
+            (
+                "Chapter One\nThe letter arrived before breakfast.",
+                "Chapter One\n",
+            ),
+        ] {
+            let head = first_complete_head(text).expect("complete head");
+            assert_eq!(&text[..head.end_byte], expected);
+        }
+    }
+
+    #[test]
     fn dotted_abbreviations_do_not_split_the_head() {
         let text = "Use e.g. this example carefully. Then continue.";
         let head = first_complete_head(text).expect("complete head");
@@ -1098,6 +1486,35 @@ mod tests {
         let text = "Use i.e. this case as the control. Then continue.";
         let head = first_complete_head(text).expect("complete head");
         assert_eq!(&text[..head.end_byte], "Use i.e. this case as the control.");
+    }
+
+    #[test]
+    fn naive_splitter_demonstrates_erroneous_abbreviation_cases() {
+        let text = "Dr. Smith saw No. 5 at 3.14 p.m. before leaving.";
+        let seams_sentences = seams_sentences_from_text(text);
+        assert_eq!(seams_sentences, vec![text.to_string()]);
+
+        let discrepancies = build_naive_seams_discrepancies(&seams_sentences, "test", 8);
+        assert_eq!(discrepancies.len(), 1);
+        assert_eq!(discrepancies[0].seams_sentence, text);
+        assert!(discrepancies[0]
+            .naive_sentences
+            .iter()
+            .any(|sentence| sentence == "Dr."));
+        assert!(discrepancies[0]
+            .naive_sentences
+            .iter()
+            .any(|sentence| sentence == "14 p."));
+    }
+
+    #[test]
+    fn discrepancy_mining_is_bounded_per_file() {
+        let seams_sentences = vec![
+            "Dr. Smith went home.".to_string(),
+            "Mr. Jones waited quietly.".to_string(),
+        ];
+        let discrepancies = build_naive_seams_discrepancies(&seams_sentences, "test", 1);
+        assert_eq!(discrepancies.len(), 1);
     }
 
     #[test]
@@ -1132,12 +1549,43 @@ mod tests {
     }
 
     #[test]
-    fn lowered_symbols_include_boundaries_and_terminal_prosody() {
+    fn end_of_text_flushes_title_like_non_sentences() {
+        for title in ["Hidden Letter", "Editor Notes", "Appendix Materials"] {
+            let row = flush_example_for_prefix(title, "test", TrainingRowSource::Exceptional)
+                .expect("flush row");
+            assert_eq!(row.input, format!("{title}{END_OF_TEXT}"));
+            assert_eq!(row.head.as_deref(), Some(title));
+            assert_eq!(row.split_after, Some(title.graphemes(true).count()));
+            assert!(row.output.starts_with(PHONES_OPEN));
+        }
+    }
+
+    #[test]
+    fn ipa_phones_include_boundaries_and_terminal_prosody() {
         let symbols = speech_symbols_for_text("Dr. Smith went home.").expect("symbols");
         assert!(symbols.contains("|"));
-        assert!(symbols.contains("D") || symbols.contains("DH"));
+        assert!(symbols.contains("d") || symbols.contains("ɾ"));
+        assert!(symbols.contains("ɑ") || symbols.contains("ɔ"));
+        assert!(!symbols.split_whitespace().any(|token| token == "DH"));
+        assert!(!symbols.split_whitespace().any(|token| token == "OW"));
+        assert!(!symbols.contains('˭'));
         assert!(symbols.contains("."));
         assert!(symbols.contains("↘"));
+    }
+
+    #[test]
+    fn broad_ipa_does_not_emit_narrow_allophone_marks() {
+        let symbols = speech_symbols_for_text("Mr. Jones waited.").expect("symbols");
+        assert!(symbols.contains("mɪstɚ") || symbols.contains("mɪ.stɚ"));
+        assert!(!symbols.contains("t˭"));
+        assert!(!symbols.contains('˭'));
+    }
+
+    #[test]
+    fn broad_ipa_splits_intervocalic_r_colored_schwa_by_maximum_onset() {
+        let symbols = speech_symbols_for_text("arrived").expect("symbols");
+        assert!(symbols.contains("əˈɹaɪvd"), "{symbols}");
+        assert!(!symbols.contains("ɚˈaɪvd"), "{symbols}");
     }
 
     #[test]

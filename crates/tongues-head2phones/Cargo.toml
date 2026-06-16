@@ -13,5 +13,5 @@ tongues-core = { path = "../tongues-core" }
 tongues-data = { path = "../tongues-data" }
 tongues-neural = { path = "../tongues-neural" }
 speaking = { path = "../speaking" }
-styletts2 = { path = "../styletts2" }
+ureq = { workspace = true }
 unicode-segmentation = { workspace = true }

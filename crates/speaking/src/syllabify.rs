@@ -40,11 +40,12 @@ fn phone_words(phones: &[PhoneToken]) -> Vec<&[PhoneToken]> {
 }
 
 fn syllabify_word(phones: &[PhoneToken], variety: &LinguisticVariety) -> Vec<Syllable> {
-    let phones = phones
+    let word_phones = phones
         .iter()
         .filter(|phone| !is_boundary_phone(phone))
         .cloned()
         .collect::<Vec<_>>();
+    let phones = split_intervocalic_r_colored_schwa(&word_phones);
     if phones.is_empty() {
         return Vec::new();
     }
@@ -104,6 +105,64 @@ fn syllabify_word(phones: &[PhoneToken], variety: &LinguisticVariety) -> Vec<Syl
     }
 
     syllables
+}
+
+fn split_intervocalic_r_colored_schwa(phones: &[PhoneToken]) -> Vec<PhoneToken> {
+    let mut split = Vec::with_capacity(phones.len());
+    for (index, phone) in phones.iter().enumerate() {
+        if is_unstressed_r_colored_schwa(phone) && phones.get(index + 1).is_some_and(is_nucleus) {
+            split.push(split_schwa_phone(phone));
+            split.push(split_r_onset_phone(phone));
+        } else {
+            split.push(phone.clone());
+        }
+    }
+    split
+}
+
+fn is_unstressed_r_colored_schwa(phone: &PhoneToken) -> bool {
+    matches!(&phone.phone, Spec::Known(id) if id.as_str() == "ipa.phone.ɚ")
+}
+
+fn split_schwa_phone(phone: &PhoneToken) -> PhoneToken {
+    let mut schwa = phone.clone();
+    schwa.phone = Spec::Known(PhoneId("ipa.phone.ə".into()));
+    schwa.features.values.insert(
+        FeatureId("phonology.base_symbol".into()),
+        Spec::Known(FeatureValue::Category("AH".into())),
+    );
+    schwa
+}
+
+fn split_r_onset_phone(phone: &PhoneToken) -> PhoneToken {
+    let mut r = phone.clone();
+    r.phone = Spec::Known(PhoneId("ipa.phone.ɹ".into()));
+    r.features.values.insert(
+        FeatureId("phonology.major".into()),
+        Spec::Known(FeatureValue::Category("consonant".into())),
+    );
+    r.features.values.insert(
+        FeatureId("phonology.syllabic".into()),
+        Spec::Known(FeatureValue::Bool(false)),
+    );
+    r.features.values.insert(
+        FeatureId("phonology.place".into()),
+        Spec::Known(FeatureValue::Category("alveolar".into())),
+    );
+    r.features.values.insert(
+        FeatureId("phonology.manner".into()),
+        Spec::Known(FeatureValue::Category("liquid".into())),
+    );
+    r.features.values.insert(
+        FeatureId("phonology.base_symbol".into()),
+        Spec::Known(FeatureValue::Category("R".into())),
+    );
+    r.provenance = EvidenceProvenance {
+        source: EvidenceSource::Rule,
+        method: "rhotic vowel onset r from syllabification".into(),
+        version: Some("0.1".into()),
+    };
+    r
 }
 
 fn split_maximum_onset(
@@ -360,7 +419,8 @@ mod tests {
     #[test]
     fn rhotic_vowels_do_not_add_coda_r_in_syllables() {
         assert_eq!(syllables_to_ipa(&syllables_for("current")), "ˈkʰɝ.ənt");
-        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dɚˈaɪvd");
+        assert_eq!(syllables_to_ipa(&syllables_for("arrived")), "əˈɹaɪvd");
+        assert_eq!(syllables_to_ipa(&syllables_for("derived")), "dəˈɹaɪvd");
         assert_eq!(syllables_to_ipa(&syllables_for("surface")), "ˈsɝ.fəs");
 
         let current = syllables_for("current");
