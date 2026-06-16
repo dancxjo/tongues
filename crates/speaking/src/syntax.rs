@@ -876,6 +876,7 @@ fn is_likely_verb(word: &str) -> bool {
             | "invite"
             | "know"
             | "knows"
+            | "lead"
             | "left"
             | "like"
             | "likes"

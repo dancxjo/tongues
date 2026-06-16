@@ -1210,10 +1210,6 @@ fn pronunciation_for_word(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
-    if let Some(pronunciation) = pipeline.weak_form_resolver(word, variety, context) {
-        return pronunciation;
-    }
-
     match &word.kind {
         OrthographicTokenKind::Acronym => {
             return acronym_pronunciation(word.text.as_str(), variety);
@@ -1238,6 +1234,10 @@ fn pronunciation_for_word(
             );
         }
         OrthographicTokenKind::Word | OrthographicTokenKind::Hyphenated(_) => {}
+    }
+
+    if let Some(pronunciation) = pipeline.weak_form_resolver(word, variety, context) {
+        return pronunciation;
     }
 
     let entry = cmudict::bundled().lookup_entry(&word.normalized);
@@ -1428,6 +1428,9 @@ const POS_SENSITIVE_PRONUNCIATIONS: &[PosSensitivePronunciation] = &[
     ),
     pos_pronunciation("wind", PartOfSpeech::Noun, &["W", "IH1", "N", "D"]),
     pos_pronunciation("wind", PartOfSpeech::Verb, &["W", "AY1", "N", "D"]),
+    pos_pronunciation("lead", PartOfSpeech::Noun, &["L", "EH1", "D"]),
+    pos_pronunciation("lead", PartOfSpeech::Adjective, &["L", "EH1", "D"]),
+    pos_pronunciation("lead", PartOfSpeech::Verb, &["L", "IY1", "D"]),
 ];
 
 const fn pos_pronunciation(
@@ -2208,6 +2211,155 @@ fn spell_out(i: u128) -> String {
     }
 }
 
+fn spell_digit_sequence(digits: &str) -> String {
+    digits
+        .chars()
+        .filter_map(|digit| digit.to_digit(10))
+        .map(|digit| spell_out(digit as u128))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn spell_clock_time(hour: u128, minute_digits: &str) -> Option<String> {
+    if minute_digits.len() != 2 || !minute_digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let minutes = minute_digits.parse::<u128>().ok()?;
+    if minutes > 59 {
+        return None;
+    }
+    let minute_text = if minutes == 0 {
+        "o'clock".to_string()
+    } else if minutes < 10 {
+        format!("oh {}", spell_out(minutes))
+    } else {
+        spell_out(minutes)
+    };
+    Some(format!("{} {}", spell_out(hour), minute_text))
+}
+
+fn spell_dotted_number(first: u128, segments: &[String]) -> String {
+    let mut parts = vec![spell_out(first)];
+    for segment in segments {
+        parts.push("point".to_string());
+        parts.push(spell_digit_sequence(segment));
+    }
+    parts.join(" ")
+}
+
+fn spell_year(year: u128) -> String {
+    if (2000..=2009).contains(&year) {
+        format!("two thousand {}", spell_out(year - 2000))
+    } else if (2010..=2099).contains(&year) {
+        format!("twenty {}", spell_out(year - 2000))
+    } else {
+        spell_out(year)
+    }
+}
+
+fn numeric_product_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut left = String::new();
+    let mut index = start;
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        left.push(characters[index]);
+        index += 1;
+    }
+    if left.is_empty() || index >= characters.len() || !matches!(characters[index], 'x' | 'X' | '×')
+    {
+        return None;
+    }
+
+    index += 1;
+    let mut right = String::new();
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        right.push(characters[index]);
+        index += 1;
+    }
+    if right.is_empty() || (index < characters.len() && characters[index].is_alphanumeric()) {
+        return None;
+    }
+
+    let left = left.parse::<u128>().ok()?;
+    let right = right.parse::<u128>().ok()?;
+    Some((
+        format!("{} by {}", spell_out(left), spell_out(right)),
+        index,
+    ))
+}
+
+fn slash_number_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut groups = Vec::new();
+    let mut index = start;
+    loop {
+        let group_start = index;
+        while index < characters.len() && characters[index].is_ascii_digit() {
+            index += 1;
+        }
+        if group_start == index {
+            return None;
+        }
+        groups.push(characters[group_start..index].iter().collect::<String>());
+        if index >= characters.len() || characters[index] != '/' {
+            break;
+        }
+        index += 1;
+    }
+
+    if groups.len() < 2 || (index < characters.len() && characters[index].is_alphanumeric()) {
+        return None;
+    }
+
+    let parts = groups
+        .iter()
+        .enumerate()
+        .map(|(group_index, group)| {
+            let value = group.parse::<u128>().ok()?;
+            if group_index + 1 == groups.len() && group.len() == 4 {
+                Some(spell_year(value))
+            } else {
+                Some(spell_out(value))
+            }
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((parts.join(" slash "), index))
+}
+
+fn phone_number_digits_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let mut groups = Vec::new();
+    let mut index = start;
+    loop {
+        let group_start = index;
+        while index < characters.len() && characters[index].is_ascii_digit() {
+            index += 1;
+        }
+        if group_start == index {
+            return None;
+        }
+        groups.push(characters[group_start..index].iter().collect::<String>());
+        if index >= characters.len() || characters[index] != '-' {
+            break;
+        }
+        index += 1;
+    }
+
+    let shape_is_phone = matches!(
+        groups
+            .iter()
+            .map(String::len)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [3, 4] | [3, 3, 4]
+    );
+    if !shape_is_phone {
+        return None;
+    }
+    if index < characters.len() && characters[index].is_alphanumeric() {
+        return None;
+    }
+
+    Some((groups.concat(), index))
+}
+
 fn is_scale_word(word: &str) -> bool {
     matches!(
         word,
@@ -2242,6 +2394,9 @@ fn is_known_unit(word: &str) -> bool {
             | "kilo"
             | "kilos"
             | "kilograms"
+            | "mg"
+            | "milligram"
+            | "milligrams"
             | "cm"
             | "centimeter"
             | "centimeters"
@@ -2282,6 +2437,13 @@ fn spell_unit(val: u128, unit: &str) -> &'static str {
                 "kilogram"
             } else {
                 "kilograms"
+            }
+        }
+        "mg" | "milligram" | "milligrams" => {
+            if val == 1 {
+                "milligram"
+            } else {
+                "milligrams"
             }
         }
         "cm" | "centimeter" | "centimeters" => {
@@ -2353,10 +2515,6 @@ fn find_word_index_at(c_idx: usize, words: &[WordToken]) -> Option<usize> {
 
 pub fn english_normalize_numbers(text: &str) -> String {
     let words = tokenize_words(text);
-    if words.is_empty() {
-        return text.to_string();
-    }
-
     let words_str: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
     let syntax = crate::syntax::HeuristicLinkGrammarParser.parse(&words_str, None);
 
@@ -2500,6 +2658,17 @@ pub fn english_normalize_numbers(text: &str) -> String {
 
         // Check cardinal number or measurement at `idx`
         if char_vec[idx].is_ascii_digit() {
+            if let Some((product, product_end)) = numeric_product_at(&char_vec, idx) {
+                result.push_str(&product);
+                idx = product_end;
+                continue;
+            }
+            if let Some((slash_number, slash_end)) = slash_number_at(&char_vec, idx) {
+                result.push_str(&slash_number);
+                idx = slash_end;
+                continue;
+            }
+
             let mut int_part = String::new();
             let mut temp_idx = idx;
             while temp_idx < char_vec.len()
@@ -2535,6 +2704,12 @@ pub fn english_normalize_numbers(text: &str) -> String {
                 continue;
             }
 
+            if let Some((phone_digits, phone_end)) = phone_number_digits_at(&char_vec, idx) {
+                result.push_str(&spell_digit_sequence(&phone_digits));
+                idx = phone_end;
+                continue;
+            }
+
             let clean_int: String = int_part.chars().filter(|&c| c != ',').collect();
             let commas_valid = if int_part.contains(',') {
                 let groups: Vec<&str> = int_part.split(',').collect();
@@ -2550,6 +2725,27 @@ pub fn english_normalize_numbers(text: &str) -> String {
 
             if !clean_int.is_empty() && commas_valid {
                 if let Ok(val) = clean_int.parse::<u128>() {
+                    if temp_idx < char_vec.len() && char_vec[temp_idx] == ':' {
+                        let minute_start = temp_idx + 1;
+                        let minute_end = minute_start.saturating_add(2);
+                        if minute_end <= char_vec.len()
+                            && char_vec[minute_start..minute_end]
+                                .iter()
+                                .all(|ch| ch.is_ascii_digit())
+                            && (minute_end >= char_vec.len()
+                                || !char_vec[minute_end].is_ascii_digit())
+                        {
+                            let minute_digits = char_vec[minute_start..minute_end]
+                                .iter()
+                                .collect::<String>();
+                            if let Some(spelled) = spell_clock_time(val, &minute_digits) {
+                                result.push_str(&spelled);
+                                idx = minute_end;
+                                continue;
+                            }
+                        }
+                    }
+
                     let mut suffix_temp = temp_idx;
                     while suffix_temp < char_vec.len() && char_vec[suffix_temp] == ' ' {
                         suffix_temp += 1;
@@ -2613,27 +2809,65 @@ pub fn english_normalize_numbers(text: &str) -> String {
                         continue;
                     } else {
                         let mut decimal_temp = temp_idx;
-                        let mut is_decimal = false;
                         if decimal_temp < char_vec.len() && char_vec[decimal_temp] == '.' {
-                            decimal_temp += 1;
-                            let mut dec_digits = String::new();
-                            while decimal_temp < char_vec.len()
-                                && char_vec[decimal_temp].is_ascii_digit()
-                            {
-                                dec_digits.push(char_vec[decimal_temp]);
-                                decimal_temp += 1;
+                            let mut segments = Vec::new();
+                            while decimal_temp < char_vec.len() && char_vec[decimal_temp] == '.' {
+                                let segment_start = decimal_temp + 1;
+                                let mut segment_temp = segment_start;
+                                let mut segment = String::new();
+                                while segment_temp < char_vec.len()
+                                    && char_vec[segment_temp].is_ascii_digit()
+                                {
+                                    segment.push(char_vec[segment_temp]);
+                                    segment_temp += 1;
+                                }
+                                if segment.is_empty() {
+                                    break;
+                                }
+                                decimal_temp = segment_temp;
+                                segments.push(segment);
                             }
-                            if !dec_digits.is_empty() {
-                                is_decimal = true;
+                            if !segments.is_empty() {
+                                let mut decimal_suffix_temp = decimal_temp;
+                                while decimal_suffix_temp < char_vec.len()
+                                    && char_vec[decimal_suffix_temp] == ' '
+                                {
+                                    decimal_suffix_temp += 1;
+                                }
+
+                                let mut decimal_suffix_word = String::new();
+                                while decimal_suffix_temp < char_vec.len()
+                                    && char_vec[decimal_suffix_temp].is_alphabetic()
+                                {
+                                    decimal_suffix_word.push(char_vec[decimal_suffix_temp]);
+                                    decimal_suffix_temp += 1;
+                                }
+                                let decimal_suffix_valid = !decimal_suffix_word.is_empty()
+                                    && is_known_unit(&decimal_suffix_word.to_lowercase())
+                                    && (decimal_suffix_temp >= char_vec.len()
+                                        || !char_vec[decimal_suffix_temp].is_alphanumeric());
+
+                                if decimal_suffix_valid {
+                                    let unit_str = decimal_suffix_word.to_lowercase();
+                                    result.push_str(&format!(
+                                        "{} {}",
+                                        spell_dotted_number(val, &segments),
+                                        spell_unit(val, &unit_str)
+                                    ));
+                                    idx = decimal_suffix_temp;
+                                    continue;
+                                }
+
+                                result.push_str(&spell_dotted_number(val, &segments));
+                                idx = decimal_temp;
+                                continue;
                             }
                         }
 
-                        if !is_decimal {
-                            let spelled = spell_out(val);
-                            result.push_str(&spelled);
-                            idx = temp_idx;
-                            continue;
-                        }
+                        let spelled = spell_out(val);
+                        result.push_str(&spelled);
+                        idx = temp_idx;
+                        continue;
                     }
                 }
             }
@@ -2734,6 +2968,36 @@ mod tests {
             english_normalize_numbers("The price was $15.52."),
             "The price was fifteen dollars and fifty-two cents."
         );
+        assert_eq!(
+            english_normalize_numbers("I saw 3.14 written on the board."),
+            "I saw three point one four written on the board."
+        );
+        assert_eq!(
+            english_normalize_numbers("Prof. Adams arrived at 4:30 p.m. sharp."),
+            "Prof. Adams arrived at four thirty p.m. sharp."
+        );
+        assert_eq!(
+            english_normalize_numbers("The version is 1.2.3."),
+            "The version is one point two point three."
+        );
+        assert_eq!(
+            english_normalize_numbers("Call 555-1212 now."),
+            "Call five five five one two one two now."
+        );
+        assert_eq!(
+            english_normalize_numbers("The dose was 2.0 mg."),
+            "The dose was two point zero milligrams."
+        );
+        assert_eq!(english_normalize_numbers("2x4"), "two by four");
+        assert_eq!(
+            english_normalize_numbers("5/6/2026"),
+            "five slash six slash twenty twenty-six"
+        );
+        assert_eq!(
+            english_normalize_numbers("$12.50"),
+            "twelve dollars and fifty cents"
+        );
+        assert_eq!(EnglishPhonemicizer.text_normalizer("No. 5"), "Number five");
         assert_eq!(
             english_normalize_numbers("A 5% discount."),
             "A five percent discount."
@@ -3161,6 +3425,80 @@ mod tests {
                 .warnings
                 .iter()
                 .all(|warning| warning.kind != PronunciationWarningKind::MixedAlphaNumeric)
+        );
+    }
+
+    #[test]
+    fn dotted_initials_are_letter_names_not_weak_articles() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("A. B. Carter signed the note.", "en-US"))
+            .expect("initials should phonemicize");
+        let symbols = cmudict_symbols(&output);
+        assert_eq!(&symbols[..3], &["EY1", "B", "IY1"]);
+    }
+
+    #[test]
+    fn requested_edge_cases_phonemicize_without_obvious_normalization_errors() {
+        let dr = EnglishPhonemicizer
+            .phonemicize(&request("Dr. Smith", "en-US"))
+            .expect("doctor abbreviation");
+        assert_eq!(
+            &cmudict_symbols(&dr)[..6],
+            &["D", "AA1", "K", "T", "ER0", "S"]
+        );
+
+        let saint = EnglishPhonemicizer
+            .phonemicize(&request("St. John went home.", "en-US"))
+            .expect("saint abbreviation");
+        assert!(
+            cmudict_symbols(&saint)
+                .windows(4)
+                .any(|window| window == ["S", "EY1", "N", "T"])
+        );
+
+        let street = EnglishPhonemicizer
+            .phonemicize(&request("He lives on Sansome St.", "en-US"))
+            .expect("street abbreviation");
+        assert!(
+            cmudict_symbols(&street)
+                .windows(5)
+                .any(|window| window == ["S", "T", "R", "IY1", "T"])
+        );
+
+        let lead_noun = EnglishPhonemicizer
+            .phonemicize(&request("The lead pipe broke.", "en-US"))
+            .expect("lead noun");
+        assert!(
+            cmudict_symbols(&lead_noun)
+                .windows(3)
+                .any(|window| window == ["L", "EH1", "D"])
+        );
+
+        let lead_verb = EnglishPhonemicizer
+            .phonemicize(&request("They lead the team.", "en-US"))
+            .expect("lead verb");
+        assert!(
+            cmudict_symbols(&lead_verb)
+                .windows(3)
+                .any(|window| window == ["L", "IY1", "D"])
+        );
+
+        let read_past = EnglishPhonemicizer
+            .phonemicize(&request("I read the book yesterday.", "en-US"))
+            .expect("read ambiguous");
+        let read_present = EnglishPhonemicizer
+            .phonemicize(&request("I read the book today.", "en-US"))
+            .expect("read ambiguous");
+        assert!(
+            cmudict_symbols(&read_past)
+                .windows(3)
+                .any(|window| window == ["R", "EH1", "D"])
+        );
+        assert!(
+            cmudict_symbols(&read_present)
+                .windows(3)
+                .any(|window| window == ["R", "EH1", "D"]),
+            "read/read tense remains ambiguous without stronger syntax"
         );
     }
 

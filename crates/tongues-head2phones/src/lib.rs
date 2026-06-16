@@ -1757,6 +1757,15 @@ mod tests {
     }
 
     #[test]
+    fn decimal_head_phones_spell_fractional_digits() {
+        let symbols = speech_symbols_for_text("I saw 3.14 written on the board.").expect("symbols");
+        assert!(symbols.contains("pɔɪnt"), "{symbols}");
+        assert!(symbols.contains("wən"), "{symbols}");
+        assert!(symbols.contains("fɔɹ"), "{symbols}");
+        assert!(!symbols.contains("fɔɹˈtiːn"), "{symbols}");
+    }
+
+    #[test]
     fn questions_exclamations_and_closing_punctuation_are_complete_heads() {
         for (text, expected) in [
             (
