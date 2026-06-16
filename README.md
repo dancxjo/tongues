@@ -67,6 +67,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
 - [Sentence parser](docs/sentence-parser.md)
+- [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Interpretation](docs/interpretation.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)

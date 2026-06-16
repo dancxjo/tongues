@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bzip2::read::BzDecoder;
@@ -259,6 +260,14 @@ pub struct PrepareReport {
     pub test_examples: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrepareCheckpointState {
+    pub status: String,
+    pub dataset_id: String,
+    pub source_kind: WiktionarySourceKind,
+    pub report: Option<PrepareReport>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
     Stage {
@@ -314,6 +323,7 @@ pub fn prepare_dataset_with_progress(
     });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(cache_dir).with_context(|| format!("creating {}", cache_dir.display()))?;
+    write_prepare_state(out, "starting", config, None)?;
 
     if config.source_kind == WiktionarySourceKind::PieEtymology {
         return prepare_pie_dataset(out, cache_dir, config, &mut progress);
@@ -323,6 +333,7 @@ pub fn prepare_dataset_with_progress(
     let extracted = load_or_parse_pronunciation_data(out, &dump_path, config, &mut progress)?;
     let phonemes = extracted.phonemes;
     let phones = extracted.phones;
+    write_prepare_state(out, "parsed", config, None)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Expanding {} phoneme and {} phone rows into training examples",
@@ -336,6 +347,7 @@ pub fn prepare_dataset_with_progress(
         .cloned()
         .collect::<Vec<_>>();
     let examples = load_or_expand_training_examples(out, &entries, config, &mut progress)?;
+    write_prepare_state(out, "expanded", config, None)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Splitting {} examples into train/valid/test",
@@ -344,6 +356,7 @@ pub fn prepare_dataset_with_progress(
     });
     let (train, valid, test) =
         split_examples(examples, config.train_frac, config.valid_frac, config.seed);
+    write_prepare_state(out, "writing", config, None)?;
 
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
@@ -361,18 +374,8 @@ pub fn prepare_dataset_with_progress(
         &serde_json::to_string_pretty(config)?,
     )?;
     write_text_atomic(&out.join("README.md"), &dataset_readme(config, &dump_path))?;
-    remove_stale_part_files(
-        out,
-        &[
-            "patterns.jsonl.part",
-            "phonemes.jsonl.part",
-            "phones.jsonl.part",
-            "supplemental_terms.jsonl.part",
-            "expanded.jsonl.part",
-        ],
-    )?;
 
-    Ok(PrepareReport {
+    let report = PrepareReport {
         dump_path: dump_path.display().to_string(),
         extracted_patterns: extracted.patterns.len(),
         parsed_phonemes: phonemes.len(),
@@ -381,7 +384,9 @@ pub fn prepare_dataset_with_progress(
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
-    })
+    };
+    write_prepare_state(out, "complete", config, Some(&report))?;
+    Ok(report)
 }
 
 fn load_or_parse_pronunciation_data(
@@ -457,7 +462,8 @@ fn load_or_expand_training_examples(
         return Ok(examples);
     }
 
-    let expanded_part_path = expanded_path.with_file_name("expanded.jsonl.part");
+    let expanded_part_path = jsonl_part_path(&expanded_path);
+    archive_interrupted_part(&expanded_path)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Writing expanded training examples to {}",
@@ -502,6 +508,7 @@ fn prepare_pie_dataset(
 ) -> Result<PrepareReport> {
     let dump_path = resolve_dump_path_with_progress(cache_dir, config, progress)?;
     let extracted = parse_dump_with_progress(&dump_path, config, progress)?;
+    write_prepare_state(out, "parsed", config, None)?;
     let mut roots = extracted.pie_roots;
     let mut source_paths = vec![dump_path];
     let wikipedia_paths =
@@ -537,6 +544,7 @@ fn prepare_pie_dataset(
         ),
     });
     let examples = expand_pie_training_examples(&roots, config);
+    write_prepare_state(out, "expanded", config, None)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Splitting {} examples into train/valid/test",
@@ -545,6 +553,7 @@ fn prepare_pie_dataset(
     });
     let (train, valid, test) =
         split_examples(examples, config.train_frac, config.valid_frac, config.seed);
+    write_prepare_state(out, "writing", config, None)?;
 
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, progress)?;
@@ -567,7 +576,7 @@ fn prepare_pie_dataset(
         &pie_dataset_readme(config, &source_paths),
     )?;
 
-    Ok(PrepareReport {
+    let report = PrepareReport {
         dump_path: source_paths
             .iter()
             .map(|path| path.display().to_string())
@@ -580,7 +589,9 @@ fn prepare_pie_dataset(
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
-    })
+    };
+    write_prepare_state(out, "complete", config, Some(&report))?;
+    Ok(report)
 }
 
 fn resolve_wikipedia_source_paths_with_progress(
@@ -2682,6 +2693,7 @@ fn write_jsonl_with_progress<T: Serialize>(
         message: format!("Writing {} rows to {}", examples.len(), path.display()),
     });
     let part_path = jsonl_part_path(path);
+    archive_interrupted_part(path)?;
     let mut file =
         File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?;
     for example in examples {
@@ -2732,12 +2744,8 @@ fn write_vocab_with_progress(out: &Path, examples: &[TrainingExample]) -> Result
 }
 
 fn write_text_atomic(path: &Path, contents: &str) -> Result<()> {
-    let part_path = path.with_file_name(format!(
-        "{}.part",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .context("path has no UTF-8 filename")?
-    ));
+    let part_path = atomic_part_path(path);
+    archive_interrupted_part(path)?;
     let mut file =
         File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?;
     file.write_all(contents.as_bytes())
@@ -2751,22 +2759,58 @@ fn write_text_atomic(path: &Path, contents: &str) -> Result<()> {
 }
 
 fn jsonl_part_path(path: &Path) -> PathBuf {
-    path.with_file_name(format!(
-        "{}.part",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("output.jsonl")
-    ))
+    atomic_part_path(path)
 }
 
-fn remove_stale_part_files(out: &Path, filenames: &[&str]) -> Result<()> {
-    for filename in filenames {
-        let path = out.join(filename);
-        if path.exists() {
-            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-        }
+fn atomic_part_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{file_name}.writing.part"))
+}
+
+fn archive_interrupted_part(path: &Path) -> Result<()> {
+    let part = atomic_part_path(path);
+    if !part.exists() {
+        return Ok(());
     }
-    Ok(())
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
+}
+
+fn write_prepare_state(
+    out: &Path,
+    status: &str,
+    config: &WiktionaryConfig,
+    report: Option<&PrepareReport>,
+) -> Result<()> {
+    let state = PrepareCheckpointState {
+        status: status.to_string(),
+        dataset_id: config.dataset_id.clone(),
+        source_kind: config.source_kind,
+        report: report.cloned(),
+    };
+    write_text_atomic(
+        &out.join("prepare_state.json"),
+        &serde_json::to_string_pretty(&state)?,
+    )
 }
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
@@ -3365,10 +3409,19 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             max_pages: Some(1),
             ..WiktionaryConfig::default()
         };
+        fs::create_dir_all(&out).expect("create out");
+        let legacy_part = out.join("expanded.jsonl.part");
+        fs::write(&legacy_part, "legacy partial should remain untouched\n")
+            .expect("write legacy partial");
         let first = prepare_dataset(&out, &cache, &config).expect("initial prepare");
         assert!(out.join("phonemes.jsonl").exists());
         assert!(out.join("phones.jsonl").exists());
         assert!(out.join("expanded.jsonl").exists());
+        assert!(out.join("prepare_state.json").exists());
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial"),
+            "legacy partial should remain untouched\n"
+        );
 
         fs::remove_file(&dump_path).expect("remove source dump");
         for filename in [
@@ -3383,6 +3436,10 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         }
 
         let second = prepare_dataset(&out, &cache, &config).expect("resume prepare");
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial after resume"),
+            "legacy partial should remain untouched\n"
+        );
         fs::remove_dir_all(&root).expect("clean temp dir");
 
         assert_eq!(second.parsed_phonemes, first.parsed_phonemes);

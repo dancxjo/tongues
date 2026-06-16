@@ -7,6 +7,7 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
@@ -14,6 +15,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
 use seams::SentenceDetectorDialog;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{HeuristicLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
@@ -232,6 +234,41 @@ pub struct PrepareReport {
     pub test_examples: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepareCheckpointState {
+    pub status: String,
+    pub dataset_id: String,
+    pub config_fingerprint: String,
+    pub shards: Vec<PrepareShardManifest>,
+    pub report: Option<PrepareReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepareShardManifest {
+    pub id: String,
+    pub label: String,
+    pub config_fingerprint: String,
+    pub sentences_path: PathBuf,
+    pub examples_path: PathBuf,
+    pub discrepancies_path: Option<PathBuf>,
+    pub sentences: usize,
+    pub examples: usize,
+    pub discrepancies: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SentenceRecord {
+    sentence: String,
+    source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrepareShardData {
+    sentences: Vec<SentenceRecord>,
+    examples: Vec<BoundaryTrainingExample>,
+    discrepancies: Vec<BoundaryTrainingExample>,
+}
+
 pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<PrepareReport> {
     prepare_dataset_with_progress(out, config, |_| {})
 }
@@ -288,81 +325,120 @@ pub fn prepare_dataset_with_progress(
         !files.is_empty(),
         "no sentence-parser source files found. Pass one or more `--input` files/directories to `sentence-parser prepare` or `sentence-parser train --prepare`, or set source_paths in the config"
     );
-    let mut sentences = Vec::new();
-    let mut correction_examples = Vec::new();
-    let sentences_part_path = out.join("sentences.jsonl.part");
-    let discrepancies_part_path = out.join("naive_discrepancies.jsonl.part");
-    let examples_part_path = out.join("examples.jsonl.part");
-    let mut sentences_part = BufWriter::new(
-        File::create(&sentences_part_path)
-            .with_context(|| format!("creating {}", sentences_part_path.display()))?,
-    );
-    let mut discrepancies_part = BufWriter::new(
-        File::create(&discrepancies_part_path)
-            .with_context(|| format!("creating {}", discrepancies_part_path.display()))?,
-    );
-    let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
-    for (file_index, path) in files.iter().enumerate() {
-        progress(PrepareProgress::Stage {
-            message: format!("Detecting sentence boundaries in {}", path.display()),
+    let checkpoint_dir = out.join("prepare-checkpoints");
+    fs::create_dir_all(&checkpoint_dir)
+        .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
+    let config_fingerprint = config_fingerprint(config)?;
+    let mut shard_manifests = Vec::new();
+
+    if config.include_synthetic {
+        let manifest = build_or_load_prepare_shard(
+            &checkpoint_dir,
+            "000-synthetic",
+            "synthetic sentences",
+            &config_fingerprint,
+            &mut progress,
+            || {
+                let text = synthesize_boundary_text(config.synthetic_sentences, config.seed);
+                let sentences = detect_sentences_for_text(&text, "synthetic", config)?;
+                let examples = build_boundary_examples(
+                    &sentences
+                        .iter()
+                        .map(|record| (record.sentence.clone(), record.source.clone()))
+                        .collect::<Vec<_>>(),
+                    config,
+                );
+                Ok(PrepareShardData {
+                    sentences,
+                    examples,
+                    discrepancies: Vec::new(),
+                })
+            },
+        )?;
+        progress(PrepareProgress::Synthesize {
+            path: manifest.sentences_path.display().to_string(),
+            sentences: manifest.sentences,
         });
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let mut file_sentences = Vec::new();
-        for detected in detector
-            .detect_sentences_borrowed(&raw)
-            .with_context(|| format!("detecting sentence boundaries in {}", path.display()))?
-        {
-            let sentence = normalize_sentence(&detected.normalize(), config.lowercase);
-            if sentence.chars().count() >= config.min_sentence_chars
-                && sentence.chars().count() <= config.max_sentence_chars
-            {
-                file_sentences.push(sentence);
-            }
-        }
-        if config.include_naive_discrepancies {
-            let file_corrections = build_naive_discrepancy_examples(
-                &file_sentences,
-                &path.display().to_string(),
-                config,
-            );
-            for example in &file_corrections {
-                writeln!(discrepancies_part, "{}", serde_json::to_string(example)?)?;
-            }
-            correction_examples.extend(file_corrections);
-        }
-        for sentence in &file_sentences {
-            writeln!(
-                sentences_part,
-                "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "sentence": sentence,
-                    "source": path.display().to_string()
-                }))?
-            )?;
-        }
-        sentences.extend(
-            file_sentences
-                .into_iter()
-                .map(|sentence| (sentence, path.display().to_string())),
+        shard_manifests.push(manifest);
+    }
+
+    for (file_index, path) in files.iter().enumerate() {
+        let shard_id = format!(
+            "{:03}-source-{}",
+            file_index + 1,
+            sanitize_checkpoint_id(path)
         );
+        let label = path.display().to_string();
+        let manifest = build_or_load_prepare_shard(
+            &checkpoint_dir,
+            &shard_id,
+            &label,
+            &config_fingerprint,
+            &mut progress,
+            || {
+                let raw = fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let sentences =
+                    detect_sentences_for_text(&raw, &path.display().to_string(), config)?;
+                let sentence_pairs = sentences
+                    .iter()
+                    .map(|record| (record.sentence.clone(), record.source.clone()))
+                    .collect::<Vec<_>>();
+                let mut examples = build_boundary_examples(&sentence_pairs, config);
+                let discrepancies = if config.include_naive_discrepancies {
+                    build_naive_discrepancy_examples(
+                        &sentences
+                            .iter()
+                            .map(|record| record.sentence.clone())
+                            .collect::<Vec<_>>(),
+                        &path.display().to_string(),
+                        config,
+                    )
+                } else {
+                    Vec::new()
+                };
+                examples.extend(discrepancies.clone());
+                Ok(PrepareShardData {
+                    sentences,
+                    examples,
+                    discrepancies,
+                })
+            },
+        )?;
         progress(PrepareProgress::Detect {
             path: path.display().to_string(),
             files_done: file_index + 1,
             files_total: files.len(),
-            sentences: sentences.len(),
-            naive_discrepancies: correction_examples.len(),
+            sentences: manifest.sentences,
+            naive_discrepancies: manifest.discrepancies,
         });
+        shard_manifests.push(manifest);
     }
-    sentences_part
-        .flush()
-        .with_context(|| format!("flushing {}", sentences_part_path.display()))?;
-    discrepancies_part
-        .flush()
-        .with_context(|| format!("flushing {}", discrepancies_part_path.display()))?;
-    drop(sentences_part);
-    drop(discrepancies_part);
 
+    write_prepare_state(
+        out,
+        "assembling",
+        config,
+        &config_fingerprint,
+        &shard_manifests,
+        None,
+    )?;
+    let mut sentences = Vec::new();
+    let mut examples = Vec::new();
+    let mut correction_examples = Vec::new();
+    for manifest in &shard_manifests {
+        let mut shard_sentences: Vec<SentenceRecord> = read_jsonl(&manifest.sentences_path)?;
+        let mut shard_examples: Vec<BoundaryTrainingExample> = read_jsonl(&manifest.examples_path)?;
+        let mut shard_discrepancies: Vec<BoundaryTrainingExample> = manifest
+            .discrepancies_path
+            .as_ref()
+            .map(|path| read_jsonl(path))
+            .transpose()?
+            .unwrap_or_default();
+        sentences.append(&mut shard_sentences);
+        examples.append(&mut shard_examples);
+        correction_examples.append(&mut shard_discrepancies);
+    }
     let naive_discrepancy_examples = correction_examples.len();
     anyhow::ensure!(
         !sentences.is_empty(),
@@ -377,8 +453,6 @@ pub fn prepare_dataset_with_progress(
             sentences.len()
         ),
     });
-    let mut examples = build_boundary_examples(&sentences, config);
-    examples.extend(correction_examples.clone());
     progress(PrepareProgress::Build {
         sentences: sentences.len(),
         examples: examples.len(),
@@ -388,7 +462,8 @@ pub fn prepare_dataset_with_progress(
         "no sentence-parser training examples were built from {} detected sentences",
         sentences.len()
     );
-    write_jsonl_with_progress(&examples_part_path, &examples, &mut progress)?;
+    write_jsonl_with_progress(&out.join("sentences.jsonl"), &sentences, &mut progress)?;
+    write_jsonl_with_progress(&out.join("examples.jsonl"), &examples, &mut progress)?;
     let mut shuffled = examples;
     shuffled.shuffle(&mut StdRng::seed_from_u64(config.seed));
     let n = shuffled.len();
@@ -432,18 +507,23 @@ pub fn prepare_dataset_with_progress(
             naive_discrepancy_examples,
         ),
     )?;
-    fs::remove_file(&sentences_part_path)
-        .with_context(|| format!("removing {}", sentences_part_path.display()))?;
-    fs::remove_file(&examples_part_path)
-        .with_context(|| format!("removing {}", examples_part_path.display()))?;
-    Ok(PrepareReport {
+    let report = PrepareReport {
         source_files: files.len(),
         detected_sentences: sentences.len(),
         naive_discrepancy_examples,
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
-    })
+    };
+    write_prepare_state(
+        out,
+        "complete",
+        config,
+        &config_fingerprint,
+        &shard_manifests,
+        Some(&report),
+    )?;
+    Ok(report)
 }
 
 pub fn write_scaffold_model(out: &Path, config: &SentenceParserConfig) -> Result<()> {
@@ -481,6 +561,236 @@ pub fn write_scaffold_model(out: &Path, config: &SentenceParserConfig) -> Result
         &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id)
             .with_task("cursor-boundary"),
     )
+}
+
+fn detect_sentences_for_text(
+    text: &str,
+    source: &str,
+    config: &SentenceParserConfig,
+) -> Result<Vec<SentenceRecord>> {
+    let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
+    let mut sentences = Vec::new();
+    for detected in detector
+        .detect_sentences_borrowed(text)
+        .with_context(|| format!("detecting sentence boundaries in {source}"))?
+    {
+        let sentence = normalize_sentence(&detected.normalize(), config.lowercase);
+        if sentence.chars().count() >= config.min_sentence_chars
+            && sentence.chars().count() <= config.max_sentence_chars
+        {
+            sentences.push(SentenceRecord {
+                sentence,
+                source: source.to_string(),
+            });
+        }
+    }
+    Ok(sentences)
+}
+
+fn build_or_load_prepare_shard(
+    checkpoint_dir: &Path,
+    id: &str,
+    label: &str,
+    config_fingerprint: &str,
+    progress: &mut impl FnMut(PrepareProgress),
+    build: impl FnOnce() -> Result<PrepareShardData>,
+) -> Result<PrepareShardManifest> {
+    let manifest_path = checkpoint_dir.join(format!("{id}.manifest.json"));
+    if manifest_path.exists() {
+        let manifest: PrepareShardManifest = read_json_file(&manifest_path)?;
+        anyhow::ensure!(
+            manifest.config_fingerprint == config_fingerprint,
+            "checkpoint {} was built with a different config; delete that shard or use a matching config",
+            manifest_path.display()
+        );
+        ensure_checkpoint_file(&manifest.sentences_path)?;
+        ensure_checkpoint_file(&manifest.examples_path)?;
+        if let Some(path) = &manifest.discrepancies_path {
+            ensure_checkpoint_file(path)?;
+        }
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Reusing checkpoint {} ({} examples)",
+                manifest_path.display(),
+                manifest.examples
+            ),
+        });
+        return Ok(manifest);
+    }
+
+    let sentences_path = checkpoint_dir.join(format!("{id}.sentences.jsonl"));
+    let examples_path = checkpoint_dir.join(format!("{id}.examples.jsonl"));
+    let discrepancies_path = checkpoint_dir.join(format!("{id}.naive_discrepancies.jsonl"));
+    archive_interrupted_part(&sentences_path)?;
+    archive_interrupted_part(&examples_path)?;
+    archive_interrupted_part(&discrepancies_path)?;
+    archive_interrupted_part(&manifest_path)?;
+
+    progress(PrepareProgress::Stage {
+        message: format!("Building checkpoint shard {id}: {label}"),
+    });
+    let data = build()?;
+    write_jsonl_atomic(&sentences_path, &data.sentences)?;
+    write_jsonl_atomic(&examples_path, &data.examples)?;
+    let discrepancies_path = if data.discrepancies.is_empty() {
+        None
+    } else {
+        write_jsonl_atomic(&discrepancies_path, &data.discrepancies)?;
+        Some(discrepancies_path)
+    };
+    let manifest = PrepareShardManifest {
+        id: id.to_string(),
+        label: label.to_string(),
+        config_fingerprint: config_fingerprint.to_string(),
+        sentences_path,
+        examples_path,
+        discrepancies_path,
+        sentences: data.sentences.len(),
+        examples: data.examples.len(),
+        discrepancies: data.discrepancies.len(),
+    };
+    write_json_file_atomic(&manifest_path, &manifest)?;
+    progress(PrepareProgress::Write {
+        path: manifest_path.display().to_string(),
+        rows: manifest.examples,
+    });
+    Ok(manifest)
+}
+
+fn ensure_checkpoint_file(path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        path.exists() && path.metadata()?.len() > 0,
+        "checkpoint manifest references missing or empty file {}",
+        path.display()
+    );
+    Ok(())
+}
+
+fn write_prepare_state(
+    out: &Path,
+    status: &str,
+    config: &SentenceParserConfig,
+    config_fingerprint: &str,
+    shards: &[PrepareShardManifest],
+    report: Option<&PrepareReport>,
+) -> Result<()> {
+    let state = PrepareCheckpointState {
+        status: status.to_string(),
+        dataset_id: config.dataset_id.clone(),
+        config_fingerprint: config_fingerprint.to_string(),
+        shards: shards.to_vec(),
+        report: report.cloned(),
+    };
+    write_json_file_atomic(&out.join("prepare_state.json"), &state)
+}
+
+fn config_fingerprint(config: &SentenceParserConfig) -> Result<String> {
+    let json = serde_json::to_string(config)?;
+    Ok(format!("{:016x}", stable_hash(json.as_bytes())))
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn sanitize_checkpoint_id(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("source")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    serde_json::from_reader(file).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    raw.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str(line).with_context(|| {
+                format!(
+                    "parsing {} line {}",
+                    path.display(),
+                    index.saturating_add(1)
+                )
+            })
+        })
+        .collect()
+}
+
+fn write_json_file_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    fs::write(&part, serde_json::to_string_pretty(value)?)
+        .with_context(|| format!("writing {}", part.display()))?;
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn write_jsonl_atomic<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    let mut writer = BufWriter::new(
+        File::create(&part).with_context(|| format!("creating {}", part.display()))?,
+    );
+    for row in rows {
+        writeln!(writer, "{}", serde_json::to_string(row)?)?;
+    }
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    drop(writer);
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn atomic_part_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{file_name}.writing.part"))
+}
+
+fn archive_interrupted_part(path: &Path) -> Result<()> {
+    let part = atomic_part_path(path);
+    if !part.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
 }
 
 pub fn build_vocab(examples: &[BoundaryTrainingExample]) -> Vocab {
@@ -963,25 +1273,10 @@ fn write_jsonl_with_progress<T: Serialize>(
     rows: &[T],
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<()> {
-    let part_path = path.with_extension(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| format!("{extension}.part"))
-            .unwrap_or_else(|| "part".to_string()),
-    );
     progress(PrepareProgress::Stage {
-        message: format!("Writing {} rows to {}", rows.len(), part_path.display()),
+        message: format!("Writing {} rows to {}", rows.len(), path.display()),
     });
-    let mut file = BufWriter::new(
-        File::create(&part_path).with_context(|| format!("creating {}", part_path.display()))?,
-    );
-    for row in rows {
-        writeln!(file, "{}", serde_json::to_string(row)?)?;
-    }
-    file.flush()
-        .with_context(|| format!("flushing {}", part_path.display()))?;
-    fs::rename(&part_path, path)
-        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
+    write_jsonl_atomic(path, rows)?;
     progress(PrepareProgress::Write {
         path: path.display().to_string(),
         rows: rows.len(),
@@ -1088,5 +1383,71 @@ mod tests {
             rows[0].output,
             "<boundary:repair>Elizabeth met Mr. Darcy at Pemberley."
         );
+    }
+
+    #[test]
+    fn prepare_reuses_checkpoints_and_does_not_touch_legacy_parts() {
+        let out = tempfile_path("sentence-parser-resume");
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).expect("create temp dataset dir");
+        let source = out.join("source.txt");
+        fs::write(
+            &source,
+            "Dr. Smith went home. Then he slept. Who shot John F. Kennedy?",
+        )
+        .expect("write source");
+        let legacy_part = out.join("examples.jsonl.part");
+        fs::write(&legacy_part, "legacy partial should remain untouched\n")
+            .expect("write legacy partial");
+
+        let config = SentenceParserConfig {
+            dataset_id: "resume-test".to_string(),
+            source_paths: vec![source],
+            include_default_gutenberg: false,
+            include_synthetic: false,
+            include_naive_discrepancies: true,
+            max_examples_per_sentence: 2,
+            ..SentenceParserConfig::default()
+        };
+
+        let first = prepare_dataset(&out, &config).expect("first prepare");
+        let checkpoint = out
+            .join("prepare-checkpoints")
+            .join("001-source-source-txt.manifest.json");
+        assert!(checkpoint.exists());
+        assert!(out.join("examples.jsonl").exists());
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial"),
+            "legacy partial should remain untouched\n"
+        );
+
+        for path in [
+            out.join("sentences.jsonl"),
+            out.join("examples.jsonl"),
+            out.join("train.jsonl"),
+            out.join("valid.jsonl"),
+            out.join("test.jsonl"),
+            out.join("naive_discrepancies.jsonl"),
+            out.join("vocab.json"),
+        ] {
+            fs::remove_file(path).expect("remove final output");
+        }
+
+        let second = prepare_dataset(&out, &config).expect("resume prepare");
+        assert_eq!(first.detected_sentences, second.detected_sentences);
+        assert_eq!(
+            first.naive_discrepancy_examples,
+            second.naive_discrepancy_examples
+        );
+        assert_eq!(first.train_examples, second.train_examples);
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial after resume"),
+            "legacy partial should remain untouched\n"
+        );
+        fs::remove_dir_all(&out).expect("remove temp dataset dir");
+    }
+
+    fn tempfile_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{}-{name}", std::process::id()))
     }
 }

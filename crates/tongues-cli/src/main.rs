@@ -167,6 +167,48 @@ enum Commands {
         out: PathBuf,
     },
 
+    /// Compare pronunciations from lexicons, rules, and trained models
+    Discrepancies {
+        /// Markdown report path to write
+        #[arg(long, default_value = "docs/pronunciation-discrepancies.md")]
+        out: PathBuf,
+
+        /// Limit the default OpenEPD word sample
+        #[arg(long, default_value_t = 250)]
+        limit: usize,
+
+        /// Maximum OpenEPD rarity rank included in the default sample
+        #[arg(long, default_value_t = 50_000.0)]
+        max_rarity: f32,
+
+        /// Add an explicit word to compare; may be passed more than once
+        #[arg(long = "word")]
+        words: Vec<String>,
+
+        /// Read additional words, one per line
+        #[arg(long)]
+        words_file: Option<PathBuf>,
+
+        /// Include the G2P2G model pronouncer
+        #[arg(long, default_value_t = true)]
+        g2p2g: bool,
+
+        /// Include the Wiktionary model pronouncer
+        #[arg(long, default_value_t = true)]
+        wiktionary: bool,
+
+        /// G2P2G model directory
+        #[arg(long, default_value = "models/g2p2g/openepd-v0")]
+        g2p2g_model: PathBuf,
+
+        /// Wiktionary model directory
+        #[arg(
+            long,
+            default_value = "models/wiktionary/enwiktionary-2026-06-01-v0-phones"
+        )]
+        wiktionary_model: PathBuf,
+    },
+
     /// Parse OpenEPD, build vocabulary, and create train/valid/test splits
     Prepare {
         /// Deprecated compatibility argument; prepare now uses embedded OpenEPD.
@@ -460,6 +502,10 @@ enum G2p2gCommands {
         /// Direction of translation to train: g2p, p2g, or both
         #[arg(long)]
         task: Option<String>,
+
+        /// Wait for an in-progress prepare in --data to finish, then start training
+        #[arg(long, visible_alias = "while-preparing")]
+        wait_for_prepare: bool,
     },
 
     /// Evaluate a trained G2P2G model
@@ -609,6 +655,10 @@ enum SentenceParserCommands {
         #[arg(long)]
         prepare: bool,
 
+        /// Wait for an in-progress prepare in --data to finish, then start training
+        #[arg(long, visible_alias = "while-preparing")]
+        wait_for_prepare: bool,
+
         /// AdamW learning rate
         #[arg(long, default_value_t = 3e-4)]
         learning_rate: f64,
@@ -731,6 +781,10 @@ enum Head2PhonesCommands {
         #[arg(long)]
         prepare: bool,
 
+        /// Wait for an in-progress prepare in --data to finish, then start training
+        #[arg(long, visible_alias = "while-preparing")]
+        wait_for_prepare: bool,
+
         /// AdamW learning rate
         #[arg(long, default_value_t = 3e-4)]
         learning_rate: f64,
@@ -813,6 +867,10 @@ enum InterpretationCommands {
         /// Output directory for the model
         #[arg(long, default_value = "models/interpretation/mini-v0")]
         out: PathBuf,
+
+        /// Wait for an in-progress prepare in --data to finish, then start training
+        #[arg(long, visible_alias = "while-preparing")]
+        wait_for_prepare: bool,
 
         /// Maximum training epochs
         #[arg(long)]
@@ -923,6 +981,10 @@ enum WiktionaryCommands {
         /// Rebuild prepared split files before training
         #[arg(long)]
         prepare: bool,
+
+        /// Wait for an in-progress prepare in --data to finish, then start training
+        #[arg(long, visible_alias = "while-preparing")]
+        wait_for_prepare: bool,
 
         /// AdamW learning rate
         #[arg(long, default_value_t = 3e-4)]
@@ -1113,6 +1175,29 @@ fn main() -> Result<()> {
             run_wiktionary_command(command, device_arg, output_mode)
         }
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
+        Commands::Discrepancies {
+            out,
+            limit,
+            max_rarity,
+            words,
+            words_file,
+            g2p2g,
+            wiktionary,
+            g2p2g_model,
+            wiktionary_model,
+        } => cmd_discrepancies(
+            &out,
+            limit,
+            max_rarity,
+            words,
+            words_file.as_deref(),
+            g2p2g,
+            wiktionary,
+            &g2p2g_model,
+            &wiktionary_model,
+            device_arg,
+            output_mode,
+        ),
         Commands::Prepare {
             input,
             out,
@@ -1257,7 +1342,8 @@ fn command_needs_device(command: &Commands) -> bool {
         | Commands::Eval { .. }
         | Commands::Refine { .. }
         | Commands::Predict { .. }
-        | Commands::Repl { .. } => true,
+        | Commands::Repl { .. }
+        | Commands::Discrepancies { .. } => true,
         _ => false,
     }
 }
@@ -1603,7 +1689,15 @@ fn run_g2p2g_command(
             batch_size,
             seed,
             task,
+            wait_for_prepare,
         } => {
+            if wait_for_prepare {
+                wait_for_prepared_dataset(
+                    &data,
+                    &["vocab.json", "train.jsonl", "valid.jsonl"],
+                    "g2p2g",
+                )?;
+            }
             let file_config = read_g2p2g_config(&config)?;
             let train = file_config.train.unwrap_or_default();
             cmd_train(
@@ -1803,7 +1897,15 @@ fn run_sentence_parser_command(
             patience,
             seed,
             training_set,
+            wait_for_prepare,
         } => {
+            if wait_for_prepare {
+                wait_for_prepared_dataset(
+                    &data,
+                    &["vocab.json", "train.jsonl", "valid.jsonl"],
+                    "sentence-parser",
+                )?;
+            }
             if prepare
                 || !data.join("vocab.json").exists()
                 || !data.join("train.jsonl").exists()
@@ -2148,13 +2250,14 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             finish_status(
                 pb,
                 format!(
-                    "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional, {} naive/seams discrepancies)",
+                    "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} repair, {} exceptional, {} naive/seams discrepancies)",
                     out.display(),
                     format_count(report.train_examples),
                     format_count(report.valid_examples),
                     format_count(report.test_examples),
                     format_count(report.complete_examples),
                     format_count(report.no_head_examples),
+                    format_count(report.repair_examples),
                     format_count(report.exceptional_examples),
                     format_count(report.naive_seams_discrepancies)
                 ),
@@ -2174,7 +2277,15 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             epochs,
             patience,
             seed,
+            wait_for_prepare,
         } => {
+            if wait_for_prepare {
+                wait_for_prepared_dataset(
+                    &data,
+                    &["vocab.json", "train.jsonl", "valid.jsonl"],
+                    "head2phones",
+                )?;
+            }
             if prepare
                 || !data.join("vocab.json").exists()
                 || !data.join("train.jsonl").exists()
@@ -2198,13 +2309,14 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                 finish_status(
                     pb,
                     format!(
-                        "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional, {} naive/seams discrepancies)",
+                        "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} repair, {} exceptional, {} naive/seams discrepancies)",
                         data.display(),
                         format_count(report.train_examples),
                         format_count(report.valid_examples),
                         format_count(report.test_examples),
                         format_count(report.complete_examples),
                         format_count(report.no_head_examples),
+                        format_count(report.repair_examples),
                         format_count(report.exceptional_examples),
                         format_count(report.naive_seams_discrepancies)
                     ),
@@ -2841,6 +2953,7 @@ fn run_wiktionary_command(
             epochs,
             patience,
             seed,
+            wait_for_prepare,
         } => {
             let mut config = tongues_wiktionary::read_config(&config)?;
             if let Some(dump) = dump {
@@ -2849,6 +2962,13 @@ fn run_wiktionary_command(
             apply_wiktionary_language_override(&mut config, langs);
             let data = effective_wiktionary_data_path(data, &config);
             let out = effective_wiktionary_model_path(out, &config);
+            if wait_for_prepare {
+                wait_for_prepared_dataset(
+                    &data,
+                    &["vocab.json", "train.jsonl", "valid.jsonl", "test.jsonl"],
+                    "wiktionary",
+                )?;
+            }
             if prepare
                 || !data.join("train.jsonl").exists()
                 || !data.join("valid.jsonl").exists()
@@ -3355,13 +3475,25 @@ fn write_and_train_wiktionary_seq2seq(
     let model_path = out.join("model");
     println!("Starting Wiktionary training...");
     println!(
-        "  lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
+        "  examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={}",
+        format_count(train_examples.len()),
+        format_count(valid_examples.len()),
+        format_count(vocab.size()),
         learning_rate,
         weight_decay,
         dropout,
         format_count(epochs),
         format_count(patience),
         format_count(batch_size)
+    );
+    println!("  train_state: {}", out.join("train_state.json").display());
+    println!(
+        "  epoch checkpoints: {}",
+        out.join("model-epoch-N.bin").display()
+    );
+    println!(
+        "  best model: {}",
+        model_path.with_extension("bin").display()
     );
 
     match device_arg {
@@ -3961,10 +4093,25 @@ fn run_interpretation_command(
         InterpretationCommands::Train {
             data,
             out,
+            wait_for_prepare,
             epochs,
             batch_size,
             seed,
         } => {
+            if wait_for_prepare {
+                wait_for_prepared_dataset(
+                    &data,
+                    &[
+                        "vocab.json",
+                        "phoneme_vocab.json",
+                        "phone_vocab.json",
+                        "word_vocab.json",
+                        "train.jsonl",
+                        "valid.jsonl",
+                    ],
+                    "interpretation",
+                )?;
+            }
             if !data.join("vocab.json").exists()
                 || !data.join("phoneme_vocab.json").exists()
                 || !data.join("phone_vocab.json").exists()
@@ -4848,10 +4995,24 @@ fn cmd_prepare(
     let train_path = out.join("train.jsonl");
     let valid_path = out.join("valid.jsonl");
     let test_path = out.join("test.jsonl");
+    write_cli_text_atomic(
+        &out.join("prepare_state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "writing",
+            "dataset_id": "openepd-v0",
+        }))?,
+    )?;
 
-    let train_file = fs::File::create(&train_path)?;
-    let valid_file = fs::File::create(&valid_path)?;
-    let test_file = fs::File::create(&test_path)?;
+    let train_part = atomic_part_path(&train_path);
+    let valid_part = atomic_part_path(&valid_path);
+    let test_part = atomic_part_path(&test_path);
+    archive_interrupted_part(&train_path)?;
+    archive_interrupted_part(&valid_path)?;
+    archive_interrupted_part(&test_path)?;
+
+    let train_file = fs::File::create(&train_part)?;
+    let valid_file = fs::File::create(&valid_part)?;
+    let test_file = fs::File::create(&test_part)?;
 
     use indicatif::ProgressBar;
     use std::io::Write;
@@ -4919,6 +5080,25 @@ fn cmd_prepare(
     train_writer.flush()?;
     valid_writer.flush()?;
     test_writer.flush()?;
+    drop(train_writer);
+    drop(valid_writer);
+    drop(test_writer);
+    fs::rename(&train_part, &train_path).with_context(|| {
+        format!(
+            "moving {} to {}",
+            train_part.display(),
+            train_path.display()
+        )
+    })?;
+    fs::rename(&valid_part, &valid_path).with_context(|| {
+        format!(
+            "moving {} to {}",
+            valid_part.display(),
+            valid_path.display()
+        )
+    })?;
+    fs::rename(&test_part, &test_path)
+        .with_context(|| format!("moving {} to {}", test_part.display(), test_path.display()))?;
 
     println!(
         "Data splits generated on-the-fly:\n  train={} valid={} test={}",
@@ -4937,7 +5117,7 @@ fn cmd_prepare(
         let mut deduped = words.clone();
         deduped.sort_unstable();
         deduped.dedup();
-        fs::write(&path, deduped.join("\n"))?;
+        write_cli_text_atomic(&path, deduped.join("\n"))?;
     }
 
     // Build & save vocabulary
@@ -4951,11 +5131,128 @@ fn cmd_prepare(
     println!("  Unified vocabulary size: {}", format_count(vocab.size()));
     let vocab_path = out.join("vocab.json");
     let vocab_json = serde_json::to_string_pretty(&vocab)?;
-    fs::write(&vocab_path, &vocab_json).context("writing vocab.json")?;
+    write_cli_text_atomic(&vocab_path, &vocab_json).context("writing vocab.json")?;
     println!("  Vocab saved to {}", vocab_path.display());
+    write_cli_text_atomic(
+        &out.join("prepare_state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "complete",
+            "dataset_id": "openepd-v0",
+            "lexemes": total_words,
+            "train_examples": train_words.len(),
+            "valid_examples": valid_words.len(),
+            "test_examples": test_words.len(),
+        }))?,
+    )?;
 
     println!("Prepare complete.");
     Ok(())
+}
+
+fn write_cli_text_atomic(path: &Path, contents: impl AsRef<str>) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    fs::write(&part, contents.as_ref()).with_context(|| format!("writing {}", part.display()))?;
+    fs::rename(&part, path)
+        .with_context(|| format!("moving {} to {}", part.display(), path.display()))
+}
+
+fn atomic_part_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{file_name}.writing.part"))
+}
+
+fn archive_interrupted_part(path: &Path) -> Result<()> {
+    let part = atomic_part_path(path);
+    if !part.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
+}
+
+fn wait_for_prepared_dataset(data: &Path, required_files: &[&str], label: &str) -> Result<()> {
+    println!(
+        "Waiting for {label} prepare to finish before training: {}",
+        data.display()
+    );
+    loop {
+        let files_ready = required_files_ready(data, required_files);
+        let status = prepare_state_status(data)?;
+        match (status.as_deref(), files_ready) {
+            (Some("complete"), true) => {
+                println!(
+                    "{label} prepared data is ready; starting training from {}",
+                    data.display()
+                );
+                return Ok(());
+            }
+            (None, true) => {
+                println!(
+                    "{label} prepared data is ready; starting training from {}",
+                    data.display()
+                );
+                return Ok(());
+            }
+            (Some(state), _) => {
+                println!(
+                    "{label} prepare_state status={state}; waiting for final files in {}",
+                    data.display()
+                );
+            }
+            (None, false) => {
+                println!(
+                    "{label} prepared data is not ready yet; waiting for {}",
+                    data.display()
+                );
+            }
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
+fn required_files_ready(data: &Path, required_files: &[&str]) -> bool {
+    required_files.iter().all(|name| {
+        let path = data.join(name);
+        path.exists()
+            && path
+                .metadata()
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false)
+    })
+}
+
+fn prepare_state_status(data: &Path) -> Result<Option<String>> {
+    let path = data.join("prepare_state.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(value
+        .get("status")
+        .and_then(|status| status.as_str())
+        .map(|status| status.to_string()))
 }
 
 fn read_jsonl(path: &Path) -> Result<Vec<Lexeme>> {
@@ -5194,6 +5491,15 @@ fn cmd_train(
         format_count(epochs),
         format_count(patience),
         format_count(batch_size)
+    );
+    println!("  train_state: {}", out.join("train_state.json").display());
+    println!(
+        "  epoch checkpoints: {}",
+        out.join("model-epoch-N.bin").display()
+    );
+    println!(
+        "  best model: {}",
+        model_path.with_extension("bin").display()
     );
 
     match device_arg {

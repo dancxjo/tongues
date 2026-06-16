@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use burn::module::{AutodiffModule, Module};
@@ -398,6 +399,14 @@ pub struct PrepareReport {
     pub test_examples: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrepareCheckpointState {
+    pub status: String,
+    pub dataset_id: String,
+    pub utterances: usize,
+    pub report: Option<PrepareReport>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
     Stage {
@@ -630,6 +639,7 @@ fn prepare_dataset_inner(
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     fs::create_dir_all(out.join("features")).context("creating features directory")?;
+    write_prepare_state(out, "starting", config, 0, None)?;
     let feature_bins = audio_feature_bins(config);
     let archive = out.join("source.tar.gz");
     if !archive.exists() {
@@ -670,6 +680,7 @@ fn prepare_dataset_inner(
     progress(PrepareProgress::Parse {
         transcripts: transcripts.len(),
     });
+    write_prepare_state(out, "parsed", config, 0, None)?;
     anyhow::ensure!(!transcripts.is_empty(), "no LibriSpeech transcripts found");
     let selected_transcripts = transcripts
         .into_iter()
@@ -785,6 +796,7 @@ fn prepare_dataset_inner(
         rows.push(row);
     }
     utterance_writer.flush()?;
+    write_prepare_state(out, "utterances", config, rows.len(), None)?;
 
     let mut shuffled = rows;
     anyhow::ensure!(
@@ -798,59 +810,62 @@ fn prepare_dataset_inner(
     let train = shuffled[..train_end].to_vec();
     let valid = shuffled[train_end..valid_end].to_vec();
     let test = shuffled[valid_end..].to_vec();
+    write_prepare_state(out, "writing", config, n, None)?;
     write_jsonl_atomic(&out.join("train.jsonl"), &train, progress)?;
     write_jsonl_atomic(&out.join("valid.jsonl"), &valid, progress)?;
     write_jsonl_atomic(&out.join("test.jsonl"), &test, progress)?;
     let vocab = build_text_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("vocab.json"),
+    write_text_atomic(
+        &out.join("vocab.json"),
         serde_json::to_string_pretty(&vocab)?,
     )?;
     let phoneme_vocab =
         build_phoneme_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("phoneme_vocab.json"),
+    write_text_atomic(
+        &out.join("phoneme_vocab.json"),
         serde_json::to_string_pretty(&phoneme_vocab)?,
     )?;
     let phone_vocab = build_phone_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("phone_vocab.json"),
+    write_text_atomic(
+        &out.join("phone_vocab.json"),
         serde_json::to_string_pretty(&phone_vocab)?,
     )?;
     let word_vocab = build_word_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("word_vocab.json"),
+    write_text_atomic(
+        &out.join("word_vocab.json"),
         serde_json::to_string_pretty(&word_vocab)?,
     )?;
     let syntax_pos_vocab =
         build_syntax_pos_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("syntax_pos_vocab.json"),
+    write_text_atomic(
+        &out.join("syntax_pos_vocab.json"),
         serde_json::to_string_pretty(&syntax_pos_vocab)?,
     )?;
     let syntax_link_vocab =
         build_syntax_link_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("syntax_link_vocab.json"),
+    write_text_atomic(
+        &out.join("syntax_link_vocab.json"),
         serde_json::to_string_pretty(&syntax_link_vocab)?,
     )?;
     let syntax_head_offset_vocab =
         build_syntax_head_offset_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
-    fs::write(
-        out.join("syntax_head_offset_vocab.json"),
+    write_text_atomic(
+        &out.join("syntax_head_offset_vocab.json"),
         serde_json::to_string_pretty(&syntax_head_offset_vocab)?,
     )?;
-    fs::write(
-        out.join("dataset_config.json"),
+    write_text_atomic(
+        &out.join("dataset_config.json"),
         serde_json::to_string_pretty(config)?,
     )?;
-    fs::write(out.join("README.md"), dataset_readme(config))?;
-    Ok(PrepareReport {
+    write_text_atomic(&out.join("README.md"), dataset_readme(config))?;
+    let report = PrepareReport {
         utterances: n,
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
-    })
+    };
+    write_prepare_state(out, "complete", config, n, Some(&report))?;
+    Ok(report)
 }
 
 fn enrich_row_supervision(
@@ -879,7 +894,8 @@ fn download_to_part(
     path: &Path,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<()> {
-    let part = path.with_extension("tar.gz.part");
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
     let response = ureq::get(url)
         .call()
         .with_context(|| format!("downloading {url}"))?;
@@ -1202,7 +1218,8 @@ fn mel_project(power: &[f32], bins: usize) -> Vec<f32> {
 }
 
 fn write_mel_file(path: &Path, features: &[Vec<f32>], mel_bins: usize) -> Result<()> {
-    let part = path.with_extension("mel.bin.part");
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
     let mut writer = BufWriter::new(File::create(&part)?);
     writer.write_all(b"TONGUES_MEL1")?;
     writer.write_all(&(features.len() as u32).to_le_bytes())?;
@@ -1819,12 +1836,8 @@ fn write_jsonl_atomic<T: Serialize>(
     rows: &[T],
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<()> {
-    let part = path.with_extension(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| format!("{ext}.part"))
-            .unwrap_or_else(|| "part".to_string()),
-    );
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
     let mut writer = BufWriter::new(File::create(&part)?);
     for row in rows {
         writeln!(writer, "{}", serde_json::to_string(row)?)?;
@@ -1837,6 +1850,75 @@ fn write_jsonl_atomic<T: Serialize>(
         rows: rows.len(),
     });
     Ok(())
+}
+
+fn write_text_atomic(path: &Path, contents: impl AsRef<str>) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    let mut writer = BufWriter::new(
+        File::create(&part).with_context(|| format!("creating {}", part.display()))?,
+    );
+    writer
+        .write_all(contents.as_ref().as_bytes())
+        .with_context(|| format!("writing {}", part.display()))?;
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    drop(writer);
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn atomic_part_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{file_name}.writing.part"))
+}
+
+fn archive_interrupted_part(path: &Path) -> Result<()> {
+    let part = atomic_part_path(path);
+    if !part.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
+}
+
+fn write_prepare_state(
+    out: &Path,
+    status: &str,
+    config: &InterpretationConfig,
+    utterances: usize,
+    report: Option<&PrepareReport>,
+) -> Result<()> {
+    let state = PrepareCheckpointState {
+        status: status.to_string(),
+        dataset_id: config.dataset_id.clone(),
+        utterances,
+        report: report.cloned(),
+    };
+    write_text_atomic(
+        &out.join("prepare_state.json"),
+        serde_json::to_string_pretty(&state)?,
+    )
 }
 
 pub fn read_examples(path: &Path) -> Result<Vec<LibriSpeechUtterance>> {

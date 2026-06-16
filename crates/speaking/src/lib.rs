@@ -7,6 +7,7 @@
 pub mod acoustics;
 pub mod asr;
 pub mod data;
+pub mod discrepancies;
 pub mod evidence;
 pub mod feature;
 pub mod ids;
@@ -35,6 +36,7 @@ pub mod word_stream;
 pub use acoustics::*;
 pub use asr::*;
 pub use data::*;
+pub use discrepancies::*;
 pub use evidence::*;
 pub use feature::*;
 pub use ids::*;

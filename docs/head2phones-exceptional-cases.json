@@ -1,0 +1,80 @@
+{
+  "description": "Regression catalog for head2phones preparation edge cases. Tests load this file directly; keep cases small, specific, and tied to an observed or plausible data-prep failure.",
+  "cases": [
+    {
+      "id": "loadstone-pronounced-lodestone",
+      "kind": "phones",
+      "input": "The Loadstone Rock was drawing him.",
+      "note": "Archaic spelling in A Tale of Two Cities must use the lodestone pronunciation, not a fallback guess.",
+      "output_contains": ["ˈloʊdˌstoʊn"],
+      "output_not_contains": ["ˈlʌəd.stə.nɪ", "ˈləəd.stə.nɪ"]
+    },
+    {
+      "id": "st-name-prefix-is-saint",
+      "kind": "phones",
+      "input": "We visited St. Charles.",
+      "note": "Link-grammar context should pick CMUdict's saint candidate for St. before a proper name.",
+      "output_contains": ["ˈseɪnt"],
+      "output_not_contains": ["ˈstɹiːt", "ˈst˭ɹiːt"]
+    },
+    {
+      "id": "st-address-abbreviation-is-street",
+      "kind": "phones",
+      "input": "He lives on Sansome St.",
+      "note": "Street/address contexts should keep CMUdict's street candidate for St.",
+      "output_contains": ["ˈstɹiːt"],
+      "output_not_contains": ["ˈseɪnt"]
+    },
+    {
+      "id": "doctor-abbreviation-stays-in-head",
+      "kind": "head",
+      "input": "Dr. Smith went home. Then he slept.",
+      "note": "Title abbreviations must not split the head at the abbreviation period.",
+      "expected_head": "Dr. Smith went home."
+    },
+    {
+      "id": "number-abbreviation-stays-in-head",
+      "kind": "head",
+      "input": "No. 5 was missing from the list. Then it appeared.",
+      "note": "No. before a digit is an abbreviation, not a sentence boundary.",
+      "expected_head": "No. 5 was missing from the list."
+    },
+    {
+      "id": "decimal-and-pm-stay-in-head",
+      "kind": "head",
+      "input": "Dr. Smith saw No. 5 at 3.14 p.m. before leaving.",
+      "note": "Decimals and dotted time abbreviations should not create false head boundaries.",
+      "expected_head": "Dr. Smith saw No. 5 at 3.14 p.m. before leaving."
+    },
+    {
+      "id": "representative-party-state-abbreviations-stay-incomplete",
+      "kind": "head",
+      "input": "After the meeting, Rep. Susan Smith (D. NY.) said she didn't know what the meeting was about.",
+      "note": "Political title, party, and state abbreviations should not split before the sentence end.",
+      "expected_head": "After the meeting, Rep. Susan Smith (D. NY.) said she didn't know what the meeting was about."
+    },
+    {
+      "id": "partial-prefix-has-no-head",
+      "kind": "head",
+      "input": "I think we should",
+      "note": "Incomplete streaming prefixes should train as <NO_HEAD> instead of being flushed early.",
+      "expected_head": null
+    },
+    {
+      "id": "title-like-prefix-flushes-at-end-of-text",
+      "kind": "flush",
+      "input": "Hidden Letter",
+      "note": "At end of text, title-like fragments are speakable heads for flush examples.",
+      "expected_head": "Hidden Letter",
+      "output_contains": ["<PHONES>"]
+    },
+    {
+      "id": "false-abbreviation-split-emits-repair-rollback",
+      "kind": "repair",
+      "input": "Who shot John F. Kennedy?",
+      "note": "If an earlier model or naive splitter emitted `Who shot John F.` too early, the next buffer should be able to signal a low-confidence repair and tell the caller how far back to roll.",
+      "expected_head": "Who shot John F. Kennedy?",
+      "output_contains": ["<CONFIDENCE> low", "<ERROR_REPAIR>", "<ROLLBACK_GRAPHEMES>", "<PHONES>", "<SPLIT_AFTER>"]
+    }
+  ]
+}

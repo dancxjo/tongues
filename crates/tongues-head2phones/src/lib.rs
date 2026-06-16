@@ -7,12 +7,14 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use seams::SentenceDetectorDialog;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use speaking::{
     EnglishPhonemicizer, PauseKind, PhonemicizeOutput, PhonemicizeRequest, Phonemicizer,
@@ -30,6 +32,10 @@ pub const PHONES_OPEN: &str = "<PHONES>";
 pub const PHONES_CLOSE: &str = "</PHONES>";
 pub const SPLIT_AFTER: &str = "<SPLIT_AFTER>";
 pub const NO_HEAD: &str = "<NO_HEAD>";
+pub const ERROR_REPAIR: &str = "<ERROR_REPAIR>";
+pub const ROLLBACK_GRAPHEMES: &str = "<ROLLBACK_GRAPHEMES>";
+pub const CONFIDENCE: &str = "<CONFIDENCE>";
+pub const CONFIDENCE_LOW: &str = "low";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
 const USER_AGENT: &str = "tongues-head2phones/0.1";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
@@ -181,6 +187,7 @@ pub enum TrainingRowSource {
     Synthetic,
     RandomCut,
     Exceptional,
+    Repair,
     SourceText,
 }
 
@@ -197,10 +204,41 @@ pub struct PrepareReport {
     pub naive_seams_discrepancies: usize,
     pub complete_examples: usize,
     pub no_head_examples: usize,
+    pub repair_examples: usize,
     pub exceptional_examples: usize,
     pub train_examples: usize,
     pub valid_examples: usize,
     pub test_examples: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepareCheckpointState {
+    pub status: String,
+    pub dataset_id: String,
+    pub config_fingerprint: String,
+    pub shards: Vec<PrepareShardManifest>,
+    pub report: Option<PrepareReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepareShardManifest {
+    pub id: String,
+    pub label: String,
+    pub config_fingerprint: String,
+    pub examples_path: PathBuf,
+    pub discrepancies_path: Option<PathBuf>,
+    pub synthetic_buffers_path: Option<PathBuf>,
+    pub source_buffers: usize,
+    pub examples: usize,
+    pub discrepancies: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrepareShardData {
+    examples: Vec<Head2PhonesTrainingExample>,
+    discrepancies: Vec<NaiveSeamsDiscrepancy>,
+    synthetic_buffers: Option<Vec<String>>,
+    source_buffers: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,127 +284,185 @@ pub fn prepare_dataset_with_progress(
     });
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
 
-    let mut rng = StdRng::seed_from_u64(config.seed);
-    let examples_part_path = out.join("examples.jsonl.part");
-    let discrepancies_part_path = out.join("naive_seams_discrepancies.jsonl.part");
-    protect_nonempty_partial(&examples_part_path)?;
-    protect_nonempty_partial(&discrepancies_part_path)?;
-    let mut examples_part = BufWriter::new(
-        File::create(&examples_part_path)
-            .with_context(|| format!("creating {}", examples_part_path.display()))?,
-    );
-    let mut discrepancies_part = BufWriter::new(
-        File::create(&discrepancies_part_path)
-            .with_context(|| format!("creating {}", discrepancies_part_path.display()))?,
-    );
-    let mut examples = Vec::new();
-    let mut naive_seams_discrepancies = Vec::new();
-    let mut source_buffers = 0usize;
-
-    let mut temporary_parts = vec![examples_part_path.clone(), discrepancies_part_path.clone()];
+    let checkpoint_dir = out.join("prepare-checkpoints");
+    fs::create_dir_all(&checkpoint_dir)
+        .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
+    let config_fingerprint = config_fingerprint(config)?;
+    let mut shard_manifests = Vec::new();
 
     if config.include_synthetic {
-        let synthetic_path = out.join("synthetic_buffers.jsonl.part");
-        protect_nonempty_partial(&synthetic_path)?;
-        temporary_parts.push(synthetic_path.clone());
-        let synthetic = synthetic_buffers(config.synthetic_buffers, &mut rng);
-        let mut writer = BufWriter::new(
-            File::create(&synthetic_path)
-                .with_context(|| format!("creating {}", synthetic_path.display()))?,
-        );
-        for buffer in &synthetic {
-            source_buffers += 1;
-            writeln!(writer, "{}", serde_json::to_string(buffer)?)?;
-            add_examples_for_buffer(
-                buffer,
-                "synthetic",
-                TrainingRowSource::Synthetic,
-                config,
-                &mut rng,
-                &mut examples,
-                &mut examples_part,
-            )?;
-        }
-        writer
-            .flush()
-            .with_context(|| format!("flushing {}", synthetic_path.display()))?;
+        let manifest = build_or_load_prepare_shard(
+            &checkpoint_dir,
+            "000-synthetic",
+            "synthetic buffers",
+            &config_fingerprint,
+            &mut progress,
+            || {
+                let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "synthetic"));
+                let synthetic = synthetic_buffers(config.synthetic_buffers, &mut rng);
+                let mut examples = Vec::new();
+                for buffer in &synthetic {
+                    add_examples_for_buffer(
+                        buffer,
+                        "synthetic",
+                        TrainingRowSource::Synthetic,
+                        config,
+                        &mut rng,
+                        &mut examples,
+                    )?;
+                }
+                Ok(PrepareShardData {
+                    source_buffers: synthetic.len(),
+                    examples,
+                    discrepancies: Vec::new(),
+                    synthetic_buffers: Some(synthetic),
+                })
+            },
+        )?;
         progress(PrepareProgress::Synthesize {
-            path: synthetic_path.display().to_string(),
-            buffers: synthetic.len(),
+            path: manifest
+                .synthetic_buffers_path
+                .as_ref()
+                .unwrap_or(&manifest.examples_path)
+                .display()
+                .to_string(),
+            buffers: manifest.source_buffers,
         });
+        shard_manifests.push(manifest);
     }
 
     if config.include_exceptional {
-        for buffer in exceptional_buffers() {
-            source_buffers += 1;
-            add_examples_for_buffer(
-                buffer,
-                "exceptional",
-                TrainingRowSource::Exceptional,
-                config,
-                &mut rng,
-                &mut examples,
-                &mut examples_part,
-            )?;
-        }
+        let manifest = build_or_load_prepare_shard(
+            &checkpoint_dir,
+            "001-exceptional",
+            "exceptional buffers",
+            &config_fingerprint,
+            &mut progress,
+            || {
+                let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "exceptional"));
+                let mut examples = Vec::new();
+                let mut source_buffers = 0usize;
+                for buffer in exceptional_buffers() {
+                    source_buffers += 1;
+                    add_examples_for_buffer(
+                        buffer,
+                        "exceptional",
+                        TrainingRowSource::Exceptional,
+                        config,
+                        &mut rng,
+                        &mut examples,
+                    )?;
+                }
+                add_repair_examples_for_discrepancies(
+                    &exceptional_repair_discrepancies(),
+                    config,
+                    &mut examples,
+                );
+                Ok(PrepareShardData {
+                    source_buffers,
+                    examples,
+                    discrepancies: Vec::new(),
+                    synthetic_buffers: None,
+                })
+            },
+        )?;
+        shard_manifests.push(manifest);
     }
 
     let source_files = resolve_source_files_with_progress(out, config, &mut progress)?;
-    for path in &source_files {
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let seams_sentences = seams_sentences_from_text(&raw);
-        let file_discrepancies = if config.include_naive_seams_discrepancies {
-            build_naive_seams_discrepancies(
-                &seams_sentences,
-                &path.display().to_string(),
-                config.max_naive_seams_discrepancies_per_file,
-            )
-        } else {
-            Vec::new()
-        };
-        for discrepancy in &file_discrepancies {
-            writeln!(
-                discrepancies_part,
-                "{}",
-                serde_json::to_string(discrepancy)?
-            )?;
-        }
-        naive_seams_discrepancies.extend(file_discrepancies);
-        let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
-        for buffer in &buffers {
-            source_buffers += 1;
-            add_examples_for_buffer(
-                buffer,
-                &path.display().to_string(),
-                TrainingRowSource::SourceText,
-                config,
-                &mut rng,
-                &mut examples,
-                &mut examples_part,
-            )?;
-        }
+    for (index, path) in source_files.iter().enumerate() {
+        let shard_id = format!("{:03}-source-{}", index + 2, sanitize_checkpoint_id(path));
+        let label = path.display().to_string();
+        let manifest = build_or_load_prepare_shard(
+            &checkpoint_dir,
+            &shard_id,
+            &label,
+            &config_fingerprint,
+            &mut progress,
+            || {
+                let mut rng = StdRng::seed_from_u64(unit_seed(
+                    config.seed,
+                    &format!("source:{}", path.display()),
+                ));
+                let raw = fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let seams_sentences = seams_sentences_from_text(&raw);
+                let discrepancies = if config.include_naive_seams_discrepancies {
+                    build_naive_seams_discrepancies(
+                        &seams_sentences,
+                        &path.display().to_string(),
+                        config.max_naive_seams_discrepancies_per_file,
+                    )
+                } else {
+                    Vec::new()
+                };
+                let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
+                let mut examples = Vec::new();
+                for buffer in &buffers {
+                    add_examples_for_buffer(
+                        buffer,
+                        &path.display().to_string(),
+                        TrainingRowSource::SourceText,
+                        config,
+                        &mut rng,
+                        &mut examples,
+                    )?;
+                }
+                add_repair_examples_for_discrepancies(&discrepancies, config, &mut examples);
+                Ok(PrepareShardData {
+                    source_buffers: buffers.len(),
+                    examples,
+                    discrepancies,
+                    synthetic_buffers: None,
+                })
+            },
+        )?;
         progress(PrepareProgress::Read {
             path: path.display().to_string(),
-            buffers: buffers.len(),
-            naive_seams_discrepancies: naive_seams_discrepancies.len(),
+            buffers: manifest.source_buffers,
+            naive_seams_discrepancies: manifest.discrepancies,
         });
+        shard_manifests.push(manifest);
     }
 
-    examples_part
-        .flush()
-        .with_context(|| format!("flushing {}", examples_part_path.display()))?;
-    discrepancies_part
-        .flush()
-        .with_context(|| format!("flushing {}", discrepancies_part_path.display()))?;
-    drop(examples_part);
-    drop(discrepancies_part);
+    write_prepare_state(
+        out,
+        "assembling",
+        config,
+        &config_fingerprint,
+        &shard_manifests,
+        None,
+    )?;
+
+    let mut examples = Vec::new();
+    let mut naive_seams_discrepancies = Vec::new();
+    let mut source_buffers = 0usize;
+    for manifest in &shard_manifests {
+        let mut shard_examples: Vec<Head2PhonesTrainingExample> =
+            read_jsonl(&manifest.examples_path)?;
+        let mut shard_discrepancies: Vec<NaiveSeamsDiscrepancy> = manifest
+            .discrepancies_path
+            .as_ref()
+            .map(|path| read_jsonl(path))
+            .transpose()?
+            .unwrap_or_default();
+        source_buffers += manifest.source_buffers;
+        examples.append(&mut shard_examples);
+        naive_seams_discrepancies.append(&mut shard_discrepancies);
+    }
 
     let complete_examples = examples
         .iter()
-        .filter(|example| example.head.is_some())
+        .filter(|example| example.head.is_some() && example.row_source != TrainingRowSource::Repair)
         .count();
-    let no_head_examples = examples.len().saturating_sub(complete_examples);
+    let no_head_examples = examples
+        .iter()
+        .filter(|example| example.output == NO_HEAD)
+        .count();
+    let repair_examples = examples
+        .iter()
+        .filter(|example| example.row_source == TrainingRowSource::Repair)
+        .count();
     let exceptional_examples = examples
         .iter()
         .filter(|example| example.row_source == TrainingRowSource::Exceptional)
@@ -382,6 +478,7 @@ pub fn prepare_dataset_with_progress(
         no_head_examples
     );
 
+    let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "split-shuffle"));
     examples.shuffle(&mut rng);
     let n = examples.len();
     let train_end = (n as f64 * config.train_frac).round() as usize;
@@ -390,6 +487,7 @@ pub fn prepare_dataset_with_progress(
     let valid = examples[train_end.min(n)..valid_end].to_vec();
     let test = examples[valid_end..].to_vec();
 
+    write_jsonl_with_progress(&out.join("examples.jsonl"), &examples, &mut progress)?;
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
     write_jsonl_with_progress(&out.join("test.jsonl"), &test, &mut progress)?;
@@ -425,34 +523,245 @@ pub fn prepare_dataset_with_progress(
             naive_seams_discrepancies.len(),
         ),
     )?;
-    for part in temporary_parts {
-        if part.exists() {
-            fs::remove_file(&part).with_context(|| format!("removing {}", part.display()))?;
-        }
-    }
 
-    Ok(PrepareReport {
+    let report = PrepareReport {
         source_buffers,
         naive_seams_discrepancies: naive_seams_discrepancies.len(),
         complete_examples,
         no_head_examples,
+        repair_examples,
         exceptional_examples,
         train_examples: train.len(),
         valid_examples: valid.len(),
         test_examples: test.len(),
-    })
+    };
+    write_prepare_state(
+        out,
+        "complete",
+        config,
+        &config_fingerprint,
+        &shard_manifests,
+        Some(&report),
+    )?;
+
+    Ok(report)
 }
 
-fn protect_nonempty_partial(path: &Path) -> Result<()> {
-    let Some(metadata) = fs::metadata(path).ok() else {
-        return Ok(());
+fn build_or_load_prepare_shard(
+    checkpoint_dir: &Path,
+    id: &str,
+    label: &str,
+    config_fingerprint: &str,
+    progress: &mut impl FnMut(PrepareProgress),
+    build: impl FnOnce() -> Result<PrepareShardData>,
+) -> Result<PrepareShardManifest> {
+    let manifest_path = checkpoint_dir.join(format!("{id}.manifest.json"));
+    if manifest_path.exists() {
+        let manifest: PrepareShardManifest = read_json_file(&manifest_path)?;
+        anyhow::ensure!(
+            manifest.config_fingerprint == config_fingerprint,
+            "checkpoint {} was built with a different config; delete that shard or use a matching config",
+            manifest_path.display()
+        );
+        ensure_checkpoint_file(&manifest.examples_path)?;
+        if let Some(path) = &manifest.discrepancies_path {
+            ensure_checkpoint_file(path)?;
+        }
+        if let Some(path) = &manifest.synthetic_buffers_path {
+            ensure_checkpoint_file(path)?;
+        }
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Reusing checkpoint {} ({} examples)",
+                manifest_path.display(),
+                manifest.examples
+            ),
+        });
+        return Ok(manifest);
+    }
+
+    let examples_path = checkpoint_dir.join(format!("{id}.examples.jsonl"));
+    let discrepancies_path = checkpoint_dir.join(format!("{id}.discrepancies.jsonl"));
+    let synthetic_buffers_path = checkpoint_dir.join(format!("{id}.synthetic_buffers.jsonl"));
+    archive_interrupted_part(&examples_path)?;
+    archive_interrupted_part(&discrepancies_path)?;
+    archive_interrupted_part(&synthetic_buffers_path)?;
+    archive_interrupted_part(&manifest_path)?;
+
+    progress(PrepareProgress::Stage {
+        message: format!("Building checkpoint shard {id}: {label}"),
+    });
+    let data = build()?;
+    write_jsonl_atomic(&examples_path, &data.examples)?;
+    let discrepancies_path = if data.discrepancies.is_empty() {
+        None
+    } else {
+        write_jsonl_atomic(&discrepancies_path, &data.discrepancies)?;
+        Some(discrepancies_path)
     };
+    let synthetic_buffers_path = if let Some(buffers) = &data.synthetic_buffers {
+        write_jsonl_atomic(&synthetic_buffers_path, buffers)?;
+        Some(synthetic_buffers_path)
+    } else {
+        None
+    };
+    let manifest = PrepareShardManifest {
+        id: id.to_string(),
+        label: label.to_string(),
+        config_fingerprint: config_fingerprint.to_string(),
+        examples_path,
+        discrepancies_path,
+        synthetic_buffers_path,
+        source_buffers: data.source_buffers,
+        examples: data.examples.len(),
+        discrepancies: data.discrepancies.len(),
+    };
+    write_json_file_atomic(&manifest_path, &manifest)?;
+    progress(PrepareProgress::Write {
+        path: manifest_path.display().to_string(),
+        rows: manifest.examples,
+    });
+    Ok(manifest)
+}
+
+fn ensure_checkpoint_file(path: &Path) -> Result<()> {
     anyhow::ensure!(
-        metadata.len() == 0,
-        "refusing to overwrite nonempty partial artifact {}; move, remove, or resume it explicitly",
+        path.exists() && path.metadata()?.len() > 0,
+        "checkpoint manifest references missing or empty file {}",
         path.display()
     );
     Ok(())
+}
+
+fn write_prepare_state(
+    out: &Path,
+    status: &str,
+    config: &Head2PhonesConfig,
+    config_fingerprint: &str,
+    shards: &[PrepareShardManifest],
+    report: Option<&PrepareReport>,
+) -> Result<()> {
+    let state = PrepareCheckpointState {
+        status: status.to_string(),
+        dataset_id: config.dataset_id.clone(),
+        config_fingerprint: config_fingerprint.to_string(),
+        shards: shards.to_vec(),
+        report: report.cloned(),
+    };
+    write_json_file_atomic(&out.join("prepare_state.json"), &state)
+}
+
+fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
+    let json = serde_json::to_string(config)?;
+    Ok(format!("{:016x}", stable_hash(json.as_bytes())))
+}
+
+fn unit_seed(base_seed: u64, label: &str) -> u64 {
+    base_seed ^ stable_hash(label.as_bytes())
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn sanitize_checkpoint_id(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("source")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    serde_json::from_reader(file).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    raw.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str(line).with_context(|| {
+                format!(
+                    "parsing {} line {}",
+                    path.display(),
+                    index.saturating_add(1)
+                )
+            })
+        })
+        .collect()
+}
+
+fn write_json_file_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    fs::write(&part, serde_json::to_string_pretty(value)?)
+        .with_context(|| format!("writing {}", part.display()))?;
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn write_jsonl_atomic<T: Serialize>(path: &Path, rows: &[T]) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    let mut writer = BufWriter::new(
+        File::create(&part).with_context(|| format!("creating {}", part.display()))?,
+    );
+    for row in rows {
+        writeln!(writer, "{}", serde_json::to_string(row)?)?;
+    }
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    drop(writer);
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn atomic_part_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{file_name}.writing.part"))
+}
+
+fn archive_interrupted_part(path: &Path) -> Result<()> {
+    let part = atomic_part_path(path);
+    if !part.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!("{ext}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
 }
 
 fn add_examples_for_buffer(
@@ -462,7 +771,6 @@ fn add_examples_for_buffer(
     config: &Head2PhonesConfig,
     rng: &mut StdRng,
     examples: &mut Vec<Head2PhonesTrainingExample>,
-    examples_part: &mut BufWriter<File>,
 ) -> Result<()> {
     if let Some(head) = first_complete_head(buffer) {
         let head_text = buffer[..head.end_byte].trim().to_string();
@@ -480,7 +788,6 @@ fn add_examples_for_buffer(
                     split_after: Some(split_after),
                     source: source.to_string(),
                 };
-                writeln!(examples_part, "{}", serde_json::to_string(&row)?)?;
                 examples.push(row);
             }
         }
@@ -501,7 +808,6 @@ fn add_examples_for_buffer(
                     split_after: Some(split_after),
                     source: source.to_string(),
                 };
-                writeln!(examples_part, "{}", serde_json::to_string(&row)?)?;
                 examples.push(row);
             }
         }
@@ -519,12 +825,10 @@ fn add_examples_for_buffer(
                 split_after: None,
                 source: source.to_string(),
             };
-            writeln!(examples_part, "{}", serde_json::to_string(&row)?)?;
             examples.push(row);
 
             if prefix_ends_at_boundary_in_head(&prefix, &head_text) {
                 if let Some(flush_row) = flush_example_for_prefix(&prefix, source, row_source) {
-                    writeln!(examples_part, "{}", serde_json::to_string(&flush_row)?)?;
                     examples.push(flush_row);
                 }
             }
@@ -538,11 +842,9 @@ fn add_examples_for_buffer(
             split_after: None,
             source: source.to_string(),
         };
-        writeln!(examples_part, "{}", serde_json::to_string(&row)?)?;
         examples.push(row);
 
         if let Some(flush_row) = flush_example_for_prefix(buffer.trim(), source, row_source) {
-            writeln!(examples_part, "{}", serde_json::to_string(&flush_row)?)?;
             examples.push(flush_row);
         }
     }
@@ -585,6 +887,48 @@ fn prefix_ends_at_boundary_in_head(prefix: &str, head: &str) -> bool {
     rest.chars()
         .next()
         .is_none_or(|ch| ch.is_whitespace() || !ch.is_alphanumeric())
+}
+
+fn add_repair_examples_for_discrepancies(
+    discrepancies: &[NaiveSeamsDiscrepancy],
+    config: &Head2PhonesConfig,
+    examples: &mut Vec<Head2PhonesTrainingExample>,
+) {
+    for discrepancy in discrepancies {
+        if let Some(row) = repair_example_for_discrepancy(discrepancy, config) {
+            examples.push(row);
+        }
+    }
+}
+
+fn repair_example_for_discrepancy(
+    discrepancy: &NaiveSeamsDiscrepancy,
+    config: &Head2PhonesConfig,
+) -> Option<Head2PhonesTrainingExample> {
+    let wrong_head = discrepancy.naive_sentences.first()?.trim();
+    let repaired_head = discrepancy.seams_sentence.trim();
+    if wrong_head.is_empty() || repaired_head.is_empty() || wrong_head == repaired_head {
+        return None;
+    }
+    if !repaired_head.starts_with(wrong_head) {
+        return None;
+    }
+    let repaired_len = repaired_head.graphemes(true).count();
+    if repaired_len < config.min_head_graphemes || repaired_len > config.max_head_graphemes {
+        return None;
+    }
+    let rollback = wrong_head.graphemes(true).count();
+    let symbols = speech_symbols_for_text(repaired_head)?;
+    Some(Head2PhonesTrainingExample {
+        row_source: TrainingRowSource::Repair,
+        input: repaired_head.to_string(),
+        output: format!(
+            "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {repaired_len}"
+        ),
+        head: Some(repaired_head.to_string()),
+        split_after: Some(repaired_len),
+        source: discrepancy.source.clone(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1021,6 +1365,29 @@ fn exceptional_buffers() -> &'static [&'static str] {
     ]
 }
 
+fn exceptional_repair_discrepancies() -> Vec<NaiveSeamsDiscrepancy> {
+    [
+        (
+            "Who shot John F. Kennedy?",
+            vec!["Who shot John F.", "Kennedy?"],
+        ),
+        (
+            "Elizabeth met Mr. Darcy at Pemberley.",
+            vec!["Elizabeth met Mr.", "Darcy at Pemberley."],
+        ),
+    ]
+    .into_iter()
+    .map(|(seams_sentence, naive_sentences)| NaiveSeamsDiscrepancy {
+        source: "exceptional-repair".to_string(),
+        seams_sentence: seams_sentence.to_string(),
+        naive_sentences: naive_sentences
+            .into_iter()
+            .map(|sentence| sentence.to_string())
+            .collect(),
+    })
+    .collect()
+}
+
 fn seams_sentences_from_text(raw: &str) -> Vec<String> {
     if let Ok(detector) = SentenceDetectorDialog::new() {
         if let Ok(sentences) = detector.detect_sentences_borrowed(raw) {
@@ -1281,30 +1648,7 @@ fn write_jsonl_with_progress<T: Serialize>(
     rows: &[T],
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<()> {
-    let part = path.with_extension(format!(
-        "{}part",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| format!("{ext}."))
-            .unwrap_or_default()
-    ));
-    let mut writer = BufWriter::new(
-        File::create(&part).with_context(|| format!("creating {}", part.display()))?,
-    );
-    for row in rows {
-        writeln!(writer, "{}", serde_json::to_string(row)?)?;
-    }
-    writer
-        .flush()
-        .with_context(|| format!("flushing {}", part.display()))?;
-    drop(writer);
-    fs::rename(&part, path).with_context(|| {
-        format!(
-            "renaming completed JSONL {} -> {}",
-            part.display(),
-            path.display()
-        )
-    })?;
+    write_jsonl_atomic(path, rows)?;
     progress(PrepareProgress::Write {
         path: path.display().to_string(),
         rows: rows.len(),
@@ -1320,7 +1664,7 @@ fn dataset_readme(
     naive_seams_discrepancies: usize,
 ) -> String {
     format!(
-        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}` or `{}` broad IPA phone text `{}` plus `{}` and a Unicode grapheme-cluster offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
+        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}`, `{}` broad IPA phone text `{}` plus `{}`, or `{}` repair rows. Repair rows start with `{}` confidence, then `{}`, `{}` with a Unicode grapheme-cluster rollback distance, corrected phones, and a corrected split offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
         config.dataset_id,
         train.len(),
         valid.len(),
@@ -1329,7 +1673,11 @@ fn dataset_readme(
         NO_HEAD,
         PHONES_OPEN,
         PHONES_CLOSE,
-        SPLIT_AFTER
+        SPLIT_AFTER,
+        ERROR_REPAIR,
+        CONFIDENCE,
+        ERROR_REPAIR,
+        ROLLBACK_GRAPHEMES
     )
 }
 
@@ -1361,6 +1709,23 @@ pub fn write_scaffold_model(out: &Path, config: &Head2PhonesConfig) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct ExceptionalCaseCatalog {
+        cases: Vec<ExceptionalCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ExceptionalCase {
+        id: String,
+        kind: String,
+        input: String,
+        expected_head: Option<String>,
+        #[serde(default)]
+        output_contains: Vec<String>,
+        #[serde(default)]
+        output_not_contains: Vec<String>,
+    }
 
     #[test]
     fn counts_graphemes_for_split_offsets() {
@@ -1557,6 +1922,83 @@ mod tests {
     }
 
     #[test]
+    fn documented_exceptional_cases_are_covered() {
+        let catalog: ExceptionalCaseCatalog = serde_json::from_str(include_str!(
+            "../../../docs/head2phones-exceptional-cases.json"
+        ))
+        .expect("exceptional case catalog should parse");
+        assert!(!catalog.cases.is_empty());
+
+        for case in catalog.cases {
+            match case.kind.as_str() {
+                "head" => {
+                    let head = first_complete_head(&case.input)
+                        .map(|head| case.input[..head.end_byte].to_string());
+                    assert_eq!(head, case.expected_head, "{}", case.id);
+                }
+                "phones" => {
+                    let symbols = speech_symbols_for_text(&case.input)
+                        .unwrap_or_else(|| panic!("{} should produce phones", case.id));
+                    assert_contains_all(&case.id, &symbols, &case.output_contains);
+                    assert_contains_none(&case.id, &symbols, &case.output_not_contains);
+                }
+                "flush" => {
+                    let row = flush_example_for_prefix(
+                        &case.input,
+                        "documented-exceptional-case",
+                        TrainingRowSource::Exceptional,
+                    )
+                    .unwrap_or_else(|| panic!("{} should flush", case.id));
+                    assert_eq!(row.head, case.expected_head, "{}", case.id);
+                    assert_contains_all(&case.id, &row.output, &case.output_contains);
+                    assert_contains_none(&case.id, &row.output, &case.output_not_contains);
+                }
+                "repair" => {
+                    let discrepancy = NaiveSeamsDiscrepancy {
+                        source: "documented-exceptional-case".to_string(),
+                        seams_sentence: case
+                            .expected_head
+                            .clone()
+                            .unwrap_or_else(|| case.input.clone()),
+                        naive_sentences: naive_split_sentences(&case.input),
+                    };
+                    let row =
+                        repair_example_for_discrepancy(&discrepancy, &Head2PhonesConfig::default())
+                            .unwrap_or_else(|| panic!("{} should produce a repair row", case.id));
+                    assert_eq!(row.head, case.expected_head, "{}", case.id);
+                    assert_contains_all(&case.id, &row.output, &case.output_contains);
+                    assert_contains_none(&case.id, &row.output, &case.output_not_contains);
+                }
+                other => panic!("{} has unsupported kind {other}", case.id),
+            }
+        }
+    }
+
+    #[test]
+    fn repair_rows_signal_low_confidence_error_and_rollback_distance() {
+        let discrepancy = NaiveSeamsDiscrepancy {
+            source: "test".to_string(),
+            seams_sentence: "Who shot John F. Kennedy?".to_string(),
+            naive_sentences: vec!["Who shot John F.".to_string(), "Kennedy?".to_string()],
+        };
+        let row = repair_example_for_discrepancy(&discrepancy, &Head2PhonesConfig::default())
+            .expect("repair row");
+
+        assert_eq!(row.row_source, TrainingRowSource::Repair);
+        assert_eq!(row.head.as_deref(), Some("Who shot John F. Kennedy?"));
+        assert!(row
+            .output
+            .contains(&format!("{CONFIDENCE} {CONFIDENCE_LOW}")));
+        assert!(row.output.contains(ERROR_REPAIR));
+        assert!(row.output.contains(&format!(
+            "{ROLLBACK_GRAPHEMES} {}",
+            "Who shot John F.".graphemes(true).count()
+        )));
+        assert!(row.output.contains(PHONES_OPEN));
+        assert!(row.output.contains(SPLIT_AFTER));
+    }
+
+    #[test]
     fn random_cuts_create_complete_and_no_head_rows() {
         let config = Head2PhonesConfig {
             synthetic_buffers: 0,
@@ -1566,8 +2008,6 @@ mod tests {
         };
         let mut rng = StdRng::seed_from_u64(3);
         let mut rows = Vec::new();
-        let temp = tempfile_path("head2phones-random-cuts.jsonl.part");
-        let mut writer = BufWriter::new(File::create(&temp).expect("create temp jsonl"));
         add_examples_for_buffer(
             "This is ready. The remainder is still arriving now.",
             "test",
@@ -1575,11 +2015,8 @@ mod tests {
             &config,
             &mut rng,
             &mut rows,
-            &mut writer,
         )
         .expect("add examples");
-        drop(writer);
-        let _ = fs::remove_file(temp);
         assert!(rows.iter().any(|row| row.head.is_some()));
         assert!(rows.iter().any(|row| row.output == NO_HEAD));
         assert!(rows
@@ -1587,7 +2024,78 @@ mod tests {
             .any(|row| row.row_source == TrainingRowSource::RandomCut));
     }
 
+    #[test]
+    fn prepare_reuses_checkpoints_and_does_not_touch_legacy_parts() {
+        let out = tempfile_path("head2phones-resume");
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).expect("create temp dataset dir");
+        let legacy_part = out.join("examples.jsonl.part");
+        fs::write(&legacy_part, "legacy partial should remain untouched\n")
+            .expect("write legacy partial");
+        let config = Head2PhonesConfig {
+            dataset_id: "resume-test".to_string(),
+            include_default_gutenberg: false,
+            source_paths: Vec::new(),
+            include_synthetic: true,
+            synthetic_buffers: 32,
+            random_cuts_per_buffer: 1,
+            no_head_cuts_per_head: 1,
+            include_exceptional: false,
+            include_naive_seams_discrepancies: false,
+            ..Head2PhonesConfig::default()
+        };
+
+        let first = prepare_dataset(&out, &config).expect("first prepare");
+        let checkpoint = out
+            .join("prepare-checkpoints")
+            .join("000-synthetic.manifest.json");
+        assert!(checkpoint.exists());
+        assert!(out.join("examples.jsonl").exists());
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial"),
+            "legacy partial should remain untouched\n"
+        );
+
+        for path in [
+            out.join("examples.jsonl"),
+            out.join("train.jsonl"),
+            out.join("valid.jsonl"),
+            out.join("test.jsonl"),
+            out.join("vocab.json"),
+        ] {
+            fs::remove_file(path).expect("remove final output");
+        }
+
+        let second = prepare_dataset(&out, &config).expect("resume prepare");
+        assert_eq!(first.complete_examples, second.complete_examples);
+        assert_eq!(first.no_head_examples, second.no_head_examples);
+        assert_eq!(first.train_examples, second.train_examples);
+        assert_eq!(
+            fs::read_to_string(&legacy_part).expect("read legacy partial after resume"),
+            "legacy partial should remain untouched\n"
+        );
+        fs::remove_dir_all(&out).expect("remove temp dataset dir");
+    }
+
     fn tempfile_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{}-{name}", std::process::id()))
+    }
+
+    fn assert_contains_all(case_id: &str, haystack: &str, needles: &[String]) {
+        for needle in needles {
+            assert!(
+                haystack.contains(needle),
+                "{case_id}: expected `{haystack}` to contain `{needle}`"
+            );
+        }
+    }
+
+    fn assert_contains_none(case_id: &str, haystack: &str, needles: &[String]) {
+        for needle in needles {
+            assert!(
+                !haystack.contains(needle),
+                "{case_id}: expected `{haystack}` not to contain `{needle}`"
+            );
+        }
     }
 }
