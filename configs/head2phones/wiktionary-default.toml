@@ -1,0 +1,29 @@
+dataset_id = "wiktionary-default-languages-v0"
+varieties = [
+  "en-US",
+  "fr-FR-Standard",
+  "de-DE-Standard",
+  "es-ES-Castilian",
+  "es-419-Standard",
+  "la-Classical",
+  "la-Ecclesiastical",
+  "el-GR-Standard",
+  "grc-Attic",
+  "grc-Koine",
+  "sa-Deva-Standard",
+]
+source_paths = []
+include_synthetic = true
+include_default_gutenberg = false
+gutenberg_urls = []
+synthetic_buffers = 4096
+random_cuts_per_buffer = 8
+no_head_cuts_per_head = 8
+include_exceptional = true
+include_naive_seams_discrepancies = true
+max_naive_seams_discrepancies_per_file = 1024
+train_frac = 0.8
+valid_frac = 0.1
+seed = 42
+min_head_graphemes = 4
+max_head_graphemes = 220

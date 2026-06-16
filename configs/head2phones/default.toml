@@ -1,4 +1,5 @@
 dataset_id = "v0"
+varieties = ["en-US"]
 # Optional local Project Gutenberg-style .txt files/directories. If this is
 # empty, prepare uses the default Gutenberg URLs below plus synthetic cases.
 source_paths = []

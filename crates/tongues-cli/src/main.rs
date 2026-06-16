@@ -822,6 +822,10 @@ enum Head2PhonesCommands {
         #[arg(long, default_value = "models/head2phones/v0")]
         model: PathBuf,
 
+        /// Target pronunciation variety tag
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+
         /// Raw rolling UTF-8 text buffer
         buffer: String,
     },
@@ -2339,9 +2343,11 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                 device_arg,
             )
         }
-        Head2PhonesCommands::Infer { model, buffer } => {
-            cmd_head2phones_infer(&model, &buffer, device_arg)
-        }
+        Head2PhonesCommands::Infer {
+            model,
+            variety,
+            buffer,
+        } => cmd_head2phones_infer(&model, &variety, &buffer, device_arg),
     }
 }
 
@@ -2481,7 +2487,12 @@ fn cmd_head2phones_train(
     Ok(())
 }
 
-fn cmd_head2phones_infer(model_dir: &Path, buffer: &str, device_arg: DeviceArg) -> Result<()> {
+fn cmd_head2phones_infer(
+    model_dir: &Path,
+    variety: &str,
+    buffer: &str,
+    device_arg: DeviceArg,
+) -> Result<()> {
     let manifest =
         tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
     anyhow::ensure!(
@@ -2491,7 +2502,7 @@ fn cmd_head2phones_infer(model_dir: &Path, buffer: &str, device_arg: DeviceArg) 
     );
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let input = tongues_head2phones::format_input(buffer);
+    let input = tongues_head2phones::format_input_for_variety(variety, buffer);
     let output = match device_arg {
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;

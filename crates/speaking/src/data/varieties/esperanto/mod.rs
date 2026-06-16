@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::feature::FeatureSystem;
+use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
@@ -10,112 +10,72 @@ use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStatus};
 
-const A: PhoneId = PhoneId::borrowed("ipa.phone.a");
-const E: PhoneId = PhoneId::borrowed("ipa.phone.e");
-const I: PhoneId = PhoneId::borrowed("ipa.phone.i");
-const O: PhoneId = PhoneId::borrowed("ipa.phone.o");
-const U: PhoneId = PhoneId::borrowed("ipa.phone.u");
-const P: PhoneId = PhoneId::borrowed("ipa.phone.p");
-const L: PhoneId = PhoneId::borrowed("ipa.phone.l");
-const R: PhoneId = PhoneId::borrowed("ipa.phone.r");
-const S: PhoneId = PhoneId::borrowed("ipa.phone.s");
-const N: PhoneId = PhoneId::borrowed("ipa.phone.n");
-const M: PhoneId = PhoneId::borrowed("ipa.phone.m");
-const T: PhoneId = PhoneId::borrowed("ipa.phone.t");
-const K: PhoneId = PhoneId::borrowed("ipa.phone.k");
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EsperantoSegment {
+    grapheme: &'static str,
     symbol: &'static str,
-    phone: PhoneId,
 }
 
 const PHONEMES: &[EsperantoSegment] = &[
-    EsperantoSegment {
-        symbol: "A",
-        phone: A,
-    },
-    EsperantoSegment {
-        symbol: "E",
-        phone: E,
-    },
-    EsperantoSegment {
-        symbol: "I",
-        phone: I,
-    },
-    EsperantoSegment {
-        symbol: "O",
-        phone: O,
-    },
-    EsperantoSegment {
-        symbol: "U",
-        phone: U,
-    },
-    EsperantoSegment {
-        symbol: "P",
-        phone: P,
-    },
-    EsperantoSegment {
-        symbol: "L",
-        phone: L,
-    },
-    EsperantoSegment {
-        symbol: "R",
-        phone: R,
-    },
-    EsperantoSegment {
-        symbol: "S",
-        phone: S,
-    },
-    EsperantoSegment {
-        symbol: "N",
-        phone: N,
-    },
-    EsperantoSegment {
-        symbol: "M",
-        phone: M,
-    },
-    EsperantoSegment {
-        symbol: "T",
-        phone: T,
-    },
-    EsperantoSegment {
-        symbol: "K",
-        phone: K,
-    },
+    seg("a", "a"),
+    seg("b", "b"),
+    seg("c", "t͡s"),
+    seg("ĉ", "t͡ʃ"),
+    seg("d", "d"),
+    seg("e", "e"),
+    seg("f", "f"),
+    seg("g", "ɡ"),
+    seg("ĝ", "d͡ʒ"),
+    seg("h", "h"),
+    seg("ĥ", "x"),
+    seg("i", "i"),
+    seg("j", "j"),
+    seg("ĵ", "ʒ"),
+    seg("k", "k"),
+    seg("l", "l"),
+    seg("m", "m"),
+    seg("n", "n"),
+    seg("o", "o"),
+    seg("p", "p"),
+    seg("r", "r"),
+    seg("s", "s"),
+    seg("ŝ", "ʃ"),
+    seg("t", "t"),
+    seg("u", "u"),
+    seg("ŭ", "w"),
+    seg("v", "v"),
+    seg("z", "z"),
 ];
 
-const ONSET_CLUSTERS: &[&[PhoneId]] = &[&[P, L], &[P, R]];
+const fn seg(grapheme: &'static str, symbol: &'static str) -> EsperantoSegment {
+    EsperantoSegment { grapheme, symbol }
+}
 
 pub fn variety() -> LinguisticVariety {
     let mut phonemes = HashMap::new();
     let mut phones = HashMap::new();
     for segment in PHONEMES {
-        let phone_id = segment.phone.clone();
-        let ipa = phone_symbol(&phone_id);
+        let phone_id = PhoneId(format!("ipa.phone.{}", segment.symbol).into());
         phones.insert(
             phone_id.clone(),
             Phone {
                 id: phone_id.clone(),
-                ipa: ipa.into(),
-                features: Default::default(),
+                ipa: segment.symbol.into(),
+                features: segment_features(segment.symbol),
                 aliases: vec![SymbolAlias {
                     system: "esperanto".into(),
-                    symbol: segment.symbol.into(),
+                    symbol: segment.grapheme.into(),
                 }],
                 status: SegmentStatus::Core,
             },
         );
         let phoneme = Phoneme {
-            id: PhonemeId(format!("eo.phoneme.{ipa}")),
-            notation: format!("/{ipa}/"),
-            features: Default::default(),
+            id: PhonemeId(format!("eo.phoneme.{}", segment.symbol)),
+            notation: format!("/{}/", segment.symbol),
+            features: segment_features(segment.symbol),
             default_phone: Some(phone_id.clone()),
             possible_phones: vec![phone_id],
-            aliases: vec![SymbolAlias {
-                system: "esperanto".into(),
-                symbol: segment.symbol.into(),
-            }],
+            aliases: aliases(segment.grapheme, segment.symbol),
             allophones: Vec::new(),
             status: SegmentStatus::Core,
         };
@@ -125,7 +85,7 @@ pub fn variety() -> LinguisticVariety {
     LinguisticVariety {
         id: VarietyId("eo".into()),
         language: LanguageId("eo".into()),
-        name: "Esperanto (sample)".into(),
+        name: "Esperanto".into(),
         feature_system: FeatureSystem::default(),
         phonemes: PhonemeInventory { phonemes },
         phones: PhoneInventory { phones },
@@ -144,11 +104,27 @@ pub fn variety() -> LinguisticVariety {
                 SyllableShape {
                     pattern: "CVC".into(),
                 },
+                SyllableShape {
+                    pattern: "CCV".into(),
+                },
             ],
-            constraints: ONSET_CLUSTERS
-                .iter()
-                .map(|cluster| cluster_constraint(cluster))
-                .collect(),
+            constraints: [
+                &["p", "l"][..],
+                &["p", "r"][..],
+                &["b", "l"][..],
+                &["b", "r"][..],
+                &["t", "r"][..],
+                &["d", "r"][..],
+                &["k", "l"][..],
+                &["k", "r"][..],
+                &["ɡ", "l"][..],
+                &["ɡ", "r"][..],
+                &["f", "l"][..],
+                &["f", "r"][..],
+            ]
+            .into_iter()
+            .map(cluster_constraint)
+            .collect(),
         }),
         orthography: Some(Orthography {
             name: "Esperanto Latin orthography".into(),
@@ -162,15 +138,140 @@ pub fn variety() -> LinguisticVariety {
     }
 }
 
-fn cluster_constraint(cluster: &[PhoneId]) -> PhonotacticConstraint {
-    let suffix = cluster_suffix(cluster);
-    let label = cluster_label(cluster);
+pub fn synthesize_ipa(word: &str) -> Option<String> {
+    let normalized = normalize_esperanto_word(word)?;
+    let mut ipa = String::new();
+    let vowel_count = normalized.chars().filter(|ch| is_vowel(*ch)).count();
+    let stress_vowel = vowel_count.checked_sub(2);
+    let mut vowel_index = 0usize;
+    for ch in normalized.chars() {
+        if ch == '-' || ch == '\'' || ch == '’' {
+            continue;
+        }
+        if is_vowel(ch) {
+            if Some(vowel_index) == stress_vowel {
+                ipa.push('ˈ');
+            }
+            vowel_index += 1;
+        }
+        ipa.push_str(grapheme_symbol(ch)?);
+    }
+    let ipa = reposition_primary_stress(&ipa);
+    (!ipa.is_empty()).then_some(format!("/{ipa}/"))
+}
+
+fn normalize_esperanto_word(word: &str) -> Option<String> {
+    let normalized = word.trim().to_lowercase();
+    if normalized.is_empty()
+        || normalized.chars().count() > 48
+        || normalized
+            .chars()
+            .any(|ch| !(ch.is_alphabetic() || matches!(ch, '-' | '\'' | '’')))
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn grapheme_symbol(ch: char) -> Option<&'static str> {
+    Some(match ch {
+        'a' => "a",
+        'b' => "b",
+        'c' => "t͡s",
+        'ĉ' => "t͡ʃ",
+        'd' => "d",
+        'e' => "e",
+        'f' => "f",
+        'g' => "ɡ",
+        'ĝ' => "d͡ʒ",
+        'h' => "h",
+        'ĥ' => "x",
+        'i' => "i",
+        'j' => "j",
+        'ĵ' => "ʒ",
+        'k' => "k",
+        'l' => "l",
+        'm' => "m",
+        'n' => "n",
+        'o' => "o",
+        'p' => "p",
+        'r' => "r",
+        's' => "s",
+        'ŝ' => "ʃ",
+        't' => "t",
+        'u' => "u",
+        'ŭ' => "w",
+        'v' => "v",
+        'z' => "z",
+        _ => return None,
+    })
+}
+
+fn aliases(grapheme: &str, symbol: &str) -> Vec<SymbolAlias> {
+    vec![
+        SymbolAlias {
+            system: "esperanto".into(),
+            symbol: grapheme.into(),
+        },
+        SymbolAlias {
+            system: "ipa".into(),
+            symbol: symbol.into(),
+        },
+    ]
+}
+
+fn segment_features(symbol: &str) -> FeatureBundle {
+    let mut features = FeatureBundle::default();
+    let is_vowel = matches!(symbol, "a" | "e" | "i" | "o" | "u");
+    features.values.insert(
+        crate::ids::FeatureId("phonology.major".into()),
+        Spec::Known(FeatureValue::Category(
+            if is_vowel { "vowel" } else { "consonant" }.into(),
+        )),
+    );
+    features.values.insert(
+        crate::ids::FeatureId("phonology.syllabic".into()),
+        Spec::Known(FeatureValue::Bool(is_vowel)),
+    );
+    features.values.insert(
+        crate::ids::FeatureId("phonology.base_symbol".into()),
+        Spec::Known(FeatureValue::Category(symbol.into())),
+    );
+    features
+}
+
+fn is_vowel(ch: char) -> bool {
+    matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u')
+}
+
+fn reposition_primary_stress(ipa: &str) -> String {
+    let mut chars = ipa.chars().collect::<Vec<_>>();
+    let Some(stress_index) = chars.iter().position(|ch| *ch == 'ˈ') else {
+        return ipa.to_string();
+    };
+    let mut insert_index = stress_index;
+    while insert_index > 0 && !is_vowel(chars[insert_index - 1]) && chars[insert_index - 1] != '|' {
+        insert_index -= 1;
+    }
+    if insert_index == stress_index {
+        return ipa.to_string();
+    }
+    chars.remove(stress_index);
+    chars.insert(insert_index, 'ˈ');
+    chars.into_iter().collect()
+}
+
+fn cluster_constraint(cluster: &[&str]) -> PhonotacticConstraint {
+    let label = cluster.join("");
     PhonotacticConstraint {
-        id: format!("eo.legal_onset.{suffix}"),
+        id: format!("eo.legal_onset.{label}"),
         description: format!("Legal Esperanto onset cluster {label}"),
         matcher: SegmentMatcher::Any,
         environment: Environment {
-            before: cluster.iter().cloned().map(SegmentMatcher::Phone).collect(),
+            before: cluster
+                .iter()
+                .map(|symbol| SegmentMatcher::Phone(PhoneId(format!("ipa.phone.{symbol}").into())))
+                .collect(),
             syllable_position: Spec::Known(crate::segment::SyllablePosition::Onset),
             ..Default::default()
         },
@@ -178,35 +279,12 @@ fn cluster_constraint(cluster: &[PhoneId]) -> PhonotacticConstraint {
     }
 }
 
-fn cluster_suffix(cluster: &[PhoneId]) -> String {
-    cluster
-        .iter()
-        .map(phone_symbol)
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
-fn cluster_label(cluster: &[PhoneId]) -> String {
-    cluster
-        .iter()
-        .map(phone_symbol)
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn phone_symbol(phone: &PhoneId) -> &str {
-    phone
-        .as_str()
-        .strip_prefix("ipa.phone.")
-        .unwrap_or(phone.as_str())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn esperanto_sample_loads_expected_phonemes() {
+    fn esperanto_loads_expected_phonemes() {
         let eo = variety();
         assert!(
             eo.phonemes
@@ -216,16 +294,13 @@ mod tests {
         assert!(
             eo.phonemes
                 .phonemes
-                .contains_key(&PhonemeId("eo.phoneme.k".into()))
+                .contains_key(&PhonemeId("eo.phoneme.ʃ".into()))
         );
-        assert!(
-            eo.phonemes
-                .phonemes
-                .get(&PhonemeId("eo.phoneme.a".into()))
-                .expect("a phoneme")
-                .aliases
-                .iter()
-                .any(|alias| alias.system == "esperanto" && alias.symbol == "A")
-        );
+    }
+
+    #[test]
+    fn esperanto_synthesizes_regular_stress() {
+        assert_eq!(synthesize_ipa("amiko").as_deref(), Some("/aˈmiko/"));
+        assert_eq!(synthesize_ipa("ŝipo").as_deref(), Some("/ˈʃipo/"));
     }
 }

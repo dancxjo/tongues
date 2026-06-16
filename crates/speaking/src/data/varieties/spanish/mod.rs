@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::feature::FeatureSystem;
+use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
@@ -43,6 +43,14 @@ pub enum SpanishVariety {
 }
 
 impl SpanishVariety {
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "es" | "es-ES" | "es-ES-Castilian" => Some(Self::Castilian),
+            "es-419" | "es-419-Standard" | "es-LatAm" => Some(Self::LatinAmericanStandard),
+            _ => None,
+        }
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             Self::Castilian => "es-ES-Castilian",
@@ -188,11 +196,7 @@ const LEGAL_ONSETS: &[&[PhoneId]] = &[
 ];
 
 pub fn variety(id: &str) -> LinguisticVariety {
-    let variety = match id {
-        "es" | "es-ES" | "es-ES-Castilian" => SpanishVariety::Castilian,
-        "es-419" | "es-419-Standard" | "es-LatAm" => SpanishVariety::LatinAmericanStandard,
-        _ => SpanishVariety::LatinAmericanStandard,
-    };
+    let variety = SpanishVariety::from_id(id).unwrap_or(SpanishVariety::LatinAmericanStandard);
     let phonemes = phoneme_inventory(variety);
     let phones = phone_inventory(variety);
 
@@ -362,7 +366,7 @@ fn phoneme_inventory(variety: SpanishVariety) -> PhonemeInventory {
         let phoneme = Phoneme {
             id: PhonemeId(format!("{}.phoneme.{}", variety.id(), segment.symbol)),
             notation: format!("/{}/", segment.symbol),
-            features: Default::default(),
+            features: segment_features(segment.symbol),
             default_phone: Some(segment.phone.clone()),
             possible_phones: vec![segment.phone.clone()],
             aliases: vec![SymbolAlias {
@@ -385,7 +389,7 @@ fn phone_inventory(variety: SpanishVariety) -> PhoneInventory {
             .or_insert_with(|| Phone {
                 id: segment.phone.clone(),
                 ipa: segment.symbol.into(),
-                features: Default::default(),
+                features: segment_features(segment.symbol),
                 aliases: vec![SymbolAlias {
                     system: "spanish".into(),
                     symbol: segment.symbol.into(),
@@ -394,6 +398,26 @@ fn phone_inventory(variety: SpanishVariety) -> PhoneInventory {
             });
     }
     PhoneInventory { phones }
+}
+
+fn segment_features(symbol: &str) -> FeatureBundle {
+    let mut features = FeatureBundle::default();
+    let is_vowel = matches!(symbol, "a" | "e" | "i" | "o" | "u");
+    features.values.insert(
+        crate::ids::FeatureId("phonology.major".into()),
+        Spec::Known(FeatureValue::Category(
+            if is_vowel { "vowel" } else { "consonant" }.into(),
+        )),
+    );
+    features.values.insert(
+        crate::ids::FeatureId("phonology.syllabic".into()),
+        Spec::Known(FeatureValue::Bool(is_vowel)),
+    );
+    features.values.insert(
+        crate::ids::FeatureId("phonology.base_symbol".into()),
+        Spec::Known(FeatureValue::Category(symbol.into())),
+    );
+    features
 }
 
 fn segment_rows(variety: SpanishVariety) -> Vec<SpanishSegment> {

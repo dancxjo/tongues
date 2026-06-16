@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::english::normalization as english_normalization;
+use crate::data::varieties::esperanto;
+use crate::data::varieties::french;
+use crate::data::varieties::german;
+use crate::data::varieties::greek::{self, GreekVariety};
+use crate::data::varieties::latin::{self, LatinVariety};
+use crate::data::varieties::sanskrit;
+use crate::data::varieties::spanish::{self, SpanishVariety};
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -668,7 +675,17 @@ fn tokenize_words(text: &str) -> Vec<WordToken> {
 }
 
 fn is_word_chunk_character(character: char) -> bool {
-    character.is_alphanumeric() || is_apostrophe(character) || character == '-'
+    character.is_alphanumeric()
+        || is_combining_word_mark(character)
+        || is_apostrophe(character)
+        || character == '-'
+}
+
+fn is_combining_word_mark(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0300}'..='\u{036F}' | '\u{0900}'..='\u{094D}' | '\u{0951}'..='\u{0957}'
+    )
 }
 
 fn is_apostrophe(character: char) -> bool {
@@ -1425,7 +1442,16 @@ fn variety_data_pronunciation_for_word(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
-    let candidate = planned_candidate_from_variety_aliases(&word.normalized, variety);
+    let candidate = match variety.language.0.as_str() {
+        "eo" => planned_candidate_from_esperanto_orthography(&word.normalized, variety),
+        "fr" => planned_candidate_from_french_orthography(&word.normalized, variety),
+        "de" => planned_candidate_from_german_orthography(&word.normalized, variety),
+        "el" | "grc" => planned_candidate_from_greek_orthography(&word.normalized, variety),
+        "la" => planned_candidate_from_latin_orthography(&word.normalized, variety),
+        "sa" => planned_candidate_from_sanskrit_orthography(&word.normalized, variety),
+        "es" => planned_candidate_from_spanish_orthography(&word.normalized, variety),
+        _ => planned_candidate_from_variety_aliases(&word.normalized, variety),
+    };
     if candidate.is_empty() {
         return WordPronunciation {
             candidates: Vec::new(),
@@ -1462,6 +1488,134 @@ fn variety_data_pronunciation_for_word(
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
     }
+}
+
+fn planned_candidate_from_french_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(ipa) = french::synthesize_ipa(normalized) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_german_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(ipa) = german::synthesize_ipa(normalized) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_greek_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(greek_variety) = GreekVariety::from_id(&variety.id.0) else {
+        return Vec::new();
+    };
+    let Some(ipa) = greek::synthesize_ipa(normalized, greek_variety) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_esperanto_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(ipa) = esperanto::synthesize_ipa(normalized) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_latin_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(latin_variety) = LatinVariety::from_id(&variety.id.0) else {
+        return Vec::new();
+    };
+    let Some(ipa) = latin::synthesize_ipa(normalized, latin_variety) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_sanskrit_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(ipa) = sanskrit::synthesize_ipa(normalized) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_spanish_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let Some(spanish_variety) = SpanishVariety::from_id(&variety.id.0) else {
+        return Vec::new();
+    };
+    let Some(ipa) = spanish::synthesize_ipa(normalized, spanish_variety) else {
+        return Vec::new();
+    };
+    planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_variety_ipa(
+    ipa: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let aliases = phoneme_aliases_by_length(variety);
+    let chars = ipa
+        .trim_matches('/')
+        .chars()
+        .filter(|ch| !matches!(ch, '.' | 'ˌ'))
+        .collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut primary_stress_pending = false;
+    let mut candidate = Vec::new();
+    while index < chars.len() {
+        if chars[index] == 'ˈ' {
+            primary_stress_pending = true;
+            index += 1;
+            continue;
+        }
+        let rest = chars[index..].iter().collect::<String>();
+        if let Some((phoneme, consumed)) = aliases.iter().find_map(|(alias, phoneme)| {
+            rest.starts_with(alias)
+                .then_some((phoneme, alias.chars().count()))
+        }) {
+            let mut planned = planned_phoneme_from_inventory(phoneme);
+            if primary_stress_pending && planned_phoneme_is_syllabic(&planned) {
+                planned.features.values.insert(
+                    FeatureId("phonology.stress".into()),
+                    Spec::Known(FeatureValue::Category("primary".into())),
+                );
+                primary_stress_pending = false;
+            }
+            candidate.push(planned);
+            index += consumed;
+        } else {
+            index += 1;
+        }
+    }
+    candidate
+}
+
+fn planned_phoneme_is_syllabic(planned: &PlannedPhoneme) -> bool {
+    planned
+        .features
+        .values
+        .get(&FeatureId("phonology.syllabic".into()))
+        == Some(&Spec::Known(FeatureValue::Bool(true)))
 }
 
 fn planned_candidate_from_variety_aliases(
@@ -4380,11 +4534,73 @@ mod tests {
         assert_eq!(phoneme_symbols(&spanish), vec!["p", "a", "t", "o"]);
         assert!(spanish.syntax.link_parses.is_empty());
 
+        let castilian = phonemicizer_for_variety(&VarietyId("es-ES-Castilian".into()))
+            .expect("Castilian Spanish phonemicizer")
+            .phonemicize(&request("zapato", "es-ES-Castilian"))
+            .expect("Castilian Spanish should phonemicize from spelling rules");
+        let latam = phonemicizer_for_variety(&VarietyId("es-419-Standard".into()))
+            .expect("Latin American Spanish phonemicizer")
+            .phonemicize(&request("zapato", "es-419-Standard"))
+            .expect("Latin American Spanish should phonemicize from spelling rules");
+        assert_eq!(
+            phoneme_symbols(&castilian),
+            vec!["θ", "a", "p", "a", "t", "o"]
+        );
+        assert_eq!(phoneme_symbols(&latam), vec!["s", "a", "p", "a", "t", "o"]);
+
         let esperanto = phonemicizer_for_variety(&VarietyId("eo".into()))
             .expect("Esperanto phonemicizer")
-            .phonemicize(&request("pato", "eo"))
-            .expect("Esperanto should phonemicize from variety aliases");
-        assert_eq!(phoneme_symbols(&esperanto), vec!["p", "a", "t", "o"]);
+            .phonemicize(&request("ŝipo", "eo"))
+            .expect("Esperanto should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&esperanto), vec!["ʃ", "i", "p", "o"]);
+
+        let french = phonemicizer_for_variety(&VarietyId("fra".into()))
+            .expect("French phonemicizer")
+            .phonemicize(&request("bonjour", "fra"))
+            .expect("French should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&french), vec!["b", "ɔ̃", "ʒ", "u", "ʁ"]);
+
+        let german = phonemicizer_for_variety(&VarietyId("deu".into()))
+            .expect("German phonemicizer")
+            .phonemicize(&request("Sprache", "deu"))
+            .expect("German should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&german), vec!["ʃ", "p", "r", "a", "x", "ə"]);
+
+        let classical = phonemicizer_for_variety(&VarietyId("la-Classical".into()))
+            .expect("Classical Latin phonemicizer")
+            .phonemicize(&request("caelum", "la-Classical"))
+            .expect("Classical Latin should phonemicize from spelling rules");
+        let ecclesiastical = phonemicizer_for_variety(&VarietyId("la-Ecclesiastical".into()))
+            .expect("Ecclesiastical Latin phonemicizer")
+            .phonemicize(&request("caelum", "la-Ecclesiastical"))
+            .expect("Ecclesiastical Latin should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&classical), vec!["k", "ae̯", "l", "u", "m"]);
+        assert_eq!(
+            phoneme_symbols(&ecclesiastical),
+            vec!["t͡ʃ", "ae", "l", "u", "m"]
+        );
+
+        let modern_greek = phonemicizer_for_variety(&VarietyId("el-GR-Standard".into()))
+            .expect("Modern Greek phonemicizer")
+            .phonemicize(&request("και", "el-GR-Standard"))
+            .expect("Modern Greek should phonemicize from spelling rules");
+        let ancient_greek = phonemicizer_for_variety(&VarietyId("grc-Attic".into()))
+            .expect("Ancient Greek phonemicizer")
+            .phonemicize(&request("και", "grc-Attic"))
+            .expect("Ancient Greek should phonemicize from spelling rules");
+        let koine_greek = phonemicizer_for_variety(&VarietyId("grc-Koine".into()))
+            .expect("Koine Greek phonemicizer")
+            .phonemicize(&request("και", "grc-Koine"))
+            .expect("Koine Greek should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&modern_greek), vec!["c", "e"]);
+        assert_eq!(phoneme_symbols(&ancient_greek), vec!["k", "ai̯"]);
+        assert_eq!(phoneme_symbols(&koine_greek), vec!["k", "e"]);
+
+        let sanskrit = phonemicizer_for_variety(&VarietyId("san".into()))
+            .expect("Sanskrit phonemicizer")
+            .phonemicize(&request("धर्म", "san"))
+            .expect("Sanskrit should phonemicize from spelling rules");
+        assert_eq!(phoneme_symbols(&sanskrit), vec!["dʱ", "a", "r", "m", "a"]);
     }
 
     #[test]

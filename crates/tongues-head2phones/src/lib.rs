@@ -1,6 +1,6 @@
 //! Head-chunk-to-phones seq2seq data preparation.
 //!
-//! The model sees a raw rolling UTF-8 English buffer and emits either
+//! The model sees a raw rolling UTF-8 text buffer and emits either
 //! `<NO_HEAD>` or phones plus the Unicode grapheme-cluster split offset for
 //! the first complete TTS-speakable head chunk.
 
@@ -28,6 +28,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const FAMILY: &str = "head2phones";
 pub const ARCHITECTURE: &str = "seq2seq-transformer";
 pub const TASK_TOKEN: &str = "<task:head2phones>";
+pub const VARIETY_OPEN: &str = "<variety:";
+pub const VARIETY_CLOSE: &str = ">";
 pub const PHONES_OPEN: &str = "<PHONES>";
 pub const PHONES_CLOSE: &str = "</PHONES>";
 pub const SPLIT_AFTER: &str = "<SPLIT_AFTER>";
@@ -51,6 +53,8 @@ const DEFAULT_GUTENBERG_URLS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Head2PhonesConfig {
     pub dataset_id: String,
+    #[serde(default = "default_varieties")]
+    pub varieties: Vec<String>,
     #[serde(default)]
     pub source_paths: Vec<PathBuf>,
     #[serde(default = "default_include_default_gutenberg")]
@@ -87,6 +91,7 @@ impl Default for Head2PhonesConfig {
     fn default() -> Self {
         Self {
             dataset_id: "v0".to_string(),
+            varieties: default_varieties(),
             source_paths: Vec::new(),
             include_default_gutenberg: default_include_default_gutenberg(),
             gutenberg_urls: default_gutenberg_urls(),
@@ -116,6 +121,10 @@ fn default_gutenberg_urls() -> Vec<String> {
         .iter()
         .map(|url| (*url).to_string())
         .collect()
+}
+
+fn default_varieties() -> Vec<String> {
+    vec!["en-US".to_string()]
 }
 
 fn default_include_synthetic() -> bool {
@@ -170,6 +179,8 @@ fn default_max_head_graphemes() -> usize {
 pub struct Head2PhonesTrainingExample {
     #[serde(default = "default_training_row_source")]
     pub row_source: TrainingRowSource,
+    #[serde(default = "default_training_row_variety")]
+    pub variety: String,
     pub input: String,
     pub output: String,
     pub head: Option<String>,
@@ -179,6 +190,10 @@ pub struct Head2PhonesTrainingExample {
 
 fn default_training_row_source() -> TrainingRowSource {
     TrainingRowSource::Synthetic
+}
+
+fn default_training_row_variety() -> String {
+    "en-US".to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,7 +314,7 @@ pub fn prepare_dataset_with_progress(
             &mut progress,
             || {
                 let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "synthetic"));
-                let synthetic = synthetic_buffers(config.synthetic_buffers, &mut rng);
+                let synthetic = synthetic_buffers(config, config.synthetic_buffers, &mut rng);
                 let mut examples = Vec::new();
                 let examples_part_path = checkpoint_dir.join("000-synthetic.examples.jsonl.part");
                 archive_existing_path(&examples_part_path)?;
@@ -360,7 +375,7 @@ pub fn prepare_dataset_with_progress(
                 let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "exceptional"));
                 let mut examples = Vec::new();
                 let mut source_buffers = 0usize;
-                for buffer in exceptional_buffers() {
+                for buffer in exceptional_buffers(config) {
                     source_buffers += 1;
                     add_examples_for_buffer(
                         buffer,
@@ -372,7 +387,7 @@ pub fn prepare_dataset_with_progress(
                     )?;
                 }
                 add_repair_examples_for_discrepancies(
-                    &exceptional_repair_discrepancies(),
+                    &exceptional_repair_discrepancies(config),
                     config,
                     &mut examples,
                 );
@@ -797,96 +812,127 @@ fn add_examples_for_buffer(
     rng: &mut StdRng,
     examples: &mut Vec<Head2PhonesTrainingExample>,
 ) -> Result<()> {
+    let varieties = configured_varieties(config);
     if let Some(head) = first_complete_head(buffer) {
         let head_text = buffer[..head.end_byte].trim().to_string();
         let split_after = buffer[..head.end_byte].graphemes(true).count();
         let head_len = head_text.graphemes(true).count();
         if head_len >= config.min_head_graphemes && head_len <= config.max_head_graphemes {
-            if let Some(phones) = speech_symbols_for_text(&head_text) {
-                let row = Head2PhonesTrainingExample {
-                    row_source,
-                    input: buffer.to_string(),
-                    output: format!(
-                        "{PHONES_OPEN} {phones} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
-                    ),
-                    head: Some(head_text.clone()),
-                    split_after: Some(split_after),
-                    source: source.to_string(),
-                };
-                examples.push(row);
+            for variety in &varieties {
+                if let Some(phones) = speech_symbols_for_text(&head_text, variety) {
+                    let row = Head2PhonesTrainingExample {
+                        row_source,
+                        variety: variety.0.clone(),
+                        input: buffer.to_string(),
+                        output: format!(
+                            "{PHONES_OPEN} {phones} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
+                        ),
+                        head: Some(head_text.clone()),
+                        split_after: Some(split_after),
+                        source: source.to_string(),
+                    };
+                    examples.push(row);
+                }
             }
         }
 
         for cut_buffer in random_complete_buffers(buffer, head.end_byte, config, rng) {
-            if let Some(symbols) = speech_symbols_for_text(&head_text) {
+            for variety in &varieties {
+                if let Some(symbols) = speech_symbols_for_text(&head_text, variety) {
+                    let row = Head2PhonesTrainingExample {
+                        row_source: if row_source == TrainingRowSource::Exceptional {
+                            TrainingRowSource::Exceptional
+                        } else {
+                            TrainingRowSource::RandomCut
+                        },
+                        variety: variety.0.clone(),
+                        input: cut_buffer.clone(),
+                        output: format!(
+                            "{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
+                        ),
+                        head: Some(head_text.clone()),
+                        split_after: Some(split_after),
+                        source: source.to_string(),
+                    };
+                    examples.push(row);
+                }
+            }
+        }
+
+        for prefix in no_head_prefixes(&head_text, config, rng) {
+            for variety in &varieties {
                 let row = Head2PhonesTrainingExample {
                     row_source: if row_source == TrainingRowSource::Exceptional {
                         TrainingRowSource::Exceptional
                     } else {
                         TrainingRowSource::RandomCut
                     },
-                    input: cut_buffer,
-                    output: format!(
-                        "{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
-                    ),
-                    head: Some(head_text.clone()),
-                    split_after: Some(split_after),
+                    variety: variety.0.clone(),
+                    input: prefix.clone(),
+                    output: NO_HEAD.to_string(),
+                    head: None,
+                    split_after: None,
                     source: source.to_string(),
                 };
                 examples.push(row);
             }
-        }
 
-        for prefix in no_head_prefixes(&head_text, config, rng) {
+            if prefix_ends_at_boundary_in_head(&prefix, &head_text) {
+                for flush_row in flush_examples_for_prefix(&prefix, source, row_source, &varieties)
+                {
+                    examples.push(flush_row);
+                }
+            }
+        }
+    } else if !buffer.trim().is_empty() {
+        for variety in &varieties {
             let row = Head2PhonesTrainingExample {
-                row_source: if row_source == TrainingRowSource::Exceptional {
-                    TrainingRowSource::Exceptional
-                } else {
-                    TrainingRowSource::RandomCut
-                },
-                input: prefix.clone(),
+                row_source,
+                variety: variety.0.clone(),
+                input: buffer.to_string(),
                 output: NO_HEAD.to_string(),
                 head: None,
                 split_after: None,
                 source: source.to_string(),
             };
             examples.push(row);
-
-            if prefix_ends_at_boundary_in_head(&prefix, &head_text) {
-                if let Some(flush_row) = flush_example_for_prefix(&prefix, source, row_source) {
-                    examples.push(flush_row);
-                }
-            }
         }
-    } else if !buffer.trim().is_empty() {
-        let row = Head2PhonesTrainingExample {
-            row_source,
-            input: buffer.to_string(),
-            output: NO_HEAD.to_string(),
-            head: None,
-            split_after: None,
-            source: source.to_string(),
-        };
-        examples.push(row);
 
-        if let Some(flush_row) = flush_example_for_prefix(buffer.trim(), source, row_source) {
+        for flush_row in flush_examples_for_prefix(buffer.trim(), source, row_source, &varieties) {
             examples.push(flush_row);
         }
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn flush_example_for_prefix(
     prefix: &str,
     source: &str,
     row_source: TrainingRowSource,
 ) -> Option<Head2PhonesTrainingExample> {
+    flush_examples_for_prefix(
+        prefix,
+        source,
+        row_source,
+        &[VarietyId(default_training_row_variety())],
+    )
+    .into_iter()
+    .next()
+}
+
+fn flush_examples_for_prefix(
+    prefix: &str,
+    source: &str,
+    row_source: TrainingRowSource,
+    varieties: &[VarietyId],
+) -> Vec<Head2PhonesTrainingExample> {
     let head_text = prefix.trim();
     if prefix_ends_with_nonterminal_abbreviation(head_text) {
-        return None;
+        return Vec::new();
     }
     if head_text.split_whitespace().count() < 2 {
-        return None;
+        return Vec::new();
     }
     let last_word = head_text
         .split_whitespace()
@@ -894,18 +940,26 @@ fn flush_example_for_prefix(
         .unwrap_or("")
         .trim_matches(|ch: char| !ch.is_alphanumeric());
     if last_word.chars().count() < 3 {
-        return None;
+        return Vec::new();
     }
-    let symbols = speech_symbols_for_text(head_text)?;
     let split_after = head_text.graphemes(true).count();
-    Some(Head2PhonesTrainingExample {
-        row_source,
-        input: format!("{head_text}{END_OF_TEXT}"),
-        output: format!("{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"),
-        head: Some(head_text.to_string()),
-        split_after: Some(split_after),
-        source: source.to_string(),
-    })
+    varieties
+        .iter()
+        .filter_map(|variety| {
+            let symbols = speech_symbols_for_text(head_text, variety)?;
+            Some(Head2PhonesTrainingExample {
+                row_source,
+                variety: variety.0.clone(),
+                input: format!("{head_text}{END_OF_TEXT}"),
+                output: format!(
+                    "{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
+                ),
+                head: Some(head_text.to_string()),
+                split_after: Some(split_after),
+                source: source.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn prefix_ends_with_nonterminal_abbreviation(prefix: &str) -> bool {
@@ -931,40 +985,62 @@ fn add_repair_examples_for_discrepancies(
     examples: &mut Vec<Head2PhonesTrainingExample>,
 ) {
     for discrepancy in discrepancies {
-        if let Some(row) = repair_example_for_discrepancy(discrepancy, config) {
+        for row in repair_examples_for_discrepancy(discrepancy, config) {
             examples.push(row);
         }
     }
 }
 
+#[cfg(test)]
 fn repair_example_for_discrepancy(
     discrepancy: &NaiveSeamsDiscrepancy,
     config: &Head2PhonesConfig,
 ) -> Option<Head2PhonesTrainingExample> {
-    let wrong_head = discrepancy.naive_sentences.first()?.trim();
+    repair_examples_for_discrepancy(discrepancy, config)
+        .into_iter()
+        .next()
+}
+
+fn repair_examples_for_discrepancy(
+    discrepancy: &NaiveSeamsDiscrepancy,
+    config: &Head2PhonesConfig,
+) -> Vec<Head2PhonesTrainingExample> {
+    let Some(wrong_head) = discrepancy
+        .naive_sentences
+        .first()
+        .map(|value| value.trim())
+    else {
+        return Vec::new();
+    };
     let repaired_head = discrepancy.seams_sentence.trim();
     if wrong_head.is_empty() || repaired_head.is_empty() || wrong_head == repaired_head {
-        return None;
+        return Vec::new();
     }
     if !repaired_head.starts_with(wrong_head) {
-        return None;
+        return Vec::new();
     }
     let repaired_len = repaired_head.graphemes(true).count();
     if repaired_len < config.min_head_graphemes || repaired_len > config.max_head_graphemes {
-        return None;
+        return Vec::new();
     }
     let rollback = wrong_head.graphemes(true).count();
-    let symbols = speech_symbols_for_text(repaired_head)?;
-    Some(Head2PhonesTrainingExample {
-        row_source: TrainingRowSource::Repair,
-        input: repaired_head.to_string(),
-        output: format!(
-            "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {repaired_len}"
-        ),
-        head: Some(repaired_head.to_string()),
-        split_after: Some(repaired_len),
-        source: discrepancy.source.clone(),
-    })
+    configured_varieties(config)
+        .into_iter()
+        .filter_map(|variety| {
+            let symbols = speech_symbols_for_text(repaired_head, &variety)?;
+            Some(Head2PhonesTrainingExample {
+                row_source: TrainingRowSource::Repair,
+                variety: variety.0,
+                input: repaired_head.to_string(),
+                output: format!(
+                    "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {repaired_len}"
+                ),
+                head: Some(repaired_head.to_string()),
+                split_after: Some(repaired_len),
+                source: discrepancy.source.clone(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1116,10 +1192,7 @@ pub fn grapheme_split(input: &str, split_after: usize) -> (&str, &str) {
 }
 
 pub fn build_vocab(examples: &[Head2PhonesTrainingExample]) -> Vocab {
-    let inputs = examples
-        .iter()
-        .map(|example| format!("{TASK_TOKEN}{}", example.input))
-        .collect::<Vec<_>>();
+    let inputs = examples.iter().map(training_input).collect::<Vec<_>>();
     let outputs = examples
         .iter()
         .map(|example| example.output.clone())
@@ -1133,7 +1206,7 @@ pub fn make_seq2seq_examples(
 ) -> Vec<Seq2SeqExample> {
     rows.iter()
         .map(|row| {
-            let mut src_ids = vocab.encode_string(&format!("{TASK_TOKEN}{}", row.input));
+            let mut src_ids = vocab.encode_string(&training_input(row));
             if src_ids.first().copied() != Some(vocab.get_id(TASK_TOKEN)) {
                 src_ids.insert(0, vocab.get_id(TASK_TOKEN));
             }
@@ -1151,16 +1224,51 @@ pub fn make_seq2seq_examples(
 }
 
 pub fn format_input(buffer: &str) -> String {
-    format!("{TASK_TOKEN}{buffer}")
+    format_input_for_variety("en-US", buffer)
 }
 
-fn speech_symbols_for_text(text: &str) -> Option<String> {
-    let variety = VarietyId("en-US".to_string());
-    let phonemicizer = phonemicizer_for_variety(&variety).ok()?;
+pub fn format_input_for_variety(variety: &str, buffer: &str) -> String {
+    format!(
+        "{TASK_TOKEN}{VARIETY_OPEN}{}{VARIETY_CLOSE}{buffer}",
+        normalized_variety(variety)
+    )
+}
+
+fn training_input(row: &Head2PhonesTrainingExample) -> String {
+    format_input_for_variety(&row.variety, &row.input)
+}
+
+fn normalized_variety(variety: &str) -> &str {
+    let variety = variety.trim();
+    if variety.is_empty() {
+        "en-US"
+    } else {
+        variety
+    }
+}
+
+fn configured_varieties(config: &Head2PhonesConfig) -> Vec<VarietyId> {
+    let mut varieties = if config.varieties.is_empty() {
+        default_varieties()
+    } else {
+        config.varieties.clone()
+    };
+    varieties.retain(|variety| !variety.trim().is_empty());
+    if varieties.is_empty() {
+        varieties = default_varieties();
+    }
+    varieties
+        .into_iter()
+        .map(|variety| VarietyId(variety.trim().to_string()))
+        .collect()
+}
+
+fn speech_symbols_for_text(text: &str, variety: &VarietyId) -> Option<String> {
+    let phonemicizer = phonemicizer_for_variety(variety).ok()?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: text.to_string(),
-            variety,
+            variety: variety.clone(),
             style: None,
         })
         .ok()?;
@@ -1317,39 +1425,9 @@ fn syllables_to_phonemes_ipa(
         .collect()
 }
 
-fn synthetic_buffers(count: usize, rng: &mut StdRng) -> Vec<String> {
-    let heads = [
-        "Dr. Smith went home.",
-        "This is the next sentence; and then the next.",
-        "What happened next?",
-        "Stop right there!",
-        "Wait... really?",
-        "\"No.\" she said.",
-        "\"Are you sure?\" Mina asked.",
-        "(Really?) That was the whole answer.",
-        "Mr. Jones arrived after lunch.",
-        "The package is ready, but the driver is late.",
-        "First, open the small panel.",
-        "- Bring the blue folder.",
-        "I saw 3.14 written on the board.",
-        "Use e.g. this example carefully.",
-        "In short: the answer changed.",
-        "A sudden pause — then the lamp went out.",
-        "Chapter One\nThe letter arrived before breakfast.",
-        "Editor's Note\nThis page was left in the archive.",
-        "Appendix A\nMeasurements and notes follow.",
-        "Hidden Letter",
-        "Editor Notes",
-        "Appendix Materials",
-    ];
-    let remainders = [
-        " Then he slept.",
-        " The next part is still streaming.",
-        " and more words are coming soon.",
-        "\n\nAnother paragraph starts here.",
-        " \"Yes,\" she answered later.",
-        "",
-    ];
+fn synthetic_buffers(config: &Head2PhonesConfig, count: usize, rng: &mut StdRng) -> Vec<String> {
+    let heads = synthetic_heads(config);
+    let remainders = synthetic_remainders(config);
     (0..count)
         .map(|_| {
             let head = heads[rng.gen_range(0..heads.len())];
@@ -1359,70 +1437,601 @@ fn synthetic_buffers(count: usize, rng: &mut StdRng) -> Vec<String> {
         .collect()
 }
 
-fn exceptional_buffers() -> &'static [&'static str] {
-    &[
-        "Dr. Smith went home. Then he slept.",
-        "Mr. Jones waited quietly for the train.",
-        "Ms. Hart said e.g. this example matters.",
-        "Use i.e. this case as the control.",
-        "I saw 3.14 written on the board. Then I erased it.",
-        "What happened next? Nobody answered.",
-        "Stop right there! The guard shouted again.",
-        "Wait... really? I thought that was done.",
-        "\"No.\" she said. Then she closed the book.",
-        "\"Are you sure?\" Mina asked. The door stayed shut.",
-        "\"No,\" she said, \"not yet.\" The room went quiet.",
-        "(Really?) That was the whole answer.",
-        "- Bring the blue folder.\n- Leave the red folder.",
-        "Chapter One\nThe letter arrived before breakfast.",
-        "Editor's Note\nThis page was left in the archive.",
-        "Appendix A\nMeasurements and notes follow.",
-        "Chapter One",
-        "Editor's Note",
-        "Appendix A",
-        "Hidden Letter",
-        "Editor Notes",
-        "Appendix Materials",
-        "First line complete.\nSecond line is still arriving",
-        "Prof. Adams arrived at 4:30 p.m. sharp.",
-        "A. B. Carter signed the note. Then he left.",
-        "The package is ready, but the driver is late.",
-        "This is the next sentence; and then the next.",
-        "In short: the answer changed. The stream keeps moving.",
-        "A sudden pause — then the lamp went out.",
-        "The signal was green; the bridge stayed closed.",
-        "Pack the ledger, seal the box, and wait.",
-        "No. 5 was missing from the list. Then it appeared.",
-        "After the meeting, Rep. Susan Smith (D. NY.) said she didn't know what the meeting was about.",
-        "After the meeting, Rep.",
-        "After the meeting, Rep. Susan Smith (D.",
-        "After the meeting, Rep. Susan Smith (D. NY.",
-        "I think we should",
-        "This final fragment should be flushed",
-    ]
+fn synthetic_heads(config: &Head2PhonesConfig) -> Vec<&'static str> {
+    let mut heads = Vec::new();
+    if config_has_language(config, "en") {
+        heads.extend(ENGLISH_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "eo") {
+        heads.extend(ESPERANTO_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "fr") {
+        heads.extend(FRENCH_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "de") {
+        heads.extend(GERMAN_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "el") {
+        heads.extend(MODERN_GREEK_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "grc") {
+        heads.extend(ANCIENT_GREEK_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "la") {
+        heads.extend(LATIN_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "sa") {
+        heads.extend(SANSKRIT_SYNTHETIC_HEADS);
+    }
+    if config_has_language(config, "es") {
+        heads.extend(SPANISH_SYNTHETIC_HEADS);
+    }
+    if heads.is_empty() {
+        heads.extend(ENGLISH_SYNTHETIC_HEADS);
+    }
+    heads
 }
 
-fn exceptional_repair_discrepancies() -> Vec<NaiveSeamsDiscrepancy> {
-    [
-        (
+fn synthetic_remainders(config: &Head2PhonesConfig) -> Vec<&'static str> {
+    let mut remainders = Vec::new();
+    if config_has_language(config, "en") {
+        remainders.extend(ENGLISH_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "eo") {
+        remainders.extend(ESPERANTO_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "fr") {
+        remainders.extend(FRENCH_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "de") {
+        remainders.extend(GERMAN_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "el") {
+        remainders.extend(MODERN_GREEK_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "grc") {
+        remainders.extend(ANCIENT_GREEK_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "la") {
+        remainders.extend(LATIN_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "sa") {
+        remainders.extend(SANSKRIT_SYNTHETIC_REMAINDERS);
+    }
+    if config_has_language(config, "es") {
+        remainders.extend(SPANISH_SYNTHETIC_REMAINDERS);
+    }
+    if remainders.is_empty() {
+        remainders.extend(ENGLISH_SYNTHETIC_REMAINDERS);
+    }
+    remainders
+}
+
+fn exceptional_buffers(config: &Head2PhonesConfig) -> Vec<&'static str> {
+    let mut buffers = Vec::new();
+    if config_has_language(config, "en") {
+        buffers.extend(ENGLISH_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "eo") {
+        buffers.extend(ESPERANTO_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "fr") {
+        buffers.extend(FRENCH_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "de") {
+        buffers.extend(GERMAN_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "el") {
+        buffers.extend(MODERN_GREEK_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "grc") {
+        buffers.extend(ANCIENT_GREEK_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "la") {
+        buffers.extend(LATIN_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "sa") {
+        buffers.extend(SANSKRIT_EXCEPTIONAL_BUFFERS);
+    }
+    if config_has_language(config, "es") {
+        buffers.extend(SPANISH_EXCEPTIONAL_BUFFERS);
+    }
+    if buffers.is_empty() {
+        buffers.extend(ENGLISH_EXCEPTIONAL_BUFFERS);
+    }
+    buffers
+}
+
+fn config_has_language(config: &Head2PhonesConfig, language: &str) -> bool {
+    configured_varieties(config)
+        .iter()
+        .any(|variety| variety.0.starts_with(language))
+}
+
+const ENGLISH_SYNTHETIC_HEADS: &[&str] = &[
+    "Dr. Smith went home.",
+    "This is the next sentence; and then the next.",
+    "What happened next?",
+    "Stop right there!",
+    "Wait... really?",
+    "\"No.\" she said.",
+    "\"Are you sure?\" Mina asked.",
+    "(Really?) That was the whole answer.",
+    "Mr. Jones arrived after lunch.",
+    "The package is ready, but the driver is late.",
+    "First, open the small panel.",
+    "- Bring the blue folder.",
+    "I saw 3.14 written on the board.",
+    "Use e.g. this example carefully.",
+    "In short: the answer changed.",
+    "A sudden pause — then the lamp went out.",
+    "Chapter One\nThe letter arrived before breakfast.",
+    "Editor's Note\nThis page was left in the archive.",
+    "Appendix A\nMeasurements and notes follow.",
+    "Hidden Letter",
+    "Editor Notes",
+    "Appendix Materials",
+];
+
+const SPANISH_SYNTHETIC_HEADS: &[&str] = &[
+    "La casa esta lista.",
+    "Que paso despues?",
+    "Alto ahi!",
+    "El zapato rojo quedo junto a la puerta.",
+    "La llave pequena abre el cajon.",
+    "Primero, abre el panel pequeno.",
+    "En resumen: la respuesta cambio.",
+    "Una pausa breve, y luego salio la luz.",
+    "Capitulo Uno\nLa carta llego antes del desayuno.",
+    "Notas del editor\nEsta pagina quedo en el archivo.",
+    "Materiales del apendice",
+    "El queso esta sobre la mesa.",
+    "La lluvia llego tarde.",
+    "El perro corrio por la calle.",
+];
+
+const ESPERANTO_SYNTHETIC_HEADS: &[&str] = &[
+    "La domo estas preta.",
+    "Kio okazis poste?",
+    "Haltu tie!",
+    "La ruĝa ŝipo restis apud la pordo.",
+    "La malgranda ŝlosilo malfermas la keston.",
+    "Unue, malfermu la malgrandan panelon.",
+    "Resume: la respondo ŝanĝiĝis.",
+    "Mallonga paŭzo, kaj poste venis la lumo.",
+    "Ĉapitro Unu\nLa letero alvenis antaŭ matenmanĝo.",
+    "Notoj de la redaktoro\nTiu paĝo restis en la arkivo.",
+    "Materialoj de la aldono",
+];
+
+const FRENCH_SYNTHETIC_HEADS: &[&str] = &[
+    "La maison est prête.",
+    "Que s'est-il passé ensuite?",
+    "Arrête-toi là!",
+    "Le bateau rouge resta près de la porte.",
+    "La petite clé ouvre la boîte.",
+    "D'abord, ouvre le petit panneau.",
+    "En bref: la réponse a changé.",
+    "Une courte pause, puis la lumière arriva.",
+    "Chapitre Un\nLa lettre arriva avant le déjeuner.",
+    "Notes de l'éditeur\nCette page resta dans l'archive.",
+    "Matériaux de l'annexe",
+];
+
+const GERMAN_SYNTHETIC_HEADS: &[&str] = &[
+    "Das Haus ist bereit.",
+    "Was geschah danach?",
+    "Bleib dort stehen!",
+    "Das rote Schiff blieb an der Tür.",
+    "Der kleine Schlüssel öffnet die Kiste.",
+    "Zuerst öffne die kleine Platte.",
+    "Kurz gesagt: die Antwort änderte sich.",
+    "Eine kurze Pause, dann kam das Licht.",
+    "Kapitel Eins\nDer Brief kam vor dem Frühstück.",
+    "Notizen des Herausgebers\nDiese Seite blieb im Archiv.",
+    "Materialien des Anhangs",
+];
+
+const MODERN_GREEK_SYNTHETIC_HEADS: &[&str] = &[
+    "Το σπίτι είναι έτοιμο.",
+    "Τι έγινε μετά;",
+    "Στάσου εκεί!",
+    "Το κόκκινο πλοίο έμεινε στην πόρτα.",
+    "Το μικρό κλειδί ανοίγει το κουτί.",
+    "Πρώτα, άνοιξε το μικρό πλαίσιο.",
+    "Σύντομα: η απάντηση άλλαξε.",
+    "Μικρή παύση, και μετά ήρθε το φως.",
+    "Κεφάλαιο Πρώτο\nΤο γράμμα ήρθε πριν το πρωινό.",
+    "Σημειώσεις του εκδότη\nΑυτή η σελίδα έμεινε στο αρχείο.",
+    "Υλικά του παραρτήματος",
+];
+
+const ANCIENT_GREEK_SYNTHETIC_HEADS: &[&str] = &[
+    "Ὁ οἶκος ἕτοιμός ἐστι.",
+    "Τί μετὰ ταῦτα ἐγένετο;",
+    "Στῆθι ἐκεῖ!",
+    "Καὶ ὁ λόγος ἦν σαφής.",
+    "Ἡ μικρὰ κλεὶς τὴν θύραν ἀνοίγει.",
+    "Πρῶτον, τὸ μικρὸν πίνακιον ἄνοιγε.",
+    "Βραχέως: ἡ ἀπόκρισις μετεβλήθη.",
+    "Παῦσις βραχεῖα, εἶτα τὸ φῶς ἦλθεν.",
+    "Κεφάλαιον Πρῶτον\nἩ ἐπιστολὴ πρὸ τοῦ ἀρίστου ἦλθεν.",
+    "Σημειώσεις τοῦ γραφέως\nΑὕτη ἡ σελὶς ἐν τῷ ἀρχείῳ ἔμεινεν.",
+    "Ὕλαι τοῦ παραρτήματος",
+];
+
+const LATIN_SYNTHETIC_HEADS: &[&str] = &[
+    "Domus parata est.",
+    "Quid postea accidit?",
+    "Siste ibi!",
+    "Caelum clarum erat.",
+    "Civitas antiqua portas aperuit.",
+    "Primum, parvum tabulatum aperi.",
+    "Brevi: responsum mutatum est.",
+    "Mora brevis, deinde lumen venit.",
+    "Capitulum Primum\nEpistula ante ientaculum venit.",
+    "Notae editoris\nHaec pagina in archivo mansit.",
+    "Materiae appendicis",
+];
+
+const SANSKRIT_SYNTHETIC_HEADS: &[&str] = &[
+    "गृहं सिद्धम् अस्ति.",
+    "किं अनन्तरम् अभवत्?",
+    "तत्र तिष्ठ!",
+    "रक्तं नौकं द्वारस्य समीपे स्थितम्.",
+    "लघु कुञ्जिका पेटिकां उद्घाटयति.",
+    "प्रथमं, लघु फलकम् उद्घाटय.",
+    "संक्षेपेण: उत्तरं परिवर्तितम्.",
+    "लघुः विरामः, अनन्तरं प्रकाशः आगतः.",
+    "प्रथमः अध्यायः\nपत्रं प्रातःभोजनात् पूर्वम् आगतम्.",
+    "सम्पादकस्य टिप्पण्यः\nएषा पृष्ठिका लेखागारे स्थितम्.",
+    "परिशिष्टस्य सामग्री",
+];
+
+const ENGLISH_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Then he slept.",
+    " The next part is still streaming.",
+    " and more words are coming soon.",
+    "\n\nAnother paragraph starts here.",
+    " \"Yes,\" she answered later.",
+    "",
+];
+
+const ESPERANTO_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Poste li ripozis.",
+    " La sekva parto ankoraŭ alvenas.",
+    " kaj pli da vortoj baldaŭ venos.",
+    "\n\nAlia alineo komenciĝas ĉi tie.",
+    " \"Jes,\" ŝi respondis poste.",
+    "",
+];
+
+const FRENCH_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Ensuite il se reposa.",
+    " La partie suivante arrive encore.",
+    " et d'autres mots viendront bientôt.",
+    "\n\nUn autre paragraphe commence ici.",
+    " \"Oui,\" répondit-elle plus tard.",
+    "",
+];
+
+const GERMAN_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Danach ruhte er.",
+    " Der nächste Teil kommt noch.",
+    " und weitere Wörter kommen bald.",
+    "\n\nEin anderer Absatz beginnt hier.",
+    " \"Ja,\" antwortete sie später.",
+    "",
+];
+
+const MODERN_GREEK_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Μετά ξεκουράστηκε.",
+    " Το επόμενο μέρος ακόμα έρχεται.",
+    " και περισσότερες λέξεις θα έρθουν σύντομα.",
+    "\n\nΆλλη παράγραφος αρχίζει εδώ.",
+    " \"Ναι,\" απάντησε μετά.",
+    "",
+];
+
+const ANCIENT_GREEK_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Εἶτα ἀνεπαύσατο.",
+    " Τὸ ἑξῆς μέρος ἔτι ἔρχεται.",
+    " καὶ πλείονες λέξεις τάχα ἥξουσιν.",
+    "\n\nἌλλη περίοδος ἐνταῦθα ἄρχεται.",
+    " \"Ναί,\" ὕστερον ἀπεκρίνατο.",
+    "",
+];
+
+const LATIN_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Deinde quievit.",
+    " Pars proxima adhuc venit.",
+    " et plura verba mox veniunt.",
+    "\n\nAlius paragraphus hic incipit.",
+    " \"Ita,\" postea respondit.",
+    "",
+];
+
+const SANSKRIT_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " अनन्तरं सः विश्रान्तवान्.",
+    " अग्रिमः भागः अद्यापि आगच्छति.",
+    " अधिकानि पदानि शीघ्रम् आगमिष्यन्ति.",
+    "\n\nअन्यः अनुच्छेदः अत्र आरभते.",
+    " \"आम्,\" सा पश्चात् प्रत्यवदत्.",
+    "",
+];
+
+const SPANISH_SYNTHETIC_REMAINDERS: &[&str] = &[
+    " Luego descanso.",
+    " La siguiente parte sigue llegando.",
+    " y vienen mas palabras pronto.",
+    "\n\nOtro parrafo empieza aqui.",
+    " \"Si,\" respondio despues.",
+    "",
+];
+
+const ENGLISH_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "Dr. Smith went home. Then he slept.",
+    "Mr. Jones waited quietly for the train.",
+    "Ms. Hart said e.g. this example matters.",
+    "Use i.e. this case as the control.",
+    "I saw 3.14 written on the board. Then I erased it.",
+    "What happened next? Nobody answered.",
+    "Stop right there! The guard shouted again.",
+    "Wait... really? I thought that was done.",
+    "\"No.\" she said. Then she closed the book.",
+    "\"Are you sure?\" Mina asked. The door stayed shut.",
+    "\"No,\" she said, \"not yet.\" The room went quiet.",
+    "(Really?) That was the whole answer.",
+    "- Bring the blue folder.\n- Leave the red folder.",
+    "Chapter One\nThe letter arrived before breakfast.",
+    "Editor's Note\nThis page was left in the archive.",
+    "Appendix A\nMeasurements and notes follow.",
+    "Chapter One",
+    "Editor's Note",
+    "Appendix A",
+    "Hidden Letter",
+    "Editor Notes",
+    "Appendix Materials",
+    "First line complete.\nSecond line is still arriving",
+    "Prof. Adams arrived at 4:30 p.m. sharp.",
+    "A. B. Carter signed the note. Then he left.",
+    "The package is ready, but the driver is late.",
+    "This is the next sentence; and then the next.",
+    "In short: the answer changed. The stream keeps moving.",
+    "A sudden pause — then the lamp went out.",
+    "The signal was green; the bridge stayed closed.",
+    "Pack the ledger, seal the box, and wait.",
+    "No. 5 was missing from the list. Then it appeared.",
+    "After the meeting, Rep. Susan Smith (D. NY.) said she didn't know what the meeting was about.",
+    "After the meeting, Rep.",
+    "After the meeting, Rep. Susan Smith (D.",
+    "After the meeting, Rep. Susan Smith (D. NY.",
+    "I think we should",
+    "This final fragment should be flushed",
+];
+
+const ESPERANTO_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "La domo estas preta. Poste li ripozis.",
+    "Kio okazis poste? Neniu respondis.",
+    "Haltu tie! La gardisto denove kriis.",
+    "\"Ne.\" ŝi diris. Poste ŝi fermis la libron.",
+    "\"Ĉu vi certas?\" demandis Mina. La pordo restis fermita.",
+    "- Alportu la bluan dosieron.\n- Lasu la ruĝan dosieron.",
+    "Ĉapitro Unu\nLa letero alvenis antaŭ matenmanĝo.",
+    "Notoj de la redaktoro\nTiu paĝo restis en la arkivo.",
+    "La signalo estis verda; la ponto restis fermita.",
+    "Mi pensas ke ni devas",
+    "Tiu fina fragmento devas eliri",
+];
+
+const FRENCH_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "La maison est prête. Ensuite il se reposa.",
+    "Que s'est-il passé ensuite? Personne ne répondit.",
+    "Arrête-toi là! Le gardien cria encore.",
+    "\"Non.\" dit-elle. Ensuite elle ferma le livre.",
+    "\"Es-tu sûr?\" demanda Mina. La porte resta fermée.",
+    "- Apporte le dossier bleu.\n- Laisse le dossier rouge.",
+    "Chapitre Un\nLa lettre arriva avant le déjeuner.",
+    "Notes de l'éditeur\nCette page resta dans l'archive.",
+    "Le signal était vert; le pont resta fermé.",
+    "Je pense que nous devons",
+    "Ce dernier fragment doit sortir",
+];
+
+const GERMAN_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "Das Haus ist bereit. Danach ruhte er.",
+    "Was geschah danach? Niemand antwortete.",
+    "Bleib dort stehen! Der Wächter rief wieder.",
+    "\"Nein.\" sagte sie. Dann schloss sie das Buch.",
+    "\"Bist du sicher?\" fragte Mina. Die Tür blieb geschlossen.",
+    "- Bring die blaue Mappe.\n- Lass die rote Mappe.",
+    "Kapitel Eins\nDer Brief kam vor dem Frühstück.",
+    "Notizen des Herausgebers\nDiese Seite blieb im Archiv.",
+    "Das Signal war grün; die Brücke blieb geschlossen.",
+    "Ich denke wir müssen",
+    "Dieses letzte Fragment soll ausgegeben werden",
+];
+
+const MODERN_GREEK_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "Το σπίτι είναι έτοιμο. Μετά ξεκουράστηκε.",
+    "Τι έγινε μετά; Κανείς δεν απάντησε.",
+    "Στάσου εκεί! Ο φύλακας φώναξε ξανά.",
+    "\"Όχι.\" είπε. Μετά έκλεισε το βιβλίο.",
+    "\"Είσαι σίγουρος;\" ρώτησε η Μίνα. Η πόρτα έμεινε κλειστή.",
+    "- Φέρε τον μπλε φάκελο.\n- Άφησε τον κόκκινο φάκελο.",
+    "Κεφάλαιο Πρώτο\nΤο γράμμα ήρθε πριν το πρωινό.",
+    "Σημειώσεις του εκδότη\nΑυτή η σελίδα έμεινε στο αρχείο.",
+    "Το σήμα ήταν πράσινο; η γέφυρα έμεινε κλειστή.",
+    "Νομίζω ότι πρέπει",
+    "Αυτό το τελικό κομμάτι πρέπει να βγει",
+];
+
+const ANCIENT_GREEK_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "Ὁ οἶκος ἕτοιμός ἐστι. Εἶτα ἀνεπαύσατο.",
+    "Τί μετὰ ταῦτα ἐγένετο; Οὐδεὶς ἀπεκρίνατο.",
+    "Στῆθι ἐκεῖ! Ὁ φύλαξ πάλιν ἐβόησεν.",
+    "\"Οὔ.\" εἶπεν. Εἶτα τὸ βιβλίον ἔκλεισεν.",
+    "\"Βέβαιός εἶ;\" ἡ Μίνα ἠρώτησεν. Ἡ θύρα κεκλεισμένη ἔμεινεν.",
+    "- Φέρε τὸ κυάνεον βιβλίον.\n- Λίπε τὸ ἐρυθρὸν βιβλίον.",
+    "Κεφάλαιον Πρῶτον\nἩ ἐπιστολὴ πρὸ τοῦ ἀρίστου ἦλθεν.",
+    "Σημειώσεις τοῦ γραφέως\nΑὕτη ἡ σελὶς ἐν τῷ ἀρχείῳ ἔμεινεν.",
+    "Τὸ σημεῖον χλωρὸν ἦν; ἡ γέφυρα κεκλεισμένη ἔμεινεν.",
+    "Οἶμαι ἡμᾶς δεῖν",
+    "Τόδε τὸ τελευταῖον μέρος ἐξελθεῖν δεῖ",
+];
+
+const LATIN_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "Domus parata est. Deinde quievit.",
+    "Quid postea accidit? Nemo respondit.",
+    "Siste ibi! Custos iterum clamavit.",
+    "\"Non.\" dixit. Deinde librum clausit.",
+    "\"Certus es?\" Mina rogavit. Porta clausa mansit.",
+    "- Fer fasciculum caeruleum.\n- Relinque fasciculum rubrum.",
+    "Capitulum Primum\nEpistula ante ientaculum venit.",
+    "Notae editoris\nHaec pagina in archivo mansit.",
+    "Signum viride erat; pons clausus mansit.",
+    "Credo nos debere",
+    "Hoc fragmentum ultimum exire debet",
+];
+
+const SANSKRIT_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "गृहं सिद्धम् अस्ति. अनन्तरं सः विश्रान्तवान्.",
+    "किं अनन्तरम् अभवत्? कश्चन न प्रत्यवदत्.",
+    "तत्र तिष्ठ! रक्षकः पुनः आक्रोशत्.",
+    "\"न.\" सा अवदत्. अनन्तरं पुस्तकम् अपिधत्.",
+    "\"निश्चितः असि?\" मीना अपृच्छत्. द्वारं पिहितम् आसीत्.",
+    "- नीलं पत्रसञ्चयं आनय.\n- रक्तं पत्रसञ्चयं त्यज.",
+    "प्रथमः अध्यायः\nपत्रं प्रातःभोजनात् पूर्वम् आगतम्.",
+    "सम्पादकस्य टिप्पण्यः\nएषा पृष्ठिका लेखागारे स्थितम्.",
+    "चिह्नं हरितम् आसीत्; सेतुः पिहितः आसीत्.",
+    "मन्ये वयं कर्तुम् अर्हामः",
+    "एषः अन्तिमः खण्डः निर्गन्तव्यः",
+];
+
+const SPANISH_EXCEPTIONAL_BUFFERS: &[&str] = &[
+    "La casa esta lista. Luego descanso.",
+    "Que paso despues? Nadie respondio.",
+    "Alto ahi! El guardia grito otra vez.",
+    "\"No.\" dijo ella. Luego cerro el libro.",
+    "\"Estas seguro?\" pregunto Mina. La puerta quedo cerrada.",
+    "- Trae la carpeta azul.\n- Deja la carpeta roja.",
+    "Capitulo Uno\nLa carta llego antes del desayuno.",
+    "Notas del editor\nEsta pagina quedo en el archivo.",
+    "Materiales del apendice",
+    "La senal estaba verde; el puente quedo cerrado.",
+    "Empaca el registro, sella la caja, y espera.",
+    "Creo que debemos",
+    "Este fragmento final debe salir",
+];
+
+fn exceptional_repair_discrepancies(config: &Head2PhonesConfig) -> Vec<NaiveSeamsDiscrepancy> {
+    let mut rows = Vec::new();
+    if config_has_language(config, "en") {
+        rows.extend([
+            (
+                "Who shot John F. Kennedy?",
+                vec!["Who shot John F.", "Kennedy?"],
+            ),
+            (
+                "Elizabeth met Mr. Darcy at Pemberley.",
+                vec!["Elizabeth met Mr.", "Darcy at Pemberley."],
+            ),
+        ]);
+    }
+    if config_has_language(config, "eo") {
+        rows.extend([
+            (
+                "La letero de D-ro Zamenhof alvenis.",
+                vec!["La letero de D-ro.", "Zamenhof alvenis."],
+            ),
+            ("Kiu vidis S-ron Petro?", vec!["Kiu vidis S-ron.", "Petro?"]),
+        ]);
+    }
+    if config_has_language(config, "fr") {
+        rows.extend([
+            (
+                "La lettre de M. Dupont arriva.",
+                vec!["La lettre de M.", "Dupont arriva."],
+            ),
+            ("Qui a vu le Dr Martin?", vec!["Qui a vu le Dr.", "Martin?"]),
+        ]);
+    }
+    if config_has_language(config, "de") {
+        rows.extend([
+            (
+                "Der Brief von Dr. Müller kam an.",
+                vec!["Der Brief von Dr.", "Müller kam an."],
+            ),
+            ("Wer sah Prof. Schmidt?", vec!["Wer sah Prof.", "Schmidt?"]),
+        ]);
+    }
+    if config_has_language(config, "el") {
+        rows.extend([
+            (
+                "Η επιστολή του κ. Νίκου έφτασε.",
+                vec!["Η επιστολή του κ.", "Νίκου έφτασε."],
+            ),
+            (
+                "Ποιος είδε τον δρ. Πέτρο;",
+                vec!["Ποιος είδε τον δρ.", "Πέτρο;"],
+            ),
+        ]);
+    }
+    if config_has_language(config, "grc") {
+        rows.extend([
+            (
+                "Ἡ ἐπιστολὴ τοῦ κ. Νικίου ἦλθεν.",
+                vec!["Ἡ ἐπιστολὴ τοῦ κ.", "Νικίου ἦλθεν."],
+            ),
+            (
+                "Τίς εἶδε τὸν δρ. Πέτρον;",
+                vec!["Τίς εἶδε τὸν δρ.", "Πέτρον;"],
+            ),
+        ]);
+    }
+    if config_has_language(config, "la") {
+        rows.extend([
+            (
+                "Epistula a Dr. Marco venit.",
+                vec!["Epistula a Dr.", "Marco venit."],
+            ),
+            ("Quis vidit S. Petrum?", vec!["Quis vidit S.", "Petrum?"]),
+        ]);
+    }
+    if config_has_language(config, "sa") {
+        rows.extend([
+            ("डॉ. रामस्य पत्रम् आगतम्.", vec!["डॉ.", "रामस्य पत्रम् आगतम्."]),
+            ("कः प्रा. देवम् अपश्यत्?", vec!["कः प्रा.", "देवम् अपश्यत्?"]),
+        ]);
+    }
+    if config_has_language(config, "es") {
+        rows.extend([
+            (
+                "La senora vio al Sr. Perez en Madrid.",
+                vec!["La senora vio al Sr.", "Perez en Madrid."],
+            ),
+            (
+                "Quien llamo al Dr. Garcia?",
+                vec!["Quien llamo al Dr.", "Garcia?"],
+            ),
+        ]);
+    }
+    if rows.is_empty() {
+        rows.extend([(
             "Who shot John F. Kennedy?",
             vec!["Who shot John F.", "Kennedy?"],
-        ),
-        (
-            "Elizabeth met Mr. Darcy at Pemberley.",
-            vec!["Elizabeth met Mr.", "Darcy at Pemberley."],
-        ),
-    ]
-    .into_iter()
-    .map(|(seams_sentence, naive_sentences)| NaiveSeamsDiscrepancy {
-        source: "exceptional-repair".to_string(),
-        seams_sentence: seams_sentence.to_string(),
-        naive_sentences: naive_sentences
-            .into_iter()
-            .map(|sentence| sentence.to_string())
-            .collect(),
-    })
-    .collect()
+        )]);
+    }
+    rows.into_iter()
+        .map(|(seams_sentence, naive_sentences)| NaiveSeamsDiscrepancy {
+            source: "exceptional-repair".to_string(),
+            seams_sentence: seams_sentence.to_string(),
+            naive_sentences: naive_sentences
+                .into_iter()
+                .map(|sentence| sentence.to_string())
+                .collect(),
+        })
+        .collect()
 }
 
 fn seams_sentences_from_text(raw: &str) -> Vec<String> {
@@ -1795,7 +2404,9 @@ mod tests {
 
     #[test]
     fn decimal_head_phones_spell_fractional_digits() {
-        let symbols = speech_symbols_for_text("I saw 3.14 written on the board.").expect("symbols");
+        let symbols =
+            speech_symbols_for_text("I saw 3.14 written on the board.", &english_variety())
+                .expect("symbols");
         assert!(symbols.contains("pɔɪnt"), "{symbols}");
         assert!(symbols.contains("wən"), "{symbols}");
         assert!(symbols.contains("fɔɹ"), "{symbols}");
@@ -1946,7 +2557,8 @@ mod tests {
 
     #[test]
     fn ipa_phones_include_boundaries_and_terminal_prosody() {
-        let symbols = speech_symbols_for_text("Dr. Smith went home.").expect("symbols");
+        let symbols =
+            speech_symbols_for_text("Dr. Smith went home.", &english_variety()).expect("symbols");
         assert!(symbols.contains("|"));
         assert!(symbols.contains("d") || symbols.contains("ɾ"));
         assert!(symbols.contains("ɑ") || symbols.contains("ɔ"));
@@ -1959,7 +2571,8 @@ mod tests {
 
     #[test]
     fn broad_ipa_does_not_emit_narrow_allophone_marks() {
-        let symbols = speech_symbols_for_text("Mr. Jones waited.").expect("symbols");
+        let symbols =
+            speech_symbols_for_text("Mr. Jones waited.", &english_variety()).expect("symbols");
         assert!(symbols.contains("mɪstɚ") || symbols.contains("mɪ.stɚ"));
         assert!(!symbols.contains("t˭"));
         assert!(!symbols.contains('˭'));
@@ -1967,7 +2580,7 @@ mod tests {
 
     #[test]
     fn broad_ipa_splits_intervocalic_r_colored_schwa_by_maximum_onset() {
-        let symbols = speech_symbols_for_text("arrived").expect("symbols");
+        let symbols = speech_symbols_for_text("arrived", &english_variety()).expect("symbols");
         assert!(symbols.contains("əˈɹaɪvd"), "{symbols}");
         assert!(!symbols.contains("ɚˈaɪvd"), "{symbols}");
     }
@@ -1975,7 +2588,8 @@ mod tests {
     #[test]
     fn loadstone_is_pronounced_like_lodestone() {
         let symbols =
-            speech_symbols_for_text("The Loadstone Rock was drawing him.").expect("symbols");
+            speech_symbols_for_text("The Loadstone Rock was drawing him.", &english_variety())
+                .expect("symbols");
         assert!(symbols.contains("ˈloʊdˌstoʊn"), "{symbols}");
         assert!(!symbols.contains("ˈlʌəd.stə.nɪ"), "{symbols}");
         assert!(!symbols.contains("ˈləəd.stə.nɪ"), "{symbols}");
@@ -1997,7 +2611,7 @@ mod tests {
                     assert_eq!(head, case.expected_head, "{}", case.id);
                 }
                 "phones" => {
-                    let symbols = speech_symbols_for_text(&case.input)
+                    let symbols = speech_symbols_for_text(&case.input, &english_variety())
                         .unwrap_or_else(|| panic!("{} should produce phones", case.id));
                     assert_contains_all(&case.id, &symbols, &case.output_contains);
                     assert_contains_none(&case.id, &symbols, &case.output_not_contains);
@@ -2085,6 +2699,221 @@ mod tests {
     }
 
     #[test]
+    fn spanish_varieties_create_parallel_rows_for_same_span() {
+        let config = Head2PhonesConfig {
+            varieties: vec!["es-ES-Castilian".to_string(), "es-419-Standard".to_string()],
+            include_synthetic: false,
+            include_default_gutenberg: false,
+            include_exceptional: false,
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut rows = Vec::new();
+        add_examples_for_buffer(
+            "El zapato rojo quedo listo.",
+            "test",
+            TrainingRowSource::SourceText,
+            &config,
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add examples");
+
+        let complete = rows
+            .iter()
+            .filter(|row| row.head.as_deref() == Some("El zapato rojo quedo listo."))
+            .collect::<Vec<_>>();
+        assert_eq!(complete.len(), 2);
+        assert!(
+            complete.iter().any(|row| {
+                row.variety == "es-ES-Castilian" && row.output.contains("θaˈpa.to")
+            }),
+            "{complete:#?}"
+        );
+        assert!(
+            complete.iter().any(|row| {
+                row.variety == "es-419-Standard" && row.output.contains("saˈpa.to")
+            }),
+            "{complete:#?}"
+        );
+    }
+
+    #[test]
+    fn esperanto_variety_creates_rows_from_spelling_rules() {
+        let config = Head2PhonesConfig {
+            varieties: vec!["eo".to_string()],
+            include_synthetic: false,
+            include_default_gutenberg: false,
+            include_exceptional: false,
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(8);
+        let mut rows = Vec::new();
+        add_examples_for_buffer(
+            "La ruĝa ŝipo restis preta.",
+            "test",
+            TrainingRowSource::SourceText,
+            &config,
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add examples");
+
+        assert!(
+            rows.iter()
+                .any(|row| { row.variety == "eo" && row.output.contains("ˈʃi.po") }),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
+    fn french_german_and_sanskrit_varieties_create_rows() {
+        for (variety, text, needle) in [
+            ("fr-FR-Standard", "Bonjour le monde.", "bɔ"),
+            ("de-DE-Standard", "Sprache ist bereit.", "ʃpra"),
+            ("sa-Deva-Standard", "धर्म सिद्धम् अस्ति.", "dʱar"),
+        ] {
+            let config = Head2PhonesConfig {
+                varieties: vec![variety.to_string()],
+                include_synthetic: false,
+                include_default_gutenberg: false,
+                include_exceptional: false,
+                random_cuts_per_buffer: 0,
+                no_head_cuts_per_head: 0,
+                ..Head2PhonesConfig::default()
+            };
+            let mut rng = StdRng::seed_from_u64(11);
+            let mut rows = Vec::new();
+            add_examples_for_buffer(
+                text,
+                "test",
+                TrainingRowSource::SourceText,
+                &config,
+                &mut rng,
+                &mut rows,
+            )
+            .expect("add examples");
+            assert!(
+                rows.iter()
+                    .any(|row| row.variety == variety && row.output.contains(needle)),
+                "{variety} {rows:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn latin_varieties_create_parallel_rows_for_same_span() {
+        let config = Head2PhonesConfig {
+            varieties: vec!["la-Classical".to_string(), "la-Ecclesiastical".to_string()],
+            include_synthetic: false,
+            include_default_gutenberg: false,
+            include_exceptional: false,
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(9);
+        let mut rows = Vec::new();
+        add_examples_for_buffer(
+            "Caelum clarum erat.",
+            "test",
+            TrainingRowSource::SourceText,
+            &config,
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add examples");
+
+        let complete = rows
+            .iter()
+            .filter(|row| row.head.as_deref() == Some("Caelum clarum erat."))
+            .collect::<Vec<_>>();
+        assert_eq!(complete.len(), 2);
+        assert!(
+            complete
+                .iter()
+                .any(|row| { row.variety == "la-Classical" && row.output.contains("ˈkae̯.lum") }),
+            "{complete:#?}"
+        );
+        assert!(
+            complete.iter().any(|row| {
+                row.variety == "la-Ecclesiastical" && row.output.contains("ˈt͡ʃae.lum")
+            }),
+            "{complete:#?}"
+        );
+    }
+
+    #[test]
+    fn greek_varieties_create_parallel_rows_for_same_span() {
+        let config = Head2PhonesConfig {
+            varieties: vec![
+                "el-GR-Standard".to_string(),
+                "grc-Attic".to_string(),
+                "grc-Koine".to_string(),
+            ],
+            include_synthetic: false,
+            include_default_gutenberg: false,
+            include_exceptional: false,
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(10);
+        let mut rows = Vec::new();
+        add_examples_for_buffer(
+            "και ο λόγος ήν.",
+            "test",
+            TrainingRowSource::SourceText,
+            &config,
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add examples");
+
+        let complete = rows
+            .iter()
+            .filter(|row| row.head.as_deref() == Some("και ο λόγος ήν."))
+            .collect::<Vec<_>>();
+        assert_eq!(complete.len(), 3);
+        assert!(
+            complete
+                .iter()
+                .any(|row| { row.variety == "el-GR-Standard" && row.output.contains("ce") }),
+            "{complete:#?}"
+        );
+        assert!(
+            complete
+                .iter()
+                .any(|row| { row.variety == "grc-Attic" && row.output.contains("kai̯") }),
+            "{complete:#?}"
+        );
+        assert!(
+            complete
+                .iter()
+                .any(|row| { row.variety == "grc-Koine" && row.output.contains("ke") }),
+            "{complete:#?}"
+        );
+    }
+
+    #[test]
+    fn training_input_includes_variety_control() {
+        let row = Head2PhonesTrainingExample {
+            row_source: TrainingRowSource::SourceText,
+            variety: "es-419-Standard".to_string(),
+            input: "El zapato rojo quedo listo.".to_string(),
+            output: NO_HEAD.to_string(),
+            head: None,
+            split_after: None,
+            source: "test".to_string(),
+        };
+        assert!(training_input(&row).starts_with("<task:head2phones><variety:es-419-Standard>"));
+    }
+
+    #[test]
     fn prepare_reuses_checkpoints_and_does_not_touch_legacy_parts() {
         let out = tempfile_path("head2phones-resume");
         let _ = fs::remove_dir_all(&out);
@@ -2139,6 +2968,10 @@ mod tests {
 
     fn tempfile_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{}-{name}", std::process::id()))
+    }
+
+    fn english_variety() -> VarietyId {
+        VarietyId("en-US".to_string())
     }
 
     fn assert_contains_all(case_id: &str, haystack: &str, needles: &[String]) {
