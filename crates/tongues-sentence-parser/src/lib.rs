@@ -18,7 +18,7 @@ use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
-use speaking::syntax::{HeuristicLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
+use speaking::syntax::{EnglishLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::Seq2SeqExample;
 use tongues_neural::{write_manifest, ModelArtifactManifest};
@@ -861,7 +861,7 @@ pub fn parse_sentence(text: &str, lowercase: bool) -> SentenceSyntaxAnalysis {
         words = words.into_iter().map(|word| word.to_lowercase()).collect();
     }
     let terminal = terminal_from_text(text);
-    HeuristicLinkGrammarParser.parse(&words, terminal)
+    EnglishLinkGrammarParser.parse(&words, terminal)
 }
 
 fn terminal_from_text(text: &str) -> Option<TerminalPunctuation> {

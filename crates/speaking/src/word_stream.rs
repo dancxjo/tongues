@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::asr::AudioFrame;
-use crate::data::lexicons::cmudict::{
-    self, CmuPhoneme, CmuStress, PronunciationEntry, PronunciationStatus as CmudictStatus,
+use crate::ids::VarietyId;
+use crate::phonemicize::{
+    PhonemicizeRequest, PhonemicizeStyle, PronunciationWarningKind, phoneme_display_symbol,
+    phonemicizer_for_variety,
 };
+use crate::realize::token_stress;
+use crate::spec::Spec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WordStreamId(pub u64);
@@ -120,28 +124,49 @@ pub struct WordPronunciation {
 }
 
 impl WordPronunciation {
-    pub fn from_cmudict_entry(entry: &PronunciationEntry) -> Self {
-        let phonemes = entry
-            .candidates
-            .first()
-            .map(|candidate| candidate.iter().map(cmu_phoneme_token).collect())
-            .unwrap_or_default();
-        let stress_pattern = entry
-            .candidates
-            .first()
-            .map(|candidate| {
-                candidate
-                    .iter()
-                    .filter_map(|phoneme| phoneme.stress.map(stress_digit))
-                    .collect()
+    pub fn from_phonemicize_output(
+        word: &str,
+        output: &crate::phonemicize::PhonemicizeOutput,
+    ) -> Self {
+        let phonemes = output
+            .phonemes
+            .iter()
+            .filter_map(|token| match &token.phoneme {
+                Spec::Known(id) => Some(phoneme_display_symbol(id).to_string()),
+                _ => None,
             })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
+        let stress_pattern = output
+            .phonemes
+            .iter()
+            .filter_map(token_stress)
+            .map(|stress| match stress {
+                crate::prosody::Stress::Primary => '1',
+                crate::prosody::Stress::Secondary => '2',
+                crate::prosody::Stress::Unstressed | crate::prosody::Stress::Reduced => '0',
+            })
+            .collect();
+        let status = if output
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == PronunciationWarningKind::UnknownPronunciation)
+        {
+            PronunciationLookupStatus::Missing
+        } else if output
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == PronunciationWarningKind::GuessedWord)
+        {
+            PronunciationLookupStatus::Guessed
+        } else {
+            PronunciationLookupStatus::Exact
+        };
         Self {
-            source: entry.source.to_string(),
-            lookup: entry.lookup.clone(),
+            source: output.provenance.method.clone(),
+            lookup: word.to_string(),
             phonemes,
             stress_pattern,
-            status: pronunciation_status_from_cmudict(entry.status),
+            status,
         }
     }
 }
@@ -155,6 +180,14 @@ pub struct TranscriptWord {
 }
 
 pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> TimedWordStream {
+    transcript_to_word_stream_for_variety(id, words, &VarietyId("en-US".into()))
+}
+
+pub fn transcript_to_word_stream_for_variety(
+    id: WordStreamId,
+    words: &[TranscriptWord],
+    variety: &VarietyId,
+) -> TimedWordStream {
     let mut byte_offset = 0usize;
     let word_nodes = words
         .iter()
@@ -192,7 +225,7 @@ pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> 
         source: WordStreamSource::RecordedAudio,
         words: word_nodes,
     };
-    attach_cmudict_pronunciations(&mut stream);
+    attach_pronunciations_for_variety(&mut stream, variety);
     stream
 }
 
@@ -202,6 +235,17 @@ pub fn transcript_to_energy_snapped_word_stream(
     audio: &[AudioFrame],
 ) -> TimedWordStream {
     let mut stream = transcript_to_word_stream(id, words);
+    HeuristicAcousticWordBoundaryRefiner.refine(audio, &mut stream);
+    stream
+}
+
+pub fn transcript_to_energy_snapped_word_stream_for_variety(
+    id: WordStreamId,
+    words: &[TranscriptWord],
+    audio: &[AudioFrame],
+    variety: &VarietyId,
+) -> TimedWordStream {
+    let mut stream = transcript_to_word_stream_for_variety(id, words, variety);
     HeuristicAcousticWordBoundaryRefiner.refine(audio, &mut stream);
     stream
 }
@@ -288,33 +332,29 @@ impl WordBoundaryRefiner for HeuristicAcousticWordBoundaryRefiner {
 }
 
 pub fn attach_cmudict_pronunciations(stream: &mut TimedWordStream) {
-    let pronouncer = cmudict::bundled();
+    attach_pronunciations_for_variety(stream, &VarietyId("en-US".into()));
+}
+
+pub fn attach_pronunciations_for_variety(stream: &mut TimedWordStream, variety: &VarietyId) {
+    let Ok(phonemicizer) = phonemicizer_for_variety(variety) else {
+        return;
+    };
     for word in &mut stream.words {
-        if word.pronunciation.is_none() {
-            let entry = pronouncer.lookup_entry(&word.text);
-            word.pronunciation = Some(WordPronunciation::from_cmudict_entry(&entry));
+        if word.pronunciation.is_some() {
+            continue;
         }
-    }
-}
-
-fn cmu_phoneme_token(phoneme: &CmuPhoneme) -> String {
-    phoneme.raw_symbol()
-}
-
-fn stress_digit(stress: CmuStress) -> char {
-    match stress {
-        CmuStress::Primary => '1',
-        CmuStress::Secondary => '2',
-        CmuStress::Unstressed => '0',
-    }
-}
-
-fn pronunciation_status_from_cmudict(status: CmudictStatus) -> PronunciationLookupStatus {
-    match status {
-        CmudictStatus::Exact => PronunciationLookupStatus::Exact,
-        CmudictStatus::Normalized => PronunciationLookupStatus::Normalized,
-        CmudictStatus::Guessed => PronunciationLookupStatus::Guessed,
-        CmudictStatus::Missing => PronunciationLookupStatus::Missing,
+        let Ok(output) = phonemicizer.phonemicize(&PhonemicizeRequest {
+            text: word.text.clone(),
+            variety: variety.clone(),
+            style: Some(PhonemicizeStyle {
+                careful_style: true,
+            }),
+        }) else {
+            continue;
+        };
+        word.pronunciation = Some(WordPronunciation::from_phonemicize_output(
+            &word.text, &output,
+        ));
     }
 }
 

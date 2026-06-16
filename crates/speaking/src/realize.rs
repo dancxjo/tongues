@@ -1,4 +1,3 @@
-use crate::data::lexicons::cmudict::CmuStress;
 use crate::data::notation::arpabet;
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -107,13 +106,8 @@ pub fn phoneme_features<'a>(
 }
 
 pub fn token_stress(token: &PhonemeToken) -> Option<Stress> {
-    if let Some((_, stress)) = token_cmu_base_and_stress(token) {
-        return match stress {
-            Some(CmuStress::Primary) => Some(Stress::Primary),
-            Some(CmuStress::Secondary) => Some(Stress::Secondary),
-            Some(CmuStress::Unstressed) => Some(Stress::Unstressed),
-            None => None,
-        };
+    if let Some(stress) = token_category_feature(&token.features, "stress") {
+        return stress_from_label(stress);
     }
 
     let Spec::Known(id) = &token.phoneme else {
@@ -513,24 +507,24 @@ fn default_phone_id(variety: &LinguisticVariety, token: &PhonemeToken) -> Spec<P
 }
 
 fn stress_aware_phone_id(token: &PhonemeToken) -> Option<PhoneId> {
-    let (base, stress) = token_cmu_base_and_stress(token).or_else(|| {
+    let (base, stress) = token_source_base_and_stress(token).or_else(|| {
         let Spec::Known(id) = &token.phoneme else {
             return None;
         };
         let symbol = phoneme_display_symbol(id);
         let (base, stress) = arpabet::split_stress(symbol);
-        Some((base.to_string(), stress.and_then(cmu_stress_from_digit)))
+        Some((base.to_string(), stress.map(|digit| digit.to_string())))
     })?;
-    arpabet::reduced_phone_for_cmu(&base, stress)
+    arpabet::reduced_phone_for_stress_label(&base, stress.as_deref())
 }
 
-fn token_cmu_base_and_stress(token: &PhonemeToken) -> Option<(String, Option<CmuStress>)> {
+fn token_source_base_and_stress(token: &PhonemeToken) -> Option<(String, Option<String>)> {
     let source_schema = token_category_feature(&token.features, "source_schema")?;
     if source_schema != "cmudict" && source_schema != "arpabet" {
         return None;
     }
     let base = token_category_feature(&token.features, "base_symbol")?.to_string();
-    let stress = token_category_feature(&token.features, "stress").and_then(cmu_stress_from_name);
+    let stress = token_category_feature(&token.features, "stress").map(str::to_string);
     Some((base, stress))
 }
 
@@ -575,20 +569,12 @@ fn token_category_feature<'a>(features: &'a FeatureBundle, name: &str) -> Option
     }
 }
 
-fn cmu_stress_from_name(name: &str) -> Option<CmuStress> {
+fn stress_from_label(name: &str) -> Option<Stress> {
     match name {
-        "primary" => Some(CmuStress::Primary),
-        "secondary" => Some(CmuStress::Secondary),
-        "unstressed" => Some(CmuStress::Unstressed),
-        _ => None,
-    }
-}
-
-fn cmu_stress_from_digit(digit: char) -> Option<CmuStress> {
-    match digit {
-        '1' => Some(CmuStress::Primary),
-        '2' => Some(CmuStress::Secondary),
-        '0' => Some(CmuStress::Unstressed),
+        "primary" | "1" => Some(Stress::Primary),
+        "secondary" | "2" => Some(Stress::Secondary),
+        "unstressed" | "0" => Some(Stress::Unstressed),
+        "reduced" => Some(Stress::Reduced),
         _ => None,
     }
 }

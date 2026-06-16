@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::acoustics::AcousticProfile;
-use crate::data::lexicons::cmudict::CmuPhoneme;
 use crate::feature::FeatureSystem;
 use crate::ids::{LanguageId, PhonemeId, VarietyId};
 use crate::morphology::Morphology;
@@ -67,8 +66,8 @@ pub struct WeakFormRule {
     pub id: String,
     pub lexical_item: String,
     pub pronunciation: Vec<PhonemeId>,
-    #[serde(default)]
-    pub cmudict_pronunciation: Vec<CmuPhoneme>,
+    #[serde(default, alias = "cmudict_pronunciation")]
+    pub source_pronunciation: Vec<String>,
     #[serde(default)]
     pub following: WeakFormFollowingContext,
     #[serde(default)]
@@ -80,8 +79,8 @@ pub struct OrthographicUnitPronunciation {
     pub kind: OrthographicUnitKind,
     pub unit: String,
     pub pronunciation: Vec<PhonemeId>,
-    #[serde(default)]
-    pub cmudict_pronunciation: Vec<CmuPhoneme>,
+    #[serde(default, alias = "cmudict_pronunciation")]
+    pub source_pronunciation: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

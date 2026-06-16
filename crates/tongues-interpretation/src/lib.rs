@@ -27,7 +27,7 @@ use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{
-    HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
+    EnglishLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
     SyntacticLinkKind,
 };
 use speaking::{
@@ -1383,7 +1383,7 @@ fn sentence_supervision(
         .context("detecting transcript sentences")?;
     let variety = VarietyId(config.variety.clone());
     let phonemicizer = phonemicizer_for_variety(&variety)?;
-    let syntax_parser = HeuristicLinkGrammarParser;
+    let syntax_parser = EnglishLinkGrammarParser;
     let mut offset = 0usize;
     let mut out = Vec::new();
     for sentence in detected {
@@ -3913,7 +3913,10 @@ mod tests {
         assert!(!rows[0].syntax.words.is_empty());
         assert!(!rows[0].syntax.links.is_empty());
         assert!(rows[0].end_frame <= 100);
-        assert!(!rows[0].phones.split_whitespace().any(|token| token == "word"));
+        assert!(!rows[0]
+            .phones
+            .split_whitespace()
+            .any(|token| token == "word"));
         assert!(!rows[0].phones.split_whitespace().any(|token| token == "|"));
     }
 

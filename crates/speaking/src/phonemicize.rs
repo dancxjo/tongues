@@ -10,7 +10,7 @@ use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::GraphemeToken;
-use crate::phonology::{PhoneToken, PhonemeToken};
+use crate::phonology::{PhoneToken, Phoneme, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
 use crate::realize::{
     PhoneDecompositionPolicy, RealizationOptions, epenthetic_phones_after, realize_phoneme_at,
@@ -20,7 +20,7 @@ use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunct
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
 use crate::syntax::{
-    HeuristicLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
+    EnglishLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
 };
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
@@ -52,7 +52,7 @@ pub fn phonemicizer_for_variety(
         })?;
     match variety_data.language.0.as_str() {
         "en" => Ok(Box::new(EnglishPhonemicizer)),
-        _ => Err(PhonemicizeError::UnsupportedVariety { variety: canonical }),
+        _ => Ok(Box::new(VarietyDataPhonemicizer)),
     }
 }
 
@@ -91,6 +91,27 @@ pub trait PronunciationPipeline {
         context: TokenPronunciationContext,
     ) -> WordPronunciation;
 
+    fn syntax_parser(&self, _variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
+        None
+    }
+
+    fn annotate_boundaries(
+        &self,
+        _boundaries: &mut Vec<SpeechBoundaryToken>,
+        _words: &[WordToken],
+        _syntax: &SentenceSyntaxAnalysis,
+    ) {
+    }
+
+    fn prosodic_label_for_boundary(
+        &self,
+        boundary: &SpeechBoundaryToken,
+        _words: &[WordToken],
+        _sentence_start_word_index: usize,
+    ) -> Option<ProsodicLabelKind> {
+        generic_prosodic_label_for_boundary(boundary)
+    }
+
     fn phoneme_planner(
         &self,
         variety_id: &VarietyId,
@@ -104,9 +125,8 @@ pub trait PronunciationPipeline {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .map(|(phoneme_index, cmu)| {
-                let raw_symbol = cmu.raw_symbol();
-                let mut features = arpabet::cmu_token_features(cmu);
+            .map(|(phoneme_index, planned)| {
+                let mut features = planned.features.clone();
                 if let Some(letter_index) = pronunciation.letter_indices.get(phoneme_index).copied()
                     && letter_index != NO_LETTER_INDEX
                 {
@@ -118,7 +138,7 @@ pub trait PronunciationPipeline {
                     add_part_of_speech_feature(&mut features, part_of_speech);
                 }
                 PhonemeToken {
-                    phoneme: Spec::Known(arpabet::phoneme_id(&variety_id.0, &raw_symbol)),
+                    phoneme: Spec::Known(planned.phoneme.clone()),
                     span: None,
                     features,
                     realized_as: Vec::new(),
@@ -168,15 +188,30 @@ pub trait PronunciationPipeline {
         let normalized_text = self.text_normalizer(&input.text);
         let words = self.orthographic_tokenizer(&normalized_text);
         let mut boundaries = self.boundary_extractor(&normalized_text, &words);
-        let syntax = HeuristicLinkGrammarParser.parse(
-            &words
-                .iter()
-                .map(|word| word.normalized.clone())
-                .collect::<Vec<_>>(),
-            final_terminal(&boundaries),
-        );
-        annotate_alternative_question_boundaries(&mut boundaries, &words, &syntax);
-        let prosody = prosody_from_boundaries(&boundaries, &words);
+        let normalized_words = words
+            .iter()
+            .map(|word| word.normalized.clone())
+            .collect::<Vec<_>>();
+        let syntax = self
+            .syntax_parser(&variety)
+            .map(|parser| parser.parse(&normalized_words, final_terminal(&boundaries)))
+            .unwrap_or_else(|| SentenceSyntaxAnalysis {
+                tokens: normalized_words
+                    .iter()
+                    .enumerate()
+                    .map(|(word_index, word)| crate::syntax::SyntaxToken {
+                        word_index,
+                        text: word.clone(),
+                        pos: PartOfSpeech::Unknown,
+                        prosodic_role: crate::syntax::ProsodicRole::Content,
+                        syntactic_links: Vec::new(),
+                    })
+                    .collect(),
+                link_parses: Vec::new(),
+                terminal: final_terminal(&boundaries),
+            });
+        self.annotate_boundaries(&mut boundaries, &words, &syntax);
+        let prosody = prosody_from_boundaries(self, &boundaries, &words);
         let mut graphemes = Vec::with_capacity(words.len());
         let mut phonemes = Vec::new();
         let mut phones = Vec::new();
@@ -275,7 +310,7 @@ pub trait PronunciationPipeline {
             .unwrap_or_default();
         candidate
             .first()
-            .is_some_and(|phoneme| arpabet::is_vowel(&phoneme.raw_symbol()))
+            .is_some_and(|phoneme| planned_phoneme_is_vowel(variety, phoneme))
     }
 }
 
@@ -416,6 +451,34 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         boundary_tokens(text, words)
     }
 
+    fn syntax_parser(&self, _variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
+        Some(&EnglishLinkGrammarParser)
+    }
+
+    fn annotate_boundaries(
+        &self,
+        boundaries: &mut Vec<SpeechBoundaryToken>,
+        words: &[WordToken],
+        syntax: &SentenceSyntaxAnalysis,
+    ) {
+        annotate_alternative_question_boundaries(boundaries, words, syntax);
+    }
+
+    fn prosodic_label_for_boundary(
+        &self,
+        boundary: &SpeechBoundaryToken,
+        words: &[WordToken],
+        sentence_start_word_index: usize,
+    ) -> Option<ProsodicLabelKind> {
+        match (boundary.terminal, boundary.pause) {
+            (Some(TerminalPunctuation::Question), _) => {
+                let sentence_words = words_in_sentence(words, sentence_start_word_index, boundary);
+                Some(prosodic_label_for_english_question(sentence_words))
+            }
+            _ => generic_prosodic_label_for_boundary(boundary),
+        }
+    }
+
     fn weak_form_resolver(
         &self,
         word: &WordToken,
@@ -426,7 +489,7 @@ impl PronunciationPipeline for EnglishPhonemicizer {
             .weak_forms
             .iter()
             .find(|rule| weak_form_rule_applies(rule, &word.normalized, context))
-            .map(weak_form_pronunciation)
+            .map(|rule| weak_form_pronunciation(rule, variety))
     }
 
     fn token_classifier(
@@ -449,10 +512,13 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 .chars()
                 .find(|character| character.is_alphabetic())
                 .map(|character| {
-                    orthographic_unit_candidate(
-                        &character.to_ascii_uppercase().to_string(),
+                    planned_candidate_from_cmu(
                         variety,
-                        OrthographicUnitKind::LetterName,
+                        orthographic_unit_candidate(
+                            &character.to_ascii_uppercase().to_string(),
+                            variety,
+                            OrthographicUnitKind::LetterName,
+                        ),
                     )
                 })
                 .unwrap_or_default(),
@@ -463,12 +529,14 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                     .cloned()
                     .unwrap_or_default()
             }
-            OrthographicTokenKind::LetterName => {
-                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::LetterName)
-            }
-            OrthographicTokenKind::DigitName => {
-                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::DigitName)
-            }
+            OrthographicTokenKind::LetterName => planned_candidate_from_cmu(
+                variety,
+                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::LetterName),
+            ),
+            OrthographicTokenKind::DigitName => planned_candidate_from_cmu(
+                variety,
+                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::DigitName),
+            ),
             OrthographicTokenKind::Word | OrthographicTokenKind::Hyphenated(_) => self
                 .token_classifier(
                     word,
@@ -487,7 +555,67 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         };
         candidate
             .first()
-            .is_some_and(|phoneme| arpabet::is_vowel(&phoneme.raw_symbol()))
+            .is_some_and(|phoneme| planned_phoneme_is_vowel(variety, phoneme))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct VarietyDataPhonemicizer;
+
+impl Phonemicizer for VarietyDataPhonemicizer {
+    fn phonemicize(
+        &self,
+        input: &PhonemicizeRequest,
+    ) -> Result<PhonemicizeOutput, PhonemicizeError> {
+        self.run(input)
+    }
+}
+
+impl PronunciationPipeline for VarietyDataPhonemicizer {
+    fn canonical_variety_id(
+        &self,
+        requested_variety: &VarietyId,
+    ) -> Result<VarietyId, PhonemicizeError> {
+        canonical_variety_id(&requested_variety.0).ok_or_else(|| {
+            PhonemicizeError::UnsupportedVariety {
+                variety: requested_variety.clone(),
+            }
+        })
+    }
+
+    fn variety(
+        &self,
+        canonical_variety: &VarietyId,
+    ) -> Result<LinguisticVariety, PhonemicizeError> {
+        variety_by_code(&canonical_variety.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
+            variety: canonical_variety.clone(),
+        })
+    }
+
+    fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
+        tokenize_words(text)
+    }
+
+    fn boundary_extractor(&self, text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> {
+        boundary_tokens(text, words)
+    }
+
+    fn weak_form_resolver(
+        &self,
+        _word: &WordToken,
+        _variety: &LinguisticVariety,
+        _context: TokenPronunciationContext,
+    ) -> Option<WordPronunciation> {
+        None
+    }
+
+    fn token_classifier(
+        &self,
+        word: &WordToken,
+        variety: &LinguisticVariety,
+        context: TokenPronunciationContext,
+    ) -> WordPronunciation {
+        variety_data_pronunciation_for_word(word, variety, context)
     }
 }
 
@@ -730,13 +858,15 @@ fn final_terminal(boundaries: &[SpeechBoundaryToken]) -> Option<TerminalPunctuat
 }
 
 fn prosody_from_boundaries(
+    pipeline: &(impl PronunciationPipeline + ?Sized),
     boundaries: &[SpeechBoundaryToken],
     words: &[WordToken],
 ) -> ProsodyTrack {
     let mut prosody = ProsodyTrack::default();
     let mut sentence_start_word_index = 0;
     for boundary in boundaries {
-        let Some(kind) = prosodic_label_for_boundary(boundary, words, sentence_start_word_index)
+        let Some(kind) =
+            pipeline.prosodic_label_for_boundary(boundary, words, sentence_start_word_index)
         else {
             if boundary.terminal.is_some() {
                 sentence_start_word_index = boundary.after_grapheme_index.saturating_add(1);
@@ -758,16 +888,11 @@ fn prosody_from_boundaries(
     prosody
 }
 
-fn prosodic_label_for_boundary(
+fn generic_prosodic_label_for_boundary(
     boundary: &SpeechBoundaryToken,
-    words: &[WordToken],
-    sentence_start_word_index: usize,
 ) -> Option<ProsodicLabelKind> {
     match (boundary.terminal, boundary.pause) {
-        (Some(TerminalPunctuation::Question), _) => {
-            let sentence_words = words_in_sentence(words, sentence_start_word_index, boundary);
-            Some(prosodic_label_for_english_question(sentence_words))
-        }
+        (Some(TerminalPunctuation::Question), _) => Some(ProsodicLabelKind::QuestionRise),
         (Some(TerminalPunctuation::Period | TerminalPunctuation::Exclamation), _) => {
             Some(ProsodicLabelKind::FinalFall)
         }
@@ -898,7 +1023,7 @@ fn has_alternative_question_coordination(words: &[WordToken]) -> bool {
         .map(|word| word.normalized.clone())
         .collect::<Vec<_>>();
     let syntax =
-        HeuristicLinkGrammarParser.parse(&normalized_words, Some(TerminalPunctuation::Question));
+        EnglishLinkGrammarParser.parse(&normalized_words, Some(TerminalPunctuation::Question));
     let has_coordination_parse = syntax.primary_parse().is_some_and(|parse| {
         parse.links.iter().any(|link| {
             link.kind == crate::syntax::SyntacticLinkKind::Coordination
@@ -1229,7 +1354,7 @@ fn mark_contextual_initialisms(text: &str, words: &mut [WordToken]) {
 
 #[derive(Debug, Clone)]
 pub struct WordPronunciation {
-    pub candidates: Vec<Vec<CmuPhoneme>>,
+    pub candidates: Vec<Vec<PlannedPhoneme>>,
     pub status: PronunciationStatus,
     pub provenance: EvidenceProvenance,
     pub warnings: Vec<PronunciationWarning>,
@@ -1238,12 +1363,148 @@ pub struct WordPronunciation {
     pub part_of_speech: Option<PartOfSpeech>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlannedPhoneme {
+    pub phoneme: PhonemeId,
+    pub features: FeatureBundle,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenPronunciationContext {
     pub next_starts_with_vowelish: bool,
     pub careful_style: bool,
     pub part_of_speech: Option<PartOfSpeech>,
     pub next_part_of_speech: Option<PartOfSpeech>,
+}
+
+fn planned_candidate_from_cmu(
+    variety: &LinguisticVariety,
+    candidate: Vec<CmuPhoneme>,
+) -> Vec<PlannedPhoneme> {
+    candidate
+        .iter()
+        .map(|cmu| planned_phoneme_from_cmu(&variety.id.0, cmu))
+        .collect()
+}
+
+fn planned_candidates_from_cmu(
+    variety: &LinguisticVariety,
+    candidates: Vec<Vec<CmuPhoneme>>,
+) -> Vec<Vec<PlannedPhoneme>> {
+    candidates
+        .into_iter()
+        .map(|candidate| planned_candidate_from_cmu(variety, candidate))
+        .collect()
+}
+
+fn planned_phoneme_from_cmu(variety_id: &str, cmu: &CmuPhoneme) -> PlannedPhoneme {
+    let raw_symbol = cmu.raw_symbol();
+    PlannedPhoneme {
+        phoneme: arpabet::phoneme_id(variety_id, &raw_symbol),
+        features: arpabet::cmu_token_features(cmu),
+    }
+}
+
+fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhoneme) -> bool {
+    variety
+        .phonemes
+        .phonemes
+        .get(&planned.phoneme)
+        .is_some_and(|phoneme| {
+            phoneme
+                .features
+                .values
+                .get(&FeatureId("phonology.major".into()))
+                == Some(&Spec::Known(FeatureValue::Category("vowel".into())))
+        })
+        || arpabet::is_vowel(phoneme_display_symbol(&planned.phoneme))
+}
+
+fn variety_data_pronunciation_for_word(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> WordPronunciation {
+    let candidate = planned_candidate_from_variety_aliases(&word.normalized, variety);
+    if candidate.is_empty() {
+        return WordPronunciation {
+            candidates: Vec::new(),
+            status: PronunciationStatus::Missing,
+            provenance: EvidenceProvenance {
+                source: EvidenceSource::Unknown,
+                method: "missing variety-data pronunciation".into(),
+                version: Some("0.1".into()),
+            },
+            warnings: vec![PronunciationWarning {
+                token: word.text.clone(),
+                kind: PronunciationWarningKind::UnknownPronunciation,
+                message: format!(
+                    "no pronunciation from {} variety data: {}",
+                    variety.id.0, word.text
+                ),
+            }],
+            letter_break_offsets: Vec::new(),
+            letter_indices: Vec::new(),
+            part_of_speech: context.part_of_speech,
+        };
+    }
+
+    WordPronunciation {
+        candidates: vec![candidate],
+        status: PronunciationStatus::Exact,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Rule,
+            method: format!("{} phoneme aliases from variety data", variety.id.0),
+            version: Some("0.1".into()),
+        },
+        warnings: Vec::new(),
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    }
+}
+
+fn planned_candidate_from_variety_aliases(
+    normalized: &str,
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    let aliases = phoneme_aliases_by_length(variety);
+    let chars = normalized.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut candidate = Vec::new();
+    while index < chars.len() {
+        let rest = chars[index..].iter().collect::<String>();
+        if let Some((phoneme, consumed)) = aliases.iter().find_map(|(alias, phoneme)| {
+            rest.starts_with(alias)
+                .then_some((phoneme, alias.chars().count()))
+        }) {
+            candidate.push(planned_phoneme_from_inventory(phoneme));
+            index += consumed;
+        } else {
+            index += chars[index].len_utf8();
+        }
+    }
+    candidate
+}
+
+fn phoneme_aliases_by_length(variety: &LinguisticVariety) -> Vec<(String, &Phoneme)> {
+    let mut aliases = Vec::new();
+    for phoneme in variety.phonemes.phonemes.values() {
+        aliases.push((phoneme_display_symbol(&phoneme.id).to_lowercase(), phoneme));
+        for alias in &phoneme.aliases {
+            aliases.push((alias.symbol.to_lowercase(), phoneme));
+        }
+    }
+    aliases.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+    aliases.dedup_by(|left, right| left.0 == right.0);
+    aliases
+}
+
+fn planned_phoneme_from_inventory(phoneme: &Phoneme) -> PlannedPhoneme {
+    PlannedPhoneme {
+        phoneme: phoneme.id.clone(),
+        features: phoneme.features.clone(),
+    }
 }
 
 fn pronunciation_for_word(
@@ -1287,7 +1548,7 @@ fn pronunciation_for_word(
         let selection =
             choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
         return WordPronunciation {
-            candidates: selection.candidates,
+            candidates: planned_candidates_from_cmu(variety, selection.candidates),
             status: entry.status,
             provenance: cmudict_pronunciation_provenance(
                 entry.status,
@@ -1304,7 +1565,10 @@ fn pronunciation_for_word(
 
     use crate::data::varieties::english::morphology;
     if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
-        let candidates = vec![morphology::compose_pronunciation(variety, &morph_parts)];
+        let candidates = vec![planned_candidate_from_cmu(
+            variety,
+            morphology::compose_pronunciation(variety, &morph_parts),
+        )];
         return WordPronunciation {
             candidates,
             status: PronunciationStatus::Exact,
@@ -1320,7 +1584,7 @@ fn pronunciation_for_word(
         };
     }
 
-    if let Some(pronunciation) = inflected_cmudict_pronunciation(word, context) {
+    if let Some(pronunciation) = inflected_cmudict_pronunciation(word, variety, context) {
         return pronunciation;
     }
 
@@ -1342,7 +1606,7 @@ fn pronunciation_for_word(
     } else {
         // eprintln!("GUESSED: {}", word.text);
         WordPronunciation {
-            candidates: vec![guessed],
+            candidates: vec![planned_candidate_from_cmu(variety, guessed)],
             status: PronunciationStatus::Guessed,
             provenance: EvidenceProvenance {
                 source: EvidenceSource::Rule,
@@ -1363,6 +1627,7 @@ fn pronunciation_for_word(
 
 fn inflected_cmudict_pronunciation(
     word: &WordToken,
+    variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> Option<WordPronunciation> {
     let normalized = word.normalized.as_str();
@@ -1381,7 +1646,7 @@ fn inflected_cmudict_pronunciation(
         })
         .collect::<Vec<_>>();
     Some(WordPronunciation {
-        candidates,
+        candidates: planned_candidates_from_cmu(variety, candidates),
         status: PronunciationStatus::Guessed,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -1620,14 +1885,25 @@ fn weak_form_rule_applies(
     }
 }
 
-fn weak_form_pronunciation(rule: &WeakFormRule) -> WordPronunciation {
-    let candidate = if rule.cmudict_pronunciation.is_empty() {
+fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> WordPronunciation {
+    let candidate = if rule.source_pronunciation.is_empty() {
         rule.pronunciation
             .iter()
-            .map(|id| CmuPhoneme::parse(phoneme_display_symbol(id)))
+            .filter_map(|id| {
+                variety
+                    .phonemes
+                    .phonemes
+                    .get(id)
+                    .map(planned_phoneme_from_inventory)
+            })
             .collect()
     } else {
-        rule.cmudict_pronunciation.clone()
+        let source_symbols = rule
+            .source_pronunciation
+            .iter()
+            .map(|symbol| CmuPhoneme::parse(symbol))
+            .collect();
+        planned_candidate_from_cmu(variety, source_symbols)
     };
     let method = format!("variety weak form: {}", rule.id.replace('_', " "));
     WordPronunciation {
@@ -1649,11 +1925,11 @@ fn acronym_pronunciation(surface: &str, variety: &LinguisticVariety) -> WordPron
     let (candidate, letter_break_offsets, letter_indices) =
         letter_name_sequence(surface.chars(), variety);
     WordPronunciation {
-        candidates: vec![candidate.clone()],
+        candidates: vec![planned_candidate_from_cmu(variety, candidate.clone())],
         status: PronunciationStatus::Exact,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
-            method: "english acronym letter-name expansion".into(),
+            method: "variety acronym letter-name expansion".into(),
             version: Some("0.1".into()),
         },
         warnings: vec![PronunciationWarning {
@@ -1689,7 +1965,7 @@ fn mixed_alphanumeric_pronunciation(
             mixed_alphanumeric_sequence(word.text.chars(), variety);
         candidate.extend(sequence);
         return WordPronunciation {
-            candidates: vec![candidate],
+            candidates: vec![planned_candidate_from_cmu(variety, candidate)],
             status: PronunciationStatus::Guessed,
             provenance: EvidenceProvenance {
                 source: EvidenceSource::Rule,
@@ -1709,7 +1985,7 @@ fn mixed_alphanumeric_pronunciation(
         candidate.extend(guess_pronunciation(&word.normalized));
     }
     WordPronunciation {
-        candidates: vec![candidate],
+        candidates: vec![planned_candidate_from_cmu(variety, candidate)],
         status: PronunciationStatus::Guessed,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -1810,7 +2086,7 @@ fn orthographic_unit_pronunciation(
         .map(|index| std::iter::repeat_n(index, candidate.len()).collect())
         .unwrap_or_default();
     WordPronunciation {
-        candidates: vec![candidate.clone()],
+        candidates: vec![planned_candidate_from_cmu(variety, candidate.clone())],
         status: PronunciationStatus::Exact,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -1839,7 +2115,7 @@ fn orthographic_unit_candidate(
         .iter()
         .find(|entry| entry.kind == kind && entry.unit == normalized)
         .map(|entry| {
-            if entry.cmudict_pronunciation.is_empty() {
+            if entry.source_pronunciation.is_empty() {
                 entry
                     .pronunciation
                     .iter()
@@ -1847,7 +2123,11 @@ fn orthographic_unit_candidate(
                     .map(CmuPhoneme::parse)
                     .collect()
             } else {
-                entry.cmudict_pronunciation.clone()
+                entry
+                    .source_pronunciation
+                    .iter()
+                    .map(|symbol| CmuPhoneme::parse(symbol))
+                    .collect()
             }
         })
         .unwrap_or_default()
@@ -2634,7 +2914,7 @@ fn find_word_index_at(c_idx: usize, words: &[WordToken]) -> Option<usize> {
 pub fn english_normalize_numbers(text: &str) -> String {
     let words = tokenize_words(text);
     let words_str: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
-    let syntax = crate::syntax::HeuristicLinkGrammarParser.parse(&words_str, None);
+    let syntax = crate::syntax::EnglishLinkGrammarParser.parse(&words_str, None);
 
     let char_vec: Vec<char> = text.chars().collect();
     let mut result = String::new();
@@ -4088,6 +4368,23 @@ mod tests {
             rp.implementation_status,
             VarietyImplementationStatus::StubDerivedFrom(VarietyId("en-US-GA".into()))
         );
+    }
+
+    #[test]
+    fn builtin_non_english_varieties_phonemicize_from_variety_data() {
+        let spanish = phonemicizer_for_variety(&VarietyId("es".into()))
+            .expect("Spanish phonemicizer")
+            .phonemicize(&request("pato", "es"))
+            .expect("Spanish should phonemicize from variety aliases");
+        assert_eq!(spanish.variety.0, "es");
+        assert_eq!(phoneme_symbols(&spanish), vec!["p", "a", "t", "o"]);
+        assert!(spanish.syntax.link_parses.is_empty());
+
+        let esperanto = phonemicizer_for_variety(&VarietyId("eo".into()))
+            .expect("Esperanto phonemicizer")
+            .phonemicize(&request("pato", "eo"))
+            .expect("Esperanto should phonemicize from variety aliases");
+        assert_eq!(phoneme_symbols(&esperanto), vec!["p", "a", "t", "o"]);
     }
 
     #[test]

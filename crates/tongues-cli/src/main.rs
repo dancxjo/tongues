@@ -4243,7 +4243,10 @@ fn interpretation_prepare_progress_message(
             path
         ),
         tongues_interpretation::PrepareProgress::Transcribe { utterance_id, path } => {
-            format!("Preparing transcript supervision for {} from {}", utterance_id, path)
+            format!(
+                "Preparing transcript supervision for {} from {}",
+                utterance_id, path
+            )
         }
         tongues_interpretation::PrepareProgress::Omit {
             utterance_id,

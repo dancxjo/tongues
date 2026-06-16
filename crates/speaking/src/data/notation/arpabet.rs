@@ -133,6 +133,16 @@ pub fn reduced_phone_for_cmu(base: &str, stress: Option<CmuStress>) -> Option<Ph
     }
 }
 
+pub fn reduced_phone_for_stress_label(base: &str, stress: Option<&str>) -> Option<PhoneId> {
+    match (base, stress) {
+        ("AH", Some("unstressed" | "0")) => Some(phone_id_for_ipa("ə")),
+        ("AH", Some("primary" | "secondary" | "1" | "2")) => Some(phone_id_for_ipa("ʌ")),
+        ("ER", Some("unstressed" | "0")) => Some(phone_id_for_ipa("ɚ")),
+        ("ER", Some("primary" | "secondary" | "1" | "2")) => Some(phone_id_for_ipa("ɝ")),
+        _ => None,
+    }
+}
+
 pub fn is_reduced_vowel(base: &str, stress: Option<CmuStress>) -> bool {
     matches!((base, stress), ("AH" | "ER", Some(CmuStress::Unstressed)))
 }

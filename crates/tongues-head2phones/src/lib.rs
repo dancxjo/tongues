@@ -17,7 +17,7 @@ use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use speaking::{
-    EnglishPhonemicizer, PauseKind, PhonemicizeOutput, PhonemicizeRequest, Phonemicizer,
+    phonemicizer_for_variety, PauseKind, PhonemicizeOutput, PhonemicizeRequest,
     SpeechBoundaryToken, TerminalPunctuation, VarietyId,
 };
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
@@ -301,7 +301,14 @@ pub fn prepare_dataset_with_progress(
                 let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "synthetic"));
                 let synthetic = synthetic_buffers(config.synthetic_buffers, &mut rng);
                 let mut examples = Vec::new();
-                for buffer in &synthetic {
+                let examples_part_path = checkpoint_dir.join("000-synthetic.examples.jsonl.part");
+                archive_existing_path(&examples_part_path)?;
+                let mut examples_part = BufWriter::new(
+                    File::create(&examples_part_path)
+                        .with_context(|| format!("creating {}", examples_part_path.display()))?,
+                );
+                for (index, buffer) in synthetic.iter().enumerate() {
+                    let previous_len = examples.len();
                     add_examples_for_buffer(
                         buffer,
                         "synthetic",
@@ -310,7 +317,18 @@ pub fn prepare_dataset_with_progress(
                         &mut rng,
                         &mut examples,
                     )?;
+                    for row in &examples[previous_len..] {
+                        writeln!(examples_part, "{}", serde_json::to_string(row)?)?;
+                    }
+                    if index < 4 || (index + 1) % 64 == 0 || index + 1 == synthetic.len() {
+                        examples_part.flush().with_context(|| {
+                            format!("flushing {}", examples_part_path.display())
+                        })?;
+                    }
                 }
+                examples_part
+                    .flush()
+                    .with_context(|| format!("flushing {}", examples_part_path.display()))?;
                 Ok(PrepareShardData {
                     source_buffers: synthetic.len(),
                     examples,
@@ -744,21 +762,28 @@ fn archive_interrupted_part(path: &Path) -> Result<()> {
     if !part.exists() {
         return Ok(());
     }
+    archive_existing_path(&part)
+}
+
+fn archive_existing_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
-    let archive = part.with_extension(format!(
+    let archive = path.with_extension(format!(
         "{}interrupted-{stamp}",
-        part.extension()
+        path.extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| format!("{ext}."))
             .unwrap_or_default()
     ));
-    fs::rename(&part, &archive).with_context(|| {
+    fs::rename(path, &archive).with_context(|| {
         format!(
             "archiving interrupted partial {} -> {}",
-            part.display(),
+            path.display(),
             archive.display()
         )
     })
@@ -857,6 +882,9 @@ fn flush_example_for_prefix(
     row_source: TrainingRowSource,
 ) -> Option<Head2PhonesTrainingExample> {
     let head_text = prefix.trim();
+    if prefix_ends_with_nonterminal_abbreviation(head_text) {
+        return None;
+    }
     if head_text.split_whitespace().count() < 2 {
         return None;
     }
@@ -878,6 +906,14 @@ fn flush_example_for_prefix(
         split_after: Some(split_after),
         source: source.to_string(),
     })
+}
+
+fn prefix_ends_with_nonterminal_abbreviation(prefix: &str) -> bool {
+    let trimmed = prefix.trim_end();
+    trimmed
+        .strip_suffix('.')
+        .and_then(|without_dot| Some(without_dot.len()))
+        .is_some_and(|dot_index| dot_is_nonterminal(trimmed, dot_index))
 }
 
 fn prefix_ends_at_boundary_in_head(prefix: &str, head: &str) -> bool {
@@ -1119,11 +1155,12 @@ pub fn format_input(buffer: &str) -> String {
 }
 
 fn speech_symbols_for_text(text: &str) -> Option<String> {
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId("en-US".to_string());
+    let phonemicizer = phonemicizer_for_variety(&variety).ok()?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: text.to_string(),
-            variety: VarietyId("en-US".to_string()),
+            variety,
             style: None,
         })
         .ok()?;
@@ -1879,6 +1916,20 @@ mod tests {
             row.split_after,
             Some("I think we should".graphemes(true).count())
         );
+    }
+
+    #[test]
+    fn end_of_text_does_not_flush_nonterminal_abbreviation_prefix() {
+        for prefix in [
+            "After the meeting, Rep.",
+            "After the meeting, Rep. Susan Smith (D.",
+            "After the meeting, Rep. Susan Smith (D. NY.",
+        ] {
+            assert!(
+                flush_example_for_prefix(prefix, "test", TrainingRowSource::Exceptional).is_none(),
+                "{prefix}"
+            );
+        }
     }
 
     #[test]

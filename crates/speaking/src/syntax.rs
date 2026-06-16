@@ -120,9 +120,9 @@ pub trait LinkGrammarParser {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct HeuristicLinkGrammarParser;
+pub struct EnglishLinkGrammarParser;
 
-impl LinkGrammarParser for HeuristicLinkGrammarParser {
+impl LinkGrammarParser for EnglishLinkGrammarParser {
     fn parse(
         &self,
         words: &[String],
@@ -131,6 +131,9 @@ impl LinkGrammarParser for HeuristicLinkGrammarParser {
         parse_english_link_grammar(words, terminal)
     }
 }
+
+#[deprecated(note = "use EnglishLinkGrammarParser for English-specific syntax")]
+pub type HeuristicLinkGrammarParser = EnglishLinkGrammarParser;
 
 pub fn parse_english_link_grammar(
     words: &[String],

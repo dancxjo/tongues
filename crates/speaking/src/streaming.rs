@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{HeuristicLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
+use crate::syntax::{EnglishLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StableTextChunk {
@@ -18,20 +18,20 @@ pub struct UnfinishedPrefixAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct StableTextChunker<P = HeuristicLinkGrammarParser> {
+pub struct StableTextChunker<P = EnglishLinkGrammarParser> {
     parser: P,
     buffer: String,
 }
 
-impl Default for StableTextChunker<HeuristicLinkGrammarParser> {
+impl Default for StableTextChunker<EnglishLinkGrammarParser> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StableTextChunker<HeuristicLinkGrammarParser> {
+impl StableTextChunker<EnglishLinkGrammarParser> {
     pub fn new() -> Self {
-        Self::with_parser(HeuristicLinkGrammarParser)
+        Self::with_parser(EnglishLinkGrammarParser)
     }
 }
 

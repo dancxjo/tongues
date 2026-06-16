@@ -286,9 +286,10 @@ fn orthographic_unit(
             .iter()
             .map(|symbol| arpabet::phoneme_id(variety_id, symbol))
             .collect(),
-        cmudict_pronunciation: symbols
+        source_pronunciation: symbols
             .iter()
             .map(|symbol| CmuPhoneme::parse(symbol))
+            .map(|phoneme| phoneme.raw_symbol())
             .collect(),
     }
 }
@@ -370,9 +371,10 @@ fn weak_form(
             .iter()
             .map(|symbol| arpabet::phoneme_id(variety_id, symbol))
             .collect(),
-        cmudict_pronunciation: symbols
+        source_pronunciation: symbols
             .iter()
             .map(|symbol| CmuPhoneme::parse(symbol))
+            .map(|phoneme| phoneme.raw_symbol())
             .collect(),
         following,
         style,
