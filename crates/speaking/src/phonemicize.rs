@@ -183,6 +183,7 @@ pub trait PronunciationPipeline {
                     .is_some_and(|next| self.next_word_starts_with_vowelish(next, &variety)),
                 careful_style,
                 part_of_speech: syntax.tokens.get(word_index).map(|token| token.pos),
+                next_part_of_speech: syntax.tokens.get(word_index + 1).map(|token| token.pos),
             };
             let pronunciation = self.token_classifier(word, &variety, context);
             warnings.extend(pronunciation.warnings.clone());
@@ -247,6 +248,7 @@ pub trait PronunciationPipeline {
                     next_starts_with_vowelish: false,
                     careful_style: true,
                     part_of_speech: None,
+                    next_part_of_speech: None,
                 },
             )
             .candidates
@@ -384,6 +386,10 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         english_normalize_numbers(text)
     }
 
+    fn text_normalizer(&self, text: &str) -> String {
+        english_normalize_numbers(&english_spoken_form(text))
+    }
+
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
         tokenize_words(text)
     }
@@ -453,6 +459,7 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                         next_starts_with_vowelish: false,
                         careful_style: true,
                         part_of_speech: None,
+                        next_part_of_speech: None,
                     },
                 )
                 .candidates
@@ -1194,6 +1201,7 @@ pub struct TokenPronunciationContext {
     pub next_starts_with_vowelish: bool,
     pub careful_style: bool,
     pub part_of_speech: Option<PartOfSpeech>,
+    pub next_part_of_speech: Option<PartOfSpeech>,
 }
 
 fn pronunciation_for_word(
@@ -1234,11 +1242,8 @@ fn pronunciation_for_word(
 
     let entry = cmudict::bundled().lookup_entry(&word.normalized);
     if !entry.candidates.is_empty() {
-        let selection = choose_pos_sensitive_candidates(
-            &entry.lookup,
-            entry.candidates,
-            context.part_of_speech,
-        );
+        let selection =
+            choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
         return WordPronunciation {
             candidates: selection.candidates,
             status: entry.status,
@@ -1437,6 +1442,22 @@ const fn pos_pronunciation(
     }
 }
 
+fn choose_context_sensitive_candidates(
+    lookup: &str,
+    candidates: Vec<Vec<CmuPhoneme>>,
+    context: TokenPronunciationContext,
+) -> CandidateSelection {
+    if lookup == "st" && context.next_part_of_speech == Some(PartOfSpeech::ProperName) {
+        if let Some(selection) =
+            choose_matching_candidate(&candidates, &["S", "EY1", "N", "T"], true)
+        {
+            return selection;
+        }
+    }
+
+    choose_pos_sensitive_candidates(lookup, candidates, context.part_of_speech)
+}
+
 fn choose_pos_sensitive_candidates(
     lookup: &str,
     candidates: Vec<Vec<CmuPhoneme>>,
@@ -1454,25 +1475,33 @@ fn choose_pos_sensitive_candidates(
             applied_pos: false,
         };
     };
+    choose_matching_candidate(&candidates, preferred.symbols, true).unwrap_or(CandidateSelection {
+        candidates,
+        applied_pos: false,
+    })
+}
+
+fn choose_matching_candidate(
+    candidates: &[Vec<CmuPhoneme>],
+    symbols: &[&str],
+    applied_pos: bool,
+) -> Option<CandidateSelection> {
     let Some(position) = candidates
         .iter()
-        .position(|candidate| candidate_matches_symbols(candidate, preferred.symbols))
+        .position(|candidate| candidate_matches_symbols(candidate, symbols))
     else {
-        return CandidateSelection {
-            candidates,
-            applied_pos: false,
-        };
+        return None;
     };
 
-    let mut candidates = candidates;
+    let mut selected = candidates.to_vec();
     if position > 0 {
-        let preferred = candidates.remove(position);
-        candidates.insert(0, preferred);
+        let preferred = selected.remove(position);
+        selected.insert(0, preferred);
     }
-    CandidateSelection {
-        candidates,
-        applied_pos: true,
-    }
+    Some(CandidateSelection {
+        candidates: selected,
+        applied_pos,
+    })
 }
 
 fn pos_sensitive_pronunciation(
@@ -2617,6 +2646,61 @@ pub fn english_normalize_numbers(text: &str) -> String {
     result
 }
 
+pub fn english_spoken_form(text: &str) -> String {
+    let mut out = text.to_string();
+    for (from, to) in [
+        ("Dr.", "Doctor"),
+        ("Mr.", "Mister"),
+        ("Mrs.", "Missus"),
+        ("Ms.", "Miz"),
+        ("Rep.", "Representative"),
+        ("Sen.", "Senator"),
+        ("Gov.", "Governor"),
+        ("Prof.", "Professor"),
+        ("Sr.", "Senior"),
+        ("Jr.", "Junior"),
+        ("e.g.", "e g"),
+        ("E.g.", "e g"),
+        ("i.e.", "i e"),
+        ("I.e.", "i e"),
+        ("a.m.", "a m"),
+        ("A.M.", "a m"),
+        ("p.m.", "p m"),
+        ("P.M.", "p m"),
+        ("Loadstone", "Lodestone"),
+        ("loadstone", "lodestone"),
+        ("D.", "D"),
+        ("R.", "R"),
+        ("NY.", "New York"),
+        ("N.Y.", "New York"),
+    ] {
+        out = out.replace(from, to);
+    }
+    replace_number_abbreviation(&out)
+}
+
+fn replace_number_abbreviation(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find("No.") {
+        out.push_str(&rest[..index]);
+        let after = &rest[index + 3..];
+        if after
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
+        {
+            out.push_str("Number");
+        } else {
+            out.push_str("No.");
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2657,6 +2741,22 @@ mod tests {
         assert_eq!(
             english_normalize_numbers("affects over 100,000 pending immigration cases"),
             "affects over one hundred thousand pending immigration cases"
+        );
+    }
+
+    #[test]
+    fn english_spoken_form_expands_shared_pronunciation_rewrites() {
+        assert_eq!(
+            english_spoken_form("Dr. Smith saw No. 5 at 3.14 p.m."),
+            "Doctor Smith saw Number 5 at 3.14 p m"
+        );
+        assert_eq!(
+            english_spoken_form("The Loadstone Rock"),
+            "The Lodestone Rock"
+        );
+        assert_eq!(
+            english_spoken_form("He lives on Sansome St. The house is blue."),
+            "He lives on Sansome St. The house is blue."
         );
     }
 
@@ -3325,6 +3425,36 @@ mod tests {
             st_boundary4.is_some_and(|b| b.terminal == Some(TerminalPunctuation::Period)),
             "St. at the end of the text should be a sentence boundary"
         );
+    }
+
+    #[test]
+    fn loadstone_is_pronounced_like_lodestone() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("The Loadstone Rock was drawing him.", "en-US"))
+            .expect("should phonemicize");
+        let symbols = phoneme_symbols(&output).join("");
+        assert!(symbols.contains("loʊdstoʊn"), "{symbols}");
+        assert!(!symbols.contains("lʌədstəni"), "{symbols}");
+        assert!(!symbols.contains("ləədstəni"), "{symbols}");
+    }
+
+    #[test]
+    fn st_name_prefix_is_saint_but_street_abbreviation_stays_street() {
+        let saint_output = EnglishPhonemicizer
+            .phonemicize(&request("We visited St. Charles.", "en-US"))
+            .expect("should phonemicize");
+        let saint_symbols = cmudict_symbols(&saint_output).join(" ");
+        assert!(saint_symbols.contains("S EY1 N T"), "{saint_symbols}");
+        assert!(!saint_symbols.contains("S T R IY1 T"), "{saint_symbols}");
+
+        let street_output = EnglishPhonemicizer
+            .phonemicize(&request(
+                "He lives on Sansome St. The house is blue.",
+                "en-US",
+            ))
+            .expect("should phonemicize");
+        let street_symbols = cmudict_symbols(&street_output).join(" ");
+        assert!(street_symbols.contains("S T R IY1 T"), "{street_symbols}");
     }
 
     #[test]

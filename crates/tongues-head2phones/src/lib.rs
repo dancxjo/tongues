@@ -249,6 +249,8 @@ pub fn prepare_dataset_with_progress(
     let mut rng = StdRng::seed_from_u64(config.seed);
     let examples_part_path = out.join("examples.jsonl.part");
     let discrepancies_part_path = out.join("naive_seams_discrepancies.jsonl.part");
+    protect_nonempty_partial(&examples_part_path)?;
+    protect_nonempty_partial(&discrepancies_part_path)?;
     let mut examples_part = BufWriter::new(
         File::create(&examples_part_path)
             .with_context(|| format!("creating {}", examples_part_path.display()))?,
@@ -265,6 +267,7 @@ pub fn prepare_dataset_with_progress(
 
     if config.include_synthetic {
         let synthetic_path = out.join("synthetic_buffers.jsonl.part");
+        protect_nonempty_partial(&synthetic_path)?;
         temporary_parts.push(synthetic_path.clone());
         let synthetic = synthetic_buffers(config.synthetic_buffers, &mut rng);
         let mut writer = BufWriter::new(
@@ -438,6 +441,18 @@ pub fn prepare_dataset_with_progress(
         valid_examples: valid.len(),
         test_examples: test.len(),
     })
+}
+
+fn protect_nonempty_partial(path: &Path) -> Result<()> {
+    let Some(metadata) = fs::metadata(path).ok() else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        metadata.len() == 0,
+        "refusing to overwrite nonempty partial artifact {}; move, remove, or resume it explicitly",
+        path.display()
+    );
+    Ok(())
 }
 
 fn add_examples_for_buffer(
@@ -761,72 +776,14 @@ pub fn format_input(buffer: &str) -> String {
 
 fn speech_symbols_for_text(text: &str) -> Option<String> {
     let phonemicizer = EnglishPhonemicizer;
-    let spoken_text = spoken_form_for_head(text);
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
-            text: spoken_text,
+            text: text.to_string(),
             variety: VarietyId("en-US".to_string()),
             style: None,
         })
         .ok()?;
     phones_for_phonemicized(&phonemicized)
-}
-
-fn spoken_form_for_head(text: &str) -> String {
-    let mut out = text.to_string();
-    for (from, to) in [
-        ("Dr.", "Doctor"),
-        ("Mr.", "Mister"),
-        ("Mrs.", "Missus"),
-        ("Ms.", "Miz"),
-        ("Rep.", "Representative"),
-        ("Sen.", "Senator"),
-        ("Gov.", "Governor"),
-        ("Prof.", "Professor"),
-        ("Sr.", "Senior"),
-        ("Jr.", "Junior"),
-        ("St.", "Saint"),
-        ("e.g.", "e g"),
-        ("E.g.", "e g"),
-        ("i.e.", "i e"),
-        ("I.e.", "i e"),
-        ("a.m.", "a m"),
-        ("A.M.", "a m"),
-        ("p.m.", "p m"),
-        ("P.M.", "p m"),
-        ("Loadstone", "Lodestone"),
-        ("loadstone", "lodestone"),
-        ("D.", "D"),
-        ("R.", "R"),
-        ("NY.", "New York"),
-        ("N.Y.", "New York"),
-    ] {
-        out = out.replace(from, to);
-    }
-    out = replace_number_abbreviation(&out);
-    out
-}
-
-fn replace_number_abbreviation(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find("No.") {
-        out.push_str(&rest[..index]);
-        let after = &rest[index + 3..];
-        if after
-            .trim_start()
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_digit())
-        {
-            out.push_str("Number");
-        } else {
-            out.push_str("No.");
-        }
-        rest = after;
-    }
-    out.push_str(rest);
-    out
 }
 
 fn phones_for_phonemicized(phonemicized: &PhonemicizeOutput) -> Option<String> {
@@ -1592,8 +1549,8 @@ mod tests {
 
     #[test]
     fn loadstone_is_pronounced_like_lodestone() {
-        let symbols = speech_symbols_for_text("The Loadstone Rock was drawing him.")
-            .expect("symbols");
+        let symbols =
+            speech_symbols_for_text("The Loadstone Rock was drawing him.").expect("symbols");
         assert!(symbols.contains("ˈloʊdˌstoʊn"), "{symbols}");
         assert!(!symbols.contains("ˈlʌəd.stə.nɪ"), "{symbols}");
         assert!(!symbols.contains("ˈləəd.stə.nɪ"), "{symbols}");

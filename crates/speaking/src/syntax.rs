@@ -1084,6 +1084,7 @@ fn is_proper_name(word: &str) -> bool {
             | "anne"
             | "baird"
             | "bob"
+            | "charles"
             | "chris"
             | "clinton"
             | "david"
