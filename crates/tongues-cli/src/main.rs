@@ -751,7 +751,7 @@ enum Head2PhonesCommands {
         #[arg(long, default_value = "configs/head2phones/default.toml")]
         config: PathBuf,
 
-        /// English text file or directory; may be passed more than once
+        /// Optional text file or directory; may be passed more than once
         #[arg(long = "input")]
         inputs: Vec<PathBuf>,
 
@@ -826,7 +826,7 @@ enum Head2PhonesCommands {
         #[arg(long, default_value = "datasets/head2phones/v0")]
         data: PathBuf,
 
-        /// English text file or directory to use when --prepare is set; may be passed more than once
+        /// Optional text file or directory to use when --prepare is set; may be passed more than once
         #[arg(long = "input")]
         inputs: Vec<PathBuf>,
 

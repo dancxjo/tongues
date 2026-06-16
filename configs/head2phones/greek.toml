@@ -2,8 +2,12 @@ dataset_id = "greek-varieties-v0"
 varieties = ["el-GR-Standard", "grc-Attic", "grc-Koine"]
 source_paths = []
 include_synthetic = true
-include_default_gutenberg = false
-gutenberg_urls = []
+include_default_gutenberg = true
+gutenberg_sources = [
+  { url = "https://www.gutenberg.org/ebooks/31669.txt.utf-8", varieties = ["el-GR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/38414.txt.utf-8", varieties = ["el-GR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/36248.txt.utf-8", varieties = ["grc-Attic", "grc-Koine"] },
+]
 synthetic_buffers = 4096
 random_cuts_per_buffer = 8
 no_head_cuts_per_head = 8

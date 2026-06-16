@@ -14,8 +14,28 @@ varieties = [
 ]
 source_paths = []
 include_synthetic = true
-include_default_gutenberg = false
+include_default_gutenberg = true
 gutenberg_urls = []
+gutenberg_sources = [
+  { url = "https://www.gutenberg.org/ebooks/1342.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/84.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/11.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/98.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/1661.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/2701.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/345.txt.utf-8", varieties = ["en-US"] },
+  { url = "https://www.gutenberg.org/ebooks/17489.txt.utf-8", varieties = ["fr-FR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/17493.txt.utf-8", varieties = ["fr-FR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/21000.txt.utf-8", varieties = ["de-DE-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/2230.txt.utf-8", varieties = ["de-DE-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/2000.txt.utf-8", varieties = ["es-ES-Castilian", "es-419-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/218.txt.utf-8", varieties = ["la-Classical", "la-Ecclesiastical"] },
+  { url = "https://www.gutenberg.org/ebooks/18837.txt.utf-8", varieties = ["la-Classical", "la-Ecclesiastical"] },
+  { url = "https://www.gutenberg.org/ebooks/31669.txt.utf-8", varieties = ["el-GR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/38414.txt.utf-8", varieties = ["el-GR-Standard"] },
+  { url = "https://www.gutenberg.org/ebooks/36248.txt.utf-8", varieties = ["grc-Attic", "grc-Koine"] },
+  { url = "https://www.gutenberg.org/ebooks/9000.txt.utf-8", varieties = ["sa-Deva-Standard"] },
+]
 synthetic_buffers = 4096
 random_cuts_per_buffer = 8
 no_head_cuts_per_head = 8

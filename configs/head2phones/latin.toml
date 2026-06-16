@@ -2,8 +2,11 @@ dataset_id = "latin-varieties-v0"
 varieties = ["la-Classical", "la-Ecclesiastical"]
 source_paths = []
 include_synthetic = true
-include_default_gutenberg = false
-gutenberg_urls = []
+include_default_gutenberg = true
+gutenberg_urls = [
+  "https://www.gutenberg.org/ebooks/218.txt.utf-8",
+  "https://www.gutenberg.org/ebooks/18837.txt.utf-8",
+]
 synthetic_buffers = 4096
 random_cuts_per_buffer = 8
 no_head_cuts_per_head = 8

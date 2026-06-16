@@ -61,6 +61,8 @@ pub struct Head2PhonesConfig {
     pub include_default_gutenberg: bool,
     #[serde(default = "default_gutenberg_urls")]
     pub gutenberg_urls: Vec<String>,
+    #[serde(default)]
+    pub gutenberg_sources: Vec<GutenbergSourceConfig>,
     #[serde(default = "default_include_synthetic")]
     pub include_synthetic: bool,
     #[serde(default = "default_synthetic_buffers")]
@@ -99,6 +101,13 @@ pub struct Head2PhonesConfig {
     pub ollama_verify_strict: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GutenbergSourceConfig {
+    pub url: String,
+    #[serde(default)]
+    pub varieties: Vec<String>,
+}
+
 impl Default for Head2PhonesConfig {
     fn default() -> Self {
         Self {
@@ -107,6 +116,7 @@ impl Default for Head2PhonesConfig {
             source_paths: Vec::new(),
             include_default_gutenberg: default_include_default_gutenberg(),
             gutenberg_urls: default_gutenberg_urls(),
+            gutenberg_sources: Vec::new(),
             include_synthetic: default_include_synthetic(),
             synthetic_buffers: default_synthetic_buffers(),
             random_cuts_per_buffer: default_random_cuts_per_buffer(),
@@ -302,6 +312,12 @@ struct PrepareShardData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedSourceFile {
+    path: PathBuf,
+    varieties: Vec<VarietyId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
     Stage {
         message: String,
@@ -453,7 +469,9 @@ pub fn prepare_dataset_with_progress(
     }
 
     let source_files = resolve_source_files_with_progress(out, config, &mut progress)?;
-    for (index, path) in source_files.iter().enumerate() {
+    for (index, source_file) in source_files.iter().enumerate() {
+        let path = &source_file.path;
+        let source_varieties = source_file.varieties.clone();
         let shard_id = format!("{:03}-source-{}", index + 2, sanitize_checkpoint_id(path));
         let label = path.display().to_string();
         let manifest = build_or_load_prepare_shard(
@@ -482,16 +500,22 @@ pub fn prepare_dataset_with_progress(
                 let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
                 let mut examples = Vec::new();
                 for buffer in &buffers {
-                    add_examples_for_buffer(
+                    add_examples_for_buffer_with_varieties(
                         buffer,
                         &path.display().to_string(),
                         TrainingRowSource::SourceText,
                         config,
+                        &source_varieties,
                         &mut rng,
                         &mut examples,
                     )?;
                 }
-                add_repair_examples_for_discrepancies(&discrepancies, config, &mut examples);
+                add_repair_examples_for_discrepancies_with_varieties(
+                    &discrepancies,
+                    config,
+                    &source_varieties,
+                    &mut examples,
+                );
                 Ok(PrepareShardData {
                     source_buffers: buffers.len(),
                     examples,
@@ -898,12 +922,26 @@ fn add_examples_for_buffer(
     examples: &mut Vec<Head2PhonesTrainingExample>,
 ) -> Result<()> {
     let varieties = configured_varieties(config);
+    add_examples_for_buffer_with_varieties(
+        buffer, source, row_source, config, &varieties, rng, examples,
+    )
+}
+
+fn add_examples_for_buffer_with_varieties(
+    buffer: &str,
+    source: &str,
+    row_source: TrainingRowSource,
+    config: &Head2PhonesConfig,
+    varieties: &[VarietyId],
+    rng: &mut StdRng,
+    examples: &mut Vec<Head2PhonesTrainingExample>,
+) -> Result<()> {
     if let Some(head) = first_complete_head(buffer) {
         let head_text = buffer[..head.end_byte].trim().to_string();
         let split_after = buffer[..head.end_byte].graphemes(true).count();
         let head_len = head_text.graphemes(true).count();
         if head_len >= config.min_head_graphemes && head_len <= config.max_head_graphemes {
-            for variety in &varieties {
+            for variety in varieties {
                 if let Some(phones) = speech_symbols_for_text(&head_text, variety) {
                     let row = Head2PhonesTrainingExample {
                         row_source,
@@ -922,7 +960,7 @@ fn add_examples_for_buffer(
         }
 
         for cut_buffer in random_complete_buffers(buffer, head.end_byte, config, rng) {
-            for variety in &varieties {
+            for variety in varieties {
                 if let Some(symbols) = speech_symbols_for_text(&head_text, variety) {
                     let row = Head2PhonesTrainingExample {
                         row_source: if row_source == TrainingRowSource::Exceptional {
@@ -945,7 +983,7 @@ fn add_examples_for_buffer(
         }
 
         for prefix in no_head_prefixes(&head_text, config, rng) {
-            for variety in &varieties {
+            for variety in varieties {
                 let row = Head2PhonesTrainingExample {
                     row_source: if row_source == TrainingRowSource::Exceptional {
                         TrainingRowSource::Exceptional
@@ -963,14 +1001,13 @@ fn add_examples_for_buffer(
             }
 
             if prefix_ends_at_boundary_in_head(&prefix, &head_text) {
-                for flush_row in flush_examples_for_prefix(&prefix, source, row_source, &varieties)
-                {
+                for flush_row in flush_examples_for_prefix(&prefix, source, row_source, varieties) {
                     examples.push(flush_row);
                 }
             }
         }
     } else if !buffer.trim().is_empty() {
-        for variety in &varieties {
+        for variety in varieties {
             let row = Head2PhonesTrainingExample {
                 row_source,
                 variety: variety.0.clone(),
@@ -983,7 +1020,7 @@ fn add_examples_for_buffer(
             examples.push(row);
         }
 
-        for flush_row in flush_examples_for_prefix(buffer.trim(), source, row_source, &varieties) {
+        for flush_row in flush_examples_for_prefix(buffer.trim(), source, row_source, varieties) {
             examples.push(flush_row);
         }
     }
@@ -1069,8 +1106,23 @@ fn add_repair_examples_for_discrepancies(
     config: &Head2PhonesConfig,
     examples: &mut Vec<Head2PhonesTrainingExample>,
 ) {
+    let varieties = configured_varieties(config);
+    add_repair_examples_for_discrepancies_with_varieties(
+        discrepancies,
+        config,
+        &varieties,
+        examples,
+    )
+}
+
+fn add_repair_examples_for_discrepancies_with_varieties(
+    discrepancies: &[NaiveSeamsDiscrepancy],
+    config: &Head2PhonesConfig,
+    varieties: &[VarietyId],
+    examples: &mut Vec<Head2PhonesTrainingExample>,
+) {
     for discrepancy in discrepancies {
-        for row in repair_examples_for_discrepancy(discrepancy, config) {
+        for row in repair_examples_for_discrepancy_with_varieties(discrepancy, config, varieties) {
             examples.push(row);
         }
     }
@@ -1086,9 +1138,19 @@ fn repair_example_for_discrepancy(
         .next()
 }
 
+#[cfg(test)]
 fn repair_examples_for_discrepancy(
     discrepancy: &NaiveSeamsDiscrepancy,
     config: &Head2PhonesConfig,
+) -> Vec<Head2PhonesTrainingExample> {
+    let varieties = configured_varieties(config);
+    repair_examples_for_discrepancy_with_varieties(discrepancy, config, &varieties)
+}
+
+fn repair_examples_for_discrepancy_with_varieties(
+    discrepancy: &NaiveSeamsDiscrepancy,
+    config: &Head2PhonesConfig,
+    varieties: &[VarietyId],
 ) -> Vec<Head2PhonesTrainingExample> {
     let Some(wrong_head) = discrepancy
         .naive_sentences
@@ -1109,13 +1171,13 @@ fn repair_examples_for_discrepancy(
         return Vec::new();
     }
     let rollback = wrong_head.graphemes(true).count();
-    configured_varieties(config)
-        .into_iter()
+    varieties
+        .iter()
         .filter_map(|variety| {
-            let symbols = speech_symbols_for_text(repaired_head, &variety)?;
+            let symbols = speech_symbols_for_text(repaired_head, variety)?;
             Some(Head2PhonesTrainingExample {
                 row_source: TrainingRowSource::Repair,
-                variety: variety.0,
+                variety: variety.0.clone(),
                 input: repaired_head.to_string(),
                 output: format!(
                     "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {repaired_len}"
@@ -2204,10 +2266,17 @@ fn resolve_source_files_with_progress(
     out: &Path,
     config: &Head2PhonesConfig,
     progress: &mut impl FnMut(PrepareProgress),
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<ResolvedSourceFile>> {
     let configured = discover_source_files(&config.source_paths)?;
     if !configured.is_empty() {
-        return Ok(configured);
+        let varieties = configured_varieties(config);
+        return Ok(configured
+            .into_iter()
+            .map(|path| ResolvedSourceFile {
+                path,
+                varieties: varieties.clone(),
+            })
+            .collect());
     }
 
     let default_dir = out.join("sources");
@@ -2216,25 +2285,62 @@ fn resolve_source_files_with_progress(
     let mut generated_paths = Vec::new();
 
     if config.include_default_gutenberg {
-        let urls = if config.gutenberg_urls.is_empty() {
-            default_gutenberg_urls()
+        let source_configs = if config.gutenberg_sources.is_empty() {
+            let urls = if config.gutenberg_urls.is_empty() {
+                default_gutenberg_urls()
+            } else {
+                config.gutenberg_urls.clone()
+            };
+            let varieties = config
+                .varieties
+                .iter()
+                .map(|variety| variety.trim())
+                .filter(|variety| !variety.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            urls.into_iter()
+                .map(|url| GutenbergSourceConfig {
+                    url,
+                    varieties: varieties.clone(),
+                })
+                .collect::<Vec<_>>()
         } else {
-            config.gutenberg_urls.clone()
+            config.gutenberg_sources.clone()
         };
-        for (index, url) in urls.iter().enumerate() {
-            match download_gutenberg_source(&default_dir, index, url, progress) {
-                Ok(path) => generated_paths.push(path),
+        for (index, source_config) in source_configs.iter().enumerate() {
+            match download_gutenberg_source(&default_dir, index, &source_config.url, progress) {
+                Ok(path) => generated_paths.push(ResolvedSourceFile {
+                    path,
+                    varieties: source_varieties(config, &source_config.varieties),
+                }),
                 Err(error) => {
                     progress(PrepareProgress::Stage {
-                        message: format!("Skipping default Gutenberg source {url}: {error}"),
+                        message: format!(
+                            "Skipping default Gutenberg source {}: {error}",
+                            source_config.url
+                        ),
                     });
                 }
             }
         }
     }
 
-    generated_paths.sort();
+    generated_paths.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(generated_paths)
+}
+
+fn source_varieties(config: &Head2PhonesConfig, varieties: &[String]) -> Vec<VarietyId> {
+    let scoped = varieties
+        .iter()
+        .map(|variety| variety.trim())
+        .filter(|variety| !variety.is_empty())
+        .map(|variety| VarietyId(variety.to_string()))
+        .collect::<Vec<_>>();
+    if scoped.is_empty() {
+        configured_varieties(config)
+    } else {
+        scoped
+    }
 }
 
 fn download_gutenberg_source(
