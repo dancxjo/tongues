@@ -17,9 +17,15 @@ Current categories:
   avoid known-bad alternatives.
 - `head`: `first_complete_head` must return the expected text, or `null` for
   incomplete prefixes.
-- `flush`: end-of-text flush examples must become speakable rows.
+- `flush`: end-of-text flush examples must become explicit `<HEAD_FOUND>`
+  speakable rows.
 - `repair`: false early emissions must produce a low-confidence repair row with
-  `<ERROR_REPAIR>` and `<ROLLBACK_GRAPHEMES>` before corrected phones.
+  `<ERROR_REPAIR>` and `<ROLLBACK_GRAPHEMES>` before the corrected
+  `<HEAD_FOUND>` block.
+- Synthetic multilingual buffers scope phone rows to the head language. Other
+  requested languages should get `<LANG_MISMATCH>` rather than phones.
+- Synthetic guess-mode rows omit the input variety tag and include
+  `<DETECTED_LANG>` before phones or language spans.
 
 Important cases currently covered include:
 
@@ -32,3 +38,7 @@ Important cases currently covered include:
 - title-like end-of-text fragments flushing into phone rows;
 - false abbreviation splits, such as `Who shot John F.` before `Kennedy?`,
   producing rollback repair rows.
+- code-switching contexts where the completed head and following text can use
+  different languages.
+- completed heads with internal code switches, marked with plain
+  `<lang id="...">...</lang>` spans.

@@ -1,8 +1,9 @@
 //! Head-chunk-to-phones seq2seq data preparation.
 //!
 //! The model sees a raw rolling UTF-8 text buffer and emits either
-//! `<NO_HEAD>` or phones plus the Unicode grapheme-cluster split offset for
-//! the first complete TTS-speakable head chunk.
+//! `<NO_HEAD>` or an explicit `<HEAD_FOUND>` block with phones, head length,
+//! and the Unicode grapheme-cluster split offset for the first complete
+//! TTS-speakable head chunk.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -32,13 +33,21 @@ pub const VARIETY_OPEN: &str = "<variety:";
 pub const VARIETY_CLOSE: &str = ">";
 pub const PHONES_OPEN: &str = "<PHONES>";
 pub const PHONES_CLOSE: &str = "</PHONES>";
+pub const HEAD_FOUND: &str = "<HEAD_FOUND>";
+pub const HEAD_LENGTH: &str = "<HEAD_LENGTH>";
+pub const LANGUAGE_SPANS_OPEN: &str = "<LANGUAGE_SPANS>";
+pub const LANGUAGE_SPANS_CLOSE: &str = "</LANGUAGE_SPANS>";
 pub const SPLIT_AFTER: &str = "<SPLIT_AFTER>";
 pub const NO_HEAD: &str = "<NO_HEAD>";
+pub const LANG_MISMATCH: &str = "<LANG_MISMATCH>";
+pub const DETECTED_LANG: &str = "<DETECTED_LANG>";
+pub const EXPECTED_LANG: &str = "<EXPECTED_LANG>";
 pub const ERROR_REPAIR: &str = "<ERROR_REPAIR>";
 pub const ROLLBACK_GRAPHEMES: &str = "<ROLLBACK_GRAPHEMES>";
 pub const CONFIDENCE: &str = "<CONFIDENCE>";
 pub const CONFIDENCE_LOW: &str = "low";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
+const PREPARE_SCHEMA_VERSION: &str = "head2phones-prepare-v2";
 const USER_AGENT: &str = "tongues-head2phones/0.1";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
@@ -225,6 +234,8 @@ pub struct Head2PhonesTrainingExample {
     pub row_source: TrainingRowSource,
     #[serde(default = "default_training_row_variety")]
     pub variety: String,
+    #[serde(default = "default_training_row_input_has_variety")]
+    pub input_has_variety: bool,
     pub input: String,
     pub output: String,
     pub head: Option<String>,
@@ -238,6 +249,10 @@ fn default_training_row_source() -> TrainingRowSource {
 
 fn default_training_row_variety() -> String {
     "en-US".to_string()
+}
+
+fn default_training_row_input_has_variety() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,8 +322,21 @@ pub struct PrepareShardManifest {
 struct PrepareShardData {
     examples: Vec<Head2PhonesTrainingExample>,
     discrepancies: Vec<NaiveSeamsDiscrepancy>,
-    synthetic_buffers: Option<Vec<String>>,
+    synthetic_buffers: Option<Vec<SyntheticBuffer>>,
     source_buffers: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SyntheticBuffer {
+    text: String,
+    head_language: String,
+    remainder_language: String,
+}
+
+struct SyntheticLanguageMaterial {
+    language: &'static str,
+    heads: &'static [&'static str],
+    remainders: &'static [&'static str],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,14 +418,32 @@ pub fn prepare_dataset_with_progress(
                 );
                 for (index, buffer) in synthetic.iter().enumerate() {
                     let previous_len = examples.len();
-                    add_examples_for_buffer(
-                        buffer,
+                    let native_varieties = varieties_for_language(config, &buffer.head_language);
+                    add_examples_for_buffer_with_varieties(
+                        &buffer.text,
                         "synthetic",
                         TrainingRowSource::Synthetic,
                         config,
+                        &native_varieties,
                         &mut rng,
                         &mut examples,
                     )?;
+                    add_language_mismatch_examples_for_buffer(
+                        &buffer.text,
+                        "synthetic",
+                        TrainingRowSource::Synthetic,
+                        &buffer.head_language,
+                        config,
+                        &mut examples,
+                    );
+                    add_variety_guess_example_for_buffer(
+                        &buffer.text,
+                        "synthetic",
+                        TrainingRowSource::Synthetic,
+                        &buffer.head_language,
+                        config,
+                        &mut examples,
+                    );
                     for row in &examples[previous_len..] {
                         writeln!(examples_part, "{}", serde_json::to_string(row)?)?;
                     }
@@ -795,7 +841,10 @@ fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
     dataset_config.ollama_verify_max_chars = default_ollama_verify_max_chars();
     dataset_config.ollama_verify_strict = false;
     let json = serde_json::to_string(&dataset_config)?;
-    Ok(format!("{:016x}", stable_hash(json.as_bytes())))
+    Ok(format!(
+        "{:016x}",
+        stable_hash(format!("{PREPARE_SCHEMA_VERSION}\n{json}").as_bytes())
+    ))
 }
 
 fn unit_seed(base_seed: u64, label: &str) -> u64 {
@@ -942,43 +991,55 @@ fn add_examples_for_buffer_with_varieties(
         let head_len = head_text.graphemes(true).count();
         if head_len >= config.min_head_graphemes && head_len <= config.max_head_graphemes {
             for variety in varieties {
-                if let Some(phones) = speech_symbols_for_text(&head_text, variety) {
-                    let row = Head2PhonesTrainingExample {
-                        row_source,
-                        variety: variety.0.clone(),
-                        input: buffer.to_string(),
-                        output: format!(
-                            "{PHONES_OPEN} {phones} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
-                        ),
-                        head: Some(head_text.clone()),
-                        split_after: Some(split_after),
-                        source: source.to_string(),
-                    };
-                    examples.push(row);
-                }
+                let output = if let Some(markup) = language_markup_for_head(&head_text, None) {
+                    Some(format_language_spans_output(&markup, head_len, split_after))
+                } else {
+                    speech_symbols_for_text(&head_text, variety)
+                        .map(|phones| format_head_found_output(&phones, head_len, split_after))
+                };
+                let Some(output) = output else {
+                    continue;
+                };
+                let row = Head2PhonesTrainingExample {
+                    row_source,
+                    variety: variety.0.clone(),
+                    input_has_variety: true,
+                    input: buffer.to_string(),
+                    output,
+                    head: Some(head_text.clone()),
+                    split_after: Some(split_after),
+                    source: source.to_string(),
+                };
+                examples.push(row);
             }
         }
 
         for cut_buffer in random_complete_buffers(buffer, head.end_byte, config, rng) {
             for variety in varieties {
-                if let Some(symbols) = speech_symbols_for_text(&head_text, variety) {
-                    let row = Head2PhonesTrainingExample {
-                        row_source: if row_source == TrainingRowSource::Exceptional {
-                            TrainingRowSource::Exceptional
-                        } else {
-                            TrainingRowSource::RandomCut
-                        },
-                        variety: variety.0.clone(),
-                        input: cut_buffer.clone(),
-                        output: format!(
-                            "{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
-                        ),
-                        head: Some(head_text.clone()),
-                        split_after: Some(split_after),
-                        source: source.to_string(),
-                    };
-                    examples.push(row);
-                }
+                let output = if let Some(markup) = language_markup_for_head(&head_text, None) {
+                    Some(format_language_spans_output(&markup, head_len, split_after))
+                } else {
+                    speech_symbols_for_text(&head_text, variety)
+                        .map(|symbols| format_head_found_output(&symbols, head_len, split_after))
+                };
+                let Some(output) = output else {
+                    continue;
+                };
+                let row = Head2PhonesTrainingExample {
+                    row_source: if row_source == TrainingRowSource::Exceptional {
+                        TrainingRowSource::Exceptional
+                    } else {
+                        TrainingRowSource::RandomCut
+                    },
+                    variety: variety.0.clone(),
+                    input_has_variety: true,
+                    input: cut_buffer.clone(),
+                    output,
+                    head: Some(head_text.clone()),
+                    split_after: Some(split_after),
+                    source: source.to_string(),
+                };
+                examples.push(row);
             }
         }
 
@@ -991,6 +1052,7 @@ fn add_examples_for_buffer_with_varieties(
                         TrainingRowSource::RandomCut
                     },
                     variety: variety.0.clone(),
+                    input_has_variety: true,
                     input: prefix.clone(),
                     output: NO_HEAD.to_string(),
                     head: None,
@@ -1011,6 +1073,7 @@ fn add_examples_for_buffer_with_varieties(
             let row = Head2PhonesTrainingExample {
                 row_source,
                 variety: variety.0.clone(),
+                input_has_variety: true,
                 input: buffer.to_string(),
                 output: NO_HEAD.to_string(),
                 head: None,
@@ -1025,6 +1088,193 @@ fn add_examples_for_buffer_with_varieties(
         }
     }
     Ok(())
+}
+
+fn format_head_found_output(symbols: &str, head_len: usize, split_after: usize) -> String {
+    format!(
+        "{HEAD_FOUND}\n{HEAD_LENGTH} {head_len}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
+    )
+}
+
+fn format_language_spans_output(markup: &str, head_len: usize, split_after: usize) -> String {
+    format!(
+        "{HEAD_FOUND}\n{LANGUAGE_SPANS_OPEN}\n{markup}\n{LANGUAGE_SPANS_CLOSE}\n{HEAD_LENGTH} {head_len}\n{SPLIT_AFTER} {split_after}"
+    )
+}
+
+fn format_detected_language_spans_output(
+    markup: &str,
+    detected_lang: &str,
+    head_len: usize,
+    split_after: usize,
+) -> String {
+    format!(
+        "{HEAD_FOUND}\n{DETECTED_LANG} {detected_lang}\n{LANGUAGE_SPANS_OPEN}\n{markup}\n{LANGUAGE_SPANS_CLOSE}\n{HEAD_LENGTH} {head_len}\n{SPLIT_AFTER} {split_after}"
+    )
+}
+
+fn add_language_mismatch_examples_for_buffer(
+    buffer: &str,
+    source: &str,
+    row_source: TrainingRowSource,
+    detected_language: &str,
+    config: &Head2PhonesConfig,
+    examples: &mut Vec<Head2PhonesTrainingExample>,
+) {
+    let Some(head) = first_complete_head(buffer) else {
+        return;
+    };
+    let head_text = buffer[..head.end_byte].trim().to_string();
+    let split_after = buffer[..head.end_byte].graphemes(true).count();
+    let head_len = head_text.graphemes(true).count();
+    if head_len < config.min_head_graphemes || head_len > config.max_head_graphemes {
+        return;
+    }
+    for variety in configured_varieties(config)
+        .into_iter()
+        .filter(|variety| !variety_matches_language(variety, detected_language))
+    {
+        examples.push(Head2PhonesTrainingExample {
+            row_source,
+            variety: variety.0.clone(),
+            input_has_variety: true,
+            input: buffer.to_string(),
+            output: format_language_mismatch_output(
+                detected_language,
+                universal_lang_code_for_variety(&variety.0),
+                head_len,
+                split_after,
+            ),
+            head: Some(head_text.clone()),
+            split_after: Some(split_after),
+            source: source.to_string(),
+        });
+    }
+}
+
+fn add_variety_guess_example_for_buffer(
+    buffer: &str,
+    source: &str,
+    row_source: TrainingRowSource,
+    detected_language: &str,
+    config: &Head2PhonesConfig,
+    examples: &mut Vec<Head2PhonesTrainingExample>,
+) {
+    let Some(head) = first_complete_head(buffer) else {
+        return;
+    };
+    let head_text = buffer[..head.end_byte].trim().to_string();
+    let split_after = buffer[..head.end_byte].graphemes(true).count();
+    let head_len = head_text.graphemes(true).count();
+    if head_len < config.min_head_graphemes || head_len > config.max_head_graphemes {
+        return;
+    }
+    let variety = representative_variety_for_language(config, detected_language);
+    let Some(symbols) = speech_symbols_for_text(&head_text, &variety) else {
+        return;
+    };
+    examples.push(Head2PhonesTrainingExample {
+        row_source,
+        variety: variety.0.clone(),
+        input_has_variety: false,
+        input: buffer.to_string(),
+        output: if let Some(markup) = language_markup_for_head(&head_text, Some(detected_language))
+        {
+            format_detected_language_spans_output(
+                &markup,
+                universal_lang_code_for_variety(&variety.0),
+                head_len,
+                split_after,
+            )
+        } else {
+            format_detected_head_found_output(
+                &symbols,
+                universal_lang_code_for_variety(&variety.0),
+                head_len,
+                split_after,
+            )
+        },
+        head: Some(head_text),
+        split_after: Some(split_after),
+        source: source.to_string(),
+    });
+}
+
+fn format_language_mismatch_output(
+    detected_language: &str,
+    expected_lang: &str,
+    head_len: usize,
+    split_after: usize,
+) -> String {
+    format!(
+        "{HEAD_FOUND}\n{LANG_MISMATCH}\n{DETECTED_LANG} {detected_language}\n{EXPECTED_LANG} {expected_lang}\n{HEAD_LENGTH} {head_len}\n{SPLIT_AFTER} {split_after}"
+    )
+}
+
+fn format_detected_head_found_output(
+    symbols: &str,
+    detected_lang: &str,
+    head_len: usize,
+    split_after: usize,
+) -> String {
+    format!(
+        "{HEAD_FOUND}\n{DETECTED_LANG} {detected_lang}\n{HEAD_LENGTH} {head_len}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
+    )
+}
+
+fn language_markup_for_head(head: &str, default_language: Option<&str>) -> Option<String> {
+    let trimmed = head.trim();
+    let sentence = trimmed.strip_suffix('?').unwrap_or(trimmed);
+    let question = if trimmed.ends_with('?') { "?" } else { "" };
+    match sentence {
+        "Como se dice 'umbrella' en espagnol" => Some(join_lang_spans(&[
+            ("es", "Como se dice "),
+            ("en", "'umbrella'"),
+            ("es", " en "),
+            ("fr", "espagnol"),
+            ("es", question),
+        ])),
+        "Como se dice 'umbrella' en espanol" | "Como se dice 'umbrella' en español" => {
+            Some(join_lang_spans(&[
+                ("es", "Como se dice "),
+                ("en", "'umbrella'"),
+                ("es", &format!(" en espanol{question}")),
+            ]))
+        }
+        "How do you say 'paraguas' in Spanish" => Some(join_lang_spans(&[
+            ("en", "How do you say "),
+            ("es", "'paraguas'"),
+            ("en", &format!(" in Spanish{question}")),
+        ])),
+        _ => default_language.map(|language| lang_span(language, trimmed)),
+    }
+}
+
+fn join_lang_spans(spans: &[(&str, &str)]) -> String {
+    spans
+        .iter()
+        .filter(|(_, text)| !text.is_empty())
+        .map(|(language, text)| lang_span(language, text))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn lang_span(language: &str, text: &str) -> String {
+    format!(
+        "<lang id=\"{}\">{}</lang>",
+        escape_markup_attr(language),
+        escape_markup_text(text)
+    )
+}
+
+fn escape_markup_attr(text: &str) -> String {
+    escape_markup_text(text).replace('"', "&quot;")
+}
+
+fn escape_markup_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -1072,10 +1322,9 @@ fn flush_examples_for_prefix(
             Some(Head2PhonesTrainingExample {
                 row_source,
                 variety: variety.0.clone(),
+                input_has_variety: true,
                 input: format!("{head_text}{END_OF_TEXT}"),
-                output: format!(
-                    "{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {split_after}"
-                ),
+                output: format_head_found_output(&symbols, split_after, split_after),
                 head: Some(head_text.to_string()),
                 split_after: Some(split_after),
                 source: source.to_string(),
@@ -1178,9 +1427,11 @@ fn repair_examples_for_discrepancy_with_varieties(
             Some(Head2PhonesTrainingExample {
                 row_source: TrainingRowSource::Repair,
                 variety: variety.0.clone(),
+                input_has_variety: true,
                 input: repaired_head.to_string(),
                 output: format!(
-                    "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{PHONES_OPEN} {symbols} {PHONES_CLOSE}\n{SPLIT_AFTER} {repaired_len}"
+                    "{CONFIDENCE} {CONFIDENCE_LOW}\n{ERROR_REPAIR}\n{ROLLBACK_GRAPHEMES} {rollback}\n{}",
+                    format_head_found_output(&symbols, repaired_len, repaired_len)
                 ),
                 head: Some(repaired_head.to_string()),
                 split_after: Some(repaired_len),
@@ -1381,8 +1632,16 @@ pub fn format_input_for_variety(variety: &str, buffer: &str) -> String {
     )
 }
 
+pub fn format_input_without_variety(buffer: &str) -> String {
+    format!("{TASK_TOKEN}{buffer}")
+}
+
 fn training_input(row: &Head2PhonesTrainingExample) -> String {
-    format_input_for_variety(&row.variety, &row.input)
+    if row.input_has_variety {
+        format_input_for_variety(&row.variety, &row.input)
+    } else {
+        format_input_without_variety(&row.input)
+    }
 }
 
 fn normalized_variety(variety: &str) -> &str {
@@ -1408,6 +1667,49 @@ fn configured_varieties(config: &Head2PhonesConfig) -> Vec<VarietyId> {
         .into_iter()
         .map(|variety| VarietyId(variety.trim().to_string()))
         .collect()
+}
+
+fn varieties_for_language(config: &Head2PhonesConfig, language: &str) -> Vec<VarietyId> {
+    let varieties = configured_varieties(config)
+        .into_iter()
+        .filter(|variety| variety_matches_language(variety, language))
+        .collect::<Vec<_>>();
+    if varieties.is_empty() {
+        vec![VarietyId(default_training_row_variety())]
+    } else {
+        varieties
+    }
+}
+
+fn representative_variety_for_language(config: &Head2PhonesConfig, language: &str) -> VarietyId {
+    varieties_for_language(config, language)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| VarietyId(default_training_row_variety()))
+}
+
+fn variety_matches_language(variety: &VarietyId, language: &str) -> bool {
+    variety_language(&variety.0) == language
+}
+
+fn variety_language(variety: &str) -> &str {
+    variety
+        .split_once('-')
+        .map_or(variety, |(language, _)| language)
+}
+
+fn universal_lang_code_for_variety(variety: &str) -> &str {
+    match variety {
+        "fr-FR-Standard" => "fr-FR",
+        "de-DE-Standard" => "de-DE",
+        "es-ES-Castilian" => "es-ES",
+        "es-419-Standard" => "es-419",
+        "el-GR-Standard" => "el-GR",
+        "sa-Deva-Standard" => "sa-Deva",
+        "la-Classical" | "la-Ecclesiastical" => "la",
+        "grc-Attic" | "grc-Koine" => "grc",
+        other => other,
+    }
 }
 
 fn speech_symbols_for_text(text: &str, variety: &VarietyId) -> Option<String> {
@@ -1572,86 +1874,101 @@ fn syllables_to_phonemes_ipa(
         .collect()
 }
 
-fn synthetic_buffers(config: &Head2PhonesConfig, count: usize, rng: &mut StdRng) -> Vec<String> {
-    let heads = synthetic_heads(config);
-    let remainders = synthetic_remainders(config);
+fn synthetic_buffers(
+    config: &Head2PhonesConfig,
+    count: usize,
+    rng: &mut StdRng,
+) -> Vec<SyntheticBuffer> {
+    let materials = synthetic_language_materials(config);
     (0..count)
         .map(|_| {
-            let head = heads[rng.gen_range(0..heads.len())];
-            let rest = remainders[rng.gen_range(0..remainders.len())];
-            format!("{head}{rest}")
+            let head_material = &materials[rng.gen_range(0..materials.len())];
+            let remainder_material = &materials[rng.gen_range(0..materials.len())];
+            let head = head_material.heads[rng.gen_range(0..head_material.heads.len())];
+            let rest = remainder_material.remainders
+                [rng.gen_range(0..remainder_material.remainders.len())];
+            SyntheticBuffer {
+                text: format!("{head}{rest}"),
+                head_language: head_material.language.to_string(),
+                remainder_language: remainder_material.language.to_string(),
+            }
         })
         .collect()
 }
 
-fn synthetic_heads(config: &Head2PhonesConfig) -> Vec<&'static str> {
-    let mut heads = Vec::new();
+fn synthetic_language_materials(config: &Head2PhonesConfig) -> Vec<SyntheticLanguageMaterial> {
+    let mut materials = Vec::new();
     if config_has_language(config, "en") {
-        heads.extend(ENGLISH_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "en",
+            heads: ENGLISH_SYNTHETIC_HEADS,
+            remainders: ENGLISH_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "eo") {
-        heads.extend(ESPERANTO_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "eo",
+            heads: ESPERANTO_SYNTHETIC_HEADS,
+            remainders: ESPERANTO_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "fr") {
-        heads.extend(FRENCH_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "fr",
+            heads: FRENCH_SYNTHETIC_HEADS,
+            remainders: FRENCH_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "de") {
-        heads.extend(GERMAN_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "de",
+            heads: GERMAN_SYNTHETIC_HEADS,
+            remainders: GERMAN_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "el") {
-        heads.extend(MODERN_GREEK_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "el",
+            heads: MODERN_GREEK_SYNTHETIC_HEADS,
+            remainders: MODERN_GREEK_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "grc") {
-        heads.extend(ANCIENT_GREEK_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "grc",
+            heads: ANCIENT_GREEK_SYNTHETIC_HEADS,
+            remainders: ANCIENT_GREEK_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "la") {
-        heads.extend(LATIN_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "la",
+            heads: LATIN_SYNTHETIC_HEADS,
+            remainders: LATIN_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "sa") {
-        heads.extend(SANSKRIT_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "sa",
+            heads: SANSKRIT_SYNTHETIC_HEADS,
+            remainders: SANSKRIT_SYNTHETIC_REMAINDERS,
+        });
     }
     if config_has_language(config, "es") {
-        heads.extend(SPANISH_SYNTHETIC_HEADS);
+        materials.push(SyntheticLanguageMaterial {
+            language: "es",
+            heads: SPANISH_SYNTHETIC_HEADS,
+            remainders: SPANISH_SYNTHETIC_REMAINDERS,
+        });
     }
-    if heads.is_empty() {
-        heads.extend(ENGLISH_SYNTHETIC_HEADS);
+    if materials.is_empty() {
+        materials.push(SyntheticLanguageMaterial {
+            language: "en",
+            heads: ENGLISH_SYNTHETIC_HEADS,
+            remainders: ENGLISH_SYNTHETIC_REMAINDERS,
+        });
     }
-    heads
-}
-
-fn synthetic_remainders(config: &Head2PhonesConfig) -> Vec<&'static str> {
-    let mut remainders = Vec::new();
-    if config_has_language(config, "en") {
-        remainders.extend(ENGLISH_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "eo") {
-        remainders.extend(ESPERANTO_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "fr") {
-        remainders.extend(FRENCH_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "de") {
-        remainders.extend(GERMAN_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "el") {
-        remainders.extend(MODERN_GREEK_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "grc") {
-        remainders.extend(ANCIENT_GREEK_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "la") {
-        remainders.extend(LATIN_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "sa") {
-        remainders.extend(SANSKRIT_SYNTHETIC_REMAINDERS);
-    }
-    if config_has_language(config, "es") {
-        remainders.extend(SPANISH_SYNTHETIC_REMAINDERS);
-    }
-    if remainders.is_empty() {
-        remainders.extend(ENGLISH_SYNTHETIC_REMAINDERS);
-    }
-    remainders
+    materials
 }
 
 fn exceptional_buffers(config: &Head2PhonesConfig) -> Vec<&'static str> {
@@ -1692,7 +2009,7 @@ fn exceptional_buffers(config: &Head2PhonesConfig) -> Vec<&'static str> {
 fn config_has_language(config: &Head2PhonesConfig, language: &str) -> bool {
     configured_varieties(config)
         .iter()
-        .any(|variety| variety.0.starts_with(language))
+        .any(|variety| variety_matches_language(variety, language))
 }
 
 const ENGLISH_SYNTHETIC_HEADS: &[&str] = &[
@@ -1711,6 +2028,7 @@ const ENGLISH_SYNTHETIC_HEADS: &[&str] = &[
     "I saw 3.14 written on the board.",
     "Use e.g. this example carefully.",
     "In short: the answer changed.",
+    "How do you say 'paraguas' in Spanish?",
     "A sudden pause — then the lamp went out.",
     "Chapter One\nThe letter arrived before breakfast.",
     "Editor's Note\nThis page was left in the archive.",
@@ -1728,6 +2046,8 @@ const SPANISH_SYNTHETIC_HEADS: &[&str] = &[
     "La llave pequena abre el cajon.",
     "Primero, abre el panel pequeno.",
     "En resumen: la respuesta cambio.",
+    "Como se dice 'umbrella' en espagnol?",
+    "Como se dice 'umbrella' en espanol?",
     "Una pausa breve, y luego salio la luz.",
     "Capitulo Uno\nLa carta llego antes del desayuno.",
     "Notas del editor\nEsta pagina quedo en el archivo.",
@@ -1945,6 +2265,7 @@ const ENGLISH_EXCEPTIONAL_BUFFERS: &[&str] = &[
     "The package is ready, but the driver is late.",
     "This is the next sentence; and then the next.",
     "In short: the answer changed. The stream keeps moving.",
+    "How do you say 'paraguas' in Spanish? The stream keeps moving.",
     "A sudden pause — then the lamp went out.",
     "The signal was green; the bridge stayed closed.",
     "Pack the ledger, seal the box, and wait.",
@@ -2067,6 +2388,8 @@ const SPANISH_EXCEPTIONAL_BUFFERS: &[&str] = &[
     "Materiales del apendice",
     "La senal estaba verde; el puente quedo cerrado.",
     "Empaca el registro, sella la caja, y espera.",
+    "Como se dice 'umbrella' en espagnol? Luego descanso.",
+    "Como se dice 'umbrella' en espanol? Luego descanso.",
     "Creo que debemos",
     "Este fragmento final debe salir",
 ];
@@ -2591,8 +2914,11 @@ fn ollama_verification_prompt(
     }
     Ok(format!(
         "You are auditing head2phones seq2seq training rows. Each JSONL row has an input rolling text buffer and an output. A sane row must obey these rules:\n\
-         - output is exactly {NO_HEAD}, or {PHONES_OPEN} phone text {PHONES_CLOSE} plus {SPLIT_AFTER} and a Unicode grapheme split offset, or an {ERROR_REPAIR} repair row.\n\
+         - output is exactly {NO_HEAD}, a {HEAD_FOUND} block with {HEAD_LENGTH}, {PHONES_OPEN} phone text {PHONES_CLOSE}, and {SPLIT_AFTER} Unicode grapheme split offset, a {LANG_MISMATCH} block with no phones, a {LANGUAGE_SPANS_OPEN} block with plain <lang id=\"...\">...</lang> spans, or an {ERROR_REPAIR} repair row containing that same {HEAD_FOUND} block.\n\
+         - rows with input_has_variety=false intentionally omit the input variety control and should include {DETECTED_LANG} using a normal language tag before phones or language spans.\n\
+         - {LANG_MISMATCH} rows should include {DETECTED_LANG}, {EXPECTED_LANG}, {HEAD_LENGTH}, and {SPLIT_AFTER}; they should not include {PHONES_OPEN}.\n\
          - if head is present, split_after should identify the end of that head in grapheme clusters in input.\n\
+         - if {HEAD_LENGTH} is present, it should equal the head text length in grapheme clusters.\n\
          - {NO_HEAD} rows should not contain a complete speakable head chunk.\n\
          - phone text should look like plausible broad IPA or serialized speaking IR for the row variety, not English spelling or unrelated text.\n\
          - report data-shape, offset, label, transcription, escaping, or consistency problems.\n\n\
@@ -2620,17 +2946,22 @@ fn dataset_readme(
     naive_seams_discrepancies: usize,
 ) -> String {
     format!(
-        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}`, `{}` broad IPA phone text `{}` plus `{}`, or `{}` repair rows. Repair rows start with `{}` confidence, then `{}`, `{}` with a Unicode grapheme-cluster rollback distance, corrected phones, and a corrected split offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
+        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}`, a `{}` block with `{}`, `{}` broad IPA phone text `{}`, and `{}`, a `{}` block for wrong requested languages, a `{}` block with plain `<lang id=\"...\">...</lang>` spans for code switching, or `{}` repair rows. Rows with `input_has_variety=false` omit the input variety control and include `{}` with a normal language tag before phones or language spans. Repair rows start with `{}` confidence, then `{}`, `{}` with a Unicode grapheme-cluster rollback distance, and the same found-head block for corrected phones and split offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
         config.dataset_id,
         train.len(),
         valid.len(),
         test.len(),
         naive_seams_discrepancies,
         NO_HEAD,
+        HEAD_FOUND,
+        HEAD_LENGTH,
         PHONES_OPEN,
         PHONES_CLOSE,
         SPLIT_AFTER,
+        LANG_MISMATCH,
+        LANGUAGE_SPANS_OPEN,
         ERROR_REPAIR,
+        DETECTED_LANG,
         CONFIDENCE,
         ERROR_REPAIR,
         ROLLBACK_GRAPHEMES
@@ -2832,7 +3163,9 @@ mod tests {
             flush_example_for_prefix("I think we should", "test", TrainingRowSource::Exceptional)
                 .expect("flush row");
         assert_eq!(row.input, format!("I think we should{END_OF_TEXT}"));
-        assert!(row.output.starts_with(PHONES_OPEN));
+        assert!(row.output.starts_with(HEAD_FOUND));
+        assert!(row.output.contains(HEAD_LENGTH));
+        assert!(row.output.contains(PHONES_OPEN));
         assert_eq!(
             row.split_after,
             Some("I think we should".graphemes(true).count())
@@ -2861,7 +3194,9 @@ mod tests {
             assert_eq!(row.input, format!("{title}{END_OF_TEXT}"));
             assert_eq!(row.head.as_deref(), Some(title));
             assert_eq!(row.split_after, Some(title.graphemes(true).count()));
-            assert!(row.output.starts_with(PHONES_OPEN));
+            assert!(row.output.starts_with(HEAD_FOUND));
+            assert!(row.output.contains(HEAD_LENGTH));
+            assert!(row.output.contains(PHONES_OPEN));
         }
     }
 
@@ -2974,6 +3309,8 @@ mod tests {
             .output
             .contains(&format!("{CONFIDENCE} {CONFIDENCE_LOW}")));
         assert!(row.output.contains(ERROR_REPAIR));
+        assert!(row.output.contains(HEAD_FOUND));
+        assert!(row.output.contains(HEAD_LENGTH));
         assert!(row.output.contains(&format!(
             "{ROLLBACK_GRAPHEMES} {}",
             "Who shot John F.".graphemes(true).count()
@@ -3006,6 +3343,141 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row.row_source == TrainingRowSource::RandomCut));
+    }
+
+    #[test]
+    fn synthetic_head_language_scopes_phone_rows_and_mismatches_other_varieties() {
+        let config = Head2PhonesConfig {
+            varieties: vec![
+                "fr-FR-Standard".to_string(),
+                "es-ES-Castilian".to_string(),
+                "la-Classical".to_string(),
+            ],
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let buffer = "En bref: la réponse a changé.\n\nAlius paragraphus hic incipit.";
+        let mut rows = Vec::new();
+        let mut rng = StdRng::seed_from_u64(19);
+        add_examples_for_buffer_with_varieties(
+            buffer,
+            "test",
+            TrainingRowSource::Synthetic,
+            &config,
+            &varieties_for_language(&config, "fr"),
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add native examples");
+        add_language_mismatch_examples_for_buffer(
+            buffer,
+            "test",
+            TrainingRowSource::Synthetic,
+            "fr",
+            &config,
+            &mut rows,
+        );
+
+        assert!(rows.iter().any(|row| {
+            row.variety == "fr-FR-Standard"
+                && row.output.contains(PHONES_OPEN)
+                && !row.output.contains(LANG_MISMATCH)
+        }));
+        let spanish = rows
+            .iter()
+            .find(|row| row.variety == "es-ES-Castilian")
+            .expect("spanish mismatch row");
+        assert!(spanish.output.contains(LANG_MISMATCH), "{spanish:#?}");
+        assert!(spanish.output.contains(&format!("{DETECTED_LANG} fr")));
+        assert!(spanish.output.contains(&format!("{EXPECTED_LANG} es-ES")));
+        assert!(
+            !spanish.output.contains(PHONES_OPEN),
+            "mismatch rows must not pronounce French as Spanish: {spanish:#?}"
+        );
+    }
+
+    #[test]
+    fn synthetic_buffers_include_code_switching_context() {
+        let config = Head2PhonesConfig {
+            varieties: vec![
+                "fr-FR-Standard".to_string(),
+                "es-ES-Castilian".to_string(),
+                "la-Classical".to_string(),
+            ],
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(23);
+        let buffers = synthetic_buffers(&config, 256, &mut rng);
+        assert!(
+            buffers
+                .iter()
+                .any(|buffer| buffer.head_language != buffer.remainder_language),
+            "{buffers:#?}"
+        );
+    }
+
+    #[test]
+    fn synthetic_guess_rows_omit_input_variety_and_emit_detected_lang() {
+        let config = Head2PhonesConfig {
+            varieties: vec!["fr-FR-Standard".to_string(), "es-ES-Castilian".to_string()],
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rows = Vec::new();
+        add_variety_guess_example_for_buffer(
+            "En bref: la réponse a changé. Luego descanso.",
+            "test",
+            TrainingRowSource::Synthetic,
+            "fr",
+            &config,
+            &mut rows,
+        );
+        let row = rows.first().expect("guess row");
+        assert!(!row.input_has_variety);
+        assert_eq!(row.variety, "fr-FR-Standard");
+        assert!(row.output.contains(&format!("{DETECTED_LANG} fr-FR")));
+        assert!(row.output.contains(LANGUAGE_SPANS_OPEN));
+        assert!(row.output.contains("<lang id=\"fr\">"));
+        assert_eq!(
+            training_input(row),
+            format!(
+                "{TASK_TOKEN}{}",
+                "En bref: la réponse a changé. Luego descanso."
+            )
+        );
+    }
+
+    #[test]
+    fn code_switch_head_emits_plain_lang_spans_instead_of_single_variety_phones() {
+        let config = Head2PhonesConfig {
+            varieties: vec!["es-ES-Castilian".to_string(), "en-US".to_string()],
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(29);
+        let mut rows = Vec::new();
+        add_examples_for_buffer_with_varieties(
+            "Como se dice 'umbrella' en espagnol? Luego descanso.",
+            "test",
+            TrainingRowSource::Synthetic,
+            &config,
+            &varieties_for_language(&config, "es"),
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add code-switch rows");
+        let row = rows
+            .iter()
+            .find(|row| row.variety == "es-ES-Castilian")
+            .expect("spanish code-switch row");
+        assert!(row.output.contains(LANGUAGE_SPANS_OPEN), "{row:#?}");
+        assert!(row.output.contains("<lang id=\"es\">Como se dice </lang>"));
+        assert!(row.output.contains("<lang id=\"en\">'umbrella'</lang>"));
+        assert!(row.output.contains("<lang id=\"fr\">espagnol</lang>"));
+        assert!(!row.output.contains(PHONES_OPEN), "{row:#?}");
     }
 
     #[test]
@@ -3214,6 +3686,7 @@ mod tests {
         let row = Head2PhonesTrainingExample {
             row_source: TrainingRowSource::SourceText,
             variety: "es-419-Standard".to_string(),
+            input_has_variety: true,
             input: "El zapato rojo quedo listo.".to_string(),
             output: NO_HEAD.to_string(),
             head: None,
@@ -3228,8 +3701,9 @@ mod tests {
         let rows = vec![Head2PhonesTrainingExample {
             row_source: TrainingRowSource::SourceText,
             variety: "en-US".to_string(),
+            input_has_variety: true,
             input: "Hello there. More text".to_string(),
-            output: format!("{PHONES_OPEN}həloʊ ðɛɹ{PHONES_CLOSE} {SPLIT_AFTER} 12"),
+            output: format_head_found_output("həloʊ ðɛɹ", 12, 12),
             head: Some("Hello there.".to_string()),
             split_after: Some(12),
             source: "test".to_string(),
@@ -3241,6 +3715,8 @@ mod tests {
         let prompt = ollama_verification_prompt(&config, &rows).expect("prompt");
         assert!(prompt.contains("Return only compact JSON"));
         assert!(prompt.contains("\"input\":\"Hello there. More text\""));
+        assert!(prompt.contains(HEAD_FOUND));
+        assert!(prompt.contains(HEAD_LENGTH));
         assert!(prompt.contains(PHONES_OPEN));
     }
 

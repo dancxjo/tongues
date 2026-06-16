@@ -66,7 +66,7 @@
       "input": "Hidden Letter",
       "note": "At end of text, title-like fragments are speakable heads for flush examples.",
       "expected_head": "Hidden Letter",
-      "output_contains": ["<PHONES>"]
+      "output_contains": ["<HEAD_FOUND>", "<HEAD_LENGTH>", "<PHONES>"]
     },
     {
       "id": "false-abbreviation-split-emits-repair-rollback",
@@ -74,7 +74,7 @@
       "input": "Who shot John F. Kennedy?",
       "note": "If an earlier model or naive splitter emitted `Who shot John F.` too early, the next buffer should be able to signal a low-confidence repair and tell the caller how far back to roll.",
       "expected_head": "Who shot John F. Kennedy?",
-      "output_contains": ["<CONFIDENCE> low", "<ERROR_REPAIR>", "<ROLLBACK_GRAPHEMES>", "<PHONES>", "<SPLIT_AFTER>"]
+      "output_contains": ["<CONFIDENCE> low", "<ERROR_REPAIR>", "<ROLLBACK_GRAPHEMES>", "<HEAD_FOUND>", "<HEAD_LENGTH>", "<PHONES>", "<SPLIT_AFTER>"]
     }
   ]
 }
