@@ -339,6 +339,12 @@ struct SyntheticLanguageMaterial {
     remainders: &'static [&'static str],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LanguageBuffer {
+    language: &'static str,
+    text: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedSourceFile {
     path: PathBuf,
@@ -489,14 +495,32 @@ pub fn prepare_dataset_with_progress(
                 let mut source_buffers = 0usize;
                 for buffer in exceptional_buffers(config) {
                     source_buffers += 1;
-                    add_examples_for_buffer(
-                        buffer,
+                    let native_varieties = varieties_for_language(config, buffer.language);
+                    add_examples_for_buffer_with_varieties(
+                        buffer.text,
                         "exceptional",
                         TrainingRowSource::Exceptional,
                         config,
+                        &native_varieties,
                         &mut rng,
                         &mut examples,
                     )?;
+                    add_language_mismatch_examples_for_buffer(
+                        buffer.text,
+                        "exceptional",
+                        TrainingRowSource::Exceptional,
+                        buffer.language,
+                        config,
+                        &mut examples,
+                    );
+                    add_variety_guess_example_for_buffer(
+                        buffer.text,
+                        "exceptional",
+                        TrainingRowSource::Exceptional,
+                        buffer.language,
+                        config,
+                        &mut examples,
+                    );
                 }
                 add_repair_examples_for_discrepancies(
                     &exceptional_repair_discrepancies(config),
@@ -962,6 +986,7 @@ fn archive_existing_path(path: &Path) -> Result<()> {
     })
 }
 
+#[cfg(test)]
 fn add_examples_for_buffer(
     buffer: &str,
     source: &str,
@@ -1971,39 +1996,46 @@ fn synthetic_language_materials(config: &Head2PhonesConfig) -> Vec<SyntheticLang
     materials
 }
 
-fn exceptional_buffers(config: &Head2PhonesConfig) -> Vec<&'static str> {
+fn exceptional_buffers(config: &Head2PhonesConfig) -> Vec<LanguageBuffer> {
     let mut buffers = Vec::new();
     if config_has_language(config, "en") {
-        buffers.extend(ENGLISH_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("en", ENGLISH_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "eo") {
-        buffers.extend(ESPERANTO_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("eo", ESPERANTO_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "fr") {
-        buffers.extend(FRENCH_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("fr", FRENCH_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "de") {
-        buffers.extend(GERMAN_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("de", GERMAN_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "el") {
-        buffers.extend(MODERN_GREEK_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("el", MODERN_GREEK_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "grc") {
-        buffers.extend(ANCIENT_GREEK_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("grc", ANCIENT_GREEK_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "la") {
-        buffers.extend(LATIN_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("la", LATIN_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "sa") {
-        buffers.extend(SANSKRIT_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("sa", SANSKRIT_EXCEPTIONAL_BUFFERS));
     }
     if config_has_language(config, "es") {
-        buffers.extend(SPANISH_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("es", SPANISH_EXCEPTIONAL_BUFFERS));
     }
     if buffers.is_empty() {
-        buffers.extend(ENGLISH_EXCEPTIONAL_BUFFERS);
+        buffers.extend(language_buffers("en", ENGLISH_EXCEPTIONAL_BUFFERS));
     }
     buffers
+}
+
+fn language_buffers(language: &'static str, texts: &'static [&'static str]) -> Vec<LanguageBuffer> {
+    texts
+        .iter()
+        .map(|text| LanguageBuffer { language, text })
+        .collect()
 }
 
 fn config_has_language(config: &Head2PhonesConfig, language: &str) -> bool {
@@ -3395,6 +3427,67 @@ mod tests {
             !spanish.output.contains(PHONES_OPEN),
             "mismatch rows must not pronounce French as Spanish: {spanish:#?}"
         );
+    }
+
+    #[test]
+    fn exceptional_buffers_do_not_cross_pronounce_english_rows() {
+        let config = Head2PhonesConfig {
+            varieties: vec![
+                "en-US".to_string(),
+                "fr-FR-Standard".to_string(),
+                "de-DE-Standard".to_string(),
+                "es-ES-Castilian".to_string(),
+            ],
+            random_cuts_per_buffer: 0,
+            no_head_cuts_per_head: 0,
+            ..Head2PhonesConfig::default()
+        };
+        let mut rng = StdRng::seed_from_u64(31);
+        let mut rows = Vec::new();
+        let buffer = LanguageBuffer {
+            language: "en",
+            text: "Dr. Smith went home. Then he slept.",
+        };
+        add_examples_for_buffer_with_varieties(
+            buffer.text,
+            "exceptional",
+            TrainingRowSource::Exceptional,
+            &config,
+            &varieties_for_language(&config, buffer.language),
+            &mut rng,
+            &mut rows,
+        )
+        .expect("add native exceptional rows");
+        add_language_mismatch_examples_for_buffer(
+            buffer.text,
+            "exceptional",
+            TrainingRowSource::Exceptional,
+            buffer.language,
+            &config,
+            &mut rows,
+        );
+
+        let english = rows
+            .iter()
+            .find(|row| {
+                row.variety == "en-US" && row.head.as_deref() == Some("Dr. Smith went home.")
+            })
+            .expect("english phone row");
+        assert!(english.output.contains(PHONES_OPEN), "{english:#?}");
+        for variety in ["fr-FR-Standard", "de-DE-Standard", "es-ES-Castilian"] {
+            let row = rows
+                .iter()
+                .find(|row| {
+                    row.variety == variety && row.head.as_deref() == Some("Dr. Smith went home.")
+                })
+                .unwrap_or_else(|| panic!("{variety} mismatch row"));
+            assert!(row.output.contains(LANG_MISMATCH), "{row:#?}");
+            assert!(row.output.contains(&format!("{DETECTED_LANG} en")));
+            assert!(
+                !row.output.contains(PHONES_OPEN),
+                "{variety} should not pronounce an English exceptional head: {row:#?}"
+            );
+        }
     }
 
     #[test]
