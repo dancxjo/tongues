@@ -1,0 +1,17 @@
+[package]
+name = "tongues-head2phones"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+rand = { workspace = true }
+seams = "0.1.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tongues-core = { path = "../tongues-core" }
+tongues-data = { path = "../tongues-data" }
+tongues-neural = { path = "../tongues-neural" }
+speaking = { path = "../speaking" }
+styletts2 = { path = "../styletts2" }
+unicode-segmentation = { workspace = true }

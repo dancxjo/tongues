@@ -7,6 +7,7 @@ members = [
     "crates/tongues-interpretation",
     "crates/tongues-sentence-parser",
     "crates/tongues-wiktionary",
+    "crates/tongues-head2phones",
     "crates/tongues-cli",
     "crates/speaking",
     "crates/styletts2",
@@ -35,4 +36,5 @@ indicatif = "0.17"
 toml = "0.8"
 bzip2 = "0.4"
 unicode-normalization = "0.1"
+unicode-segmentation = "1"
 whisper-cpp-plus = { version = "0.1.4", default-features = false }

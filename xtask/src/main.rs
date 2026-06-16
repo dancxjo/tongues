@@ -38,6 +38,15 @@ fn run() -> Result<(), String> {
                 race(args)
             }
         }
+        Some("continue") => {
+            let args = args.collect::<Vec<_>>();
+            if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+                print!("{}", continue_usage());
+                Ok(())
+            } else {
+                continue_stream(args)
+            }
+        }
         Some("-h") | Some("--help") | None => {
             print!("{}", usage());
             Ok(())
@@ -47,11 +56,15 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n"
+    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n  continue [options]       Generate text, phones, and speech chunks continuously\n"
 }
 
 fn race_usage() -> &'static str {
     "Usage: cargo xtask race [options] [words...]\n\nOptions:\n  --cpu                         Force CPU inference\n  --skip-build                  Do not build the tongues binary first\n  --g2p2g-model <path>          G2P2G model dir (default: models/g2p2g/openepd-v0)\n  --wiktionary-model <path>     Wiktionary model dir (default: models/wiktionary/enwiktionary-2026-06-01-v0-phones)\n  --wiktionary-config <path>    Wiktionary config (default: configs/wiktionary/default.toml)\n"
+}
+
+fn continue_usage() -> &'static str {
+    "Usage: cargo xtask continue [options]\n\nOptions:\n  --cpu                  Force CPU for model-backed commands\n  --skip-build           Do not build the tongues binary first\n  --forever              Run until interrupted\n  --chunks <n>           Number of chunks to generate (default: 8)\n  --sleep-ms <n>         Delay between chunks (default: 250)\n  --speak-backend <name> Speech backend passed to `tongues speak` (default: mock)\n  --out-dir <path>       Directory for generated WAV files (default: runs/head2phones/continue)\n"
 }
 
 #[derive(Debug)]
@@ -62,6 +75,17 @@ struct RaceConfig {
     wiktionary_model: PathBuf,
     wiktionary_config: PathBuf,
     words: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ContinueConfig {
+    cpu: bool,
+    skip_build: bool,
+    forever: bool,
+    chunks: usize,
+    sleep_ms: u64,
+    speak_backend: String,
+    out_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -233,6 +257,55 @@ impl ScorecardRow {
             "Still haunted"
         }
     }
+}
+
+fn continue_stream(raw_args: Vec<String>) -> Result<(), String> {
+    let config = parse_continue_args(raw_args)?;
+    if !config.skip_build {
+        println!("continue: building tongues binary");
+        run_build()?;
+    }
+    let tongues = tongues_bin_path();
+    if !tongues.exists() {
+        return Err(format!(
+            "{} does not exist; run without --skip-build first",
+            tongues.display()
+        ));
+    }
+    fs::create_dir_all(&config.out_dir)
+        .map_err(|error| format!("creating {}: {error}", config.out_dir.display()))?;
+
+    println!(
+        "continue: chunks={} forever={} backend={} out={}",
+        config.chunks,
+        config.forever,
+        config.speak_backend,
+        config.out_dir.display()
+    );
+
+    let mut index = 0usize;
+    loop {
+        if !config.forever && index >= config.chunks {
+            break;
+        }
+        let buffer = generated_continue_sentence(index);
+        let text = continue_head_chunk(&buffer).unwrap_or(buffer.as_str());
+        let phones = run_phones(&tongues, &config, text)?;
+        let wav = config.out_dir.join(format!("chunk-{:04}.wav", index + 1));
+        run_speak(&tongues, &config, text, &wav)?;
+        println!(
+            "  {:04} head={} phones={} wav={}",
+            index + 1,
+            clip(text, 72),
+            clip(&phones, 72),
+            wav.display()
+        );
+        index += 1;
+        if config.sleep_ms > 0 {
+            std::thread::sleep(Duration::from_millis(config.sleep_ms));
+        }
+    }
+    Ok(())
 }
 
 fn race(raw_args: Vec<String>) -> Result<(), String> {
@@ -898,12 +971,80 @@ fn parse_race_args(args: Vec<String>) -> Result<RaceConfig, String> {
     Ok(config)
 }
 
+fn parse_continue_args(args: Vec<String>) -> Result<ContinueConfig, String> {
+    let mut config = ContinueConfig {
+        cpu: false,
+        skip_build: false,
+        forever: false,
+        chunks: 8,
+        sleep_ms: 250,
+        speak_backend: "mock".to_string(),
+        out_dir: PathBuf::from("runs/head2phones/continue"),
+    };
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--cpu" => config.cpu = true,
+            "--skip-build" => config.skip_build = true,
+            "--forever" => config.forever = true,
+            "--chunks" => {
+                let value = next_continue_value(&mut iter, "--chunks")?;
+                config.chunks = value.parse().map_err(|_| {
+                    format!(
+                        "--chunks expects a positive integer\n\n{}",
+                        continue_usage()
+                    )
+                })?;
+            }
+            "--sleep-ms" => {
+                let value = next_continue_value(&mut iter, "--sleep-ms")?;
+                config.sleep_ms = value.parse().map_err(|_| {
+                    format!("--sleep-ms expects an integer\n\n{}", continue_usage())
+                })?;
+            }
+            "--speak-backend" => {
+                config.speak_backend = next_continue_value(&mut iter, "--speak-backend")?;
+            }
+            "--out-dir" => {
+                config.out_dir = PathBuf::from(next_continue_value(&mut iter, "--out-dir")?);
+            }
+            _ if arg.starts_with('-') => {
+                return Err(format!(
+                    "unknown continue option `{arg}`\n\n{}",
+                    continue_usage()
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "unexpected continue argument `{arg}`\n\n{}",
+                    continue_usage()
+                ))
+            }
+        }
+    }
+    if config.chunks == 0 && !config.forever {
+        return Err(format!(
+            "--chunks must be greater than zero unless --forever is set\n\n{}",
+            continue_usage()
+        ));
+    }
+    Ok(config)
+}
+
 fn next_race_value(
     iter: &mut impl Iterator<Item = String>,
     option: &str,
 ) -> Result<String, String> {
     iter.next()
         .ok_or_else(|| format!("{option} requires a value\n\n{}", race_usage()))
+}
+
+fn next_continue_value(
+    iter: &mut impl Iterator<Item = String>,
+    option: &str,
+) -> Result<String, String> {
+    iter.next()
+        .ok_or_else(|| format!("{option} requires a value\n\n{}", continue_usage()))
 }
 
 fn run_build() -> Result<(), String> {
@@ -1078,6 +1219,61 @@ fn run_infer(tongues: &Path, args: &[String]) -> Result<RaceResult, String> {
     })
 }
 
+fn run_phones(tongues: &Path, config: &ContinueConfig, text: &str) -> Result<String, String> {
+    let mut args = Vec::new();
+    if config.cpu {
+        args.push("--cpu".to_string());
+    }
+    args.extend(["phones".to_string(), text.to_string()]);
+    let output = Command::new(tongues)
+        .args(&args)
+        .output()
+        .map_err(|error| format!("starting {} phones: {error}", tongues.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "phones exited {}: {}",
+            output.status,
+            clip(stderr.trim(), 100)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn run_speak(
+    tongues: &Path,
+    config: &ContinueConfig,
+    text: &str,
+    wav: &Path,
+) -> Result<(), String> {
+    let mut args = Vec::new();
+    if config.cpu {
+        args.push("--cpu".to_string());
+    }
+    args.extend([
+        "speak".to_string(),
+        "--backend".to_string(),
+        config.speak_backend.clone(),
+        "--output".to_string(),
+        wav.display().to_string(),
+        text.to_string(),
+    ]);
+    let output = Command::new(tongues)
+        .args(&args)
+        .output()
+        .map_err(|error| format!("starting {} speak: {error}", tongues.display()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "speak exited {}: {}",
+            output.status,
+            clip(stderr.trim(), 100)
+        ))
+    }
+}
+
 fn extract_prediction(stdout: &str) -> Option<String> {
     let mut lines = stdout.lines();
     while let Some(line) = lines.next() {
@@ -1095,6 +1291,76 @@ fn extract_prediction(stdout: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn generated_continue_sentence(index: usize) -> String {
+    const SENTENCES: &[&str] = &[
+        "Dr. Smith went home. Then he checked the porch light.",
+        "This is the next sentence; and then the next thought arrives.",
+        "Wait... really? I thought the file was already open.",
+        "\"No.\" she said. The room became quiet again.",
+        "First, open the small panel. Then press the green switch.",
+        "The package is ready, but the driver is late.",
+        "- Bring the blue folder. Leave the red folder on the desk.",
+        "In short: the answer changed. The stream keeps moving.",
+    ];
+    SENTENCES[index % SENTENCES.len()].to_string()
+}
+
+fn continue_head_chunk(buffer: &str) -> Option<&str> {
+    let mut search_start = 0usize;
+    while let Some((relative, ch)) = buffer[search_start..]
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, '.' | '!' | '?' | ';' | ':'))
+    {
+        let index = search_start + relative;
+        let after = index + ch.len_utf8();
+        if ch == '.' && continue_dot_is_abbreviation(buffer, index) {
+            search_start = after;
+            continue;
+        }
+        return Some(buffer[..continue_closing_punctuation_end(buffer, after)].trim());
+    }
+    None
+}
+
+fn continue_closing_punctuation_end(buffer: &str, mut index: usize) -> usize {
+    while let Some(ch) = buffer[index..].chars().next() {
+        if matches!(ch, '"' | '\'' | ')' | ']' | '}') {
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    index
+}
+
+fn continue_dot_is_abbreviation(buffer: &str, dot_index: usize) -> bool {
+    let after_dot = dot_index + 1;
+    if buffer[after_dot..].chars().next() == Some('.') {
+        return false;
+    }
+    let prefix = buffer[..dot_index].trim_end();
+    let token = prefix
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '(' | '[' | '{' | '*' | '_' | '-'));
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "mr" | "mrs"
+            | "ms"
+            | "dr"
+            | "prof"
+            | "sr"
+            | "jr"
+            | "st"
+            | "mt"
+            | "vs"
+            | "etc"
+            | "e.g"
+            | "i.e"
+    )
 }
 
 #[cfg(test)]

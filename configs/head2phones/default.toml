@@ -1,0 +1,11 @@
+dataset_id = "v0"
+include_synthetic = true
+synthetic_buffers = 4096
+random_cuts_per_buffer = 8
+no_head_cuts_per_head = 8
+include_exceptional = true
+train_frac = 0.8
+valid_frac = 0.1
+seed = 42
+min_head_graphemes = 4
+max_head_graphemes = 220

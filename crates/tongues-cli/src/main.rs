@@ -61,6 +61,8 @@ const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
 const DEFAULT_G2P2G_MODEL_DIR: &str = "models/g2p2g/openepd-v0";
 const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
 const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
+const DEFAULT_HEAD2PHONES_DATA_DIR: &str = "datasets/head2phones/v0";
+const DEFAULT_HEAD2PHONES_MODEL_DIR: &str = "models/head2phones/v0";
 const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
 const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
 const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.35;
@@ -137,6 +139,12 @@ enum Commands {
     SentenceParser {
         #[command(subcommand)]
         command: SentenceParserCommands,
+    },
+
+    /// Prepare, train, and run rolling head-chunk-to-phones models
+    Head2phones {
+        #[command(subcommand)]
+        command: Head2PhonesCommands,
     },
 
     /// Prepare, train, evaluate, and stream LibriSpeech ASR models
@@ -682,6 +690,89 @@ enum SentenceParserCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum Head2PhonesCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
+    /// Prepare head2phones seq2seq data
+    Prepare {
+        /// TOML config file for the head2phones pipeline
+        #[arg(long, default_value = "configs/head2phones/default.toml")]
+        config: PathBuf,
+
+        /// English text file or directory; may be passed more than once
+        #[arg(long = "input")]
+        inputs: Vec<PathBuf>,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = "datasets/head2phones/v0")]
+        out: PathBuf,
+    },
+
+    /// Train the head2phones seq2seq model
+    Train {
+        /// TOML config file for the head2phones pipeline
+        #[arg(long, default_value = "configs/head2phones/default.toml")]
+        config: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/head2phones/v0")]
+        data: PathBuf,
+
+        /// English text file or directory to use when --prepare is set; may be passed more than once
+        #[arg(long = "input")]
+        inputs: Vec<PathBuf>,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/head2phones/v0")]
+        out: PathBuf,
+
+        /// Prepare data before training
+        #[arg(long)]
+        prepare: bool,
+
+        /// AdamW learning rate
+        #[arg(long, default_value_t = 3e-4)]
+        learning_rate: f64,
+
+        /// AdamW weight decay
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f32,
+
+        /// Dropout rate
+        #[arg(long, default_value_t = 0.1)]
+        dropout: f64,
+
+        /// Mini-batch size
+        #[arg(long, default_value_t = 64)]
+        batch_size: usize,
+
+        /// Maximum training epochs
+        #[arg(long, default_value_t = 20)]
+        epochs: usize,
+
+        /// Early stopping patience
+        #[arg(long, default_value_t = 5)]
+        patience: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
+
+    /// Run rolling-buffer head2phones inference
+    #[command(alias = "predict")]
+    Infer {
+        /// Directory containing the head2phones model
+        #[arg(long, default_value = "models/head2phones/v0")]
+        model: PathBuf,
+
+        /// Raw rolling UTF-8 text buffer
+        buffer: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum InterpretationCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
@@ -1014,6 +1105,7 @@ fn main() -> Result<()> {
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
+        Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
         Commands::Interpretation { command } => {
             run_interpretation_command(command, device_arg, output_mode)
         }
@@ -1154,6 +1246,12 @@ fn command_needs_device(command: &Commands) -> bool {
                 | SentenceParserCommands::Infer { .. }
                 | SentenceParserCommands::Stream { .. }
         ),
+        Commands::Head2phones { command } => {
+            matches!(
+                command,
+                Head2PhonesCommands::Train { .. } | Head2PhonesCommands::Infer { .. }
+            )
+        }
         Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
         Commands::Train { .. }
         | Commands::Eval { .. }
@@ -1171,6 +1269,9 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Infer { .. },
+        }
+        | Commands::Head2phones {
+            command: Head2PhonesCommands::Infer { .. },
         }
         | Commands::SentenceParser {
             command: SentenceParserCommands::Stream { .. },
@@ -1972,6 +2073,310 @@ fn sentence_parser_training_set_label(training_set: SentenceParserTrainingSetArg
         SentenceParserTrainingSetArg::Seams => "seams",
         SentenceParserTrainingSetArg::NaiveDiscrepancy => "naive-discrepancy",
     }
+}
+
+fn read_head2phones_config(path: &Path) -> Result<tongues_head2phones::Head2PhonesConfig> {
+    if !path.exists() {
+        return Ok(tongues_head2phones::Head2PhonesConfig::default());
+    }
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn head2phones_prepare_progress_message(progress: tongues_head2phones::PrepareProgress) -> String {
+    match progress {
+        tongues_head2phones::PrepareProgress::Stage { message } => message,
+        tongues_head2phones::PrepareProgress::Read { path, buffers } => {
+            format!("Read {} source buffers from {path}", format_count(buffers))
+        }
+        tongues_head2phones::PrepareProgress::Synthesize { path, buffers } => {
+            format!(
+                "Synthesized {} rolling buffers -> {path}",
+                format_count(buffers)
+            )
+        }
+        tongues_head2phones::PrepareProgress::Build { complete, no_head } => format!(
+            "Built {} complete-head and {} no-head examples",
+            format_count(complete),
+            format_count(no_head)
+        ),
+        tongues_head2phones::PrepareProgress::Write { path, rows } => {
+            format!("Wrote {} rows to {path}", format_count(rows))
+        }
+    }
+}
+
+fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) -> Result<()> {
+    match command {
+        Head2PhonesCommands::Clean(args) => cmd_clean_family(
+            "head2phones",
+            &args,
+            DEFAULT_HEAD2PHONES_DATA_DIR,
+            DEFAULT_HEAD2PHONES_MODEL_DIR,
+        ),
+        Head2PhonesCommands::Prepare {
+            config,
+            inputs,
+            out,
+        } => {
+            let mut config = read_head2phones_config(&config)?;
+            if !inputs.is_empty() {
+                config.source_paths = inputs;
+            }
+            let pb = status_spinner(format!(
+                "Preparing head2phones dataset at {}",
+                out.display()
+            ));
+            let report = tongues_head2phones::prepare_dataset_with_progress(&out, &config, {
+                let pb = pb.clone();
+                move |progress| pb.set_message(head2phones_prepare_progress_message(progress))
+            })?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional)",
+                    out.display(),
+                    format_count(report.train_examples),
+                    format_count(report.valid_examples),
+                    format_count(report.test_examples),
+                    format_count(report.complete_examples),
+                    format_count(report.no_head_examples),
+                    format_count(report.exceptional_examples)
+                ),
+            );
+            Ok(())
+        }
+        Head2PhonesCommands::Train {
+            config,
+            data,
+            inputs,
+            out,
+            prepare,
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            epochs,
+            patience,
+            seed,
+        } => {
+            if prepare
+                || !data.join("vocab.json").exists()
+                || !data.join("train.jsonl").exists()
+                || !data.join("valid.jsonl").exists()
+            {
+                let mut config_data = read_head2phones_config(&config)?;
+                if !inputs.is_empty() {
+                    config_data.source_paths = inputs;
+                }
+                let pb = status_spinner(format!(
+                    "Preparing head2phones dataset at {}",
+                    data.display()
+                ));
+                let report =
+                    tongues_head2phones::prepare_dataset_with_progress(&data, &config_data, {
+                        let pb = pb.clone();
+                        move |progress| {
+                            pb.set_message(head2phones_prepare_progress_message(progress));
+                        }
+                    })?;
+                finish_status(
+                    pb,
+                    format!(
+                        "Prepared head2phones dataset at {}: {} train / {} valid / {} test examples ({} complete, {} no-head, {} exceptional)",
+                        data.display(),
+                        format_count(report.train_examples),
+                        format_count(report.valid_examples),
+                        format_count(report.test_examples),
+                        format_count(report.complete_examples),
+                        format_count(report.no_head_examples),
+                        format_count(report.exceptional_examples)
+                    ),
+                );
+            }
+            let config = read_head2phones_config(&config)?;
+            cmd_head2phones_train(
+                &data,
+                &out,
+                &config,
+                learning_rate,
+                weight_decay,
+                dropout,
+                batch_size,
+                epochs,
+                patience,
+                seed,
+                device_arg,
+            )
+        }
+        Head2PhonesCommands::Infer { model, buffer } => {
+            cmd_head2phones_infer(&model, &buffer, device_arg)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_head2phones_train(
+    data: &Path,
+    out: &Path,
+    config: &tongues_head2phones::Head2PhonesConfig,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
+    let train_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
+        read_jsonl_as(&data.join("train.jsonl"))?;
+    let valid_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
+        read_jsonl_as(&data.join("valid.jsonl"))?;
+    anyhow::ensure!(!train_rows.is_empty(), "head2phones train split is empty");
+    anyhow::ensure!(!valid_rows.is_empty(), "head2phones valid split is empty");
+
+    let train_examples = tongues_head2phones::make_seq2seq_examples(&train_rows, &vocab);
+    let valid_examples = tongues_head2phones::make_seq2seq_examples(&valid_rows, &vocab);
+    let model_config = if out.join("model_config.json").exists() {
+        let existing: ModelConfig = read_json_file(&out.join("model_config.json"))?;
+        anyhow::ensure!(
+            existing.vocab_size == vocab.size(),
+            "existing model_config.json vocab_size={} does not match vocab size {}; use a fresh --out directory after rebuilding head2phones data",
+            existing.vocab_size,
+            vocab.size()
+        );
+        existing
+    } else {
+        ModelConfig::new(vocab.size())
+            .with_dropout(dropout)
+            .with_max_seq_len(256)
+    };
+    let train_config = TrainConfig {
+        learning_rate,
+        weight_decay,
+        dropout,
+        batch_size,
+        epochs,
+        early_stopping_patience: patience,
+        max_seq_len: model_config.max_seq_len,
+        task: None,
+        max_frequency_repeat: 1,
+        frequency_rarity_cap: 0.0,
+    };
+
+    fs::write(
+        out.join("model_config.json"),
+        serde_json::to_string_pretty(&model_config)?,
+    )?;
+    fs::write(
+        out.join("train_config.json"),
+        serde_json::to_string_pretty(&train_config)?,
+    )?;
+    fs::write(
+        out.join("head2phones_config.json"),
+        serde_json::to_string_pretty(config)?,
+    )?;
+    fs::write(
+        out.join("vocab.json"),
+        serde_json::to_string_pretty(&vocab)?,
+    )?;
+    write_manifest(
+        out,
+        &ModelArtifactManifest::new(
+            tongues_head2phones::FAMILY,
+            tongues_head2phones::ARCHITECTURE,
+            data_id_from_path(data),
+        )
+        .with_task("head-chunk-to-phones"),
+    )?;
+
+    let model_path = out.join("model");
+    println!("Starting head2phones seq2seq training...");
+    println!(
+        "  examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={} max_seq_len={}",
+        format_count(train_examples.len()),
+        format_count(valid_examples.len()),
+        format_count(vocab.size()),
+        learning_rate,
+        weight_decay,
+        dropout,
+        format_count(epochs),
+        format_count(patience),
+        format_count(batch_size),
+        format_count(train_config.max_seq_len)
+    );
+    println!("  train_state: {}", out.join("train_state.json").display());
+    println!(
+        "  epoch checkpoints: {}",
+        out.join("model-epoch-N.bin").display()
+    );
+    println!(
+        "  best model: {}",
+        model_path.with_extension("bin").display()
+    );
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            train_seq2seq_examples::<CpuTrainBackend, _>(
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            train_seq2seq_examples::<CudaTrainBackend, _>(
+                &model_config,
+                &train_config,
+                &train_examples,
+                &valid_examples,
+                &model_path,
+                &device,
+                &mut rng,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn cmd_head2phones_infer(model_dir: &Path, buffer: &str, device_arg: DeviceArg) -> Result<()> {
+    let manifest =
+        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
+    anyhow::ensure!(
+        manifest.family == tongues_head2phones::FAMILY,
+        "expected head2phones manifest, found `{}`",
+        manifest.family
+    );
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let input = tongues_head2phones::format_input(buffer);
+    let output = match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            let model =
+                load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            predict_sentence_boundary(&model, &input, &vocab, &device)
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            let model =
+                load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+            predict_sentence_boundary(&model, &input, &vocab, &device)
+        }
+    };
+    println!("{output}");
+    Ok(())
 }
 
 fn cmd_sentence_parser_infer(

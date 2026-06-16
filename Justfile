@@ -11,6 +11,10 @@ new-family family:
 race *args:
     @cargo run -q -p xtask -- race "$@"
 
+# Generate text chunks, derive phones, and synthesize speech continuously
+continue *args:
+    @cargo run -q -p xtask -- continue "$@"
+
 # Stream stdin through the sentence parser and emit one sentence per line
 parse *args:
     @cargo run -q --bin tongues -- sentence-parser stream "$@"
@@ -26,6 +30,10 @@ wiktionary *args:
 # Forward a model-family command to the tongues CLI
 sentence-parser *args:
     cargo run --bin tongues -- sentence-parser "$@"
+
+# Forward a model-family command to the tongues CLI
+head2phones *args:
+    cargo run --bin tongues -- head2phones "$@"
 
 # Forward a model-family command to the tongues CLI
 interpretation *args:
