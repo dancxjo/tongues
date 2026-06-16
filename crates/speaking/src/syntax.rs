@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::data::varieties::english::syntax as english_syntax;
 use crate::segment::TerminalPunctuation;
 
 pub type WordIndex = usize;
@@ -507,7 +508,7 @@ fn push_coordination_links(words: &[String], links: &mut Vec<SyntacticLink>) {
 
 fn push_contrast_links(words: &[String], links: &mut Vec<SyntacticLink>) {
     for (not_index, word) in words.iter().enumerate() {
-        if !matches!(word.as_str(), "not" | "n't") {
+        if !english_syntax::is_contrast_negator(word) {
             continue;
         }
         if let Some(but_index) = words
@@ -574,253 +575,43 @@ fn prosodic_role_for_word(word: &str, links: &[SyntacticLinkKind]) -> ProsodicRo
 }
 
 fn base_pos(word: &str) -> PartOfSpeech {
-    let word = normalize_syntax_word(word);
-    if is_auxiliary(&word) {
-        PartOfSpeech::Auxiliary
-    } else if is_determiner(&word) {
-        PartOfSpeech::Determiner
-    } else if is_preposition(&word) {
-        PartOfSpeech::Preposition
-    } else if is_coordination_conjunction(&word) {
-        PartOfSpeech::Conjunction
-    } else if is_subordinating_conjunction(&word) {
-        PartOfSpeech::Conjunction
-    } else if is_adverb(&word) {
-        PartOfSpeech::Adverb
-    } else if is_adjective(&word) {
-        PartOfSpeech::Adjective
-    } else if is_vocative_opener(&word) {
-        PartOfSpeech::Particle
-    } else if is_proper_name(&word) {
-        PartOfSpeech::ProperName
-    } else if matches!(
-        word.as_str(),
-        "i" | "me"
-            | "you"
-            | "he"
-            | "him"
-            | "she"
-            | "her"
-            | "it"
-            | "we"
-            | "us"
-            | "they"
-            | "them"
-            | "who"
-            | "whom"
-            | "what"
-            | "which"
-    ) {
-        PartOfSpeech::Pronoun
-    } else if is_likely_verb(&word) {
-        PartOfSpeech::Verb
-    } else {
-        PartOfSpeech::Noun
-    }
+    english_syntax::base_pos(&normalize_syntax_word(word))
 }
 
 fn is_function_word(word: &str) -> bool {
-    is_auxiliary(word)
-        || is_determiner(word)
-        || is_preposition(word)
-        || is_coordination_conjunction(word)
-        || is_subordinating_conjunction(word)
-        || is_complementizer(word)
+    english_syntax::is_function_word(word)
 }
 
 fn is_auxiliary(word: &str) -> bool {
-    matches!(
-        word,
-        "am" | "are"
-            | "aren't"
-            | "is"
-            | "isn't"
-            | "was"
-            | "wasn't"
-            | "were"
-            | "weren't"
-            | "do"
-            | "don't"
-            | "does"
-            | "doesn't"
-            | "did"
-            | "didn't"
-            | "have"
-            | "haven't"
-            | "has"
-            | "hasn't"
-            | "had"
-            | "hadn't"
-            | "can"
-            | "can't"
-            | "could"
-            | "couldn't"
-            | "will"
-            | "won't"
-            | "would"
-            | "wouldn't"
-            | "shall"
-            | "should"
-            | "shouldn't"
-            | "may"
-            | "might"
-            | "must"
-            | "ought"
-            | "need"
-            | "dare"
-            | "be"
-            | "been"
-            | "being"
-    )
+    english_syntax::is_auxiliary(word)
 }
 
 fn is_copula(word: &str) -> bool {
-    matches!(
-        word,
-        "am" | "are"
-            | "aren't"
-            | "is"
-            | "isn't"
-            | "was"
-            | "wasn't"
-            | "were"
-            | "weren't"
-            | "be"
-            | "been"
-            | "being"
-    )
+    english_syntax::is_copula(word)
 }
 
 fn is_determiner(word: &str) -> bool {
-    matches!(
-        word,
-        "a" | "an"
-            | "the"
-            | "this"
-            | "that"
-            | "these"
-            | "those"
-            | "my"
-            | "your"
-            | "our"
-            | "their"
-            | "his"
-            | "her"
-            | "its"
-            | "all"
-            | "another"
-            | "any"
-            | "both"
-            | "each"
-            | "either"
-            | "every"
-            | "many"
-            | "much"
-            | "no"
-            | "some"
-            | "such"
-            | "what"
-            | "which"
-    )
+    english_syntax::is_determiner(word)
 }
 
 fn is_preposition(word: &str) -> bool {
-    matches!(
-        word,
-        "about"
-            | "above"
-            | "across"
-            | "after"
-            | "against"
-            | "along"
-            | "around"
-            | "at"
-            | "before"
-            | "behind"
-            | "below"
-            | "beside"
-            | "besides"
-            | "between"
-            | "by"
-            | "during"
-            | "for"
-            | "from"
-            | "in"
-            | "inside"
-            | "into"
-            | "like"
-            | "near"
-            | "of"
-            | "off"
-            | "on"
-            | "onto"
-            | "out"
-            | "over"
-            | "through"
-            | "throughout"
-            | "to"
-            | "under"
-            | "until"
-            | "up"
-            | "with"
-            | "without"
-    )
+    english_syntax::is_preposition(word)
 }
 
 fn is_coordination_conjunction(word: &str) -> bool {
-    matches!(word, "and" | "or" | "but" | "nor")
+    english_syntax::is_coordination_conjunction(word)
 }
 
 fn is_subordinating_conjunction(word: &str) -> bool {
-    matches!(
-        word,
-        "after"
-            | "although"
-            | "as"
-            | "because"
-            | "before"
-            | "if"
-            | "since"
-            | "though"
-            | "unless"
-            | "until"
-            | "when"
-            | "where"
-            | "whether"
-            | "while"
-    )
+    english_syntax::is_subordinating_conjunction(word)
 }
 
 fn is_complementizer(word: &str) -> bool {
-    matches!(
-        word,
-        "that" | "whether" | "if" | "who" | "what" | "which" | "how"
-    )
+    english_syntax::is_complementizer(word)
 }
 
 fn is_likely_nominal(word: &str) -> bool {
-    !is_function_word(word)
-        || matches!(
-            word,
-            "i" | "me"
-                | "you"
-                | "he"
-                | "him"
-                | "she"
-                | "her"
-                | "it"
-                | "we"
-                | "us"
-                | "they"
-                | "them"
-                | "who"
-                | "what"
-                | "which"
-                | "this"
-                | "that"
-                | "these"
-                | "those"
-        )
+    english_syntax::is_likely_nominal(word)
 }
 
 fn is_subject_candidate(word: &str) -> bool {
@@ -830,106 +621,7 @@ fn is_subject_candidate(word: &str) -> bool {
 }
 
 fn is_likely_verb(word: &str) -> bool {
-    matches!(
-        word,
-        "act"
-            | "appear"
-            | "arrive"
-            | "ask"
-            | "asked"
-            | "be"
-            | "believe"
-            | "bought"
-            | "buy"
-            | "came"
-            | "chase"
-            | "chased"
-            | "choose"
-            | "close"
-            | "coming"
-            | "come"
-            | "comply"
-            | "conduct"
-            | "console"
-            | "contrast"
-            | "contrasted"
-            | "decide"
-            | "did"
-            | "die"
-            | "do"
-            | "eat"
-            | "fix"
-            | "gave"
-            | "give"
-            | "go"
-            | "goes"
-            | "going"
-            | "had"
-            | "has"
-            | "have"
-            | "hear"
-            | "help"
-            | "hit"
-            | "hope"
-            | "inhale"
-            | "inspect"
-            | "invite"
-            | "know"
-            | "knows"
-            | "lead"
-            | "left"
-            | "like"
-            | "likes"
-            | "made"
-            | "make"
-            | "meet"
-            | "met"
-            | "object"
-            | "operate"
-            | "parse"
-            | "permit"
-            | "present"
-            | "produce"
-            | "project"
-            | "put"
-            | "ran"
-            | "read"
-            | "realize"
-            | "rebel"
-            | "record"
-            | "remember"
-            | "result"
-            | "refuse"
-            | "rose"
-            | "run"
-            | "runs"
-            | "said"
-            | "saw"
-            | "say"
-            | "see"
-            | "seem"
-            | "seems"
-            | "seen"
-            | "smiled"
-            | "subject"
-            | "talk"
-            | "tell"
-            | "think"
-            | "thinks"
-            | "thought"
-            | "use"
-            | "walk"
-            | "walked"
-            | "want"
-            | "wanted"
-            | "wants"
-            | "went"
-            | "win"
-            | "wind"
-            | "work"
-            | "works"
-    ) || word.ends_with("ed")
-        || word.ends_with("ing")
+    english_syntax::is_likely_verb(word)
 }
 
 fn is_modifier_pair(left: &str, right: &str) -> bool {
@@ -938,99 +630,11 @@ fn is_modifier_pair(left: &str, right: &str) -> bool {
 }
 
 fn is_adjective(word: &str) -> bool {
-    matches!(
-        word,
-        "administrative"
-            | "afraid"
-            | "angry"
-            | "beautiful"
-            | "big"
-            | "black"
-            | "bright"
-            | "careful"
-            | "certain"
-            | "clear"
-            | "dark"
-            | "easy"
-            | "excellent"
-            | "expensive"
-            | "fast"
-            | "female"
-            | "fortunate"
-            | "good"
-            | "great"
-            | "grotesque"
-            | "happy"
-            | "heavy"
-            | "important"
-            | "impatient"
-            | "inexpensive"
-            | "large"
-            | "likely"
-            | "long"
-            | "lyrical"
-            | "medical"
-            | "necessary"
-            | "new"
-            | "obvious"
-            | "old"
-            | "patient"
-            | "possible"
-            | "ready"
-            | "relaxed"
-            | "rude"
-            | "short"
-            | "slow"
-            | "small"
-            | "stupid"
-            | "sure"
-            | "tired"
-            | "ugly"
-            | "unfortunate"
-            | "valid"
-            | "white"
-    ) || word.ends_with("able")
-        || word.ends_with("al")
-        || word.ends_with("ful")
-        || word.ends_with("ic")
-        || word.ends_with("ical")
-        || word.ends_with("ive")
-        || word.ends_with("less")
-        || word.ends_with("ous")
+    english_syntax::is_adjective(word)
 }
 
 fn is_adverb(word: &str) -> bool {
-    matches!(
-        word,
-        "already"
-            | "apparently"
-            | "broadly"
-            | "delicately"
-            | "eventually"
-            | "fortunately"
-            | "generally"
-            | "gradually"
-            | "initially"
-            | "just"
-            | "mainly"
-            | "never"
-            | "not"
-            | "now"
-            | "often"
-            | "particularly"
-            | "presumably"
-            | "quickly"
-            | "really"
-            | "recently"
-            | "sadly"
-            | "sometimes"
-            | "soon"
-            | "specifically"
-            | "straight"
-            | "ultimately"
-            | "usually"
-            | "very"
-    ) || word.ends_with("ly")
+    english_syntax::is_adverb(word)
 }
 
 fn is_modifier_only(word: &str) -> bool {
@@ -1055,99 +659,27 @@ fn is_appositive_pair(left: &str, right: &str) -> bool {
 }
 
 fn is_common_appositive_head(word: &str) -> bool {
-    matches!(
-        word,
-        "actress"
-            | "author"
-            | "brother"
-            | "cousin"
-            | "doctor"
-            | "expert"
-            | "friend"
-            | "man"
-            | "mother"
-            | "president"
-            | "singer"
-            | "sister"
-            | "student"
-            | "uncle"
-            | "woman"
-    )
+    english_syntax::is_common_appositive_head(word)
 }
 
 fn is_proper_name(word: &str) -> bool {
-    matches!(
-        word,
-        "abrams"
-            | "alfred"
-            | "alice"
-            | "ann"
-            | "anne"
-            | "baird"
-            | "bob"
-            | "charles"
-            | "chris"
-            | "clinton"
-            | "david"
-            | "dick"
-            | "einstein"
-            | "emily"
-            | "fred"
-            | "grace"
-            | "janet"
-            | "joan"
-            | "joe"
-            | "john"
-            | "ken"
-            | "mary"
-            | "michael"
-            | "nixon"
-            | "oj"
-            | "rod"
-            | "ruth"
-            | "sally"
-            | "smith"
-            | "stuart"
-            | "ted"
-            | "thomas"
-            | "whoopi"
-    )
+    english_syntax::is_proper_name(word)
 }
 
 fn is_pronoun(word: &str) -> bool {
-    matches!(
-        word,
-        "i" | "me"
-            | "you"
-            | "he"
-            | "him"
-            | "she"
-            | "her"
-            | "it"
-            | "we"
-            | "us"
-            | "they"
-            | "them"
-            | "who"
-            | "whom"
-            | "what"
-            | "which"
-    )
+    english_syntax::is_pronoun(word)
 }
 
 fn is_demonstrative_pronoun(word: &str) -> bool {
-    matches!(word, "this" | "that" | "these" | "those")
+    english_syntax::is_demonstrative_pronoun(word)
 }
 
 fn is_vocative_opener(word: &str) -> bool {
-    matches!(word, "hey" | "oh")
+    english_syntax::is_vocative_opener(word)
 }
 
 fn is_parenthetical_marker(word: &str) -> bool {
-    matches!(
-        word,
-        "apparently" | "fortunately" | "however" | "particularly" | "presumably" | "therefore"
-    )
+    english_syntax::is_parenthetical_marker(word)
 }
 
 #[cfg(test)]

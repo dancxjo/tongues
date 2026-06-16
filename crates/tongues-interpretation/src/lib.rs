@@ -1664,8 +1664,8 @@ fn word_supervision(sentences: &[SentenceSupervision]) -> Vec<WordSupervision> {
     let mut words = Vec::new();
     for (sentence_index, sentence) in sentences.iter().enumerate() {
         let sentence_words = word_spans(&sentence.text);
-        let phoneme_chunks = split_tokens_for_words(&sentence.phonemes, sentence_words.len());
-        let phone_chunks = split_tokens_for_words(&sentence.phones, sentence_words.len());
+        let phoneme_chunks = phoneme_chunks_for_words(sentence, sentence_words.len());
+        let phone_chunks = phone_chunks_for_words(sentence, sentence_words.len());
         for (sentence_word_index, (start, end, word)) in sentence_words.into_iter().enumerate() {
             let global_start = sentence.start_char + start;
             let global_end = sentence.start_char + end;
@@ -1732,6 +1732,76 @@ fn word_spans(text: &str) -> Vec<(usize, usize, String)> {
         spans.push((start_index, text.len(), text[start_index..].to_string()));
     }
     spans
+}
+
+fn phoneme_chunks_for_words(sentence: &SentenceSupervision, words: usize) -> Vec<String> {
+    let chunks = chunks_from_phoneme_tokens(&sentence.phoneme_tokens, words);
+    if chunks.iter().any(|chunk| !chunk.is_empty()) {
+        chunks
+    } else {
+        split_tokens_for_words(&sentence.phonemes, words)
+    }
+}
+
+fn phone_chunks_for_words(sentence: &SentenceSupervision, words: usize) -> Vec<String> {
+    let chunks = chunks_from_phone_tokens(&sentence.phone_tokens, words);
+    if chunks.iter().any(|chunk| !chunk.is_empty()) {
+        chunks
+    } else {
+        split_tokens_for_words(&sentence.phones, words)
+    }
+}
+
+fn chunks_from_phoneme_tokens(tokens: &[speaking::PhonemeToken], words: usize) -> Vec<String> {
+    let mut chunks = vec![Vec::new(); words];
+    for token in tokens {
+        let Some(word_index) = token_word_index(&token.features) else {
+            continue;
+        };
+        let Some(chunk) = chunks.get_mut(word_index) else {
+            continue;
+        };
+        if let speaking::Spec::Known(id) = &token.phoneme {
+            chunk.push(speaking::phoneme_display_symbol(id).to_string());
+        }
+    }
+    chunks
+        .into_iter()
+        .map(|chunk| chunk.join(" "))
+        .collect::<Vec<_>>()
+}
+
+fn chunks_from_phone_tokens(tokens: &[speaking::PhoneToken], words: usize) -> Vec<String> {
+    let mut chunks = vec![Vec::new(); words];
+    for token in tokens {
+        let Some(word_index) = token_word_index(&token.features) else {
+            continue;
+        };
+        let Some(chunk) = chunks.get_mut(word_index) else {
+            continue;
+        };
+        if let speaking::Spec::Known(id) = &token.phone {
+            chunk.push(speaking::phone_display_symbol(id).to_string());
+        }
+    }
+    chunks
+        .into_iter()
+        .map(|chunk| chunk.join(" "))
+        .collect::<Vec<_>>()
+}
+
+fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
+    let value = features
+        .values
+        .get(&speaking::FeatureId("orthography.word_index".into()))?;
+    match value {
+        speaking::Spec::Known(speaking::FeatureValue::Number(value))
+            if value.is_finite() && *value >= 0.0 =>
+        {
+            Some(*value as usize)
+        }
+        _ => None,
+    }
 }
 
 pub fn normalize_word_token(word: &str) -> Option<String> {
@@ -3937,6 +4007,22 @@ mod tests {
         assert_eq!(words[1].previous_word.as_deref(), Some("ONE"));
         assert_eq!(words[1].next_word.as_deref(), Some("THREE"));
         assert!(!words[1].phonemes.is_empty());
+    }
+
+    #[test]
+    fn word_supervision_uses_structured_token_word_indices() {
+        let cfg = InterpretationConfig::default();
+        let detector = SentenceDetectorDialog::new().unwrap();
+        let sentences = sentence_supervision(&detector, "HELLO WORLD.", 100, &cfg).unwrap();
+        let words = word_supervision(&sentences);
+
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].word, "HELLO");
+        assert_eq!(words[1].word, "WORLD");
+        assert_eq!(words[0].phonemes, "h ʌ l oʊ");
+        assert_eq!(words[1].phonemes, "w ɝ l d");
+        assert_ne!(words[0].phonemes, sentences[0].phonemes);
+        assert_ne!(words[1].phonemes, sentences[0].phonemes);
     }
 
     #[test]

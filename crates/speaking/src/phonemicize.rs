@@ -1132,22 +1132,11 @@ fn punctuation_boundary_after_word(
 fn classify_surface_word(surface: &str) -> OrthographicTokenKind {
     let has_alpha = surface.chars().any(char::is_alphabetic);
     let has_digit = surface.chars().any(|character| character.is_ascii_digit());
-    let alpha_count = surface
-        .chars()
-        .filter(|character| character.is_alphabetic())
-        .count();
     if surface.contains('-') {
         return OrthographicTokenKind::Hyphenated(Vec::new());
     }
     if has_alpha && has_digit {
         OrthographicTokenKind::MixedAlphaNumeric
-    } else if alpha_count > 1
-        && surface
-            .chars()
-            .filter(|character| character.is_alphabetic())
-            .all(|character| character.is_uppercase())
-    {
-        OrthographicTokenKind::Acronym
     } else {
         OrthographicTokenKind::Word
     }
@@ -1282,6 +1271,12 @@ fn pronunciation_for_word(
         };
     }
 
+    if let OrthographicTokenKind::Word = &word.kind
+        && is_short_uppercase_initialism_surface(&word.text)
+    {
+        return acronym_pronunciation(word.text.as_str(), variety);
+    }
+
     use crate::data::varieties::english::morphology;
     if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
         let candidates = vec![morphology::compose_pronunciation(variety, &morph_parts)];
@@ -1335,6 +1330,20 @@ fn pronunciation_for_word(
             part_of_speech: context.part_of_speech,
         }
     }
+}
+
+fn is_short_uppercase_initialism_surface(surface: &str) -> bool {
+    let mut alpha_count = 0usize;
+    for character in surface
+        .chars()
+        .filter(|character| character.is_alphabetic())
+    {
+        if !character.is_uppercase() {
+            return false;
+        }
+        alpha_count += 1;
+    }
+    (2..=3).contains(&alpha_count)
 }
 
 #[derive(Debug)]
@@ -3100,6 +3109,202 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn interpreter_training_contract_has_word_indices_and_realized_phones() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request(
+                "Mr. Carter can't email Dr. Smith at 4:30 p.m.",
+                "en-US",
+            ))
+            .expect("training-style transcript should phonemicize");
+
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Mister", "Carter", "can't", "email", "Doctor", "Smith", "at", "four", "thirty",
+                "p", "m"
+            ]
+        );
+        assert!(output.phonemes.iter().all(|token| {
+            phoneme_usize_feature(token, "orthography.word_index").is_some()
+                && token.realized_as.len() == 1
+                && token
+                    .realized_as
+                    .iter()
+                    .all(|phone| !is_boundary_phone(phone))
+        }));
+        assert!(output.warnings.iter().all(|warning| {
+            !matches!(
+                warning.kind,
+                PronunciationWarningKind::GuessedWord
+                    | PronunciationWarningKind::MixedAlphaNumeric
+                    | PronunciationWarningKind::UnknownPronunciation
+            )
+        }));
+        assert!(
+            output
+                .boundaries
+                .iter()
+                .any(|boundary| boundary.terminal == Some(TerminalPunctuation::Period))
+        );
+    }
+
+    #[test]
+    fn digit_and_initialism_expansion_preserves_training_alignment_metadata() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("U.S. officials met Apollo 11.", "en-US"))
+            .expect("initialism and number should phonemicize");
+
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["U", "S", "officials", "met", "Apollo", "eleven"]
+        );
+        assert_eq!(cmudict_symbols_for_word(&output, 0), ["Y", "UW1"]);
+        assert_eq!(cmudict_symbols_for_word(&output, 1), ["EH1", "S"]);
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 5),
+            ["IH0", "L", "EH1", "V", "AH0", "N"]
+        );
+        assert!(
+            output.phonemes.iter().all(|token| {
+                phoneme_usize_feature(token, "orthography.word_index")
+                    .is_some_and(|index| index < output.graphemes.len())
+            }),
+            "every phoneme label should map back to a grapheme token"
+        );
+    }
+
+    #[test]
+    fn all_caps_transcripts_use_dataset_pronunciations_before_acronym_fallback() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request(
+                "AND CLASSIFIED BY SCIENCE WHICH IS TO SUFFERING",
+                "en-US",
+            ))
+            .expect("all-caps transcript should phonemicize");
+
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "AND",
+                "CLASSIFIED",
+                "BY",
+                "SCIENCE",
+                "WHICH",
+                "IS",
+                "TO",
+                "SUFFERING"
+            ]
+        );
+        assert!(
+            output
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::AcronymExpanded),
+            "ordinary all-caps transcript words should not be spelled as acronyms: {:?}",
+            output.warnings
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 1),
+            ["K", "L", "AE1", "S", "AH0", "F", "AY2", "D"]
+        );
+        assert_eq!(cmudict_symbols_for_word(&output, 2), ["B", "AY1"]);
+        assert_eq!(cmudict_symbols_for_word(&output, 4), ["W", "IH1", "CH"]);
+    }
+
+    #[test]
+    fn all_caps_unknown_names_are_not_poisoned_as_acronyms() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("MARIUS HAD BUT A STEP MORE TO TAKE", "en-US"))
+            .expect("all-caps transcript with unknown name should phonemicize");
+
+        assert!(
+            output
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::AcronymExpanded),
+            "dataset casing should not force letter-name expansion: {:?}",
+            output.warnings
+        );
+        assert_ne!(
+            cmudict_symbols_for_word(&output, 0),
+            ["EH1", "M", "EY1", "AA1", "R", "AY1", "Y", "UW1", "EH1", "S"]
+        );
+        assert_eq!(cmudict_symbols_for_word(&output, 1), ["HH", "AE1", "D"]);
+        assert_eq!(cmudict_symbols_for_word(&output, 4), ["S", "T", "EH1", "P"]);
+        assert_eq!(cmudict_symbols_for_word(&output, 5), ["M", "AO1", "R"]);
+        assert_eq!(cmudict_symbols_for_word(&output, 7), ["T", "EY1", "K"]);
+    }
+
+    #[test]
+    fn possessive_names_should_not_fall_back_to_letter_pronunciation() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("Alice's email arrived.", "en-US"))
+            .expect("possessive name should phonemicize");
+
+        assert!(
+            output
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::GuessedWord)
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 0),
+            ["AE1", "L", "AH0", "S", "AH0", "Z"]
+        );
+    }
+
+    #[test]
+    fn pronounceable_acronyms_should_not_always_be_initialisms() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("NASA launched Apollo 11.", "en-US"))
+            .expect("acronym sentence should phonemicize");
+
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 0),
+            ["N", "AE1", "S", "AH0"]
+        );
+        assert!(
+            output
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::AcronymExpanded)
+        );
+    }
+
+    #[test]
+    #[ignore = "known gap: productive hyphenated prefixes are split into separate words"]
+    fn hyphenated_prefixed_words_should_compose_before_word_splitting() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("The co-op re-opened.", "en-US"))
+            .expect("hyphenated prefixed words should phonemicize");
+
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["The", "co-op", "re-opened"]
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 2),
+            ["R", "IY0", "OW1", "P", "AH0", "N", "D"]
+        );
     }
 
     #[test]

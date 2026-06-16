@@ -3,6 +3,7 @@ use std::collections::HashMap;
 mod catalog;
 pub mod morphology;
 pub mod normalization;
+pub mod syntax;
 
 use crate::acoustics::{
     AcousticCueDef, AcousticLandmark, AcousticLandmarkKind, AcousticMeasurement, AcousticProfile,
