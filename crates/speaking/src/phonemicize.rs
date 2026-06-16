@@ -39,6 +39,23 @@ pub trait Phonemicizer {
     ) -> Result<PhonemicizeOutput, PhonemicizeError>;
 }
 
+pub fn phonemicizer_for_variety(
+    variety: &VarietyId,
+) -> Result<Box<dyn Phonemicizer>, PhonemicizeError> {
+    let canonical =
+        canonical_variety_id(&variety.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
+            variety: variety.clone(),
+        })?;
+    let variety_data =
+        variety_by_code(&canonical.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
+            variety: canonical.clone(),
+        })?;
+    match variety_data.language.0.as_str() {
+        "en" => Ok(Box::new(EnglishPhonemicizer)),
+        _ => Err(PhonemicizeError::UnsupportedVariety { variety: canonical }),
+    }
+}
+
 pub trait PronunciationPipeline {
     fn canonical_variety_id(
         &self,
@@ -518,6 +535,7 @@ fn tokenize_words(text: &str) -> Vec<WordToken> {
 
     mark_spaced_letter_name_runs(&mut words);
     mark_conjoined_letter_name_runs(&mut words);
+    mark_contextual_initialisms(text, &mut words);
     words
 }
 
@@ -1196,6 +1214,19 @@ fn is_uppercase_single_letter_word(word: &WordToken) -> bool {
     characters.next().is_none() && character.is_alphabetic() && character.is_uppercase()
 }
 
+fn mark_contextual_initialisms(text: &str, words: &mut [WordToken]) {
+    if !text.chars().any(char::is_lowercase) {
+        return;
+    }
+    for word in words {
+        if matches!(word.kind, OrthographicTokenKind::Word)
+            && is_short_uppercase_initialism_surface(&word.text)
+        {
+            word.kind = OrthographicTokenKind::Acronym;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WordPronunciation {
     pub candidates: Vec<Vec<CmuPhoneme>>,
@@ -1271,12 +1302,6 @@ fn pronunciation_for_word(
         };
     }
 
-    if let OrthographicTokenKind::Word = &word.kind
-        && is_short_uppercase_initialism_surface(&word.text)
-    {
-        return acronym_pronunciation(word.text.as_str(), variety);
-    }
-
     use crate::data::varieties::english::morphology;
     if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
         let candidates = vec![morphology::compose_pronunciation(variety, &morph_parts)];
@@ -1293,6 +1318,10 @@ fn pronunciation_for_word(
             letter_indices: Vec::new(),
             part_of_speech: context.part_of_speech,
         };
+    }
+
+    if let Some(pronunciation) = inflected_cmudict_pronunciation(word, context) {
+        return pronunciation;
     }
 
     let guessed = guess_pronunciation(&word.normalized);
@@ -1330,6 +1359,140 @@ fn pronunciation_for_word(
             part_of_speech: context.part_of_speech,
         }
     }
+}
+
+fn inflected_cmudict_pronunciation(
+    word: &WordToken,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    let normalized = word.normalized.as_str();
+    let (entry, suffix) = inflection_lemma_candidates(normalized)?
+        .into_iter()
+        .map(|(lemma, suffix)| (cmudict::bundled().lookup_entry(&lemma), suffix))
+        .find(|(entry, _)| !entry.candidates.is_empty())?;
+
+    let selection = choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
+    let candidates = selection
+        .candidates
+        .into_iter()
+        .map(|mut candidate| {
+            candidate.extend(inflection_suffix_phonemes(&candidate, suffix));
+            candidate
+        })
+        .collect::<Vec<_>>();
+    Some(WordPronunciation {
+        candidates,
+        status: PronunciationStatus::Guessed,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Rule,
+            method: format!(
+                "cmudict lemma `{}` + regular {} inflection",
+                entry.lookup, suffix
+            ),
+            version: Some("0.1".into()),
+        },
+        warnings: vec![PronunciationWarning {
+            token: word.text.clone(),
+            kind: PronunciationWarningKind::GuessedWord,
+            message: format!("guessed inflected word from lemma: {}", word.text),
+        }],
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InflectionSuffix {
+    Ed,
+    S,
+}
+
+impl fmt::Display for InflectionSuffix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ed => formatter.write_str("-ed"),
+            Self::S => formatter.write_str("-s"),
+        }
+    }
+}
+
+fn inflection_lemma_candidates(word: &str) -> Option<Vec<(String, InflectionSuffix)>> {
+    let mut candidates = Vec::new();
+    if let Some(stem) = word.strip_suffix("ied")
+        && stem.len() > 1
+    {
+        candidates.push((format!("{stem}y"), InflectionSuffix::Ed));
+    }
+    if let Some(stem) = word.strip_suffix("ed")
+        && stem.len() > 1
+    {
+        candidates.push((undouble_final_consonant(stem), InflectionSuffix::Ed));
+        candidates.push((stem.to_string(), InflectionSuffix::Ed));
+    }
+    if let Some(stem) = word.strip_suffix("es")
+        && stem.len() > 1
+    {
+        candidates.push((stem.to_string(), InflectionSuffix::S));
+        candidates.push((format!("{stem}e"), InflectionSuffix::S));
+    }
+    if let Some(stem) = word.strip_suffix('s')
+        && stem.len() > 1
+    {
+        if let Some(base) = stem.strip_suffix("ie") {
+            candidates.push((format!("{base}y"), InflectionSuffix::S));
+        }
+        candidates.push((stem.to_string(), InflectionSuffix::S));
+        candidates.push((format!("{stem}e"), InflectionSuffix::S));
+    }
+    (!candidates.is_empty()).then_some(candidates)
+}
+
+fn undouble_final_consonant(stem: &str) -> String {
+    let mut chars = stem.chars().collect::<Vec<_>>();
+    if chars.len() >= 2 {
+        let last = chars[chars.len() - 1];
+        let previous = chars[chars.len() - 2];
+        if last == previous && is_ascii_consonant(last) {
+            chars.pop();
+        }
+    }
+    chars.into_iter().collect()
+}
+
+fn is_ascii_consonant(ch: char) -> bool {
+    ch.is_ascii_alphabetic() && !matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u')
+}
+
+fn inflection_suffix_phonemes(
+    candidate: &[CmuPhoneme],
+    suffix: InflectionSuffix,
+) -> Vec<CmuPhoneme> {
+    let final_base = candidate
+        .last()
+        .map(|phoneme| phoneme.base.as_str())
+        .unwrap_or("");
+    let symbols: &[&str] = match suffix {
+        InflectionSuffix::Ed if matches!(final_base, "T" | "D") => &["IH0", "D"],
+        InflectionSuffix::Ed if is_voiceless_cmu_consonant(final_base) => &["T"],
+        InflectionSuffix::Ed => &["D"],
+        InflectionSuffix::S if matches!(final_base, "S" | "Z" | "SH" | "ZH" | "CH" | "JH") => {
+            &["IH0", "Z"]
+        }
+        InflectionSuffix::S if is_voiceless_cmu_consonant(final_base) => &["S"],
+        InflectionSuffix::S => &["Z"],
+    };
+    symbols
+        .iter()
+        .map(|symbol| CmuPhoneme::parse(symbol))
+        .collect()
+}
+
+fn is_voiceless_cmu_consonant(base: &str) -> bool {
+    matches!(
+        base,
+        "P" | "T" | "K" | "F" | "TH" | "S" | "SH" | "CH" | "HH"
+    )
 }
 
 fn is_short_uppercase_initialism_surface(surface: &str) -> bool {
@@ -1691,10 +1854,25 @@ fn orthographic_unit_candidate(
 }
 
 fn guess_pronunciation(word: &str) -> Vec<CmuPhoneme> {
-    let mut phonemes: Vec<CmuPhoneme> = word
-        .chars()
-        .filter_map(|character| fallback_symbol_for_char(character).map(CmuPhoneme::parse))
-        .collect();
+    let lower = word.to_lowercase();
+    let chars = lower.chars().collect::<Vec<_>>();
+    let mut phonemes = Vec::new();
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        let rest = chars[index..].iter().collect::<String>();
+        if let Some((symbols, consumed)) = fallback_symbols_for_grapheme(&rest, index, chars.len())
+        {
+            phonemes.extend(symbols.iter().map(|symbol| CmuPhoneme::parse(symbol)));
+            index += consumed;
+            continue;
+        }
+
+        if let Some(symbol) = fallback_symbol_for_char(chars[index], index, chars.len()) {
+            phonemes.push(CmuPhoneme::parse(symbol));
+        }
+        index += 1;
+    }
 
     let vowels = [
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
@@ -1708,13 +1886,86 @@ fn guess_pronunciation(word: &str) -> Vec<CmuPhoneme> {
     phonemes
 }
 
-fn fallback_symbol_for_char(character: char) -> Option<&'static str> {
+fn fallback_symbols_for_grapheme(
+    rest: &str,
+    index: usize,
+    word_len: usize,
+) -> Option<(&'static [&'static str], usize)> {
+    const TH: &[&str] = &["TH"];
+    const SH: &[&str] = &["SH"];
+    const CH: &[&str] = &["CH"];
+    const PH: &[&str] = &["F"];
+    const CK: &[&str] = &["K"];
+    const NG: &[&str] = &["NG"];
+    const QU: &[&str] = &["K", "W"];
+    const WR: &[&str] = &["R"];
+    const KN: &[&str] = &["N"];
+    const TION: &[&str] = &["SH", "AH0", "N"];
+    const SION: &[&str] = &["ZH", "AH0", "N"];
+    const EA: &[&str] = &["IY0"];
+    const EE: &[&str] = &["IY0"];
+    const OO: &[&str] = &["UW0"];
+    const OU: &[&str] = &["AW0"];
+    const OW: &[&str] = &["OW0"];
+    const AI: &[&str] = &["EY0"];
+    const AY: &[&str] = &["EY0"];
+    const OY: &[&str] = &["OY0"];
+    const IE_FINAL: &[&str] = &["IY0"];
+    const SILENT: &[&str] = &[];
+
+    if rest.starts_with("tion") {
+        return Some((TION, 4));
+    }
+    if rest.starts_with("sion") {
+        return Some((SION, 4));
+    }
+    if rest.starts_with("ie") && index + 2 == word_len {
+        return Some((IE_FINAL, 2));
+    }
+    if index == 0 && rest.starts_with("wr") {
+        return Some((WR, 2));
+    }
+    if index == 0 && rest.starts_with("kn") {
+        return Some((KN, 2));
+    }
+    for (prefix, symbols) in [
+        ("th", TH),
+        ("sh", SH),
+        ("ch", CH),
+        ("ph", PH),
+        ("ck", CK),
+        ("ng", NG),
+        ("qu", QU),
+        ("ea", EA),
+        ("ee", EE),
+        ("oo", OO),
+        ("ou", OU),
+        ("ow", OW),
+        ("ai", AI),
+        ("ay", AY),
+        ("oy", OY),
+    ] {
+        if rest.starts_with(prefix) {
+            return Some((symbols, prefix.len()));
+        }
+    }
+    if rest.starts_with('e') && index + 1 == word_len && word_len > 3 {
+        return Some((SILENT, 1));
+    }
+    None
+}
+
+fn fallback_symbol_for_char(
+    character: char,
+    index: usize,
+    word_len: usize,
+) -> Option<&'static str> {
     match character {
-        'a' => Some("AH0"),
+        'a' => Some("AE0"),
         'b' => Some("B"),
         'c' => Some("K"),
         'd' => Some("D"),
-        'e' => Some("IH0"),
+        'e' => Some("EH0"),
         'f' => Some("F"),
         'g' => Some("G"),
         'h' => Some("HH"),
@@ -1724,7 +1975,7 @@ fn fallback_symbol_for_char(character: char) -> Option<&'static str> {
         'l' => Some("L"),
         'm' => Some("M"),
         'n' => Some("N"),
-        'o' => Some("AH0"),
+        'o' => Some("AO0"),
         'p' => Some("P"),
         'q' => Some("K"),
         'r' => Some("R"),
@@ -1734,6 +1985,7 @@ fn fallback_symbol_for_char(character: char) -> Option<&'static str> {
         'v' => Some("V"),
         'w' => Some("W"),
         'x' => Some("K"),
+        'y' if index + 1 == word_len => Some("IY0"),
         'y' => Some("Y"),
         'z' => Some("Z"),
         _ => None,
@@ -3251,6 +3503,50 @@ mod tests {
     }
 
     #[test]
+    fn unknown_dataset_names_use_grapheme_clusters_not_raw_letters() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("CORINTHE PONTMERCY CHANVRERIE MONDETOUR", "en-US"))
+            .expect("unknown dataset names should phonemicize");
+
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 0),
+            ["K", "AO1", "R", "IH0", "N", "TH"]
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 1),
+            ["P", "AO1", "N", "T", "M", "EH0", "R", "K", "IY0"]
+        );
+        assert!(
+            cmudict_symbols_for_word(&output, 2).contains(&"CH".to_string()),
+            "CHANVRERIE should keep ch as one phoneme"
+        );
+        assert!(
+            cmudict_symbols_for_word(&output, 3).contains(&"AW0".to_string()),
+            "MONDETOUR should keep ou as one vowel"
+        );
+    }
+
+    #[test]
+    fn regular_inflections_try_cmudict_lemmas_before_grapheme_fallback() {
+        let output = EnglishPhonemicizer
+            .phonemicize(&request("PARCELLED COMBATED ANNIHILATES", "en-US"))
+            .expect("regular inflections should phonemicize from lemmas");
+
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 0),
+            ["P", "AA1", "R", "S", "AH0", "L", "D"]
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 1),
+            ["K", "AA1", "M", "B", "AE0", "T", "IH0", "D"]
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 2),
+            ["AH0", "N", "AY1", "AH0", "L", "EY2", "T", "S"]
+        );
+    }
+
+    #[test]
     fn possessive_names_should_not_fall_back_to_letter_pronunciation() {
         let output = EnglishPhonemicizer
             .phonemicize(&request("Alice's email arrived.", "en-US"))
@@ -3504,11 +3800,9 @@ mod tests {
     #[test]
     fn acronyms_expand_as_letter_names_and_mixed_tokens_warn() {
         let ir = EnglishPhonemicizer
-            .phonemicize(&request("IR", "en-US"))
+            .phonemicize(&request("Use IR", "en-US"))
             .expect("IR");
-        assert_eq!(phoneme_symbols(&ir), ["aɪ", "ɑ", "ɹ"]);
-        assert_eq!(cmudict_symbols(&ir), ["AY1", "AA1", "R"]);
-        assert_eq!(phone_symbols(&ir), ["aɪ", "|", "j", "ɑ", "ɹ"]);
+        assert_eq!(cmudict_symbols_for_word(&ir, 1), ["AY1", "AA1", "R"]);
         assert!(ir.warnings.iter().any(|warning| {
             warning.kind == PronunciationWarningKind::AcronymExpanded && warning.token == "IR"
         }));

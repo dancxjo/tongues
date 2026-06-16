@@ -31,7 +31,7 @@ use speaking::syntax::{
     SyntacticLinkKind,
 };
 use speaking::{
-    syllables_to_ipa, EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, ProsodyTrack,
+    phonemicizer_for_variety, syllables_to_ipa, PhonemicizeRequest, ProsodyTrack,
     SpeechBoundaryToken, Syllable, VarietyId,
 };
 use tongues_core::Vocab;
@@ -1381,7 +1381,8 @@ fn sentence_supervision(
     let detected = detector
         .detect_sentences_borrowed(transcript)
         .context("detecting transcript sentences")?;
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId(config.variety.clone());
+    let phonemicizer = phonemicizer_for_variety(&variety)?;
     let syntax_parser = HeuristicLinkGrammarParser;
     let mut offset = 0usize;
     let mut out = Vec::new();
@@ -1397,7 +1398,7 @@ fn sentence_supervision(
         let end_frame = char_to_frame(end, transcript.len(), num_frames).max(start_frame + 1);
         let phonemicized = phonemicizer.phonemicize(&PhonemicizeRequest {
             text: text.clone(),
-            variety: VarietyId(config.variety.clone()),
+            variety: variety.clone(),
             style: None,
         })?;
         let terminal = text.chars().rev().find(|ch| matches!(ch, '.' | '?' | '!'));
@@ -1424,7 +1425,7 @@ fn sentence_supervision(
     if out.is_empty() && !transcript.trim().is_empty() {
         let phonemicized = phonemicizer.phonemicize(&PhonemicizeRequest {
             text: transcript.to_string(),
-            variety: VarietyId(config.variety.clone()),
+            variety,
             style: None,
         })?;
         let syntax = syntax_supervision(&syntax_parser, transcript, None);
