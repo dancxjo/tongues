@@ -731,6 +731,20 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
 // ── Full training loop ─────────────────────────────────────────────────────
 
 /// Run the complete training loop with early stopping, loading state from disk if present.
+const EARLY_STOP_METRIC: &str = "val_loss";
+
+fn format_optional_epoch(epoch: Option<usize>) -> String {
+    epoch
+        .map(|epoch| epoch.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn format_optional_metric(metric: Option<f32>) -> String {
+    metric
+        .map(|metric| format!("{metric:.3}"))
+        .unwrap_or_else(|| "none".to_string())
+}
+
 pub fn train<B: AutodiffBackend, R: Rng>(
     model_config: &ModelConfig,
     train_config: &TrainConfig,
@@ -765,6 +779,8 @@ where
 
     let mut start_epoch = 1usize;
     let mut best_val_loss = f32::INFINITY;
+    let mut best_epoch = None;
+    let mut best_exact_match = None;
 
     let mut model: Seq2SeqModel<B> = if state_path.exists() {
         let state_data =
@@ -791,9 +807,15 @@ where
                 .context("loading epoch model weights")?;
             start_epoch = state.current_epoch + 1;
             best_val_loss = state.best_val_loss;
+            best_epoch = state.best_epoch;
+            best_exact_match = state.best_exact_match;
             println!(
-                "Resuming from epoch {} (previous best val loss: {:.4})",
-                start_epoch, best_val_loss
+                "Resuming from epoch {} (best_epoch={} best_val_loss={:.4} best_exact_match={} early_stop_metric={})",
+                start_epoch,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                state.early_stop_metric
             );
             loaded_model
         } else if model_file.exists() {
@@ -807,9 +829,15 @@ where
                 .context("loading model weights")?;
             start_epoch = state.current_epoch + 1;
             best_val_loss = state.best_val_loss;
+            best_epoch = state.best_epoch;
+            best_exact_match = state.best_exact_match;
             println!(
-                "Resuming from epoch {} (previous best val loss: {:.4})",
-                start_epoch, best_val_loss
+                "Resuming from epoch {} (best_epoch={} best_val_loss={:.4} best_exact_match={} early_stop_metric={})",
+                start_epoch,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                state.early_stop_metric
             );
             loaded_model
         } else {
@@ -924,6 +952,9 @@ where
         let current_state = TrainState {
             current_epoch: epoch,
             best_val_loss,
+            best_epoch,
+            best_exact_match,
+            early_stop_metric: EARLY_STOP_METRIC.to_string(),
         };
         let state_json = serde_json::to_string_pretty(&current_state)?;
         std::fs::write(&state_path, state_json)?;
@@ -943,6 +974,8 @@ where
         // Early stopping & saving best model
         if val_loss < best_val_loss - 1e-5 {
             best_val_loss = val_loss;
+            best_epoch = Some(epoch);
+            best_exact_match = Some(val_acc);
             patience_counter = 0;
 
             eval_model
@@ -954,13 +987,21 @@ where
             let best_state = TrainState {
                 current_epoch: epoch,
                 best_val_loss,
+                best_epoch,
+                best_exact_match,
+                early_stop_metric: EARLY_STOP_METRIC.to_string(),
             };
             std::fs::write(&state_path, serde_json::to_string_pretty(&best_state)?)?;
         } else {
             patience_counter += 1;
             println!(
-                "  (no improvement, patience {}/{})",
-                patience_counter, train_config.early_stopping_patience
+                "  (no improvement in {}; best_epoch={} best_val_loss={:.4} best_exact_match={}, patience {}/{})",
+                EARLY_STOP_METRIC,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                patience_counter,
+                train_config.early_stopping_patience
             );
             if patience_counter >= train_config.early_stopping_patience {
                 println!("Early stopping at epoch {}", epoch);
@@ -1006,6 +1047,8 @@ where
 
     let mut start_epoch = 1usize;
     let mut best_val_loss = f32::INFINITY;
+    let mut best_epoch = None;
+    let mut best_exact_match = None;
 
     let mut model: Seq2SeqModel<B> = if state_path.exists() {
         let state_data =
@@ -1032,6 +1075,16 @@ where
                 .context("loading epoch model weights")?;
             start_epoch = state.current_epoch + 1;
             best_val_loss = state.best_val_loss;
+            best_epoch = state.best_epoch;
+            best_exact_match = state.best_exact_match;
+            println!(
+                "Resuming from epoch {} (best_epoch={} best_val_loss={:.4} best_exact_match={} early_stop_metric={})",
+                start_epoch,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                state.early_stop_metric
+            );
             loaded_model
         } else if model_file.exists() {
             println!(
@@ -1044,6 +1097,16 @@ where
                 .context("loading model weights")?;
             start_epoch = state.current_epoch + 1;
             best_val_loss = state.best_val_loss;
+            best_epoch = state.best_epoch;
+            best_exact_match = state.best_exact_match;
+            println!(
+                "Resuming from epoch {} (best_epoch={} best_val_loss={:.4} best_exact_match={} early_stop_metric={})",
+                start_epoch,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                state.early_stop_metric
+            );
             loaded_model
         } else {
             println!("Checkpoint files not found. Initializing new model weights...");
@@ -1152,6 +1215,9 @@ where
         let current_state = TrainState {
             current_epoch: epoch,
             best_val_loss,
+            best_epoch,
+            best_exact_match,
+            early_stop_metric: EARLY_STOP_METRIC.to_string(),
         };
         std::fs::write(&state_path, serde_json::to_string_pretty(&current_state)?)?;
 
@@ -1168,6 +1234,8 @@ where
 
         if val_loss < best_val_loss - 1e-5 {
             best_val_loss = val_loss;
+            best_epoch = Some(epoch);
+            best_exact_match = Some(val_acc);
             patience_counter = 0;
 
             eval_model
@@ -1178,13 +1246,21 @@ where
             let best_state = TrainState {
                 current_epoch: epoch,
                 best_val_loss,
+                best_epoch,
+                best_exact_match,
+                early_stop_metric: EARLY_STOP_METRIC.to_string(),
             };
             std::fs::write(&state_path, serde_json::to_string_pretty(&best_state)?)?;
         } else {
             patience_counter += 1;
             println!(
-                "  (no improvement, patience {}/{})",
-                patience_counter, train_config.early_stopping_patience
+                "  (no improvement in {}; best_epoch={} best_val_loss={:.4} best_exact_match={}, patience {}/{})",
+                EARLY_STOP_METRIC,
+                format_optional_epoch(best_epoch),
+                best_val_loss,
+                format_optional_metric(best_exact_match),
+                patience_counter,
+                train_config.early_stopping_patience
             );
             if patience_counter >= train_config.early_stopping_patience {
                 println!("Early stopping at epoch {}", epoch);

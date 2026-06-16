@@ -52,6 +52,18 @@ prepare *args:
 fetch *args:
     cargo run --bin tongues -- fetch-cmudict --out data/cmudict.dict "$@"
 
+# Update the markdown table of pronunciation discrepancies across pronouncers
+discrepancies *args:
+    cargo run --bin tongues -- discrepancies "$@"
+
+# Alias for the common misspelling
+discrepencies *args:
+    @just discrepancies "$@"
+
+# Alias for the common misspelling
+discrepency *args:
+    @just discrepancies "$@"
+
 # Move generated data, prepared runs, and model outputs aside for a fresh start
 archive:
     #!/usr/bin/env bash

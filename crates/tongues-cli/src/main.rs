@@ -168,6 +168,7 @@ enum Commands {
     },
 
     /// Compare pronunciations from lexicons, rules, and trained models
+    #[command(alias = "discrepancy", alias = "discrepency", alias = "discrepencies")]
     Discrepancies {
         /// Markdown report path to write
         #[arg(long, default_value = "docs/pronunciation-discrepancies.md")]
@@ -189,13 +190,13 @@ enum Commands {
         #[arg(long)]
         words_file: Option<PathBuf>,
 
-        /// Include the G2P2G model pronouncer
-        #[arg(long, default_value_t = true)]
-        g2p2g: bool,
+        /// Skip the G2P2G model pronouncer
+        #[arg(long = "no-g2p2g")]
+        no_g2p2g: bool,
 
-        /// Include the Wiktionary model pronouncer
-        #[arg(long, default_value_t = true)]
-        wiktionary: bool,
+        /// Skip the Wiktionary model pronouncer
+        #[arg(long = "no-wiktionary")]
+        no_wiktionary: bool,
 
         /// G2P2G model directory
         #[arg(long, default_value = "models/g2p2g/openepd-v0")]
@@ -1181,8 +1182,8 @@ fn main() -> Result<()> {
             max_rarity,
             words,
             words_file,
-            g2p2g,
-            wiktionary,
+            no_g2p2g,
+            no_wiktionary,
             g2p2g_model,
             wiktionary_model,
         } => cmd_discrepancies(
@@ -1191,8 +1192,8 @@ fn main() -> Result<()> {
             max_rarity,
             words,
             words_file.as_deref(),
-            g2p2g,
-            wiktionary,
+            !no_g2p2g,
+            !no_wiktionary,
             &g2p2g_model,
             &wiktionary_model,
             device_arg,
@@ -2114,6 +2115,7 @@ fn cmd_sentence_parser_train(
         format_count(train_config.max_seq_len)
     );
     println!("  train_state: {}", out.join("train_state.json").display());
+    println!("  early_stop_metric: val_loss");
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
@@ -2437,6 +2439,7 @@ fn cmd_head2phones_train(
         format_count(train_config.max_seq_len)
     );
     println!("  train_state: {}", out.join("train_state.json").display());
+    println!("  early_stop_metric: val_loss");
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
@@ -3487,6 +3490,7 @@ fn write_and_train_wiktionary_seq2seq(
         format_count(batch_size)
     );
     println!("  train_state: {}", out.join("train_state.json").display());
+    println!("  early_stop_metric: val_loss");
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
@@ -4366,6 +4370,7 @@ fn cmd_interpretation_train(
     tongues_interpretation::save_artifact_files(out, data, &model_config, train_config)?;
     println!("LibriSpeech ASR checkpoint paths:");
     println!("  train_state: {}", out.join("train_state.json").display());
+    println!("  early_stop_metric: val_loss");
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()
@@ -4852,6 +4857,442 @@ fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
         }
         _ => None,
     }
+}
+
+// ── pronunciation discrepancies ───────────────────────────────────────────
+
+fn cmd_discrepancies(
+    out: &Path,
+    limit: usize,
+    max_rarity: f32,
+    explicit_words: Vec<String>,
+    words_file: Option<&Path>,
+    include_g2p2g: bool,
+    include_wiktionary: bool,
+    g2p2g_model: &Path,
+    wiktionary_model: &Path,
+    device_arg: DeviceArg,
+    output_mode: OutputMode,
+) -> Result<()> {
+    match device_arg {
+        DeviceArg::Cpu => cmd_discrepancies_backend::<CpuInferBackend>(
+            &NdArrayDevice::Cpu,
+            out,
+            limit,
+            max_rarity,
+            explicit_words,
+            words_file,
+            include_g2p2g,
+            include_wiktionary,
+            g2p2g_model,
+            wiktionary_model,
+            output_mode,
+        ),
+        DeviceArg::Cuda => cmd_discrepancies_backend::<CudaInferBackend>(
+            &CudaDevice::default(),
+            out,
+            limit,
+            max_rarity,
+            explicit_words,
+            words_file,
+            include_g2p2g,
+            include_wiktionary,
+            g2p2g_model,
+            wiktionary_model,
+            output_mode,
+        ),
+    }
+}
+
+fn cmd_discrepancies_backend<B: Backend>(
+    device: &B::Device,
+    out: &Path,
+    limit: usize,
+    max_rarity: f32,
+    explicit_words: Vec<String>,
+    words_file: Option<&Path>,
+    include_g2p2g: bool,
+    include_wiktionary: bool,
+    g2p2g_model: &Path,
+    wiktionary_model: &Path,
+    output_mode: OutputMode,
+) -> Result<()>
+where
+    B::Device: Clone,
+{
+    let raw_openepd: std::collections::BTreeMap<String, OpenEpdEntry> =
+        serde_json::from_str(open_english_pronouncing_dictionary::CORPUS_JSON)
+            .context("parsing embedded OpenEPD JSON")?;
+    let words = discrepancy_words(&raw_openepd, limit, max_rarity, explicit_words, words_file)?;
+
+    let mut cmu = CmudictProvider {
+        lexicon: speaking::data::lexicons::cmudict::bundled(),
+    };
+    let mut openepd = OpenEpdProvider {
+        entries: &raw_openepd,
+    };
+    let mut rules = RuleProvider;
+
+    let mut g2p2g = if include_g2p2g {
+        Some(Seq2SeqPronouncer::<B>::load_g2p2g(
+            g2p2g_model,
+            device.clone(),
+        )?)
+    } else {
+        None
+    };
+    let mut wiktionary = if include_wiktionary {
+        Some(Seq2SeqPronouncer::<B>::load_wiktionary(
+            wiktionary_model,
+            device.clone(),
+        )?)
+    } else {
+        None
+    };
+
+    let mut provider_names = vec![
+        "cmudict".to_string(),
+        "openepd".to_string(),
+        "speaking-rules".to_string(),
+    ];
+    if let Some(provider) = &g2p2g {
+        provider_names.push(provider.name.to_string());
+    }
+    if let Some(provider) = &wiktionary {
+        provider_names.push(provider.name.to_string());
+    }
+
+    let mut providers: Vec<&mut dyn speaking::PronunciationProvider> =
+        vec![&mut cmu, &mut openepd, &mut rules];
+    if let Some(provider) = g2p2g.as_mut() {
+        providers.push(provider);
+    }
+    if let Some(provider) = wiktionary.as_mut() {
+        providers.push(provider);
+    }
+
+    if output_mode.verbose() {
+        println!(
+            "Comparing {} words across {}...",
+            format_count(words.len()),
+            provider_names.join(", ")
+        );
+    }
+    let records = speaking::find_pronunciation_discrepancies(&words, &mut providers);
+    let report = speaking::render_discrepancy_markdown(&records, &provider_names, words.len());
+    write_atomic_text(out, &report)?;
+    println!(
+        "Wrote {} discrepancies for {} checked words to {}",
+        format_count(records.len()),
+        format_count(words.len()),
+        out.display()
+    );
+    Ok(())
+}
+
+fn discrepancy_words(
+    raw_openepd: &std::collections::BTreeMap<String, OpenEpdEntry>,
+    limit: usize,
+    max_rarity: f32,
+    explicit_words: Vec<String>,
+    words_file: Option<&Path>,
+) -> Result<Vec<String>> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut words = Vec::new();
+
+    for word in ["loadstone", "lodestone"] {
+        push_discrepancy_word(word, &mut seen, &mut words);
+    }
+    for word in explicit_words {
+        push_discrepancy_word(&word, &mut seen, &mut words);
+    }
+    if let Some(path) = words_file {
+        for line in fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .lines()
+        {
+            push_discrepancy_word(line, &mut seen, &mut words);
+        }
+    }
+
+    let mut openepd_words = raw_openepd
+        .iter()
+        .filter(|(_, entry)| entry.rarity <= max_rarity)
+        .map(|(word, entry)| (entry.rarity, word.as_str()))
+        .collect::<Vec<_>>();
+    openepd_words.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(right.1))
+    });
+    for (_, word) in openepd_words.into_iter().take(limit) {
+        push_discrepancy_word(word, &mut seen, &mut words);
+    }
+
+    Ok(words)
+}
+
+fn push_discrepancy_word(
+    word: &str,
+    seen: &mut std::collections::BTreeSet<String>,
+    words: &mut Vec<String>,
+) {
+    let normalized = speaking::data::lexicons::cmudict::normalize_for_lookup(word);
+    if normalized.is_empty() || !normalized.chars().any(|c| c.is_alphabetic()) {
+        return;
+    }
+    if seen.insert(normalized.clone()) {
+        words.push(normalized);
+    }
+}
+
+struct CmudictProvider {
+    lexicon: &'static speaking::data::lexicons::cmudict::CmudictLexicon,
+}
+
+impl speaking::PronunciationProvider for CmudictProvider {
+    fn name(&self) -> &str {
+        "cmudict"
+    }
+
+    fn pronounce(&mut self, word: &str) -> speaking::PronouncerResult {
+        let entry = self.lexicon.lookup_entry(word);
+        let output = entry
+            .candidates
+            .first()
+            .map(|candidate| speaking::cmu_phonemes_to_ipa(candidate));
+        speaking::PronouncerResult {
+            source: self.name().to_string(),
+            status: if output.is_some() {
+                speaking::PronouncerStatus::Found
+            } else {
+                speaking::PronouncerStatus::Missing
+            },
+            output,
+            note: Some(format!("{:?}", entry.status)),
+        }
+    }
+}
+
+struct OpenEpdProvider<'a> {
+    entries: &'a std::collections::BTreeMap<String, OpenEpdEntry>,
+}
+
+impl speaking::PronunciationProvider for OpenEpdProvider<'_> {
+    fn name(&self) -> &str {
+        "openepd"
+    }
+
+    fn pronounce(&mut self, word: &str) -> speaking::PronouncerResult {
+        let output = self
+            .entries
+            .get(word)
+            .and_then(|entry| preferred_openepd_ipa(&entry.ipa))
+            .and_then(|ipa| normalize_openepd_ipa(ipa).ok());
+        speaking::PronouncerResult {
+            source: self.name().to_string(),
+            status: if output.is_some() {
+                speaking::PronouncerStatus::Found
+            } else {
+                speaking::PronouncerStatus::Missing
+            },
+            output,
+            note: None,
+        }
+    }
+}
+
+struct RuleProvider;
+
+impl speaking::PronunciationProvider for RuleProvider {
+    fn name(&self) -> &str {
+        "speaking-rules"
+    }
+
+    fn pronounce(&mut self, word: &str) -> speaking::PronouncerResult {
+        match phonemicized_first_word_phones(word) {
+            Ok(output) if !output.is_empty() => speaking::PronouncerResult {
+                source: self.name().to_string(),
+                output: Some(output),
+                status: speaking::PronouncerStatus::Found,
+                note: None,
+            },
+            Ok(_) => speaking::PronouncerResult {
+                source: self.name().to_string(),
+                output: None,
+                status: speaking::PronouncerStatus::Missing,
+                note: None,
+            },
+            Err(err) => speaking::PronouncerResult {
+                source: self.name().to_string(),
+                output: None,
+                status: speaking::PronouncerStatus::Error,
+                note: Some(err.to_string()),
+            },
+        }
+    }
+}
+
+enum Seq2SeqPronouncerKind {
+    G2p2g,
+    Wiktionary,
+}
+
+struct Seq2SeqPronouncer<B: Backend> {
+    name: &'static str,
+    kind: Seq2SeqPronouncerKind,
+    model: Seq2SeqModel<B>,
+    vocab: Vocab,
+    device: B::Device,
+}
+
+impl<B: Backend> Seq2SeqPronouncer<B> {
+    fn load_g2p2g(model_dir: &Path, device: B::Device) -> Result<Self> {
+        let (model, vocab) = load_seq2seq_model_and_vocab::<B>(model_dir, &device)?;
+        Ok(Self {
+            name: "g2p2g",
+            kind: Seq2SeqPronouncerKind::G2p2g,
+            model,
+            vocab,
+            device,
+        })
+    }
+
+    fn load_wiktionary(model_dir: &Path, device: B::Device) -> Result<Self> {
+        let (model, vocab) = load_seq2seq_model_and_vocab::<B>(model_dir, &device)?;
+        Ok(Self {
+            name: "wiktionary",
+            kind: Seq2SeqPronouncerKind::Wiktionary,
+            model,
+            vocab,
+            device,
+        })
+    }
+}
+
+impl<B: Backend> speaking::PronunciationProvider for Seq2SeqPronouncer<B> {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn pronounce(&mut self, word: &str) -> speaking::PronouncerResult {
+        let prediction = match self.kind {
+            Seq2SeqPronouncerKind::G2p2g => {
+                predict(&self.model, word, Task::G2P, &self.vocab, &self.device)
+            }
+            Seq2SeqPronouncerKind::Wiktionary => {
+                match wiktionary_infer_source(
+                    "orthography-to-phones",
+                    "eng",
+                    WiktionaryNotationArg::Phones,
+                    None,
+                    word,
+                ) {
+                    Ok(source) => {
+                        let src_ids = self.vocab.encode_string(&source);
+                        let src_len = src_ids.len();
+                        let src_tensor = Tensor::<B, 2, Int>::from_data(
+                            burn::tensor::TensorData::new(
+                                src_ids.iter().map(|&x| x as i32).collect::<Vec<_>>(),
+                                [1, src_len],
+                            ),
+                            &self.device,
+                        );
+                        let pred_ids = self.model.generate(src_tensor, 128);
+                        self.vocab.decode_ids(&pred_ids)
+                    }
+                    Err(err) => {
+                        return speaking::PronouncerResult {
+                            source: self.name().to_string(),
+                            output: None,
+                            status: speaking::PronouncerStatus::Error,
+                            note: Some(err.to_string()),
+                        };
+                    }
+                }
+            }
+        };
+
+        speaking::PronouncerResult {
+            source: self.name().to_string(),
+            output: Some(prediction),
+            status: speaking::PronouncerStatus::Found,
+            note: None,
+        }
+    }
+}
+
+fn load_seq2seq_model_and_vocab<B: Backend>(
+    model_dir: &Path,
+    device: &B::Device,
+) -> Result<(Seq2SeqModel<B>, Vocab)> {
+    let model_config: ModelConfig = serde_json::from_str(
+        &fs::read_to_string(model_dir.join("model_config.json")).with_context(|| {
+            format!("reading {}", model_dir.join("model_config.json").display())
+        })?,
+    )?;
+    let vocab: Vocab = serde_json::from_str(
+        &fs::read_to_string(model_dir.join("vocab.json"))
+            .with_context(|| format!("reading {}", model_dir.join("vocab.json").display()))?,
+    )?;
+    let model = load_model::<B>(&model_config, &model_dir.join("model"), device)?;
+    Ok((model, vocab))
+}
+
+fn phonemicized_first_word_phones(text: &str) -> Result<String> {
+    use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+
+    let phonemicizer = EnglishPhonemicizer;
+    let phonemicized = phonemicizer
+        .phonemicize(&PhonemicizeRequest {
+            text: text.to_string(),
+            variety: VarietyId("en-US".to_string()),
+            style: None,
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
+
+    let mut first_word_syllables = Vec::new();
+    let mut first_word_index = None;
+    for syllable in phonemicized.syllables.iter() {
+        let Some(first_phone) = syllable.phones.first() else {
+            continue;
+        };
+        let Some(word_idx) = token_word_index(&first_phone.features) else {
+            continue;
+        };
+        if first_word_index.is_none() {
+            first_word_index = Some(word_idx);
+        }
+        if Some(word_idx) == first_word_index {
+            first_word_syllables.push(syllable.clone());
+        }
+    }
+
+    Ok(syllables_to_ipa_formatted(&first_word_syllables))
+}
+
+fn write_atomic_text(path: &Path, text: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let part = path.with_extension(format!(
+        "{}part",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}."))
+            .unwrap_or_default()
+    ));
+    {
+        let mut writer = std::io::BufWriter::new(
+            fs::File::create(&part).with_context(|| format!("creating {}", part.display()))?,
+        );
+        writer.write_all(text.as_bytes())?;
+        writer.flush()?;
+    }
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} to {}", part.display(), path.display()))?;
+    Ok(())
 }
 
 // ── fetch-cmudict ──────────────────────────────────────────────────────────
@@ -5493,6 +5934,7 @@ fn cmd_train(
         format_count(batch_size)
     );
     println!("  train_state: {}", out.join("train_state.json").display());
+    println!("  early_stop_metric: val_loss");
     println!(
         "  epoch checkpoints: {}",
         out.join("model-epoch-N.bin").display()

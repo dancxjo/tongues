@@ -118,27 +118,56 @@ pub fn max_pairwise_edit_distance(keys: &[String]) -> usize {
 
 pub fn cmu_phonemes_to_ipa(phonemes: &[CmuPhoneme]) -> String {
     let mut text = String::new();
-    let mut previous_was_vowel = false;
+    let mut has_seen_vowel = false;
+    let mut consonant_cluster_start = 0usize;
+    let mut consonant_cluster_len = 0usize;
 
     for phoneme in phonemes {
         let Some(entry) = arpabet::entry(&phoneme.base) else {
             continue;
         };
         if entry.syllabic {
-            match phoneme.stress {
-                Some(CmuStress::Primary) => text.push('ˈ'),
-                Some(CmuStress::Secondary) => text.push('ˌ'),
-                Some(CmuStress::Unstressed) if previous_was_vowel && !text.is_empty() => {
-                    text.push('.')
+            let stress_index = if has_seen_vowel {
+                if consonant_cluster_len > 2 {
+                    text.char_indices()
+                        .nth(
+                            text[..consonant_cluster_start].chars().count() + consonant_cluster_len
+                                - 2,
+                        )
+                        .map(|(index, _)| index)
+                        .unwrap_or(text.len())
+                } else {
+                    consonant_cluster_start
                 }
-                _ if previous_was_vowel && !text.is_empty() => text.push('.'),
+            } else {
+                0
+            };
+            match phoneme.stress {
+                Some(CmuStress::Primary) => text.insert(stress_index, 'ˈ'),
+                Some(CmuStress::Secondary) => text.insert(stress_index, 'ˌ'),
+                Some(CmuStress::Unstressed) if has_seen_vowel && !text.is_empty() => {
+                    text.insert(stress_index, '.')
+                }
+                _ if has_seen_vowel && !text.is_empty() => text.insert(stress_index, '.'),
                 _ => {}
             }
-            previous_was_vowel = true;
+            has_seen_vowel = true;
+            consonant_cluster_start = text.len();
+            consonant_cluster_len = 0;
+        } else if consonant_cluster_len == 0 {
+            consonant_cluster_start = text.len();
+            consonant_cluster_len = 1;
+        } else {
+            consonant_cluster_len += 1;
         }
 
         if let Some(phone) = arpabet::reduced_phone_for_cmu(&phoneme.base, phoneme.stress) {
-            text.push_str(phone.as_str().strip_prefix("ipa.phone.").unwrap_or(phone.as_str()));
+            text.push_str(
+                phone
+                    .as_str()
+                    .strip_prefix("ipa.phone.")
+                    .unwrap_or(phone.as_str()),
+            );
         } else {
             text.push_str(entry.ipa);
         }

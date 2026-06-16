@@ -18,10 +18,20 @@ pub fn make_recorder() -> FullPrecisionBinRecorder {
     FullPrecisionBinRecorder::new()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainState {
     pub current_epoch: usize,
     pub best_val_loss: f32,
+    #[serde(default)]
+    pub best_epoch: Option<usize>,
+    #[serde(default)]
+    pub best_exact_match: Option<f32>,
+    #[serde(default = "default_early_stop_metric")]
+    pub early_stop_metric: String,
+}
+
+fn default_early_stop_metric() -> String {
+    "val_loss".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +159,18 @@ pub fn read_manifest(path: &Path) -> Result<ModelArtifactManifest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn train_state_defaults_new_diagnostic_fields() {
+        let state: TrainState =
+            serde_json::from_str(r#"{"current_epoch":11,"best_val_loss":0.0309}"#).unwrap();
+
+        assert_eq!(state.current_epoch, 11);
+        assert_eq!(state.best_val_loss, 0.0309);
+        assert_eq!(state.best_epoch, None);
+        assert_eq!(state.best_exact_match, None);
+        assert_eq!(state.early_stop_metric, "val_loss");
+    }
 
     #[test]
     fn serializes_expected_contract() {
