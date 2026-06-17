@@ -217,7 +217,7 @@ fn default_ollama_url() -> String {
 }
 
 fn default_ollama_model() -> String {
-    "gpt-oss:20b".to_string()
+    "gemma4:latest".to_string()
 }
 
 fn default_ollama_verify_rows() -> usize {
@@ -2890,12 +2890,20 @@ pub fn verify_training_chunk_with_ollama(
     }))?;
     let response = ureq::post(&url)
         .header("Content-Type", "application/json")
+        .config()
+        .http_status_as_error(false)
+        .build()
         .send(body)
         .with_context(|| format!("POST {url}"))?;
+    let status = response.status();
     let raw = response
         .into_body()
         .read_to_string()
         .with_context(|| format!("reading Ollama response from {url}"))?;
+    anyhow::ensure!(
+        status.is_success(),
+        "POST {url} returned HTTP {status}: {raw}"
+    );
     let generated: OllamaGenerateResponse =
         serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
     let judgement = parse_ollama_verification_judgement(&generated.response)?;

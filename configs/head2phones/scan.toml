@@ -20,7 +20,7 @@ max_head_graphemes = 220
 # write ollama_verification.json, but do not fail unless strict is enabled.
 verify_with_ollama = true
 ollama_url = "http://localhost:11434"
-ollama_model = "gpt-oss:20b"
+ollama_model = "gemma4:latest"
 ollama_verify_rows = 32
 ollama_verify_max_chars = 12000
 ollama_verify_strict = false

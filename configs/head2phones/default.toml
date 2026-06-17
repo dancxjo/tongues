@@ -56,7 +56,7 @@ max_head_graphemes = 220
 # Passive sanity check with a local Ollama server during prepare.
 verify_with_ollama = true
 ollama_url = "http://localhost:11434"
-ollama_model = "gpt-oss:20b"
+ollama_model = "gemma4:latest"
 ollama_verify_rows = 32
 ollama_verify_max_chars = 12000
 ollama_verify_strict = false
