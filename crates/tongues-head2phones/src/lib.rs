@@ -5,7 +5,7 @@
 //! and the Unicode grapheme-cluster split offset for the first complete
 //! TTS-speakable head chunk.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -2913,17 +2913,82 @@ pub fn verify_training_data_with_ollama(
             .map(|extension| format!("{extension}."))
             .unwrap_or_default()
     ));
-    let mut chunks_writer = BufWriter::new(
-        File::create(&chunks_part_path)
-            .with_context(|| format!("creating {}", chunks_part_path.display()))?,
-    );
-
     let mut start = 0usize;
     let mut chunk_index = 0usize;
     let mut sane = true;
     let mut issue = None;
     let mut raw_response = String::new();
     let mut raw_response_json = None;
+
+    if !chunks_part_path.exists() && chunks_path.exists() {
+        fs::copy(chunks_path, &chunks_part_path).with_context(|| {
+            format!(
+                "copying existing {} to {} for resume",
+                chunks_path.display(),
+                chunks_part_path.display()
+            )
+        })?;
+    }
+    if chunks_part_path.exists() {
+        let chunks: Vec<OllamaVerificationChunkReport> = read_jsonl(&chunks_part_path)?;
+        for chunk in chunks {
+            anyhow::ensure!(
+                chunk.model == config.ollama_model && chunk.url == config.ollama_url,
+                "cannot resume {}: chunk {} was scanned with model={} url={}, current model={} url={}",
+                chunks_part_path.display(),
+                chunk.chunk,
+                chunk.model,
+                chunk.url,
+                config.ollama_model,
+                config.ollama_url
+            );
+            anyhow::ensure!(
+                chunk.chunk == chunk_index && chunk.start_row == start,
+                "cannot resume {}: chunk {} starts at row {}, expected chunk {} row {}",
+                chunks_part_path.display(),
+                chunk.chunk,
+                chunk.start_row,
+                chunk_index,
+                start
+            );
+            anyhow::ensure!(
+                chunk.rows > 0,
+                "cannot resume {}: chunk {} has zero rows",
+                chunks_part_path.display(),
+                chunk.chunk
+            );
+            let next_start = start + chunk.rows;
+            anyhow::ensure!(
+                next_start <= rows.len(),
+                "cannot resume {}: chunk {} ends at row {}, but train split has {} rows",
+                chunks_part_path.display(),
+                chunk.chunk,
+                next_start,
+                rows.len()
+            );
+            if !chunk.sane {
+                sane = false;
+                if issue.is_none() {
+                    issue = chunk.issue.clone();
+                }
+            }
+            raw_response = chunk.raw_response;
+            raw_response_json = chunk.raw_response_json;
+            start = next_start;
+            chunk_index += 1;
+        }
+        if start > 0 {
+            progress(start);
+        }
+    }
+
+    let mut chunks_writer = BufWriter::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&chunks_part_path)
+            .with_context(|| format!("opening {}", chunks_part_path.display()))?,
+    );
     while start < rows.len() {
         let end = (start + config.ollama_verify_rows).min(rows.len());
         let report = verify_training_chunk_with_ollama(config, &rows[start..end])?;
@@ -3003,12 +3068,17 @@ pub fn verify_training_chunk_with_ollama(
     let (prompt, prompt_rows) =
         ollama_verification_prompt_with_row_count(config, &rows[..sample_rows])?;
     let url = format!(
-        "{}/api/generate",
+        "{}/api/chat",
         config.ollama_url.trim().trim_end_matches('/')
     );
     let body = serde_json::to_string(&serde_json::json!({
         "model": config.ollama_model,
-        "prompt": prompt,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
         "stream": false,
         "format": ollama_verification_response_schema(),
         "options": {
@@ -3031,11 +3101,12 @@ pub fn verify_training_chunk_with_ollama(
         status.is_success(),
         "POST {url} returned HTTP {status}: {raw}"
     );
-    let generated: OllamaGenerateResponse =
+    let generated: OllamaChatResponse =
         serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
-    let raw_response_json = serde_json::from_str(&generated.response).ok();
+    let response_content = generated.message.content;
+    let raw_response_json = serde_json::from_str(&response_content).ok();
     let judgement =
-        parse_ollama_verification_judgement(&generated.response).unwrap_or_else(|error| {
+        parse_ollama_verification_judgement(&response_content).unwrap_or_else(|error| {
             let detail = error.to_string();
             let detail = detail
                 .strip_prefix("parsing verifier judgement: ")
@@ -3068,7 +3139,7 @@ pub fn verify_training_chunk_with_ollama(
         completed: true,
         sane: judgement.sane,
         issue,
-        raw_response: generated.response,
+        raw_response: response_content,
         raw_response_json,
         chunks_path: None,
         report_path: None,
@@ -3076,8 +3147,13 @@ pub fn verify_training_chunk_with_ollama(
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
-    response: String,
+struct OllamaChatResponse {
+    message: OllamaChatMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaChatMessage {
+    content: String,
 }
 
 #[derive(Debug, Deserialize)]
