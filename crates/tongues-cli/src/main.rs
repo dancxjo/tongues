@@ -1067,6 +1067,10 @@ enum WiktionaryCommands {
         #[arg(long)]
         prepare: bool,
 
+        /// Add extra training copies of matching English Dolch sight-word rows
+        #[arg(long)]
+        sight_words: bool,
+
         /// Wait for an in-progress prepare in --data to finish, then start training
         #[arg(long, visible_alias = "while-preparing")]
         wait_for_prepare: bool,
@@ -3201,6 +3205,7 @@ fn run_wiktionary_command(
             out,
             cache_dir,
             prepare,
+            sight_words,
             learning_rate,
             weight_decay,
             dropout,
@@ -3272,6 +3277,7 @@ fn run_wiktionary_command(
                 epochs,
                 patience,
                 seed,
+                sight_words,
                 device_arg,
             )
         }
@@ -3325,6 +3331,7 @@ fn cmd_wiktionary_train(
     epochs: usize,
     patience: usize,
     seed: u64,
+    sight_words: bool,
     device_arg: DeviceArg,
 ) -> Result<()> {
     if config.source_kind == tongues_wiktionary::WiktionarySourceKind::PieEtymology {
@@ -3347,6 +3354,7 @@ fn cmd_wiktionary_train(
             epochs,
             patience,
             seed,
+            sight_words,
             device_arg,
         );
     }
@@ -3368,6 +3376,7 @@ fn cmd_wiktionary_train(
             epochs,
             patience,
             seed,
+            sight_words,
             device_arg,
         );
     }
@@ -3410,6 +3419,21 @@ fn cmd_wiktionary_train(
     let pb = status_spinner("Splitting rows, building vocabulary, and encoding examples");
     let (mut train_rows, mut valid_rows, _test_rows) =
         split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
+    if sight_words {
+        let added = add_wiktionary_sight_word_training_examples(
+            &mut train_rows,
+            [&valid_rows[..], &_test_rows[..]],
+        );
+        if added > 0 {
+            println!(
+                "  included {} extra Wiktionary sight-word training rows (repeat={})",
+                format_count(added),
+                format_count(SIGHT_WORD_TRAINING_REPEATS)
+            );
+        } else {
+            println!("  no matching English Wiktionary sight-word rows found to oversample");
+        }
+    }
     let vocab = if out.join("vocab.json").exists() {
         println!(
             "Reusing existing vocabulary from {}",
@@ -3495,6 +3519,7 @@ fn cmd_wiktionary_train_prepared_rows(
     epochs: usize,
     patience: usize,
     seed: u64,
+    sight_words: bool,
     device_arg: DeviceArg,
 ) -> Result<()> {
     let pb = status_spinner(format!(
@@ -3515,7 +3540,7 @@ fn cmd_wiktionary_train_prepared_rows(
     );
 
     let pb = status_spinner(format!("Filtering prepared rows for task={task}"));
-    let train_rows = filter_wiktionary_examples(
+    let mut train_rows = filter_wiktionary_examples(
         filter_wiktionary_examples_by_notation(train_rows_raw, notations),
         task,
     )?;
@@ -3523,6 +3548,31 @@ fn cmd_wiktionary_train_prepared_rows(
         filter_wiktionary_examples_by_notation(valid_rows_raw, notations),
         task,
     )?;
+    let test_rows = if sight_words && data.join("test.jsonl").exists() {
+        let rows: Vec<tongues_wiktionary::TrainingExample> =
+            read_jsonl_as(&data.join("test.jsonl"))?;
+        filter_wiktionary_examples(
+            filter_wiktionary_examples_by_notation(rows, notations),
+            task,
+        )?
+    } else {
+        Vec::new()
+    };
+    if sight_words {
+        let added = add_wiktionary_sight_word_training_examples(
+            &mut train_rows,
+            [&valid_rows[..], &test_rows[..]],
+        );
+        if added > 0 {
+            println!(
+                "  included {} extra Wiktionary sight-word training rows (repeat={})",
+                format_count(added),
+                format_count(SIGHT_WORD_TRAINING_REPEATS)
+            );
+        } else {
+            println!("  no matching English Wiktionary sight-word rows found to oversample");
+        }
+    }
     finish_status(
         pb,
         format!(
@@ -3659,6 +3709,78 @@ fn load_or_build_wiktionary_vocab(
         );
     }
     Ok((vocab, train_rows, valid_rows))
+}
+
+fn add_wiktionary_sight_word_training_examples<const N: usize>(
+    train_rows: &mut Vec<tongues_wiktionary::TrainingExample>,
+    extra_sources: [&[tongues_wiktionary::TrainingExample]; N],
+) -> usize {
+    let sight_words: std::collections::BTreeSet<&str> = SIGHT_WORDS.iter().copied().collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut selected = Vec::new();
+
+    for row in train_rows.iter().chain(extra_sources.into_iter().flatten()) {
+        if wiktionary_sight_word_for_example(row, &sight_words).is_some()
+            && seen.insert(wiktionary_training_example_key(row))
+        {
+            selected.push(row.clone());
+        }
+    }
+
+    let mut added = 0usize;
+    for row in selected {
+        for _ in 0..SIGHT_WORD_TRAINING_REPEATS {
+            train_rows.push(row.clone());
+            added += 1;
+        }
+    }
+    added
+}
+
+fn wiktionary_sight_word_for_example(
+    row: &tongues_wiktionary::TrainingExample,
+    sight_words: &std::collections::BTreeSet<&str>,
+) -> Option<String> {
+    use tongues_wiktionary::WiktionaryTask;
+
+    if !wiktionary_example_is_english(row) {
+        return None;
+    }
+
+    let candidate = match row.task {
+        WiktionaryTask::OrthographyToPhonology | WiktionaryTask::GuessLangFromOrthography => {
+            row.input.split_whitespace().last()
+        }
+        WiktionaryTask::PhonologyToOrthography | WiktionaryTask::NormalizeText => {
+            Some(row.output.as_str())
+        }
+        WiktionaryTask::GuessLangFromOrthographyAndPhonology => {
+            row.input.split("=>").next()?.split_whitespace().last()
+        }
+        _ => None,
+    }?;
+
+    let candidate = candidate.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '\'');
+    let candidate = candidate.to_ascii_lowercase();
+    sight_words
+        .contains(candidate.as_str())
+        .then_some(candidate)
+}
+
+fn wiktionary_example_is_english(row: &tongues_wiktionary::TrainingExample) -> bool {
+    row.lang.as_deref() == Some("eng")
+        || row.lang.is_none() && row.notation.is_some() && row.output == "eng"
+}
+
+fn wiktionary_training_example_key(row: &tongues_wiktionary::TrainingExample) -> String {
+    format!(
+        "{:?}\x1f{}\x1f{}\x1f{}\x1f{}",
+        row.task,
+        row.lang.as_deref().unwrap_or(""),
+        row.notation.as_deref().unwrap_or(""),
+        row.input,
+        row.output
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7879,6 +8001,57 @@ mod tests {
     }
 
     #[test]
+    fn wiktionary_sight_word_training_adds_matching_rows() {
+        let mut train_rows = vec![tongues_wiktionary::TrainingExample {
+            task: tongues_wiktionary::WiktionaryTask::OrthographyToPhonology,
+            lang: Some("eng".to_string()),
+            notation: Some("phonetic".to_string()),
+            accent: None,
+            input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> said".to_string(),
+            output: "sɛd".to_string(),
+            source: "test".to_string(),
+        }];
+        let valid_rows = vec![
+            tongues_wiktionary::TrainingExample {
+                task: tongues_wiktionary::WiktionaryTask::PhonologyToOrthography,
+                lang: Some("eng".to_string()),
+                notation: Some("phonetic".to_string()),
+                accent: None,
+                input: "<task:phonology_to_orthography> <lang:eng> <repr:phones> wʌn".to_string(),
+                output: "one".to_string(),
+                source: "test".to_string(),
+            },
+            tongues_wiktionary::TrainingExample {
+                task: tongues_wiktionary::WiktionaryTask::OrthographyToPhonology,
+                lang: Some("deu".to_string()),
+                notation: Some("phonetic".to_string()),
+                accent: None,
+                input: "<task:orthography_to_phonology> <lang:deu> <repr:phones> die".to_string(),
+                output: "diː".to_string(),
+                source: "test".to_string(),
+            },
+        ];
+
+        let added = add_wiktionary_sight_word_training_examples(&mut train_rows, [&valid_rows[..]]);
+
+        assert_eq!(added, SIGHT_WORD_TRAINING_REPEATS * 2);
+        assert_eq!(
+            train_rows
+                .iter()
+                .filter(|row| row.input.ends_with(" said"))
+                .count(),
+            SIGHT_WORD_TRAINING_REPEATS + 1
+        );
+        assert_eq!(
+            train_rows.iter().filter(|row| row.output == "one").count(),
+            SIGHT_WORD_TRAINING_REPEATS
+        );
+        assert!(!train_rows
+            .iter()
+            .any(|row| row.lang.as_deref() == Some("deu")));
+    }
+
+    #[test]
     fn openepd_prepare_conversion_includes_rarity_for_have() {
         let entry = OpenEpdEntry {
             rarity: 23.0,
@@ -8087,6 +8260,19 @@ mod tests {
             cli.command,
             Some(Commands::Wiktionary {
                 command: WiktionaryCommands::Infer { .. }
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["tongues", "wiktionary", "train", "--sight-words"])
+            .expect("wiktionary train --sight-words should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Wiktionary {
+                command: WiktionaryCommands::Train {
+                    sight_words: true,
+                    ..
+                }
             })
         ));
     }
