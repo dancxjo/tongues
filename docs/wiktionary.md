@@ -27,14 +27,14 @@ https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06
 
 The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `lat`, `ell`, `grc`, and `san`.
 
-Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Model-facing rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, and language-guessing tasks.
+Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Entry etymology templates from Etymology sections are written to `etymologies.jsonl`. Model-facing rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, find-etymology, and language-guessing tasks.
 
 Preparation writes durable checkpoints while it parses and expands:
 
 | Path | When written | Resume behavior |
 |---|---|---|
 | `prepare-checkpoints/parse-pronunciation/pages-START-END.json` | During XML parsing, for the first few pages and then every 1,000 pages, plus the final tail. | If final parse artifacts are missing, prepare reloads these shards, skips already checkpointed XML pages, and continues from the next page. |
-| `patterns.jsonl`, `phonemes.jsonl`, `phones.jsonl`, `supplemental_terms.jsonl` | After parsing completes, written through `.writing.part` files and renamed atomically. | If all four exist, prepare resumes from them without reparsing the dump. |
+| `patterns.jsonl`, `phonemes.jsonl`, `phones.jsonl`, `etymologies.jsonl`, `supplemental_terms.jsonl` | After parsing completes, written through `.writing.part` files and renamed atomically. | If all five exist, prepare resumes from them without reparsing the dump. |
 | `expanded.jsonl.writing.part` | While model-facing rows are expanded. | If `expanded.jsonl` exists with the current schema marker, prepare resumes from it. Interrupted partials are archived before rebuilding. |
 | `train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`, `dataset_config.json`, `README.md` | Final split and metadata phase, written atomically. | Existing completed parse/expanded artifacts are reused if final split files need to be rebuilt. |
 
@@ -110,6 +110,7 @@ Supported `--task` values:
 | `phonemes-to-orthography` | `cargo run --release -- wiktionary infer --task phonemes-to-orthography --lang eng --notation phonemes "kæt"` |
 | `phones-to-orthography` | `cargo run --release -- wiktionary infer --task phones-to-orthography --lang eng --notation phones "ˈkʰæt"` |
 | `phonetic-realization` | `cargo run --release -- wiktionary infer --task phonetic-realization --lang eng --variety en-US.GenAm --notation phonemes "kæt"` |
+| `find-etymology` | `cargo run --release -- wiktionary infer --task find-etymology --lang eng "thorp"` |
 | `segment-compound` | `cargo run --release -- wiktionary infer --task segment-compound --lang eng "how-do-you-do"` |
 | `pronounce-segments` | `cargo run --release -- wiktionary infer --task pronounce-segments --lang eng "how | do | you | do"` |
 | `verify-pronunciation` | `cargo run --release -- wiktionary infer --task verify-pronunciation --lang eng "get || d͡ʒɛt"` |

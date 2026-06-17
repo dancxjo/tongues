@@ -1047,7 +1047,7 @@ enum WiktionaryCommands {
         #[arg(long, value_enum)]
         notation: Option<WiktionaryNotationArg>,
 
-        /// Wiktionary task mix: orthography-to-phonemes, orthography-to-phones, phonetic-realization, segment-compound, pronounce-segments, verify, normalize-phonology, lang, or all.
+        /// Wiktionary task mix: orthography-to-phonemes, orthography-to-phones, phonetic-realization, find-etymology, segment-compound, pronounce-segments, verify, normalize-phonology, lang, or all.
         /// Defaults to train_task in the Wiktionary config.
         #[arg(long)]
         task: Option<String>,
@@ -1113,7 +1113,7 @@ enum WiktionaryCommands {
         )]
         model: PathBuf,
 
-        /// Wiktionary task: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify, normalize-phonology, normalize, or a language guessing task
+        /// Wiktionary task: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, find-etymology, segment-compound, pronounce-segments, verify, normalize-phonology, normalize, or a language guessing task
         #[arg(long, default_value = "orthography-to-phones")]
         task: String,
 
@@ -1560,13 +1560,15 @@ fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProg
             patterns,
             phonemes,
             phones,
+            etymologies,
             pie_roots,
         } => format!(
-            "Parsing dump: {} pages, {} patterns, {} phonemes, {} phones, {} PIE roots",
+            "Parsing dump: {} pages, {} patterns, {} phonemes, {} phones, {} etymologies, {} PIE roots",
             format_count(pages),
             format_count(patterns),
             format_count(phonemes),
             format_count(phones),
+            format_count(etymologies),
             format_count(pie_roots)
         ),
         tongues_wiktionary::PrepareProgress::Expand {
@@ -3185,9 +3187,10 @@ fn run_wiktionary_command(
                 report.dump_path
             );
             println!(
-                "Parsed {} phonemes, {} phones, and {} PIE roots into train/valid/test examples: {}/{}/{}",
+                "Parsed {} phonemes, {} phones, {} etymologies, and {} PIE roots into train/valid/test examples: {}/{}/{}",
                 format_count(report.parsed_phonemes),
                 format_count(report.parsed_phones),
+                format_count(report.parsed_etymologies),
                 format_count(report.parsed_pie_roots),
                 format_count(report.train_examples),
                 format_count(report.valid_examples),
@@ -3222,11 +3225,26 @@ fn run_wiktionary_command(
             apply_wiktionary_language_override(&mut config, langs);
             let data = effective_wiktionary_data_path(data, &config);
             let out = effective_wiktionary_model_path(out, &config);
+            let task = task
+                .as_deref()
+                .unwrap_or(config.train_task.as_str())
+                .to_string();
             if wait_for_prepare {
-                wait_for_prepared_dataset(
+                cmd_wiktionary_train_while_preparing(
                     &data,
-                    &["vocab.json", "train.jsonl", "valid.jsonl", "test.jsonl"],
-                    "wiktionary",
+                    &out,
+                    &config,
+                    notation.as_ref(),
+                    &task,
+                    learning_rate,
+                    weight_decay,
+                    dropout,
+                    batch_size,
+                    epochs,
+                    patience,
+                    seed,
+                    sight_words,
+                    device_arg,
                 )?;
             }
             if prepare
@@ -3260,10 +3278,6 @@ fn run_wiktionary_command(
                     ),
                 );
             }
-            let task = task
-                .as_deref()
-                .unwrap_or(config.train_task.as_str())
-                .to_string();
             cmd_wiktionary_train(
                 &data,
                 &out,
@@ -3315,6 +3329,174 @@ fn apply_wiktionary_language_override(
     if !langs.is_empty() {
         config.languages = langs;
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_wiktionary_train_while_preparing(
+    data: &Path,
+    out: &Path,
+    config: &tongues_wiktionary::WiktionaryConfig,
+    notation: Option<&WiktionaryNotationArg>,
+    task: &str,
+    learning_rate: f64,
+    weight_decay: f32,
+    dropout: f64,
+    batch_size: usize,
+    epochs: usize,
+    patience: usize,
+    seed: u64,
+    sight_words: bool,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    if wiktionary_prepared_final_files_exist(data) {
+        return Ok(());
+    }
+    if config.source_kind == tongues_wiktionary::WiktionarySourceKind::PieEtymology {
+        wait_for_prepared_dataset(
+            data,
+            &["vocab.json", "train.jsonl", "valid.jsonl", "test.jsonl"],
+            "wiktionary",
+        )?;
+        return Ok(());
+    }
+    if sight_words {
+        println!(
+            "  --sight-words will be applied to the final prepared train run; rolling while-preparing epochs use available expanded rows only"
+        );
+    }
+
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let vocab = tongues_wiktionary::build_stable_wiktionary_vocab(&[]);
+    write_cli_text_atomic(
+        out.join("vocab.json").as_path(),
+        serde_json::to_string_pretty(&vocab)?,
+    )?;
+
+    let notations = resolve_wiktionary_train_notations(notation, config)?;
+    let min_rows = (batch_size * 4).max(256);
+    let row_step = 10_000usize;
+    let mut last_trained_rows = 0usize;
+
+    println!(
+        "Wiktionary while-preparing training enabled: watching {} for expanded rows",
+        data.display()
+    );
+    println!(
+        "  stable vocab: {} tokens; rolling epochs train from expanded.jsonl(.writing.part) until final splits are ready",
+        format_count(vocab.size())
+    );
+
+    loop {
+        if wiktionary_prepared_final_files_exist(data) {
+            println!("Wiktionary prepared splits are ready; leaving while-preparing mode.");
+            return Ok(());
+        }
+
+        let completed_epoch = wiktionary_completed_epoch(out)?;
+        if completed_epoch >= epochs {
+            println!(
+                "Rolling training reached requested epochs={}; waiting for final Wiktionary prepared files",
+                format_count(epochs)
+            );
+            wait_for_prepared_dataset(
+                data,
+                &["vocab.json", "train.jsonl", "valid.jsonl", "test.jsonl"],
+                "wiktionary",
+            )?;
+            return Ok(());
+        }
+
+        let Some(expanded_path) = wiktionary_available_expanded_path(data) else {
+            std::thread::sleep(Duration::from_secs(10));
+            continue;
+        };
+        let rows_raw = read_jsonl_lossy::<tongues_wiktionary::TrainingExample>(&expanded_path)?;
+        let rows = filter_wiktionary_examples(
+            filter_wiktionary_examples_by_notation(rows_raw, Some(&notations)),
+            task,
+        )?;
+        if rows.len() < min_rows {
+            println!(
+                "  waiting for {} rows in {}; currently {} usable rows",
+                format_count(min_rows),
+                expanded_path.display(),
+                format_count(rows.len())
+            );
+            std::thread::sleep(Duration::from_secs(20));
+            continue;
+        }
+        let enough_new_rows = rows.len().saturating_sub(last_trained_rows) >= row_step;
+        if !enough_new_rows && !expanded_path.ends_with("expanded.jsonl") {
+            std::thread::sleep(Duration::from_secs(20));
+            continue;
+        }
+
+        let next_epoch = completed_epoch + 1;
+        let (train_rows, valid_rows, _) =
+            split_wiktionary_examples(rows, config.train_frac, config.valid_frac, config.seed);
+        if train_rows.is_empty() || valid_rows.is_empty() {
+            std::thread::sleep(Duration::from_secs(20));
+            continue;
+        }
+        let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
+        let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+        println!(
+            "Rolling Wiktionary epoch {} from {} usable rows ({} train / {} valid) in {}",
+            format_count(next_epoch),
+            format_count(train_rows.len() + valid_rows.len()),
+            format_count(train_examples.len()),
+            format_count(valid_examples.len()),
+            expanded_path.display()
+        );
+
+        write_and_train_wiktionary_seq2seq(
+            data,
+            out,
+            config,
+            &format!("while-preparing:{task}"),
+            learning_rate,
+            weight_decay,
+            dropout,
+            batch_size,
+            next_epoch,
+            patience.max(1_000_000),
+            seed + next_epoch as u64,
+            device_arg,
+            vocab.clone(),
+            train_examples,
+            valid_examples,
+        )?;
+        last_trained_rows = train_rows.len() + valid_rows.len();
+    }
+}
+
+fn wiktionary_prepared_final_files_exist(data: &Path) -> bool {
+    ["vocab.json", "train.jsonl", "valid.jsonl", "test.jsonl"]
+        .iter()
+        .all(|file| data.join(file).exists())
+}
+
+fn wiktionary_available_expanded_path(data: &Path) -> Option<PathBuf> {
+    let final_path = data.join("expanded.jsonl");
+    if final_path.exists() {
+        return Some(final_path);
+    }
+    let partial_path = data.join("expanded.jsonl.writing.part");
+    partial_path.exists().then_some(partial_path)
+}
+
+fn wiktionary_completed_epoch(out: &Path) -> Result<usize> {
+    let path = out.join("train_state.json");
+    if !path.exists() {
+        return Ok(0);
+    }
+    let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let state: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(state
+        .get("current_epoch")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3943,6 +4125,9 @@ fn filter_wiktionary_examples(
         "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
             example.task == WiktionaryTask::NormalizePhonology
         }
+        "find-etymology" | "etymology-from-word" | "word-etymology" => {
+            example.task == WiktionaryTask::FindEtymology
+        }
         "etymology"
         | "etymology-translation"
         | "translate-etymology"
@@ -3988,6 +4173,9 @@ fn filter_wiktionary_examples(
             | "normalize-phonology"
             | "normalise-phonology"
             | "broad-equivalence"
+            | "find-etymology"
+            | "etymology-from-word"
+            | "word-etymology"
             | "etymology"
             | "etymology-translation"
             | "translate-etymology"
@@ -4009,7 +4197,7 @@ fn filter_wiktionary_examples(
             | "language-guessing"
             | "all"
     ) {
-        anyhow::bail!("Invalid Wiktionary task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, etymology-translation, normalize, align, lang, all");
+        anyhow::bail!("Invalid Wiktionary task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, find-etymology, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, etymology-translation, normalize, align, lang, all");
     }
 
     Ok(examples
@@ -4108,15 +4296,12 @@ fn build_wiktionary_vocab(
     train: &[tongues_wiktionary::TrainingExample],
     valid: &[tongues_wiktionary::TrainingExample],
 ) -> Vocab {
-    let rows = train.iter().chain(valid.iter());
-    let inputs = rows
-        .clone()
-        .map(|example| wiktionary_source_text(example))
+    let rows = train
+        .iter()
+        .chain(valid.iter())
+        .cloned()
         .collect::<Vec<_>>();
-    let outputs = rows
-        .map(|example| example.output.clone())
-        .collect::<Vec<_>>();
-    Vocab::build(&inputs, &outputs, &[])
+    tongues_wiktionary::build_stable_wiktionary_vocab(&rows)
 }
 
 fn wiktionary_example_fits_vocab(
@@ -4328,6 +4513,9 @@ fn wiktionary_infer_source(
         "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
             format!("<task:normalize_phonology> <lang:{lang}> <BROAD_EQUIV> <repr:phones> {input}")
         }
+        "find-etymology" | "etymology-from-word" | "word-etymology" => {
+            format!("<task:find_etymology> <lang:{lang}> {input}")
+        }
         "normalize" | "normalise" => {
             format!("<task:normalize> <lang:{lang}> {input}")
         }
@@ -4346,7 +4534,7 @@ fn wiktionary_infer_source(
             )
         }
         _ => anyhow::bail!(
-            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
+            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, find-etymology, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
         ),
     };
     Ok(tongues_wiktionary::normalize_wiktionary_control_tokens(
@@ -5071,6 +5259,26 @@ fn read_jsonl_as<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
         let value: T = serde_json::from_str(&line)
             .with_context(|| format!("parsing JSONL line: {}", &line[..line.len().min(80)]))?;
         out.push(value);
+    }
+    Ok(out)
+}
+
+fn read_jsonl_lossy<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
+    let f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let reader = std::io::BufReader::new(f);
+    let mut out = Vec::new();
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(&line) {
+            Ok(value) => out.push(value),
+            Err(_) => {
+                // A .writing.part file can be observed between write calls; ignore the tail.
+                break;
+            }
+        }
     }
     Ok(out)
 }

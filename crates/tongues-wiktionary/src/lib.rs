@@ -31,7 +31,7 @@ pub const DEFAULT_PIE_DATASET_ID: &str = "enwiktionary-pie-roots-2026-06-01-v0";
 pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
     "https://en.wikipedia.org/w/index.php?title=Indo-European_vocabulary&action=raw";
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
-const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-cleanup-v2";
+const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-etymology-v3";
 const PARSE_CHECKPOINT_PAGE_INTERVAL: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,6 +197,19 @@ pub struct SupplementalTerm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EtymologyEntry {
+    pub lang: String,
+    pub wiktionary_lang: String,
+    pub spelling: String,
+    pub relation: String,
+    pub source_lang: String,
+    pub source_term: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gloss: Option<String>,
+    pub raw_template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PieEtymologyEntry {
     pub pie: String,
     pub lang: String,
@@ -230,6 +243,7 @@ pub enum WiktionaryTask {
     PronounceSegments,
     VerifyPronunciation,
     NormalizePhonology,
+    FindEtymology,
     EtymologyTranslation,
     PieToDescendant,
     DescendantToPie,
@@ -251,6 +265,7 @@ impl WiktionaryTask {
             Self::PronounceSegments => "<task:pronounce_segments>",
             Self::VerifyPronunciation => "<task:verify_pronunciation>",
             Self::NormalizePhonology => "<task:normalize_phonology>",
+            Self::FindEtymology => "<task:find_etymology>",
             Self::EtymologyTranslation => "<task:etymology_translate>",
             Self::PieToDescendant => "<task:pie_to_descendant>",
             Self::DescendantToPie => "<task:descendant_to_pie>",
@@ -272,6 +287,7 @@ pub struct PrepareReport {
     pub extracted_patterns: usize,
     pub parsed_phonemes: usize,
     pub parsed_phones: usize,
+    pub parsed_etymologies: usize,
     pub parsed_pie_roots: usize,
     pub train_examples: usize,
     pub valid_examples: usize,
@@ -308,6 +324,7 @@ pub enum PrepareProgress {
         patterns: usize,
         phonemes: usize,
         phones: usize,
+        etymologies: usize,
         pie_roots: usize,
     },
     Expand {
@@ -356,14 +373,16 @@ pub fn prepare_dataset_with_progress(
 
     let dump_path = resolve_dump_path_with_progress(cache_dir, config, &mut progress)?;
     let extracted = load_or_parse_pronunciation_data(out, &dump_path, config, &mut progress)?;
-    let phonemes = extracted.phonemes;
-    let phones = extracted.phones;
+    let phonemes = extracted.phonemes.clone();
+    let phones = extracted.phones.clone();
+    let etymologies = extracted.etymologies.clone();
     write_prepare_state(out, "parsed", config, None)?;
     progress(PrepareProgress::Stage {
         message: format!(
-            "Expanding {} phoneme and {} phone rows into training examples",
+            "Expanding {} phoneme, {} phone, and {} etymology rows into training examples",
             phonemes.len(),
-            phones.len()
+            phones.len(),
+            etymologies.len()
         ),
     });
     let entries = phonemes
@@ -371,7 +390,8 @@ pub fn prepare_dataset_with_progress(
         .chain(phones.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let examples = load_or_expand_training_examples(out, &entries, config, &mut progress)?;
+    let examples =
+        load_or_expand_training_examples(out, &entries, &etymologies, config, &mut progress)?;
     write_prepare_state(out, "expanded", config, None)?;
     progress(PrepareProgress::Stage {
         message: format!(
@@ -405,6 +425,7 @@ pub fn prepare_dataset_with_progress(
         extracted_patterns: extracted.patterns.len(),
         parsed_phonemes: phonemes.len(),
         parsed_phones: phones.len(),
+        parsed_etymologies: etymologies.len(),
         parsed_pie_roots: 0,
         train_examples: train.len(),
         valid_examples: valid.len(),
@@ -424,11 +445,13 @@ fn load_or_parse_pronunciation_data(
     let phonemes_path = out.join("phonemes.jsonl");
     let phones_path = out.join("phones.jsonl");
     let supplemental_path = out.join("supplemental_terms.jsonl");
+    let etymologies_path = out.join("etymologies.jsonl");
     if [
         &patterns_path,
         &phonemes_path,
         &phones_path,
         &supplemental_path,
+        &etymologies_path,
     ]
     .iter()
     .all(|path| path.exists())
@@ -443,6 +466,7 @@ fn load_or_parse_pronunciation_data(
             patterns: read_jsonl(&patterns_path)?,
             phonemes: read_jsonl(&phonemes_path)?,
             phones: read_jsonl(&phones_path)?,
+            etymologies: read_jsonl(&etymologies_path)?,
             supplemental_terms: read_jsonl(&supplemental_path)?,
             pie_roots: Vec::new(),
         };
@@ -451,6 +475,7 @@ fn load_or_parse_pronunciation_data(
             patterns: data.patterns.len(),
             phonemes: data.phonemes.len(),
             phones: data.phones.len(),
+            etymologies: data.etymologies.len(),
             pie_roots: data.pie_roots.len(),
         });
         return Ok(data);
@@ -466,6 +491,7 @@ fn load_or_parse_pronunciation_data(
     write_jsonl_with_progress(&patterns_path, &extracted.patterns, progress)?;
     write_jsonl_with_progress(&phonemes_path, &extracted.phonemes, progress)?;
     write_jsonl_with_progress(&phones_path, &extracted.phones, progress)?;
+    write_jsonl_with_progress(&etymologies_path, &extracted.etymologies, progress)?;
     write_jsonl_with_progress(&supplemental_path, &extracted.supplemental_terms, progress)?;
     Ok(extracted)
 }
@@ -473,6 +499,7 @@ fn load_or_parse_pronunciation_data(
 fn load_or_expand_training_examples(
     out: &Path,
     entries: &[PronunciationEntry],
+    etymologies: &[EtymologyEntry],
     config: &WiktionaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<Vec<TrainingExample>> {
@@ -499,7 +526,7 @@ fn load_or_expand_training_examples(
             });
             let examples = read_jsonl(&expanded_path)?;
             progress(PrepareProgress::Expand {
-                rows: entries.len(),
+                rows: entries.len() + etymologies.len(),
                 examples: examples.len(),
                 path: Some(expanded_path.display().to_string()),
             });
@@ -522,6 +549,7 @@ fn load_or_expand_training_examples(
     let mut examples = Vec::new();
     expand_training_examples_to(
         entries,
+        etymologies,
         config,
         progress,
         Some(&expanded_part_path),
@@ -639,6 +667,7 @@ fn prepare_pie_dataset(
         extracted_patterns: roots.len(),
         parsed_phonemes: 0,
         parsed_phones: 0,
+        parsed_etymologies: 0,
         parsed_pie_roots: roots.len(),
         train_examples: train.len(),
         valid_examples: valid.len(),
@@ -826,6 +855,7 @@ pub struct ExtractedWiktionaryData {
     pub patterns: Vec<WiktionaryPattern>,
     pub phonemes: Vec<PronunciationEntry>,
     pub phones: Vec<PronunciationEntry>,
+    pub etymologies: Vec<EtymologyEntry>,
     pub supplemental_terms: Vec<SupplementalTerm>,
     pub pie_roots: Vec<PieEtymologyEntry>,
 }
@@ -975,6 +1005,7 @@ fn parse_xml_pages_with_progress<R: BufRead>(
         patterns: data.patterns.len(),
         phonemes: data.phonemes.len(),
         phones: data.phones.len(),
+        etymologies: data.etymologies.len(),
         pie_roots: data.pie_roots.len(),
     });
 
@@ -1113,6 +1144,7 @@ fn maybe_report_parse_progress(
             patterns: data.patterns.len(),
             phonemes: data.phonemes.len(),
             phones: data.phones.len(),
+            etymologies: data.etymologies.len(),
             pie_roots: data.pie_roots.len(),
         });
     }
@@ -1123,6 +1155,7 @@ impl ExtractedWiktionaryData {
         self.patterns.extend(other.patterns);
         self.phonemes.extend(other.phonemes);
         self.phones.extend(other.phones);
+        self.etymologies.extend(other.etymologies);
         self.supplemental_terms.extend(other.supplemental_terms);
         self.pie_roots.extend(other.pie_roots);
     }
@@ -1131,6 +1164,7 @@ impl ExtractedWiktionaryData {
         self.patterns.len()
             + self.phonemes.len()
             + self.phones.len()
+            + self.etymologies.len()
             + self.supplemental_terms.len()
             + self.pie_roots.len()
     }
@@ -1279,7 +1313,238 @@ pub fn extract_page_data(
             .collect();
         append_supplemental_pronunciation_rows(&mut data, &supplements, &mut seen);
     }
+    data.etymologies = extract_entry_etymologies(spelling, wikitext, &allowed);
     data
+}
+
+pub fn extract_entry_etymologies(
+    spelling: &str,
+    wikitext: &str,
+    allowed_wiktionary_langs: &BTreeSet<&str>,
+) -> Vec<EtymologyEntry> {
+    let page_form = clean_template_form(spelling);
+    let mut current_lang: Option<String> = None;
+    let mut in_etymology = false;
+    let mut pending_source_lang: Option<String> = None;
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in wikitext.lines() {
+        if let Some((level, heading)) = wiktionary_heading(line) {
+            if level == 2 {
+                current_lang = wiktionary_lang_from_heading(line);
+                in_etymology = false;
+                pending_source_lang = None;
+            } else if level == 3 {
+                in_etymology = heading.starts_with("Etymology");
+                pending_source_lang = None;
+            } else if level < 3 {
+                in_etymology = false;
+                pending_source_lang = None;
+            }
+            continue;
+        }
+
+        let Some(target_wiktionary_lang) = current_lang.as_deref() else {
+            continue;
+        };
+        if !in_etymology || !allowed_wiktionary_langs.contains(target_wiktionary_lang) {
+            continue;
+        }
+        let Some(target_lang) = iso3_from_wiktionary_lang(target_wiktionary_lang) else {
+            continue;
+        };
+
+        for template in find_named_templates(
+            line,
+            &[
+                "inh", "der", "bor", "borrowed", "lbor", "obor", "ubor", "cog", "root", "etyl",
+                "m", "mention", "l", "link",
+            ],
+        ) {
+            let params = split_template_params(template);
+            let Some(name) = params.first().map(|name| name.trim().to_ascii_lowercase()) else {
+                continue;
+            };
+            match name.as_str() {
+                "etyl" => {
+                    pending_source_lang = params
+                        .get(1)
+                        .map(|lang| lang.trim().to_string())
+                        .filter(|lang| !lang.is_empty());
+                }
+                "inh" | "der" | "bor" | "borrowed" | "lbor" | "obor" | "ubor" => {
+                    let Some(template_target) = params.get(1).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    if template_target != target_wiktionary_lang {
+                        continue;
+                    }
+                    let Some(source_lang) = params.get(2).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    let source_term = etymology_relation_term_param(&params)
+                        .or_else(|| template_named_param(&params, "alt"))
+                        .unwrap_or_default();
+                    push_entry_etymology(
+                        &mut entries,
+                        &mut seen,
+                        target_lang,
+                        target_wiktionary_lang,
+                        &page_form,
+                        etymology_relation(&name),
+                        source_lang,
+                        &source_term,
+                        template_named_param(&params, "t")
+                            .or_else(|| template_named_param(&params, "gloss")),
+                        template,
+                    );
+                }
+                "cog" => {
+                    let Some(source_lang) = params.get(1).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    let source_term = etymology_mention_term_param(&params)
+                        .or_else(|| template_named_param(&params, "alt"))
+                        .unwrap_or_default();
+                    push_entry_etymology(
+                        &mut entries,
+                        &mut seen,
+                        target_lang,
+                        target_wiktionary_lang,
+                        &page_form,
+                        "cognate",
+                        source_lang,
+                        &source_term,
+                        template_named_param(&params, "t")
+                            .or_else(|| template_named_param(&params, "gloss")),
+                        template,
+                    );
+                }
+                "root" => {
+                    let Some(template_target) = params.get(1).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    if template_target != target_wiktionary_lang {
+                        continue;
+                    }
+                    let Some(source_lang) = params.get(2).map(|lang| lang.trim()) else {
+                        continue;
+                    };
+                    let source_term = params
+                        .get(3)
+                        .filter(|value| !value.contains('='))
+                        .cloned()
+                        .unwrap_or_default();
+                    push_entry_etymology(
+                        &mut entries,
+                        &mut seen,
+                        target_lang,
+                        target_wiktionary_lang,
+                        &page_form,
+                        "root",
+                        source_lang,
+                        &source_term,
+                        template_named_param(&params, "t")
+                            .or_else(|| template_named_param(&params, "gloss")),
+                        template,
+                    );
+                }
+                "m" | "mention" | "l" | "link" => {
+                    let Some(source_lang) = params
+                        .get(1)
+                        .map(|lang| lang.trim())
+                        .or(pending_source_lang.as_deref())
+                    else {
+                        continue;
+                    };
+                    let Some(source_term) = params.get(2).filter(|value| !value.contains('='))
+                    else {
+                        continue;
+                    };
+                    push_entry_etymology(
+                        &mut entries,
+                        &mut seen,
+                        target_lang,
+                        target_wiktionary_lang,
+                        &page_form,
+                        if pending_source_lang.as_deref() == Some(source_lang) {
+                            "derived"
+                        } else {
+                            "mentioned"
+                        },
+                        source_lang,
+                        source_term,
+                        template_named_param(&params, "t")
+                            .or_else(|| template_named_param(&params, "gloss")),
+                        template,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    entries
+}
+
+fn push_entry_etymology(
+    entries: &mut Vec<EtymologyEntry>,
+    seen: &mut HashSet<String>,
+    lang: &str,
+    wiktionary_lang: &str,
+    spelling: &str,
+    relation: &str,
+    source_lang: &str,
+    source_term: &str,
+    gloss: Option<String>,
+    raw_template: &str,
+) {
+    let source_term = clean_template_form(source_term);
+    if source_lang.is_empty()
+        || source_term.is_empty()
+        || source_term == "-"
+        || source_term.contains("Category:")
+    {
+        return;
+    }
+    let key = format!("{lang}\t{spelling}\t{relation}\t{source_lang}\t{source_term}");
+    if !seen.insert(key) {
+        return;
+    }
+    entries.push(EtymologyEntry {
+        lang: lang.to_string(),
+        wiktionary_lang: wiktionary_lang.to_string(),
+        spelling: spelling.to_string(),
+        relation: relation.to_string(),
+        source_lang: source_lang.to_string(),
+        source_term,
+        gloss: gloss.map(|value| clean_template_form(&value)),
+        raw_template: format!("{{{{{raw_template}}}}}"),
+    });
+}
+
+fn etymology_relation(template_name: &str) -> &'static str {
+    match template_name {
+        "inh" => "inherited",
+        "bor" | "borrowed" | "lbor" | "obor" | "ubor" => "borrowed",
+        "der" => "derived",
+        _ => "related",
+    }
+}
+
+fn etymology_relation_term_param(params: &[String]) -> Option<String> {
+    params
+        .get(3)
+        .filter(|value| !value.trim().is_empty() && !value.contains('='))
+        .cloned()
+}
+
+fn etymology_mention_term_param(params: &[String]) -> Option<String> {
+    params
+        .get(2)
+        .filter(|value| !value.trim().is_empty() && !value.contains('='))
+        .cloned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1795,6 +2060,25 @@ fn wiktionary_lang_from_heading(line: &str) -> Option<String> {
         }
         .to_string(),
     )
+}
+
+fn wiktionary_heading(line: &str) -> Option<(usize, String)> {
+    let trimmed = line.trim();
+    if !(trimmed.starts_with("==") && trimmed.ends_with("==")) {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|ch| *ch == '=').count();
+    if level == 0 {
+        return None;
+    }
+    let closing = trimmed.chars().rev().take_while(|ch| *ch == '=').count();
+    if closing != level {
+        return None;
+    }
+    let heading = trimmed[level..trimmed.len().saturating_sub(level)]
+        .trim()
+        .to_string();
+    (!heading.is_empty()).then_some((level, heading))
 }
 
 fn pie_branch_for_wiktionary_lang(lang: &str) -> &'static str {
@@ -2379,8 +2663,16 @@ pub fn expand_training_examples(
     entries: &[PronunciationEntry],
     config: &WiktionaryConfig,
 ) -> Vec<TrainingExample> {
+    expand_training_examples_with_etymologies(entries, &[], config)
+}
+
+pub fn expand_training_examples_with_etymologies(
+    entries: &[PronunciationEntry],
+    etymologies: &[EtymologyEntry],
+    config: &WiktionaryConfig,
+) -> Vec<TrainingExample> {
     let mut examples = Vec::new();
-    expand_training_examples_to(entries, config, &mut |_| {}, None, |example| {
+    expand_training_examples_to(entries, etymologies, config, &mut |_| {}, None, |example| {
         examples.push(example);
         Ok(())
     })
@@ -2390,6 +2682,7 @@ pub fn expand_training_examples(
 
 fn expand_training_examples_to(
     entries: &[PronunciationEntry],
+    etymologies: &[EtymologyEntry],
     config: &WiktionaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
     progress_path: Option<&Path>,
@@ -2565,6 +2858,29 @@ fn expand_training_examples_to(
         );
     }
 
+    for (index, etymology) in etymologies
+        .iter()
+        .filter(|entry| allowed.contains(entry.lang.as_str()))
+        .enumerate()
+    {
+        emit(TrainingExample {
+            task: WiktionaryTask::FindEtymology,
+            lang: Some(etymology.lang.clone()),
+            notation: Some("etymology".to_string()),
+            accent: None,
+            input: find_etymology_input(&etymology.lang, &etymology.spelling),
+            output: format_etymology_output(etymology),
+            source: "enwiktionary:etymology-templates".to_string(),
+        })?;
+        emitted += 1;
+        maybe_report_expand_progress(
+            progress,
+            normalized_entries.len() + etymologies.len() + index + 1,
+            emitted,
+            progress_path,
+        );
+    }
+
     if config.include_cleanup_corpus && allowed.contains("eng") {
         for example in english_cleanup_training_examples() {
             emit(example)?;
@@ -2574,11 +2890,34 @@ fn expand_training_examples_to(
     }
 
     progress(PrepareProgress::Expand {
-        rows: entries.len(),
+        rows: entries.len() + etymologies.len(),
         examples: emitted,
         path: progress_path.map(|path| path.display().to_string()),
     });
     Ok(())
+}
+
+fn find_etymology_input(lang: &str, spelling: &str) -> String {
+    format!(
+        "{} <lang:{}> {}",
+        WiktionaryTask::FindEtymology.token(),
+        lang,
+        normalize_orthography_for_training(spelling)
+    )
+}
+
+fn format_etymology_output(entry: &EtymologyEntry) -> String {
+    let mut output = format!(
+        "<rel:{}> <from:{}> {}",
+        entry.relation,
+        entry.source_lang,
+        clean_template_form(&entry.source_term)
+    );
+    if let Some(gloss) = entry.gloss.as_deref().filter(|gloss| !gloss.is_empty()) {
+        output.push_str(" <gloss> ");
+        output.push_str(&clean_template_form(gloss));
+    }
+    output
 }
 
 pub fn english_cleanup_training_examples() -> Vec<TrainingExample> {
@@ -3504,19 +3843,84 @@ fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 }
 
 fn write_vocab_with_progress(out: &Path, examples: &[TrainingExample]) -> Result<()> {
-    let inputs = examples
-        .iter()
-        .map(|example| example.input.clone())
-        .collect::<Vec<_>>();
-    let outputs = examples
-        .iter()
-        .map(|example| example.output.clone())
-        .collect::<Vec<_>>();
-    let vocab = Vocab::build(&inputs, &outputs, &[]);
+    let vocab = build_stable_wiktionary_vocab(examples);
     write_text_atomic(
         &out.join("vocab.json"),
         &serde_json::to_string_pretty(&vocab)?,
     )
+}
+
+pub fn build_stable_wiktionary_vocab(_examples: &[TrainingExample]) -> Vocab {
+    Vocab::build(
+        &stable_wiktionary_vocab_inputs(),
+        &stable_wiktionary_vocab_outputs(),
+        &[],
+    )
+}
+
+fn stable_wiktionary_vocab_inputs() -> Vec<String> {
+    let mut inputs = vec![
+        "<task:orthography_to_phonology> <lang:eng> <repr:phonemes> abc xyz".to_string(),
+        "<task:orthography_to_phonology> <lang:eng> <repr:phones> abc xyz".to_string(),
+        "<task:phonology_to_orthography> <lang:eng> <repr:phonemes> əˈbɑ".to_string(),
+        "<task:phonetic_realization> <lang:eng> <repr:phonemes> əˈbɑ".to_string(),
+        "<task:segment_compound> <lang:eng> <SEGMENT> how-do-you-do".to_string(),
+        "<task:pronounce_segments> <lang:eng> <PRONOUNCE_SEGMENTS> <repr:phones> how | do | you | do".to_string(),
+        "<task:verify_pronunciation> <lang:eng> <VERIFY> <error:spelling-pronunciation_hallucination> get || d͡ʒɛt".to_string(),
+        "<task:normalize_phonology> <lang:eng> <BROAD_EQUIV> <repr:phones> tʰuː".to_string(),
+        "<task:find_etymology> <lang:eng> thorp".to_string(),
+        "<task:normalize> <lang:eng> Disease!".to_string(),
+        "<task:guess_lang_from_orthography> <repr:phones> cat".to_string(),
+        "<task:guess_lang_from_phonology> <repr:phones> ˈkʰæt".to_string(),
+        "<task:guess_lang_from_orthography_and_phonology> <repr:phones> cat => ˈkʰæt".to_string(),
+        "<task:align> <lang:eng> audio_features + text".to_string(),
+        "<WORD> <LETTER> <PHONEME> <LETTER_PLURAL> <COMPOUND> <weak> <strong> <en-US> <en-UK>".to_string(),
+        "<META> <accent:genam> <region:us> <feature:weak_form> </META>".to_string(),
+    ];
+
+    for lang in ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"] {
+        inputs.push(format!(
+            "<task:orthography_to_phonology> <lang:{lang}> <repr:phonemes> abc"
+        ));
+        inputs.push(format!("<task:find_etymology> <lang:{lang}> abc"));
+    }
+
+    inputs
+}
+
+fn stable_wiktionary_vocab_outputs() -> Vec<String> {
+    let mut outputs = vec![
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string(),
+        "əɚɝɡɪiːʊuːɛeɪæɑɔoʊʌθðʃʒt͡ʃd͡ʒŋɹɫɾʔ ˈˌ.-|‿͜͡".to_string(),
+        "GOOD BAD".to_string(),
+        "how | do | you | do".to_string(),
+        "<rel:inherited> <from:enm> thorp <gloss> village".to_string(),
+        "<rel:derived> <from:ine-pro> *treb- <gloss> dwelling".to_string(),
+    ];
+
+    for relation in [
+        "inherited",
+        "derived",
+        "borrowed",
+        "cognate",
+        "root",
+        "mentioned",
+        "related",
+    ] {
+        outputs.push(format!("<rel:{relation}>"));
+    }
+
+    let mut source_langs = pie_descendant_language_codes();
+    source_langs.extend([
+        "en", "fr", "de", "es", "la", "el", "grc", "sa", "enm", "ang", "non",
+    ]);
+    source_langs.sort();
+    source_langs.dedup();
+    for lang in source_langs {
+        outputs.push(format!("<from:{lang}>"));
+    }
+
+    outputs
 }
 
 fn write_text_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -3613,7 +4017,7 @@ fn write_prepare_state(
 
 fn dataset_readme(config: &WiktionaryConfig, dump_path: &Path) -> String {
     format!(
-        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve raw orthography, IPA text, notation, accent/variety metadata, and the raw template. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those rows into NFC-normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease => dəˈziːz\n<task:orthography_to_phonology> <lang:eng> <META> <accent:rp> </META> <repr:phones> Ireland => ˈɑɪələnd\n<task:orthography_to_phonology> <lang:deu> <repr:phones> Honduras => hɔnˈduːʁas\n<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz => disease\n<task:phonetic_realization> <lang:eng> <META> <accent:rp> </META> <repr:phonemes> ˈaɪələnd => ˈɑɪələnd\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nRepresentation tokens preserve the phonemes/phones distinction while targets omit only the outer visual delimiters. Wiktionary variety prose is normalized into reusable metadata controls such as `<accent:genam>`, `<region:canada>`, and `<feature:non_ae_tensing>` inside `<META>...</META>`; unrecognized prose is dropped instead of becoming a vocabulary token. Phonetic-realization rows are emitted only when matched phonemic and phonetic source rows exist for the same normalized orthography, language, and compatible metadata. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
+        "# Wiktionary pronunciation dataset\n\nSource dump: `{}`\n\nConfigured languages: {}\n\n`phonemes.jsonl` contains slash-delimited phonemic `{{IPA|...|/.../}}` rows. `phones.jsonl` contains bracket-delimited phonetic `{{IPA|...|[...]}}` rows. Both preserve raw orthography, IPA text, notation, accent/variety metadata, and the raw template. `etymologies.jsonl` contains ordinary entry etymology rows extracted from Etymology-section templates such as `{{inh}}`, `{{der}}`, `{{bor}}`, `{{cog}}`, `{{root}}`, `{{etyl}}`, and linked mention templates. `patterns.jsonl` keeps other useful pronunciation-section templates such as audio, homophones, and rhymes. `train.jsonl`, `valid.jsonl`, and `test.jsonl` expand those rows into NFC-normalized model-facing tasks.\n\nTraining row shapes:\n\n```text\n<task:orthography_to_phonology> <lang:eng> <repr:phonemes> disease => dəˈziːz\n<task:orthography_to_phonology> <lang:eng> <META> <accent:rp> </META> <repr:phones> Ireland => ˈɑɪələnd\n<task:orthography_to_phonology> <lang:deu> <repr:phones> Honduras => hɔnˈduːʁas\n<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz => disease\n<task:phonetic_realization> <lang:eng> <META> <accent:rp> </META> <repr:phonemes> ˈaɪələnd => ˈɑɪələnd\n<task:find_etymology> <lang:eng> thorp => <rel:inherited> <from:enm> thorp\n<task:align> <lang:eng> audio_features + text => phone_times\n<task:normalize> <lang:eng> Disease! => disease\n```\n\nRepresentation tokens preserve the phonemes/phones distinction while targets omit only the outer visual delimiters. Wiktionary variety prose is normalized into reusable metadata controls such as `<accent:genam>`, `<region:canada>`, and `<feature:non_ae_tensing>` inside `<META>...</META>`; unrecognized prose is dropped instead of becoming a vocabulary token. Phonetic-realization rows are emitted only when matched phonemic and phonetic source rows exist for the same normalized orthography, language, and compatible metadata. Reverse and language-guessing rows are controlled by `include_reverse` and `include_language_guessing`; align rows require audio timing data and are reserved for datasets that provide it.\n",
         dump_path.display(),
         config.languages.join(", ")
     )
@@ -3658,6 +4062,7 @@ pub fn write_scaffold_model(out: &Path, config: &WiktionaryConfig) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tongues_core::UNK_ID;
 
     #[test]
     fn default_config_targets_requested_dump_and_languages() {
@@ -3794,6 +4199,116 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
             &config,
         );
         assert!(meta_entries.is_empty());
+    }
+
+    #[test]
+    fn extracts_entry_etymology_templates_from_wiktionary_pages() {
+        let allowed = BTreeSet::from(["en"]);
+        let entries = extract_entry_etymologies(
+            "thorp",
+            r#"
+==English==
+===Etymology===
+{{root|en|ine-pro|*treb-|t=dwelling}}
+From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}.
+Borrowed doublet from {{bor|en|non|þorp|t=village}}. Compare {{cog|de|Dorf}}.
+From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
+===Pronunciation===
+* {{IPA|en|/θɔːp/}}
+"#,
+            &allowed,
+        );
+
+        assert!(entries.iter().any(|entry| {
+            entry.relation == "root"
+                && entry.source_lang == "ine-pro"
+                && entry.source_term == "*treb-"
+                && entry.gloss.as_deref() == Some("dwelling")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.relation == "inherited"
+                && entry.source_lang == "enm"
+                && entry.source_term == "thorp"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.relation == "borrowed"
+                && entry.source_lang == "non"
+                && entry.source_term == "þorp"
+                && entry.gloss.as_deref() == Some("village")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.relation == "cognate" && entry.source_lang == "de" && entry.source_term == "Dorf"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.relation == "derived"
+                && entry.source_lang == "la"
+                && entry.source_term == "turpis"
+                && entry.gloss.as_deref() == Some("ugly")
+        }));
+    }
+
+    #[test]
+    fn expands_entry_etymologies_into_find_etymology_rows() {
+        let config = WiktionaryConfig {
+            languages: vec!["eng".to_string()],
+            include_cleanup_corpus: false,
+            include_reverse: false,
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+        let examples = expand_training_examples_with_etymologies(
+            &[],
+            &[EtymologyEntry {
+                lang: "eng".to_string(),
+                wiktionary_lang: "en".to_string(),
+                spelling: "thorp".to_string(),
+                relation: "inherited".to_string(),
+                source_lang: "enm".to_string(),
+                source_term: "thorp".to_string(),
+                gloss: Some("village".to_string()),
+                raw_template: "{{inh|en|enm|thorp|t=village}}".to_string(),
+            }],
+            &config,
+        );
+
+        assert_eq!(examples.len(), 1);
+        assert_eq!(examples[0].task, WiktionaryTask::FindEtymology);
+        assert_eq!(examples[0].input, "<task:find_etymology> <lang:eng> thorp");
+        assert_eq!(
+            examples[0].output,
+            "<rel:inherited> <from:enm> thorp <gloss> village"
+        );
+    }
+
+    #[test]
+    fn stable_wiktionary_vocab_seeds_tasks_controls_and_ascii() {
+        let vocab = build_stable_wiktionary_vocab(&[]);
+
+        for token in [
+            "<task:find_etymology>",
+            "<task:segment_compound>",
+            "<task:pronounce_segments>",
+            "<task:verify_pronunciation>",
+            "<task:normalize_phonology>",
+            "<SEGMENT>",
+            "<VERIFY>",
+            "<WORD>",
+            "<COMPOUND>",
+            "<rel:inherited>",
+            "<rel:borrowed>",
+            "<from:enm>",
+            "<from:ine-pro>",
+        ] {
+            assert_ne!(vocab.get_id(token), UNK_ID, "{token} should be seeded");
+        }
+
+        for ch in ['<', '>', 'A', 'z', '0', ':', 'θ', 'ɚ'] {
+            assert_ne!(
+                vocab.get_id(&ch.to_string()),
+                UNK_ID,
+                "{ch} should be seeded"
+            );
+        }
     }
 
     #[test]
@@ -4402,6 +4917,7 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
                 accent: Some("GA.CA.non-æ-tensing".to_string()),
                 raw_template: "{{IPA|en|[tɛst]|a=GA.CA.non-æ-tensing}}".to_string(),
             }],
+            &[],
             &config,
             &mut |_| {},
         )
