@@ -29,6 +29,8 @@ The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{
 
 Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Entry etymology templates from Etymology sections are written to `etymologies.jsonl`. Model-facing rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, find-etymology, and language-guessing tasks.
 
+Wiktionary uses a stable family vocabulary rather than deriving model shape from whichever shard happens to arrive first. The stable vocab seeds Wiktionary task/control tokens, cleanup tags, etymology relation/source tags, ASCII, IPA, major modern writing systems, CJK/Kana/Hangul, combining marks, punctuation, symbols, and many historic scripts. This makes `--while-preparing` viable because the model can start before final splits exist without growing its embedding table later.
+
 Preparation writes durable checkpoints while it parses and expands:
 
 | Path | When written | Resume behavior |
@@ -43,6 +45,18 @@ For the default Just recipe, pass the model-family command through Just:
 ```sh
 just wiktionary prepare --out datasets/wiktionary/enwiktionary-2026-06-01-cleanup-v0
 ```
+
+To start training while another process is preparing the same dataset:
+
+```sh
+just wiktionary train \
+  --data datasets/wiktionary/enwiktionary-2026-06-01-cleanup-v0 \
+  --out models/wiktionary/enwiktionary-2026-06-01-cleanup-v0 \
+  --while-preparing \
+  --patience 1000000
+```
+
+`--while-preparing` watches `expanded.jsonl.writing.part` and `expanded.jsonl`, reads only complete JSONL rows, and advances one training epoch whenever enough new expanded rows are available. Once `train.jsonl`, `valid.jsonl`, `test.jsonl`, and `vocab.json` are complete, normal prepared training resumes from the same `train_state.json` and checkpoints.
 
 Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
 
