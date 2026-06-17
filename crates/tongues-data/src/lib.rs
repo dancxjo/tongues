@@ -407,19 +407,30 @@ struct OllamaVerificationJudgement {
 
 fn ollama_verification_response_schema() -> serde_json::Value {
     serde_json::json!({
-        "type": "object",
-        "properties": {
-            "sane": { "type": "boolean" },
-            "issue": {
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "null" }
-                ],
-                "maxLength": 160
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "sane": { "const": true },
+                    "issue": { "type": "null" }
+                },
+                "required": ["sane", "issue"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "sane": { "const": false },
+                    "issue": {
+                        "type": "string",
+                        "minLength": 32,
+                        "maxLength": 160
+                    }
+                },
+                "required": ["sane", "issue"],
+                "additionalProperties": false
             }
-        },
-        "required": ["sane", "issue"],
-        "additionalProperties": false
+        ]
     })
 }
 
@@ -554,7 +565,19 @@ fn json_object_end(raw: &str, start: usize) -> Option<usize> {
 
 fn normalize_ollama_verification_judgement(judgement: &mut OllamaVerificationJudgement) {
     if judgement.sane {
-        judgement.issue = None;
+        if judgement
+            .issue
+            .as_deref()
+            .is_some_and(|issue| !issue.trim().is_empty())
+        {
+            judgement.sane = false;
+            judgement.issue = Some(
+                "verifier response did not match expected schema: sane=true requires issue=null"
+                    .to_string(),
+            );
+        } else {
+            judgement.issue = None;
+        }
     } else if judgement
         .issue
         .as_deref()
@@ -578,6 +601,9 @@ fn is_unactionable_ollama_verification_issue(issue: &str) -> bool {
         .collect::<String>();
     let normalized = normalized.trim_matches('-');
     let compact = normalized.replace('-', "");
+    if is_bare_audit_reference(&compact) {
+        return true;
+    }
     let has_row_reference = lower.contains("audit_row")
         || lower.contains("audit-row")
         || lower.contains("audit row")
@@ -610,6 +636,12 @@ fn is_unactionable_ollama_verification_issue(issue: &str) -> bool {
             | "lang-mismatch"
             | "head-not-found"
     )
+}
+
+fn is_bare_audit_reference(compact: &str) -> bool {
+    compact
+        .strip_prefix("audit")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn is_bare_row_reference(compact: &str) -> bool {
@@ -1180,5 +1212,34 @@ mod tests {
             .expect_err("rarity should be required");
 
         assert!(err.to_string().contains("missing field `rarity`"));
+    }
+
+    #[test]
+    fn ollama_verification_rejects_bare_audit_references() {
+        for raw in [
+            r#"{"issue":"audit-1","sane":false}"#,
+            r#"{"issue":"audit_row 18","sane":false}"#,
+            r#"{"issue":"row 18","sane":false}"#,
+        ] {
+            let judgement = parse_ollama_verification_judgement(raw)
+                .expect("bare audit reference should parse as verifier failure");
+            assert!(!judgement.sane);
+            assert_eq!(
+                judgement.issue.as_deref(),
+                Some("verifier response did not match expected schema: issue is not actionable")
+            );
+        }
+    }
+
+    #[test]
+    fn ollama_verification_rejects_sane_with_non_null_issue() {
+        let judgement =
+            parse_ollama_verification_judgement(r#"{"issue":"No issues found","sane":true}"#)
+                .expect("schema-shaped judgement should parse as verifier failure");
+        assert!(!judgement.sane);
+        assert_eq!(
+            judgement.issue.as_deref(),
+            Some("verifier response did not match expected schema: sane=true requires issue=null")
+        );
     }
 }
