@@ -2931,6 +2931,7 @@ pub fn verify_training_data_with_ollama(
     }
     if chunks_part_path.exists() {
         let chunks: Vec<OllamaVerificationChunkReport> = read_jsonl(&chunks_part_path)?;
+        let mut resumed_chunks = Vec::new();
         for chunk in chunks {
             anyhow::ensure!(
                 chunk.model == config.ollama_model && chunk.url == config.ollama_url,
@@ -2966,16 +2967,32 @@ pub fn verify_training_data_with_ollama(
                 next_start,
                 rows.len()
             );
+            if is_retryable_ollama_verification_chunk(&chunk) {
+                break;
+            }
             if !chunk.sane {
                 sane = false;
                 if issue.is_none() {
                     issue = chunk.issue.clone();
                 }
             }
-            raw_response = chunk.raw_response;
-            raw_response_json = chunk.raw_response_json;
+            raw_response = chunk.raw_response.clone();
+            raw_response_json = chunk.raw_response_json.clone();
             start = next_start;
             chunk_index += 1;
+            resumed_chunks.push(chunk);
+        }
+        if resumed_chunks.len() < chunk_index || start < rows.len() {
+            let mut writer = BufWriter::new(
+                File::create(&chunks_part_path)
+                    .with_context(|| format!("rewriting {}", chunks_part_path.display()))?,
+            );
+            for chunk in &resumed_chunks {
+                serde_json::to_writer(&mut writer, chunk)
+                    .with_context(|| format!("writing {}", chunks_part_path.display()))?;
+                writer.write_all(b"\n")?;
+            }
+            writer.flush()?;
         }
         if start > 0 {
             progress(start);
@@ -3108,22 +3125,14 @@ pub fn verify_training_chunk_with_ollama(
     let generated: OllamaChatResponse =
         serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
     let response_content = generated.message.content.trim().to_string();
-    let raw_response_json = extract_ollama_verification_json(&response_content)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok());
-    let judgement =
-        parse_ollama_verification_judgement(&response_content).unwrap_or_else(|error| {
-            let detail = error.to_string();
-            let detail = detail
-                .strip_prefix("parsing verifier judgement: ")
-                .unwrap_or(&detail);
-            OllamaVerificationJudgement {
-                sane: false,
-                issue: Some(format!(
-                    "verifier response did not match expected schema: {detail}"
-                )),
-            }
-        });
+    let thinking_content = generated
+        .message
+        .thinking
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let (verifier_text, judgement, raw_response_json) =
+        parse_ollama_verification_response(&response_content, &thinking_content, &raw);
     let issue = if !judgement.sane {
         Some(
             judgement
@@ -3145,11 +3154,18 @@ pub fn verify_training_chunk_with_ollama(
         completed: true,
         sane: judgement.sane,
         issue,
-        raw_response: response_content,
+        raw_response: verifier_text,
         raw_response_json,
         chunks_path: None,
         report_path: None,
     })
+}
+
+fn is_retryable_ollama_verification_chunk(chunk: &OllamaVerificationChunkReport) -> bool {
+    !chunk.sane
+        && chunk.issue.as_deref().is_some_and(|issue| {
+            issue.starts_with("verifier response did not match expected schema:")
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -3159,7 +3175,10 @@ struct OllamaChatResponse {
 
 #[derive(Debug, Deserialize)]
 struct OllamaChatMessage {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3233,6 +3252,57 @@ fn ollama_verification_response_schema() -> serde_json::Value {
         "required": ["sane", "issue"],
         "additionalProperties": false
     })
+}
+
+fn parse_ollama_verification_response(
+    content: &str,
+    thinking: &str,
+    raw: &str,
+) -> (
+    String,
+    OllamaVerificationJudgement,
+    Option<serde_json::Value>,
+) {
+    let candidates = [content.trim(), thinking.trim(), raw.trim()];
+    let mut last_error = None;
+    for candidate in candidates {
+        if candidate.is_empty() {
+            continue;
+        }
+        match parse_ollama_verification_judgement(candidate) {
+            Ok(judgement) => {
+                let raw_response_json = extract_ollama_verification_json(candidate)
+                    .ok()
+                    .and_then(|json| serde_json::from_str(&json).ok());
+                return (candidate.to_string(), judgement, raw_response_json);
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let fallback = if !content.trim().is_empty() {
+        content.trim()
+    } else if !thinking.trim().is_empty() {
+        thinking.trim()
+    } else {
+        raw.trim()
+    };
+    let detail = last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "Ollama returned empty verifier content".to_string());
+    let detail = detail
+        .strip_prefix("parsing verifier judgement: ")
+        .unwrap_or(&detail)
+        .to_string();
+    (
+        fallback.to_string(),
+        OllamaVerificationJudgement {
+            sane: false,
+            issue: Some(format!(
+                "verifier response did not match expected schema: {detail}"
+            )),
+        },
+        None,
+    )
 }
 
 fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJudgement> {
@@ -4183,6 +4253,40 @@ mod tests {
             judgement.issue.as_deref(),
             Some("row 8 missing split marker with } in text")
         );
+    }
+
+    #[test]
+    fn parses_ollama_verification_judgement_from_thinking() {
+        let (raw_response, judgement, raw_response_json) = parse_ollama_verification_response(
+            "",
+            "reasoning...\n{\"sane\":true,\"issue\":null}",
+            "{\"message\":{\"content\":\"\",\"thinking\":\"reasoning...\"}}",
+        );
+        assert!(judgement.sane);
+        assert_eq!(raw_response, "reasoning...\n{\"sane\":true,\"issue\":null}");
+        assert_eq!(
+            raw_response_json,
+            Some(serde_json::json!({"sane": true, "issue": null}))
+        );
+    }
+
+    #[test]
+    fn treats_schema_failure_chunks_as_retryable() {
+        let chunk = OllamaVerificationChunkReport {
+            model: "gpt-oss:20b".to_string(),
+            url: "http://localhost:11434".to_string(),
+            chunk: 0,
+            start_row: 0,
+            rows: 32,
+            sane: false,
+            issue: Some(
+                "verifier response did not match expected schema: Ollama returned empty verifier content"
+                    .to_string(),
+            ),
+            raw_response: String::new(),
+            raw_response_json: None,
+        };
+        assert!(is_retryable_ollama_verification_chunk(&chunk));
     }
 
     #[test]
