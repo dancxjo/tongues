@@ -1619,6 +1619,18 @@ fn wiktionary_prepare_progress_message(progress: tongues_wiktionary::PrepareProg
                 format_count(examples)
             ),
         },
+        tongues_wiktionary::PrepareProgress::Verify {
+            model,
+            url,
+            rows,
+            total_rows,
+            path,
+        } => format!(
+            "Asking Ollama model {model} at {url} to scan {}/{} Wiktionary train rows into {}",
+            format_count(rows),
+            format_count(total_rows),
+            path
+        ),
         tongues_wiktionary::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {path}", format_count(rows))
         }
@@ -3260,6 +3272,44 @@ fn effective_wiktionary_model_path(
     }
 }
 
+fn print_wiktionary_ollama_report(report: &tongues_wiktionary::OllamaVerificationReport) {
+    let path = report
+        .report_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "not written".to_string());
+    if report.sane {
+        println!(
+            "Ollama verification passed: model={} rows={} chunks={} report={}",
+            report.model,
+            format_count(report.rows),
+            format_count(report.chunks),
+            path
+        );
+    } else {
+        println!(
+            "Ollama verification reported an issue: model={} rows={} chunks={} report={}\n{}",
+            report.model,
+            format_count(report.rows),
+            format_count(report.chunks),
+            path,
+            report
+                .issue
+                .as_deref()
+                .unwrap_or("model reported the data is not sane without a specific issue")
+        );
+    }
+}
+
+fn maybe_print_wiktionary_ollama_report(data: &Path) -> Result<()> {
+    let path = data.join("ollama_verification.json");
+    if path.exists() {
+        let report: tongues_wiktionary::OllamaVerificationReport = read_json_file(&path)?;
+        print_wiktionary_ollama_report(&report);
+    }
+    Ok(())
+}
+
 fn run_wiktionary_command(
     command: WiktionaryCommands,
     device_arg: DeviceArg,
@@ -3316,6 +3366,9 @@ fn run_wiktionary_command(
                 format_count(report.valid_examples),
                 format_count(report.test_examples)
             );
+            if config.verify_with_ollama {
+                maybe_print_wiktionary_ollama_report(&out)?;
+            }
             Ok(())
         }
         WiktionaryCommands::Train {

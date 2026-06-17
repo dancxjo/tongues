@@ -7,6 +7,12 @@ seed = 42
 include_reverse = true
 include_language_guessing = false
 include_descendant_pairs = false
+verify_with_ollama = true
+ollama_url = "http://localhost:11434"
+ollama_model = "gpt-oss:20b"
+ollama_verify_rows = 32
+ollama_verify_max_chars = 12000
+ollama_verify_strict = false
 
 # PIE itself plus major Indo-European branches, proto-languages, historical
 # witnesses, and common modern descendants using Wiktionary language codes.

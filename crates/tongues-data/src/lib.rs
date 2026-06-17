@@ -1,17 +1,613 @@
 //! Data pipeline for tongues sequence-to-sequence translation.
 //!
 //! Handles CMUdict parsing, parallelized IPA phonemicization, splitting,
-//! vocabulary construction, and seq2seq batch collation.
+//! vocabulary construction, seq2seq batch collation, and shared dataset audits.
 
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use anyhow::{Context, Result};
 use rand::seq::SliceRandom;
 use rand::Rng;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
 use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaVerifierConfig {
+    pub family: String,
+    pub model: String,
+    pub url: String,
+    pub rows_per_chunk: usize,
+    pub max_prompt_chars: usize,
+}
+
+impl OllamaVerifierConfig {
+    pub fn new(
+        family: impl Into<String>,
+        model: impl Into<String>,
+        url: impl Into<String>,
+        rows_per_chunk: usize,
+        max_prompt_chars: usize,
+    ) -> Self {
+        Self {
+            family: family.into(),
+            model: model.into(),
+            url: url.into(),
+            rows_per_chunk,
+            max_prompt_chars,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaVerificationReport {
+    pub model: String,
+    pub url: String,
+    pub rows: usize,
+    #[serde(default)]
+    pub total_rows: usize,
+    #[serde(default)]
+    pub chunks: usize,
+    #[serde(default)]
+    pub completed: bool,
+    pub sane: bool,
+    pub issue: Option<String>,
+    pub raw_response: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response_json: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_path: Option<PathBuf>,
+    pub report_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaVerificationChunkReport {
+    pub model: String,
+    pub url: String,
+    pub chunk: usize,
+    pub start_row: usize,
+    pub rows: usize,
+    pub sane: bool,
+    pub issue: Option<String>,
+    pub raw_response: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response_json: Option<serde_json::Value>,
+}
+
+type OllamaPromptBuilder<'a, T> =
+    dyn Fn(&OllamaVerifierConfig, &[T]) -> Result<(String, usize)> + 'a;
+
+pub fn verify_jsonl_rows_with_ollama<T: Serialize>(
+    config: &OllamaVerifierConfig,
+    rows: &[T],
+    report_path: &Path,
+    chunks_path: &Path,
+    prompt_builder: &OllamaPromptBuilder<'_, T>,
+    mut progress: impl FnMut(usize),
+) -> Result<OllamaVerificationReport> {
+    anyhow::ensure!(
+        config.rows_per_chunk > 0,
+        "ollama rows per chunk must be greater than zero"
+    );
+    anyhow::ensure!(
+        !config.model.trim().is_empty(),
+        "ollama model must be set for {} verification",
+        config.family
+    );
+    anyhow::ensure!(
+        !config.url.trim().is_empty(),
+        "ollama URL must be set for {} verification",
+        config.family
+    );
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "no {} training rows to verify",
+        config.family
+    );
+
+    if let Some(parent) = chunks_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let chunks_part_path = part_path(chunks_path);
+    let mut start = 0usize;
+    let mut chunk_index = 0usize;
+    let mut sane = true;
+    let mut issue = None;
+    let mut raw_response = String::new();
+    let mut raw_response_json = None;
+
+    if !chunks_part_path.exists() && chunks_path.exists() {
+        fs::copy(chunks_path, &chunks_part_path).with_context(|| {
+            format!(
+                "copying existing {} to {} for resume",
+                chunks_path.display(),
+                chunks_part_path.display()
+            )
+        })?;
+    }
+    if chunks_part_path.exists() {
+        let chunks: Vec<OllamaVerificationChunkReport> = read_jsonl_file(&chunks_part_path)?;
+        let mut resumed_chunks = Vec::new();
+        for chunk in chunks {
+            anyhow::ensure!(
+                chunk.model == config.model && chunk.url == config.url,
+                "cannot resume {}: chunk {} was scanned with model={} url={}, current model={} url={}",
+                chunks_part_path.display(),
+                chunk.chunk,
+                chunk.model,
+                chunk.url,
+                config.model,
+                config.url
+            );
+            anyhow::ensure!(
+                chunk.chunk == chunk_index && chunk.start_row == start,
+                "cannot resume {}: chunk {} starts at row {}, expected chunk {} row {}",
+                chunks_part_path.display(),
+                chunk.chunk,
+                chunk.start_row,
+                chunk_index,
+                start
+            );
+            anyhow::ensure!(
+                chunk.rows > 0,
+                "cannot resume {}: chunk {} has zero rows",
+                chunks_part_path.display(),
+                chunk.chunk
+            );
+            let next_start = start + chunk.rows;
+            anyhow::ensure!(
+                next_start <= rows.len(),
+                "cannot resume {}: chunk {} ends at row {}, but train split has {} rows",
+                chunks_part_path.display(),
+                chunk.chunk,
+                next_start,
+                rows.len()
+            );
+            if is_retryable_ollama_verification_chunk(&chunk) {
+                break;
+            }
+            if !chunk.sane {
+                sane = false;
+                if issue.is_none() {
+                    issue = chunk.issue.clone();
+                }
+            }
+            raw_response = chunk.raw_response.clone();
+            raw_response_json = chunk.raw_response_json.clone();
+            start = next_start;
+            chunk_index += 1;
+            resumed_chunks.push(chunk);
+        }
+        if resumed_chunks.len() < chunk_index || start < rows.len() {
+            let mut writer = BufWriter::new(
+                File::create(&chunks_part_path)
+                    .with_context(|| format!("rewriting {}", chunks_part_path.display()))?,
+            );
+            for chunk in &resumed_chunks {
+                serde_json::to_writer(&mut writer, chunk)
+                    .with_context(|| format!("writing {}", chunks_part_path.display()))?;
+                writer.write_all(b"\n")?;
+            }
+            writer.flush()?;
+        }
+        if start > 0 {
+            progress(start);
+        }
+    }
+
+    let mut chunks_writer = BufWriter::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&chunks_part_path)
+            .with_context(|| format!("opening {}", chunks_part_path.display()))?,
+    );
+    while start < rows.len() {
+        let end = (start + config.rows_per_chunk).min(rows.len());
+        let report = verify_jsonl_chunk_with_ollama(config, &rows[start..end], prompt_builder)?;
+        let scanned = report.rows.max(1).min(end - start);
+        let chunk = OllamaVerificationChunkReport {
+            model: report.model.clone(),
+            url: report.url.clone(),
+            chunk: chunk_index,
+            start_row: start,
+            rows: scanned,
+            sane: report.sane,
+            issue: report.issue.clone(),
+            raw_response: report.raw_response.clone(),
+            raw_response_json: report.raw_response_json.clone(),
+        };
+        serde_json::to_writer(&mut chunks_writer, &chunk)
+            .with_context(|| format!("writing {}", chunks_part_path.display()))?;
+        chunks_writer.write_all(b"\n")?;
+        chunks_writer.flush()?;
+
+        if !report.sane {
+            sane = false;
+            if issue.is_none() {
+                issue = report.issue.clone();
+            }
+        }
+        raw_response = report.raw_response;
+        raw_response_json = report.raw_response_json;
+        start += scanned;
+        chunk_index += 1;
+        progress(start);
+    }
+
+    chunks_writer.flush()?;
+    drop(chunks_writer);
+    fs::rename(&chunks_part_path, chunks_path).with_context(|| {
+        format!(
+            "renaming {} to {}",
+            chunks_part_path.display(),
+            chunks_path.display()
+        )
+    })?;
+
+    let aggregate = OllamaVerificationReport {
+        model: config.model.clone(),
+        url: config.url.clone(),
+        rows: start,
+        total_rows: rows.len(),
+        chunks: chunk_index,
+        completed: start == rows.len(),
+        sane,
+        issue,
+        raw_response,
+        raw_response_json,
+        chunks_path: Some(chunks_path.to_path_buf()),
+        report_path: Some(report_path.to_path_buf()),
+    };
+    write_json_file_atomic(report_path, &aggregate)?;
+    Ok(aggregate)
+}
+
+pub fn verify_jsonl_chunk_with_ollama<T: Serialize>(
+    config: &OllamaVerifierConfig,
+    rows: &[T],
+    prompt_builder: &OllamaPromptBuilder<'_, T>,
+) -> Result<OllamaVerificationReport> {
+    let sample_rows = rows.len().min(config.rows_per_chunk);
+    anyhow::ensure!(
+        sample_rows > 0,
+        "no {} training rows to verify",
+        config.family
+    );
+
+    let (prompt, prompt_rows) = prompt_builder(config, &rows[..sample_rows])?;
+    let (prompt, raw_prompt) = ollama_generate_prompt_for_model(&config.model, &prompt);
+    let url = format!("{}/api/generate", config.url.trim().trim_end_matches('/'));
+    let mut request = serde_json::json!({
+        "model": config.model,
+        "prompt": prompt,
+        "stream": false,
+        "think": false,
+        "format": ollama_verification_response_schema(),
+        "options": {
+            "temperature": 0
+        }
+    });
+    if raw_prompt {
+        request["raw"] = serde_json::Value::Bool(true);
+    }
+    let body = serde_json::to_string(&request)?;
+    let response = ureq::post(&url)
+        .header("Content-Type", "application/json")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send(body)
+        .with_context(|| format!("POST {url}"))?;
+    let status = response.status();
+    let raw = response
+        .into_body()
+        .read_to_string()
+        .with_context(|| format!("reading Ollama response from {url}"))?;
+    anyhow::ensure!(
+        status.is_success(),
+        "POST {url} returned HTTP {status}: {raw}"
+    );
+    let generated: OllamaGenerateResponse =
+        serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
+    let response_content = generated.response.trim().to_string();
+    let (verifier_text, judgement, raw_response_json) =
+        parse_ollama_verification_response(&response_content, &raw);
+    let issue = if !judgement.sane {
+        Some(
+            judgement
+                .issue
+                .filter(|issue| !issue.trim().is_empty())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Ollama reported unsane {} data without an exact issue",
+                        config.family
+                    )
+                }),
+        )
+    } else {
+        judgement.issue
+    };
+    Ok(OllamaVerificationReport {
+        model: config.model.clone(),
+        url: config.url.clone(),
+        rows: prompt_rows,
+        total_rows: prompt_rows,
+        chunks: 1,
+        completed: true,
+        sane: judgement.sane,
+        issue,
+        raw_response: verifier_text,
+        raw_response_json,
+        chunks_path: None,
+        report_path: None,
+    })
+}
+
+fn part_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}part",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}."))
+            .unwrap_or_default()
+    ))
+}
+
+fn is_retryable_ollama_verification_chunk(chunk: &OllamaVerificationChunkReport) -> bool {
+    chunk.issue.as_deref().is_some_and(|issue| {
+        if chunk.sane && !issue.trim().is_empty() {
+            return true;
+        }
+        !chunk.sane && issue.starts_with("verifier response did not match expected schema:")
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    #[serde(default)]
+    response: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaVerificationJudgement {
+    sane: bool,
+    #[serde(default)]
+    issue: Option<String>,
+}
+
+fn ollama_verification_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sane": { "type": "boolean" },
+            "issue": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "null" }
+                ],
+                "maxLength": 160
+            }
+        },
+        "required": ["sane", "issue"],
+        "additionalProperties": false
+    })
+}
+
+fn ollama_generate_prompt_for_model(model: &str, prompt: &str) -> (String, bool) {
+    if is_gpt_oss_ollama_model(model) {
+        (
+            format!(
+                "<|start|>user<|message|>{prompt}<|end|><|start|>assistant<|channel|>final<|message|>"
+            ),
+            true,
+        )
+    } else {
+        (prompt.to_string(), false)
+    }
+}
+
+fn is_gpt_oss_ollama_model(model: &str) -> bool {
+    let model = model.trim();
+    model == "gpt-oss" || model.starts_with("gpt-oss:")
+}
+
+fn parse_ollama_verification_response(
+    content: &str,
+    raw: &str,
+) -> (
+    String,
+    OllamaVerificationJudgement,
+    Option<serde_json::Value>,
+) {
+    let candidates = [content.trim()];
+    let mut last_error = None;
+    for candidate in candidates {
+        if candidate.is_empty() {
+            continue;
+        }
+        match parse_ollama_verification_judgement(candidate) {
+            Ok(judgement) => {
+                let raw_response_json = extract_ollama_verification_json(candidate)
+                    .ok()
+                    .and_then(|json| serde_json::from_str(&json).ok());
+                return (candidate.to_string(), judgement, raw_response_json);
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let fallback = if !content.trim().is_empty() {
+        content.trim()
+    } else {
+        raw.trim()
+    };
+    let detail = last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "Ollama returned empty verifier content".to_string());
+    let detail = detail
+        .strip_prefix("parsing verifier judgement: ")
+        .unwrap_or(&detail)
+        .to_string();
+    (
+        fallback.to_string(),
+        OllamaVerificationJudgement {
+            sane: false,
+            issue: Some(format!(
+                "verifier response did not match expected schema: {detail}"
+            )),
+        },
+        None,
+    )
+}
+
+fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJudgement> {
+    let json = extract_ollama_verification_json(raw)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&json).with_context(|| format!("parsing verifier JSON: {raw}"))?;
+    let mut judgement: OllamaVerificationJudgement = serde_json::from_value(value)
+        .with_context(|| format!("parsing verifier judgement: {raw}"))?;
+    normalize_ollama_verification_judgement(&mut judgement);
+    Ok(judgement)
+}
+
+fn extract_ollama_verification_json(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "Ollama returned empty verifier content"
+    );
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return Ok(trimmed.to_string());
+    }
+    for (start, character) in trimmed.char_indices() {
+        if character != '{' {
+            continue;
+        }
+        if let Some(end) = json_object_end(trimmed, start) {
+            let candidate = &trimmed[start..end];
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+    anyhow::bail!("parsing verifier JSON: {raw}");
+}
+
+fn json_object_end(raw: &str, start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, character) in raw[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match character {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(start + offset + character.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_ollama_verification_judgement(judgement: &mut OllamaVerificationJudgement) {
+    if judgement.sane
+        && judgement
+            .issue
+            .as_deref()
+            .is_some_and(|issue| !issue.trim().is_empty())
+    {
+        judgement.sane = false;
+        judgement.issue = Some(
+            "verifier response did not match expected schema: sane=true with non-null issue"
+                .to_string(),
+        );
+    } else if !judgement.sane
+        && judgement
+            .issue
+            .as_deref()
+            .is_some_and(is_unactionable_ollama_verification_issue)
+    {
+        judgement.issue = Some(
+            "verifier response did not match expected schema: issue is not actionable".to_string(),
+        );
+    }
+}
+
+fn is_unactionable_ollama_verification_issue(issue: &str) -> bool {
+    let trimmed = issue.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_lowercase();
+    let has_row_reference = lower.contains("audit_row") || lower.contains("row ");
+    if has_row_reference {
+        return false;
+    }
+    if lower.contains("missing required field: split")
+        || lower.contains("head-split-format-check")
+        || lower.contains("audit-output-format-error")
+    {
+        return true;
+    }
+    let normalized = lower
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    let normalized = normalized.trim_matches('-');
+    matches!(
+        normalized,
+        "audit" | "data" | "issue-001" | "format-check" | "lang-mismatch" | "head-not-found"
+    )
+}
+
+fn read_jsonl_file<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut rows = Vec::new();
+    for (index, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows.push(
+            serde_json::from_str(&line).with_context(|| {
+                format!("parsing JSONL row {} in {}", index + 1, path.display())
+            })?,
+        );
+    }
+    Ok(rows)
+}
+
+fn write_json_file_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let part = part_path(path);
+    fs::write(&part, serde_json::to_string_pretty(value)?)
+        .with_context(|| format!("writing {}", part.display()))?;
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} to {}", part.display(), path.display()))
+}
 
 // ── Lexeme ─────────────────────────────────────────────────────────────────
 

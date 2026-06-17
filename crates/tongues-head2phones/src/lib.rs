@@ -5,7 +5,7 @@
 //! and the Unicode grapheme-cluster split offset for the first complete
 //! TTS-speakable head chunk.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +22,7 @@ use speaking::{
     SpeechBoundaryToken, TerminalPunctuation, VarietyId,
 };
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
-use tongues_data::Seq2SeqExample;
+use tongues_data::{OllamaVerifierConfig, Seq2SeqExample};
 use tongues_neural::{write_manifest, ModelArtifactManifest};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -286,40 +286,8 @@ pub struct PrepareReport {
     pub test_examples: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OllamaVerificationReport {
-    pub model: String,
-    pub url: String,
-    pub rows: usize,
-    #[serde(default)]
-    pub total_rows: usize,
-    #[serde(default)]
-    pub chunks: usize,
-    #[serde(default)]
-    pub completed: bool,
-    pub sane: bool,
-    pub issue: Option<String>,
-    pub raw_response: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_response_json: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chunks_path: Option<PathBuf>,
-    pub report_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OllamaVerificationChunkReport {
-    pub model: String,
-    pub url: String,
-    pub chunk: usize,
-    pub start_row: usize,
-    pub rows: usize,
-    pub sane: bool,
-    pub issue: Option<String>,
-    pub raw_response: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_response_json: Option<serde_json::Value>,
-}
+pub type OllamaVerificationReport = tongues_data::OllamaVerificationReport;
+pub type OllamaVerificationChunkReport = tongues_data::OllamaVerificationChunkReport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepareCheckpointState {
@@ -2935,264 +2903,42 @@ pub fn verify_training_data_with_ollama(
     rows: &[Head2PhonesTrainingExample],
     report_path: &Path,
     chunks_path: &Path,
-    mut progress: impl FnMut(usize),
+    progress: impl FnMut(usize),
 ) -> Result<OllamaVerificationReport> {
-    anyhow::ensure!(
-        config.ollama_verify_rows > 0,
-        "ollama_verify_rows must be greater than zero"
-    );
-    anyhow::ensure!(!rows.is_empty(), "no head2phones training rows to verify");
-
-    if let Some(parent) = chunks_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    }
-    let chunks_part_path = chunks_path.with_extension(format!(
-        "{}part",
-        chunks_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| format!("{extension}."))
-            .unwrap_or_default()
-    ));
-    let mut start = 0usize;
-    let mut chunk_index = 0usize;
-    let mut sane = true;
-    let mut issue = None;
-    let mut raw_response = String::new();
-    let mut raw_response_json = None;
-
-    if !chunks_part_path.exists() && chunks_path.exists() {
-        fs::copy(chunks_path, &chunks_part_path).with_context(|| {
-            format!(
-                "copying existing {} to {} for resume",
-                chunks_path.display(),
-                chunks_part_path.display()
-            )
-        })?;
-    }
-    if chunks_part_path.exists() {
-        let chunks: Vec<OllamaVerificationChunkReport> = read_jsonl(&chunks_part_path)?;
-        let mut resumed_chunks = Vec::new();
-        for chunk in chunks {
-            anyhow::ensure!(
-                chunk.model == config.ollama_model && chunk.url == config.ollama_url,
-                "cannot resume {}: chunk {} was scanned with model={} url={}, current model={} url={}",
-                chunks_part_path.display(),
-                chunk.chunk,
-                chunk.model,
-                chunk.url,
-                config.ollama_model,
-                config.ollama_url
-            );
-            anyhow::ensure!(
-                chunk.chunk == chunk_index && chunk.start_row == start,
-                "cannot resume {}: chunk {} starts at row {}, expected chunk {} row {}",
-                chunks_part_path.display(),
-                chunk.chunk,
-                chunk.start_row,
-                chunk_index,
-                start
-            );
-            anyhow::ensure!(
-                chunk.rows > 0,
-                "cannot resume {}: chunk {} has zero rows",
-                chunks_part_path.display(),
-                chunk.chunk
-            );
-            let next_start = start + chunk.rows;
-            anyhow::ensure!(
-                next_start <= rows.len(),
-                "cannot resume {}: chunk {} ends at row {}, but train split has {} rows",
-                chunks_part_path.display(),
-                chunk.chunk,
-                next_start,
-                rows.len()
-            );
-            if is_retryable_ollama_verification_chunk(&chunk) {
-                break;
-            }
-            if !chunk.sane {
-                sane = false;
-                if issue.is_none() {
-                    issue = chunk.issue.clone();
-                }
-            }
-            raw_response = chunk.raw_response.clone();
-            raw_response_json = chunk.raw_response_json.clone();
-            start = next_start;
-            chunk_index += 1;
-            resumed_chunks.push(chunk);
-        }
-        if resumed_chunks.len() < chunk_index || start < rows.len() {
-            let mut writer = BufWriter::new(
-                File::create(&chunks_part_path)
-                    .with_context(|| format!("rewriting {}", chunks_part_path.display()))?,
-            );
-            for chunk in &resumed_chunks {
-                serde_json::to_writer(&mut writer, chunk)
-                    .with_context(|| format!("writing {}", chunks_part_path.display()))?;
-                writer.write_all(b"\n")?;
-            }
-            writer.flush()?;
-        }
-        if start > 0 {
-            progress(start);
-        }
-    }
-
-    let mut chunks_writer = BufWriter::new(
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&chunks_part_path)
-            .with_context(|| format!("opening {}", chunks_part_path.display()))?,
-    );
-    while start < rows.len() {
-        let end = (start + config.ollama_verify_rows).min(rows.len());
-        let report = verify_training_chunk_with_ollama(config, &rows[start..end])?;
-        let scanned = report.rows.max(1).min(end - start);
-        let chunk = OllamaVerificationChunkReport {
-            model: report.model.clone(),
-            url: report.url.clone(),
-            chunk: chunk_index,
-            start_row: start,
-            rows: scanned,
-            sane: report.sane,
-            issue: report.issue.clone(),
-            raw_response: report.raw_response.clone(),
-            raw_response_json: report.raw_response_json.clone(),
-        };
-        serde_json::to_writer(&mut chunks_writer, &chunk)
-            .with_context(|| format!("writing {}", chunks_part_path.display()))?;
-        chunks_writer.write_all(b"\n")?;
-        chunks_writer.flush()?;
-
-        if !report.sane {
-            sane = false;
-            if issue.is_none() {
-                issue = report.issue.clone();
-            }
-        }
-        raw_response = report.raw_response;
-        raw_response_json = report.raw_response_json;
-        start += scanned;
-        chunk_index += 1;
-        progress(start);
-    }
-
-    chunks_writer.flush()?;
-    drop(chunks_writer);
-    fs::rename(&chunks_part_path, chunks_path).with_context(|| {
-        format!(
-            "renaming {} to {}",
-            chunks_part_path.display(),
-            chunks_path.display()
-        )
-    })?;
-
-    let aggregate = OllamaVerificationReport {
-        model: config.ollama_model.clone(),
-        url: config.ollama_url.clone(),
-        rows: start,
-        total_rows: rows.len(),
-        chunks: chunk_index,
-        completed: start == rows.len(),
-        sane,
-        issue,
-        raw_response,
-        raw_response_json,
-        chunks_path: Some(chunks_path.to_path_buf()),
-        report_path: Some(report_path.to_path_buf()),
-    };
-    write_json_file_atomic(report_path, &aggregate)?;
-    Ok(aggregate)
+    let verifier = head2phones_ollama_verifier_config(config);
+    tongues_data::verify_jsonl_rows_with_ollama(
+        &verifier,
+        rows,
+        report_path,
+        chunks_path,
+        &head2phones_ollama_verification_prompt_with_row_count,
+        progress,
+    )
 }
 
 pub fn verify_training_chunk_with_ollama(
     config: &Head2PhonesConfig,
     rows: &[Head2PhonesTrainingExample],
 ) -> Result<OllamaVerificationReport> {
-    anyhow::ensure!(
-        !config.ollama_model.trim().is_empty(),
-        "ollama_model must be set for head2phones verification"
-    );
-    anyhow::ensure!(
-        !config.ollama_url.trim().is_empty(),
-        "ollama_url must be set for head2phones verification"
-    );
-    let sample_rows = rows.len().min(config.ollama_verify_rows);
-    anyhow::ensure!(sample_rows > 0, "no head2phones training rows to verify");
-
-    let (prompt, prompt_rows) =
-        ollama_verification_prompt_with_row_count(config, &rows[..sample_rows])?;
-    let (prompt, raw_prompt) = ollama_generate_prompt_for_model(&config.ollama_model, &prompt);
-    let url = format!(
-        "{}/api/generate",
-        config.ollama_url.trim().trim_end_matches('/')
-    );
-    let mut request = serde_json::json!({
-        "model": config.ollama_model,
-        "prompt": prompt,
-        "stream": false,
-        "think": false,
-        "format": ollama_verification_response_schema(),
-        "options": {
-            "temperature": 0
-        }
-    });
-    if raw_prompt {
-        request["raw"] = serde_json::Value::Bool(true);
-    }
-    let body = serde_json::to_string(&request)?;
-    let response = ureq::post(&url)
-        .header("Content-Type", "application/json")
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .send(body)
-        .with_context(|| format!("POST {url}"))?;
-    let status = response.status();
-    let raw = response
-        .into_body()
-        .read_to_string()
-        .with_context(|| format!("reading Ollama response from {url}"))?;
-    anyhow::ensure!(
-        status.is_success(),
-        "POST {url} returned HTTP {status}: {raw}"
-    );
-    let generated: OllamaGenerateResponse =
-        serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
-    let response_content = generated.response.trim().to_string();
-    let (verifier_text, judgement, raw_response_json) =
-        parse_ollama_verification_response(&response_content, &raw);
-    let issue = if !judgement.sane {
-        Some(
-            judgement
-                .issue
-                .filter(|issue| !issue.trim().is_empty())
-                .unwrap_or_else(|| {
-                    "Ollama reported unsane head2phones data without an exact issue".to_string()
-                }),
-        )
-    } else {
-        judgement.issue
-    };
-    Ok(OllamaVerificationReport {
-        model: config.ollama_model.clone(),
-        url: config.ollama_url.clone(),
-        rows: prompt_rows,
-        total_rows: prompt_rows,
-        chunks: 1,
-        completed: true,
-        sane: judgement.sane,
-        issue,
-        raw_response: verifier_text,
-        raw_response_json,
-        chunks_path: None,
-        report_path: None,
-    })
+    let verifier = head2phones_ollama_verifier_config(config);
+    tongues_data::verify_jsonl_chunk_with_ollama(
+        &verifier,
+        rows,
+        &head2phones_ollama_verification_prompt_with_row_count,
+    )
 }
 
+fn head2phones_ollama_verifier_config(config: &Head2PhonesConfig) -> OllamaVerifierConfig {
+    OllamaVerifierConfig::new(
+        FAMILY,
+        config.ollama_model.clone(),
+        config.ollama_url.clone(),
+        config.ollama_verify_rows,
+        config.ollama_verify_max_chars,
+    )
+}
+
+#[cfg(test)]
 fn is_retryable_ollama_verification_chunk(chunk: &OllamaVerificationChunkReport) -> bool {
     chunk.issue.as_deref().is_some_and(|issue| {
         if chunk.sane && !issue.trim().is_empty() {
@@ -3202,12 +2948,7 @@ fn is_retryable_ollama_verification_chunk(chunk: &OllamaVerificationChunkReport)
     })
 }
 
-#[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
-    #[serde(default)]
-    response: String,
-}
-
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct OllamaVerificationJudgement {
     sane: bool,
@@ -3220,11 +2961,15 @@ fn ollama_verification_prompt(
     config: &Head2PhonesConfig,
     rows: &[Head2PhonesTrainingExample],
 ) -> Result<String> {
-    Ok(ollama_verification_prompt_with_row_count(config, rows)?.0)
+    Ok(head2phones_ollama_verification_prompt_with_row_count(
+        &head2phones_ollama_verifier_config(config),
+        rows,
+    )?
+    .0)
 }
 
-fn ollama_verification_prompt_with_row_count(
-    config: &Head2PhonesConfig,
+fn head2phones_ollama_verification_prompt_with_row_count(
+    config: &OllamaVerifierConfig,
     rows: &[Head2PhonesTrainingExample],
 ) -> Result<(String, usize)> {
     let mut jsonl = String::new();
@@ -3238,7 +2983,7 @@ fn ollama_verification_prompt_with_row_count(
             );
         }
         let line = serde_json::to_string(&value)?;
-        if !jsonl.is_empty() && jsonl.len() + line.len() + 1 > config.ollama_verify_max_chars {
+        if !jsonl.is_empty() && jsonl.len() + line.len() + 1 > config.max_prompt_chars {
             break;
         }
         jsonl.push_str(&line);
@@ -3284,24 +3029,7 @@ fn ollama_verification_prompt_with_row_count(
     ), included_rows))
 }
 
-fn ollama_verification_response_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "sane": { "type": "boolean" },
-            "issue": {
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "null" }
-                ],
-                "maxLength": 160
-            }
-        },
-        "required": ["sane", "issue"],
-        "additionalProperties": false
-    })
-}
-
+#[cfg(test)]
 fn ollama_generate_prompt_for_model(model: &str, prompt: &str) -> (String, bool) {
     if is_gpt_oss_ollama_model(model) {
         (
@@ -3315,11 +3043,13 @@ fn ollama_generate_prompt_for_model(model: &str, prompt: &str) -> (String, bool)
     }
 }
 
+#[cfg(test)]
 fn is_gpt_oss_ollama_model(model: &str) -> bool {
     let model = model.trim();
     model == "gpt-oss" || model.starts_with("gpt-oss:")
 }
 
+#[cfg(test)]
 fn parse_ollama_verification_response(
     content: &str,
     raw: &str,
@@ -3368,6 +3098,7 @@ fn parse_ollama_verification_response(
     )
 }
 
+#[cfg(test)]
 fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJudgement> {
     let json = extract_ollama_verification_json(raw)?;
     let value: serde_json::Value =
@@ -3378,6 +3109,7 @@ fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJu
     Ok(judgement)
 }
 
+#[cfg(test)]
 fn extract_ollama_verification_json(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     anyhow::ensure!(
@@ -3401,6 +3133,7 @@ fn extract_ollama_verification_json(raw: &str) -> Result<String> {
     anyhow::bail!("parsing verifier JSON: {raw}");
 }
 
+#[cfg(test)]
 fn json_object_end(raw: &str, start: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut in_string = false;
@@ -3431,6 +3164,7 @@ fn json_object_end(raw: &str, start: usize) -> Option<usize> {
     None
 }
 
+#[cfg(test)]
 fn normalize_ollama_verification_judgement(judgement: &mut OllamaVerificationJudgement) {
     if judgement.sane
         && judgement
@@ -3455,6 +3189,7 @@ fn normalize_ollama_verification_judgement(judgement: &mut OllamaVerificationJud
     }
 }
 
+#[cfg(test)]
 fn is_unactionable_ollama_verification_issue(issue: &str) -> bool {
     let trimmed = issue.trim();
     if trimmed.is_empty() {

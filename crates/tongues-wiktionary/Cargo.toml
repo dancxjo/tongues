@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 speaking = { path = "../speaking" }
 toml = { workspace = true }
 tongues-core = { path = "../tongues-core" }
+tongues-data = { path = "../tongues-data" }
 tongues-neural = { path = "../tongues-neural" }
 unicode-normalization = { workspace = true }
 ureq = { workspace = true }
