@@ -33,6 +33,17 @@ Spanish page titles with a Spanish section also get synthetic phonemic rows when
 
 Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching pronunciation rows with domain variety tags for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without a pronunciation row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.
 
+English cleanup rows are enabled by default with `include_cleanup_corpus = true`. These pinned synthetic examples target recurring Wiktionary-model attractors:
+
+| Bucket | Purpose |
+|---|---|
+| `cleanup:core-function-words` | High-frequency English function-word pronunciations and contexts such as `do`, `to-do`, and `how-do-you-do`. |
+| `cleanup:hyphenated-compounds` | Compound pronunciation plus `<task:segment_compound>` and `<task:pronounce_segments>` auxiliary rows. |
+| `cleanup:letter-symbol-word-disambiguation` | Explicit `<WORD>`, `<LETTER>`, and `<PHONEME>` tags for forms like `a`, `i`, and `s`. |
+| `cleanup:spelling-hallucination-negatives` | Gold pronunciations and `<task:verify_pronunciation>` GOOD/BAD contrastive rows for known bad outputs. |
+| `cleanup:dialect-tagged-variants` | Explicit `<en-US>` and `<en-UK>` rows for common dialect splits such as `work`, `world`, `also`, and `both`. |
+| `cleanup:broad-vs-narrow-equivalence` | `<task:normalize_phonology>` broad targets plus narrow allowed realizations for aspiration, dark L, offglides, and syllabic consonants. |
+
 ## Focused Language Runs
 
 ```sh
@@ -84,6 +95,10 @@ Supported `--task` values:
 | `phonemes-to-orthography` | `cargo run --release -- wiktionary infer --task phonemes-to-orthography --lang eng --notation phonemes "kæt"` |
 | `phones-to-orthography` | `cargo run --release -- wiktionary infer --task phones-to-orthography --lang eng --notation phones "ˈkʰæt"` |
 | `phonetic-realization` | `cargo run --release -- wiktionary infer --task phonetic-realization --lang eng --variety en-US.GenAm --notation phonemes "kæt"` |
+| `segment-compound` | `cargo run --release -- wiktionary infer --task segment-compound --lang eng "how-do-you-do"` |
+| `pronounce-segments` | `cargo run --release -- wiktionary infer --task pronounce-segments --lang eng "how | do | you | do"` |
+| `verify-pronunciation` | `cargo run --release -- wiktionary infer --task verify-pronunciation --lang eng "get || d͡ʒɛt"` |
+| `normalize-phonology` | `cargo run --release -- wiktionary infer --task normalize-phonology --lang eng "tʰuː"` |
 | `normalize` | `cargo run --release -- wiktionary infer --task normalize --lang eng "Cat!"` |
 | `guess-lang-from-orthography` | `cargo run --release -- wiktionary infer --task guess-lang-from-orthography --notation phones "cat"` |
 | `guess-lang-from-phonology` | `cargo run --release -- wiktionary infer --task guess-lang-from-phonology --notation phones "ˈkʰæt"` |

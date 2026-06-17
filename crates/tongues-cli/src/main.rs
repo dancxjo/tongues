@@ -1047,7 +1047,7 @@ enum WiktionaryCommands {
         #[arg(long, value_enum)]
         notation: Option<WiktionaryNotationArg>,
 
-        /// Wiktionary task mix: orthography-to-phonemes, orthography-to-phones, phonetic-realization, lang, or all.
+        /// Wiktionary task mix: orthography-to-phonemes, orthography-to-phones, phonetic-realization, segment-compound, pronounce-segments, verify, normalize-phonology, lang, or all.
         /// Defaults to train_task in the Wiktionary config.
         #[arg(long)]
         task: Option<String>,
@@ -1113,7 +1113,7 @@ enum WiktionaryCommands {
         )]
         model: PathBuf,
 
-        /// Wiktionary task: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, normalize, or a language guessing task
+        /// Wiktionary task: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify, normalize-phonology, normalize, or a language guessing task
         #[arg(long, default_value = "orthography-to-phones")]
         task: String,
 
@@ -3931,6 +3931,18 @@ fn filter_wiktionary_examples(
                 && example.notation.as_deref() == Some("phonetic")
         }
         "phonetic-realization" => example.task == WiktionaryTask::PhoneticRealization,
+        "segment" | "segment-compound" | "compound-segmentation" => {
+            example.task == WiktionaryTask::SegmentCompound
+        }
+        "pronounce-segments" | "segments-to-phonology" | "segments-to-phones" => {
+            example.task == WiktionaryTask::PronounceSegments
+        }
+        "verify" | "verify-pronunciation" | "verifier" => {
+            example.task == WiktionaryTask::VerifyPronunciation
+        }
+        "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
+            example.task == WiktionaryTask::NormalizePhonology
+        }
         "etymology"
         | "etymology-translation"
         | "translate-etymology"
@@ -3964,6 +3976,18 @@ fn filter_wiktionary_examples(
             | "phonemes-to-orthography"
             | "phones-to-orthography"
             | "phonetic-realization"
+            | "segment"
+            | "segment-compound"
+            | "compound-segmentation"
+            | "pronounce-segments"
+            | "segments-to-phonology"
+            | "segments-to-phones"
+            | "verify"
+            | "verify-pronunciation"
+            | "verifier"
+            | "normalize-phonology"
+            | "normalise-phonology"
+            | "broad-equivalence"
             | "etymology"
             | "etymology-translation"
             | "translate-etymology"
@@ -3985,7 +4009,7 @@ fn filter_wiktionary_examples(
             | "language-guessing"
             | "all"
     ) {
-        anyhow::bail!("Invalid Wiktionary task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, etymology-translation, normalize, align, lang, all");
+        anyhow::bail!("Invalid Wiktionary task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, etymology-translation, normalize, align, lang, all");
     }
 
     Ok(examples
@@ -4290,6 +4314,20 @@ fn wiktionary_infer_source(
             controls.push_str(" <repr:phonemes>");
             format!("{controls} {input}")
         }
+        "segment" | "segment-compound" | "compound-segmentation" => {
+            format!("<task:segment_compound> <lang:{lang}> <SEGMENT> {input}")
+        }
+        "pronounce-segments" | "segments-to-phonology" | "segments-to-phones" => {
+            format!(
+                "<task:pronounce_segments> <lang:{lang}> <PRONOUNCE_SEGMENTS> <repr:phones> {input}"
+            )
+        }
+        "verify" | "verify-pronunciation" | "verifier" => {
+            format!("<task:verify_pronunciation> <lang:{lang}> <VERIFY> {input}")
+        }
+        "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
+            format!("<task:normalize_phonology> <lang:{lang}> <BROAD_EQUIV> <repr:phones> {input}")
+        }
         "normalize" | "normalise" => {
             format!("<task:normalize> <lang:{lang}> {input}")
         }
@@ -4308,7 +4346,7 @@ fn wiktionary_infer_source(
             )
         }
         _ => anyhow::bail!(
-            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
+            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
         ),
     };
     Ok(tongues_wiktionary::normalize_wiktionary_control_tokens(

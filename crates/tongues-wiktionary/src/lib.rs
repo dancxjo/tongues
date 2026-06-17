@@ -31,7 +31,7 @@ pub const DEFAULT_PIE_DATASET_ID: &str = "enwiktionary-pie-roots-2026-06-01-v0";
 pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
     "https://en.wikipedia.org/w/index.php?title=Indo-European_vocabulary&action=raw";
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
-const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-v1";
+const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-cleanup-v2";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
@@ -59,6 +59,8 @@ pub struct WiktionaryConfig {
     pub synthesize_spanish: bool,
     #[serde(default = "default_include_wiktionary_supplements")]
     pub include_wiktionary_supplements: bool,
+    #[serde(default = "default_include_cleanup_corpus")]
+    pub include_cleanup_corpus: bool,
     #[serde(default)]
     pub include_descendant_pairs: bool,
     #[serde(default)]
@@ -100,6 +102,7 @@ impl Default for WiktionaryConfig {
             include_language_guessing: true,
             synthesize_spanish: true,
             include_wiktionary_supplements: true,
+            include_cleanup_corpus: true,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -128,6 +131,7 @@ impl WiktionaryConfig {
             include_language_guessing: false,
             synthesize_spanish: false,
             include_wiktionary_supplements: false,
+            include_cleanup_corpus: false,
             include_descendant_pairs: false,
             max_pages: None,
         }
@@ -150,6 +154,10 @@ fn default_synthesize_spanish() -> bool {
 }
 
 fn default_include_wiktionary_supplements() -> bool {
+    true
+}
+
+fn default_include_cleanup_corpus() -> bool {
     true
 }
 
@@ -217,6 +225,10 @@ pub enum WiktionaryTask {
     OrthographyToPhonology,
     PhonologyToOrthography,
     PhoneticRealization,
+    SegmentCompound,
+    PronounceSegments,
+    VerifyPronunciation,
+    NormalizePhonology,
     EtymologyTranslation,
     PieToDescendant,
     DescendantToPie,
@@ -234,6 +246,10 @@ impl WiktionaryTask {
             Self::OrthographyToPhonology => "<task:orthography_to_phonology>",
             Self::PhonologyToOrthography => "<task:phonology_to_orthography>",
             Self::PhoneticRealization => "<task:phonetic_realization>",
+            Self::SegmentCompound => "<task:segment_compound>",
+            Self::PronounceSegments => "<task:pronounce_segments>",
+            Self::VerifyPronunciation => "<task:verify_pronunciation>",
+            Self::NormalizePhonology => "<task:normalize_phonology>",
             Self::EtymologyTranslation => "<task:etymology_translate>",
             Self::PieToDescendant => "<task:pie_to_descendant>",
             Self::DescendantToPie => "<task:descendant_to_pie>",
@@ -2352,12 +2368,279 @@ fn expand_training_examples_to(
         );
     }
 
+    if config.include_cleanup_corpus && allowed.contains("eng") {
+        for example in english_cleanup_training_examples() {
+            emit(example)?;
+            emitted += 1;
+        }
+        maybe_report_expand_progress(progress, normalized_entries.len(), emitted, progress_path);
+    }
+
     progress(PrepareProgress::Expand {
         rows: entries.len(),
         examples: emitted,
         path: progress_path.map(|path| path.display().to_string()),
     });
     Ok(())
+}
+
+pub fn english_cleanup_training_examples() -> Vec<TrainingExample> {
+    let mut examples = Vec::new();
+    add_core_function_word_cleanup_examples(&mut examples);
+    add_hyphenated_compound_cleanup_examples(&mut examples);
+    add_letter_symbol_word_cleanup_examples(&mut examples);
+    add_spelling_hallucination_cleanup_examples(&mut examples);
+    add_dialect_cleanup_examples(&mut examples);
+    add_broad_narrow_cleanup_examples(&mut examples);
+    examples
+}
+
+fn cleanup_row(
+    task: WiktionaryTask,
+    notation: Option<&str>,
+    input: impl Into<String>,
+    output: impl Into<String>,
+    source: &'static str,
+) -> TrainingExample {
+    TrainingExample {
+        task,
+        lang: Some("eng".to_string()),
+        notation: notation.map(str::to_string),
+        accent: None,
+        input: input.into(),
+        output: output.into(),
+        source: source.to_string(),
+    }
+}
+
+fn english_o2p_input(prefix: &str, notation: &str, spelling: &str) -> String {
+    format!(
+        "{} <lang:eng> {} {} {}",
+        WiktionaryTask::OrthographyToPhonology.token(),
+        prefix,
+        wiktionary_representation_token(notation),
+        spelling
+    )
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn add_core_function_word_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let rows = [
+        ("<WORD>", "a", "ə"),
+        ("<WORD> <strong>", "a", "eɪ"),
+        ("<LETTER>", "a", "ˈeɪ"),
+        ("<WORD>", "i", "ˈaɪ"),
+        ("<LETTER>", "i", "ˈaɪ"),
+        ("<PHONEME>", "i", "i"),
+        ("<LETTER>", "s", "ˈɛs"),
+        ("<WORD>", "one", "ˈwʌn"),
+        ("<WORD>", "do", "ˈdu"),
+        ("<WORD> <weak>", "do", "də"),
+        ("<WORD>", "does", "ˈdʌz"),
+        ("<WORD>", "could", "ˈkʊd"),
+        ("<WORD>", "should", "ˈʃʊd"),
+        ("<WORD>", "who", "ˈhu"),
+        ("<WORD>", "do it", "ˈdu.ɪt"),
+        ("<WORD>", "do-over", "ˈduˌoʊvɚ"),
+        ("<WORD>", "make-do", "ˈmeɪkˌdu"),
+        ("<WORD>", "to-do", "təˈdu"),
+        ("<WORD> <strong>", "to-do", "tuˈdu"),
+        ("<WORD>", "how-do-you-do", "ˌhaʊ.də.jəˈdu"),
+    ];
+    for (prefix, spelling, output) in rows {
+        examples.push(cleanup_row(
+            WiktionaryTask::OrthographyToPhonology,
+            Some("phonetic"),
+            english_o2p_input(prefix, "phonetic", spelling),
+            output,
+            "cleanup:core-function-words",
+        ));
+    }
+}
+
+fn add_hyphenated_compound_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let rows = [
+        ("one-to-one", "ˌwʌn.təˈwʌn", "one | to | one"),
+        ("how-do-you-do", "ˌhaʊ.də.jəˈdu", "how | do | you | do"),
+        ("get-go", "ˈɡɛtˌɡoʊ", "get | go"),
+        ("out-and-out", "ˌaʊt.əndˈaʊt", "out | and | out"),
+        ("so-and-so", "ˈsoʊ.ənˌsoʊ", "so | and | so"),
+        ("to-do", "təˈdu", "to | do"),
+        ("well-to-do", "ˌwɛl.təˈdu", "well | to | do"),
+    ];
+    for (spelling, output, segments) in rows {
+        examples.push(cleanup_row(
+            WiktionaryTask::OrthographyToPhonology,
+            Some("phonetic"),
+            english_o2p_input("<COMPOUND>", "phonetic", spelling),
+            output,
+            "cleanup:hyphenated-compounds",
+        ));
+        examples.push(cleanup_row(
+            WiktionaryTask::SegmentCompound,
+            None,
+            format!(
+                "{} <lang:eng> <SEGMENT> {}",
+                WiktionaryTask::SegmentCompound.token(),
+                spelling
+            ),
+            segments,
+            "cleanup:hyphenated-compounds",
+        ));
+        examples.push(cleanup_row(
+            WiktionaryTask::PronounceSegments,
+            Some("phonetic"),
+            format!(
+                "{} <lang:eng> <PRONOUNCE_SEGMENTS> <repr:phones> {}",
+                WiktionaryTask::PronounceSegments.token(),
+                segments
+            ),
+            output,
+            "cleanup:hyphenated-compounds",
+        ));
+    }
+}
+
+fn add_letter_symbol_word_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let rows = [
+        ("<WORD>", "i", "ˈaɪ"),
+        ("<LETTER>", "i", "ˈaɪ"),
+        ("<PHONEME>", "i", "i"),
+        ("<LETTER>", "s", "ˈɛs"),
+        ("<WORD>", "a", "ə"),
+        ("<WORD> <strong>", "a", "eɪ"),
+        ("<LETTER_PLURAL>", "a.'s", "ˈeɪz"),
+        ("<LETTER_PLURAL>", "a's", "ˈeɪz"),
+    ];
+    for (prefix, spelling, output) in rows {
+        examples.push(cleanup_row(
+            WiktionaryTask::OrthographyToPhonology,
+            Some("phonetic"),
+            english_o2p_input(prefix, "phonetic", spelling),
+            output,
+            "cleanup:letter-symbol-word-disambiguation",
+        ));
+    }
+}
+
+fn add_spelling_hallucination_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let pairs = [
+        ("get", "ɡɛt", "d͡ʒɛt", "soft-g hallucination"),
+        ("say", "seɪ", "saɪ", "vowel-name hallucination"),
+        (
+            "great",
+            "ɡɹeɪt",
+            "ɡɹʷɪi̯t",
+            "spelling-pronunciation hallucination",
+        ),
+        (
+            "never",
+            "ˈnɛvɚ",
+            "nɪi̯vɚ",
+            "spelling-pronunciation hallucination",
+        ),
+        (
+            "people",
+            "ˈpipəl",
+            "pʰiː.ə.pɫ̩",
+            "letter-by-letter hallucination",
+        ),
+    ];
+    for (spelling, good, bad, error_type) in pairs {
+        examples.push(cleanup_row(
+            WiktionaryTask::OrthographyToPhonology,
+            Some("phonetic"),
+            english_o2p_input("<WORD>", "phonetic", spelling),
+            good,
+            "cleanup:spelling-hallucination-negatives",
+        ));
+        examples.push(cleanup_row(
+            WiktionaryTask::VerifyPronunciation,
+            None,
+            format!(
+                "{} <lang:eng> <VERIFY> <error:{}> {} || {}",
+                WiktionaryTask::VerifyPronunciation.token(),
+                error_type.replace(' ', "_"),
+                spelling,
+                good
+            ),
+            "GOOD",
+            "cleanup:spelling-hallucination-negatives",
+        ));
+        examples.push(cleanup_row(
+            WiktionaryTask::VerifyPronunciation,
+            None,
+            format!(
+                "{} <lang:eng> <VERIFY> <error:{}> {} || {}",
+                WiktionaryTask::VerifyPronunciation.token(),
+                error_type.replace(' ', "_"),
+                spelling,
+                bad
+            ),
+            "BAD",
+            "cleanup:spelling-hallucination-negatives",
+        ));
+    }
+}
+
+fn add_dialect_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let rows = [
+        ("<en-US>", "work", "wɝk"),
+        ("<en-UK>", "work", "wɜːk"),
+        ("<en-US>", "world", "wɝld"),
+        ("<en-UK>", "world", "wɜːld"),
+        ("<en-US>", "also", "ˈɔlsoʊ"),
+        ("<en-UK>", "also", "ˈɔːlsəʊ"),
+        ("<en-US>", "both", "boʊθ"),
+        ("<en-UK>", "both", "bəʊθ"),
+        ("<en-UK>", "both", "bɒθ"),
+    ];
+    for (dialect, spelling, output) in rows {
+        examples.push(cleanup_row(
+            WiktionaryTask::OrthographyToPhonology,
+            Some("phonetic"),
+            english_o2p_input(dialect, "phonetic", spelling),
+            output,
+            "cleanup:dialect-tagged-variants",
+        ));
+    }
+}
+
+fn add_broad_narrow_cleanup_examples(examples: &mut Vec<TrainingExample>) {
+    let rows = [
+        ("tu", "tʰuː"),
+        ("tu", "tʰu̟"),
+        ("taɪm", "tʰaɪm"),
+        ("wɛl", "wɛɫ"),
+        ("haʊ", "haʊ̯"),
+        ("pipəl", "pʰiːpɫ̩"),
+    ];
+    for (broad, narrow) in rows {
+        examples.push(cleanup_row(
+            WiktionaryTask::NormalizePhonology,
+            Some("phonetic"),
+            format!(
+                "{} <lang:eng> <BROAD_EQUIV> <repr:phones> {}",
+                WiktionaryTask::NormalizePhonology.token(),
+                narrow
+            ),
+            broad,
+            "cleanup:broad-vs-narrow-equivalence",
+        ));
+        examples.push(cleanup_row(
+            WiktionaryTask::PhoneticRealization,
+            Some("phonetic-realization"),
+            format!(
+                "{} <lang:eng> <ALLOW_NARROW> <repr:phonemes> {}",
+                WiktionaryTask::PhoneticRealization.token(),
+                broad
+            ),
+            narrow,
+            "cleanup:broad-vs-narrow-equivalence",
+        ));
+    }
 }
 
 fn maybe_report_expand_progress(
@@ -3189,7 +3472,10 @@ mod tests {
 
     #[test]
     fn expands_orthography_phonology_and_language_guessing_tasks() {
-        let config = WiktionaryConfig::default();
+        let config = WiktionaryConfig {
+            include_cleanup_corpus: false,
+            ..WiktionaryConfig::default()
+        };
         let examples = expand_training_examples(
             &[PronunciationEntry {
                 lang: "deu".to_string(),
@@ -3863,5 +4149,43 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         }));
 
         fs::remove_dir_all(&root).expect("clean temp dir");
+    }
+
+    #[test]
+    fn english_cleanup_examples_cover_compounds_verifier_and_equivalence() {
+        let examples = english_cleanup_training_examples();
+
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example
+                    .input
+                    .contains("<COMPOUND> <repr:phones> how-do-you-do")
+                && example.output == "ˌhaʊ.də.jəˈdu"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::SegmentCompound
+                && example.input.ends_with("<SEGMENT> how-do-you-do")
+                && example.output == "how | do | you | do"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::PronounceSegments
+                && example.input.contains("how | do | you | do")
+                && example.output == "ˌhaʊ.də.jəˈdu"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::VerifyPronunciation
+                && example.input.contains("get || d͡ʒɛt")
+                && example.output == "BAD"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::NormalizePhonology
+                && example.input.contains("tʰuː")
+                && example.output == "tu"
+        }));
+        assert!(examples.iter().any(|example| {
+            example.task == WiktionaryTask::OrthographyToPhonology
+                && example.input.contains("<WORD> <repr:phones> do")
+                && example.output == "ˈdu"
+        }));
     }
 }
