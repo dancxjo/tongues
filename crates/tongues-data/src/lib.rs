@@ -134,7 +134,7 @@ pub fn verify_jsonl_rows_with_ollama<T: Serialize>(
     if chunks_part_path.exists() {
         let chunks: Vec<OllamaVerificationChunkReport> = read_jsonl_file(&chunks_part_path)?;
         let mut resumed_chunks = Vec::new();
-        for chunk in chunks {
+        for mut chunk in chunks {
             anyhow::ensure!(
                 chunk.model == config.model && chunk.url == config.url,
                 "cannot resume {}: chunk {} was scanned with model={} url={}, current model={} url={}",
@@ -160,6 +160,7 @@ pub fn verify_jsonl_rows_with_ollama<T: Serialize>(
                 chunks_part_path.display(),
                 chunk.chunk
             );
+            normalize_ollama_verification_chunk_report(&mut chunk);
             let next_start = start + chunk.rows;
             anyhow::ensure!(
                 next_start <= rows.len(),
@@ -319,7 +320,9 @@ pub fn verify_jsonl_chunk_with_ollama<T: Serialize>(
     let response_content = generated.response.trim().to_string();
     let (verifier_text, judgement, raw_response_json) =
         parse_ollama_verification_response(&response_content, &raw);
-    let issue = if !judgement.sane {
+    let issue = if judgement.sane {
+        None
+    } else {
         Some(
             judgement
                 .issue
@@ -331,8 +334,6 @@ pub fn verify_jsonl_chunk_with_ollama<T: Serialize>(
                     )
                 }),
         )
-    } else {
-        judgement.issue
     };
     Ok(OllamaVerificationReport {
         model: config.model.clone(),
@@ -362,11 +363,33 @@ fn part_path(path: &Path) -> PathBuf {
 
 fn is_retryable_ollama_verification_chunk(chunk: &OllamaVerificationChunkReport) -> bool {
     chunk.issue.as_deref().is_some_and(|issue| {
-        if chunk.sane && !issue.trim().is_empty() {
-            return true;
-        }
-        !chunk.sane && issue.starts_with("verifier response did not match expected schema:")
+        !chunk.sane
+            && (issue.starts_with("verifier response did not match expected schema:")
+                || is_unactionable_ollama_verification_issue(issue))
     })
+}
+
+fn normalize_ollama_verification_chunk_report(chunk: &mut OllamaVerificationChunkReport) {
+    if let Some(value) = chunk.raw_response_json.clone() {
+        if let Ok(mut judgement) = serde_json::from_value::<OllamaVerificationJudgement>(value) {
+            normalize_ollama_verification_judgement(&mut judgement);
+            chunk.sane = judgement.sane;
+            chunk.issue = if judgement.sane {
+                None
+            } else {
+                judgement.issue.filter(|issue| !issue.trim().is_empty())
+            };
+            return;
+        }
+    }
+    if let Ok(judgement) = parse_ollama_verification_judgement(&chunk.raw_response) {
+        chunk.sane = judgement.sane;
+        chunk.issue = if judgement.sane {
+            None
+        } else {
+            judgement.issue.filter(|issue| !issue.trim().is_empty())
+        };
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -530,22 +553,12 @@ fn json_object_end(raw: &str, start: usize) -> Option<usize> {
 }
 
 fn normalize_ollama_verification_judgement(judgement: &mut OllamaVerificationJudgement) {
-    if judgement.sane
-        && judgement
-            .issue
-            .as_deref()
-            .is_some_and(|issue| !issue.trim().is_empty())
-    {
-        judgement.sane = false;
-        judgement.issue = Some(
-            "verifier response did not match expected schema: sane=true with non-null issue"
-                .to_string(),
-        );
-    } else if !judgement.sane
-        && judgement
-            .issue
-            .as_deref()
-            .is_some_and(is_unactionable_ollama_verification_issue)
+    if judgement.sane {
+        judgement.issue = None;
+    } else if judgement
+        .issue
+        .as_deref()
+        .is_some_and(is_unactionable_ollama_verification_issue)
     {
         judgement.issue = Some(
             "verifier response did not match expected schema: issue is not actionable".to_string(),
@@ -559,25 +572,82 @@ fn is_unactionable_ollama_verification_issue(issue: &str) -> bool {
         return true;
     }
     let lower = trimmed.to_lowercase();
-    let has_row_reference = lower.contains("audit_row") || lower.contains("row ");
-    if has_row_reference {
-        return false;
-    }
-    if lower.contains("missing required field: split")
-        || lower.contains("head-split-format-check")
-        || lower.contains("audit-output-format-error")
-    {
-        return true;
-    }
     let normalized = lower
         .chars()
         .map(|ch| if ch.is_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     let normalized = normalized.trim_matches('-');
+    let compact = normalized.replace('-', "");
+    let has_row_reference = lower.contains("audit_row")
+        || lower.contains("audit-row")
+        || lower.contains("audit row")
+        || lower.contains("audit-row")
+        || lower.contains("row ");
+    if has_row_reference && is_bare_row_reference(&compact) {
+        return true;
+    }
+    if has_row_reference && looks_like_known_head2phones_false_positive(&lower, &compact) {
+        return true;
+    }
+    if has_row_reference {
+        return false;
+    }
+    if looks_like_known_head2phones_false_positive(&lower, &compact) {
+        return true;
+    }
     matches!(
         normalized,
-        "audit" | "data" | "issue-001" | "format-check" | "lang-mismatch" | "head-not-found"
+        "audit"
+            | "data"
+            | "issue-001"
+            | "format-check"
+            | "head-split-format-check"
+            | "audit-output-format-error"
+            | "head-text-format-check"
+            | "head-length-mismatch"
+            | "head-found-sanity-check"
+            | "head-output-sanity"
+            | "lang-mismatch"
+            | "head-not-found"
     )
+}
+
+fn is_bare_row_reference(compact: &str) -> bool {
+    compact
+        .strip_prefix("auditrow")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
+        || compact
+            .strip_prefix("row")
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bool {
+    let mentions_invented_split = compact.contains("missingrequiredfieldsplit")
+        || compact.contains("splittag")
+        || compact.contains("splitpoint")
+        || compact.contains("splitaftertag")
+        || compact.contains("missingsplitafter");
+    let mentions_invented_phone_marker =
+        compact.contains("missingphonemes") || compact.contains("missingphonemen");
+    let mentions_no_head_split_zero = compact.contains("nohead")
+        && (compact.contains("splitafterof0") || compact.contains("split0"));
+    let mentions_missing_head_split =
+        compact.contains("headismissing") && compact.contains("splitispresent");
+    let mentions_verifier_contract = lower.contains("audit_id")
+        || lower.contains("is_sane")
+        || lower.contains("is_valid_output_tags")
+        || lower.contains("the json is truncated")
+        || lower.contains("the user wants");
+    let mentions_lang_mismatch_example = compact.contains("langmismatch")
+        && compact.contains("contains")
+        && (compact.contains("phones") || compact.contains("phonemes"));
+
+    mentions_invented_split
+        || mentions_invented_phone_marker
+        || mentions_no_head_split_zero
+        || mentions_missing_head_split
+        || mentions_verifier_contract
+        || mentions_lang_mismatch_example
 }
 
 fn read_jsonl_file<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {

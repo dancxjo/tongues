@@ -3957,7 +3957,8 @@ fn verify_training_data_after_prepare(
     let model = config.ollama_model.clone();
     let url = config.ollama_url.clone();
     let total_rows = train.len();
-    let path = chunks_path.display().to_string();
+    let active_chunks_path = chunks_path.with_extension("jsonl.part");
+    let path = active_chunks_path.display().to_string();
     let report = verify_training_data_with_ollama(config, train, out, |rows| {
         progress(PrepareProgress::Verify {
             model: model.clone(),

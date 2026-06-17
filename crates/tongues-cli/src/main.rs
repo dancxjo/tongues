@@ -2535,7 +2535,10 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                     let model = config.ollama_model.clone();
                     let url = config.ollama_url.clone();
                     let total_rows = rows.len();
-                    let chunks_path = chunks_path.display().to_string();
+                    let chunks_path = chunks_path
+                        .with_extension("jsonl.part")
+                        .display()
+                        .to_string();
                     move |scanned_rows| {
                         pb.set_message(format!(
                             "Asking Ollama model {model} at {url} to scan {}/{} head2phones train rows into {}",
