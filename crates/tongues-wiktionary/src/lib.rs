@@ -32,6 +32,7 @@ pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
     "https://en.wikipedia.org/w/index.php?title=Indo-European_vocabulary&action=raw";
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
 const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-cleanup-v2";
+const PARSE_CHECKPOINT_PAGE_INTERVAL: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
@@ -285,6 +286,13 @@ pub struct PrepareCheckpointState {
     pub report: Option<PrepareReport>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseCheckpointShard {
+    pub pages_start: usize,
+    pub pages_end: usize,
+    pub data: ExtractedWiktionaryData,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
     Stage {
@@ -448,7 +456,13 @@ fn load_or_parse_pronunciation_data(
         return Ok(data);
     }
 
-    let extracted = parse_dump_with_progress(dump_path, config, progress)?;
+    let checkpoint_dir = out.join("prepare-checkpoints").join("parse-pronunciation");
+    let extracted = parse_dump_with_progress_and_checkpoints(
+        dump_path,
+        config,
+        progress,
+        Some(&checkpoint_dir),
+    )?;
     write_jsonl_with_progress(&patterns_path, &extracted.patterns, progress)?;
     write_jsonl_with_progress(&phonemes_path, &extracted.phonemes, progress)?;
     write_jsonl_with_progress(&phones_path, &extracted.phones, progress)?;
@@ -825,6 +839,19 @@ fn parse_dump_with_progress(
     config: &WiktionaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<ExtractedWiktionaryData> {
+    parse_dump_with_progress_and_checkpoints(dump_path, config, progress, None)
+}
+
+fn parse_dump_with_progress_and_checkpoints(
+    dump_path: &Path,
+    config: &WiktionaryConfig,
+    progress: &mut impl FnMut(PrepareProgress),
+    checkpoint_dir: Option<&Path>,
+) -> Result<ExtractedWiktionaryData> {
+    let resume = match checkpoint_dir {
+        Some(dir) => load_parse_checkpoints(dir, progress)?,
+        None => ParseResumeState::default(),
+    };
     progress(PrepareProgress::Stage {
         message: format!("Opening dump {}", dump_path.display()),
     });
@@ -839,13 +866,13 @@ fn parse_dump_with_progress(
         });
         let decoder = BzDecoder::new(file);
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
-        parse_xml_pages_with_progress(reader, config, progress)
+        parse_xml_pages_with_progress(reader, config, progress, checkpoint_dir, resume)
     } else {
         progress(PrepareProgress::Stage {
             message: format!("Parsing {}", dump_path.display()),
         });
         let reader = BufReader::with_capacity(1024 * 1024, file);
-        parse_xml_pages_with_progress(reader, config, progress)
+        parse_xml_pages_with_progress(reader, config, progress, checkpoint_dir, resume)
     }
 }
 
@@ -853,12 +880,25 @@ fn parse_xml_pages_with_progress<R: BufRead>(
     reader: R,
     config: &WiktionaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
+    checkpoint_dir: Option<&Path>,
+    resume: ParseResumeState,
 ) -> Result<ExtractedWiktionaryData> {
-    let mut data = ExtractedWiktionaryData::default();
+    let mut data = resume.data;
+    let mut shard_data = ExtractedWiktionaryData::default();
+    let mut shard_start = resume.pages_seen + 1;
     let mut title = String::new();
     let mut text = String::new();
     let mut in_text = false;
-    let mut pages_seen = 0_usize;
+    let mut pages_seen = resume.pages_seen;
+    if pages_seen > 0 {
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Resuming Wiktionary parse from {} checkpointed pages",
+                pages_seen
+            ),
+        });
+        maybe_report_parse_progress(progress, pages_seen, &data);
+    }
 
     for line in reader.lines() {
         let line = line?;
@@ -872,11 +912,20 @@ fn parse_xml_pages_with_progress<R: BufRead>(
                     let after = &line[start + gt + 1..];
                     if let Some(end) = after.find("</text>") {
                         text.push_str(&decode_xml_entities(&after[..end]));
-                        data.extend(extract_page_data(&title, &text, config));
+                        finish_parsed_page(
+                            &title,
+                            &text,
+                            config,
+                            checkpoint_dir,
+                            progress,
+                            &mut data,
+                            &mut shard_data,
+                            &mut shard_start,
+                            &mut pages_seen,
+                            resume.pages_seen,
+                        )?;
                         text.clear();
                         in_text = false;
-                        pages_seen += 1;
-                        maybe_report_parse_progress(progress, pages_seen, &data);
                         if config.max_pages.is_some_and(|max| pages_seen >= max) {
                             break;
                         }
@@ -888,11 +937,20 @@ fn parse_xml_pages_with_progress<R: BufRead>(
             }
         } else if let Some(end) = line.find("</text>") {
             text.push_str(&decode_xml_entities(&line[..end]));
-            data.extend(extract_page_data(&title, &text, config));
+            finish_parsed_page(
+                &title,
+                &text,
+                config,
+                checkpoint_dir,
+                progress,
+                &mut data,
+                &mut shard_data,
+                &mut shard_start,
+                &mut pages_seen,
+                resume.pages_seen,
+            )?;
             text.clear();
             in_text = false;
-            pages_seen += 1;
-            maybe_report_parse_progress(progress, pages_seen, &data);
             if config.max_pages.is_some_and(|max| pages_seen >= max) {
                 break;
             }
@@ -900,6 +958,16 @@ fn parse_xml_pages_with_progress<R: BufRead>(
             text.push_str(&decode_xml_entities(&line));
             text.push('\n');
         }
+    }
+
+    if checkpoint_dir.is_some() && pages_seen > resume.pages_seen && pages_seen >= shard_start {
+        write_parse_checkpoint_shard(
+            checkpoint_dir.expect("checked above"),
+            shard_start,
+            pages_seen,
+            &shard_data,
+            progress,
+        )?;
     }
 
     progress(PrepareProgress::Parse {
@@ -911,6 +979,127 @@ fn parse_xml_pages_with_progress<R: BufRead>(
     });
 
     Ok(data)
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParseResumeState {
+    pages_seen: usize,
+    data: ExtractedWiktionaryData,
+}
+
+fn finish_parsed_page(
+    title: &str,
+    text: &str,
+    config: &WiktionaryConfig,
+    checkpoint_dir: Option<&Path>,
+    progress: &mut impl FnMut(PrepareProgress),
+    data: &mut ExtractedWiktionaryData,
+    shard_data: &mut ExtractedWiktionaryData,
+    shard_start: &mut usize,
+    pages_seen: &mut usize,
+    resume_pages: usize,
+) -> Result<()> {
+    *pages_seen += 1;
+    if *pages_seen <= resume_pages {
+        maybe_report_parse_progress(progress, *pages_seen, data);
+        return Ok(());
+    }
+
+    let page_data = extract_page_data(title, text, config);
+    data.extend(page_data.clone());
+    shard_data.extend(page_data);
+    maybe_report_parse_progress(progress, *pages_seen, data);
+
+    if let Some(checkpoint_dir) = checkpoint_dir {
+        if should_write_parse_checkpoint(*pages_seen) && *pages_seen >= *shard_start {
+            write_parse_checkpoint_shard(
+                checkpoint_dir,
+                *shard_start,
+                *pages_seen,
+                shard_data,
+                progress,
+            )?;
+            *shard_data = ExtractedWiktionaryData::default();
+            *shard_start = *pages_seen + 1;
+        }
+    }
+
+    Ok(())
+}
+
+fn should_write_parse_checkpoint(pages_seen: usize) -> bool {
+    pages_seen <= 10 || pages_seen % PARSE_CHECKPOINT_PAGE_INTERVAL == 0
+}
+
+fn load_parse_checkpoints(
+    checkpoint_dir: &Path,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<ParseResumeState> {
+    if !checkpoint_dir.exists() {
+        return Ok(ParseResumeState::default());
+    }
+
+    let mut paths = fs::read_dir(checkpoint_dir)
+        .with_context(|| format!("reading {}", checkpoint_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".json") && name.starts_with("pages-"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut state = ParseResumeState::default();
+    for path in paths {
+        let shard: ParseCheckpointShard = read_json_file(&path)?;
+        if shard.pages_start != state.pages_seen + 1 {
+            progress(PrepareProgress::Stage {
+                message: format!(
+                    "Ignoring non-contiguous Wiktionary parse checkpoint {} after page {}",
+                    path.display(),
+                    state.pages_seen
+                ),
+            });
+            break;
+        }
+        state.pages_seen = shard.pages_end;
+        state.data.extend(shard.data);
+    }
+
+    if state.pages_seen > 0 {
+        progress(PrepareProgress::Stage {
+            message: format!(
+                "Loaded Wiktionary parse checkpoints through page {} from {}",
+                state.pages_seen,
+                checkpoint_dir.display()
+            ),
+        });
+    }
+    Ok(state)
+}
+
+fn write_parse_checkpoint_shard(
+    checkpoint_dir: &Path,
+    pages_start: usize,
+    pages_end: usize,
+    data: &ExtractedWiktionaryData,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
+    fs::create_dir_all(checkpoint_dir)
+        .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
+    let path = checkpoint_dir.join(format!("pages-{pages_start:09}-{pages_end:09}.json"));
+    let shard = ParseCheckpointShard {
+        pages_start,
+        pages_end,
+        data: data.clone(),
+    };
+    write_text_atomic(&path, &serde_json::to_string(&shard)?)?;
+    progress(PrepareProgress::Write {
+        path: path.display().to_string(),
+        rows: data.total_rows(),
+    });
+    Ok(())
 }
 
 fn maybe_report_parse_progress(
@@ -936,6 +1125,14 @@ impl ExtractedWiktionaryData {
         self.phones.extend(other.phones);
         self.supplemental_terms.extend(other.supplemental_terms);
         self.pie_roots.extend(other.pie_roots);
+    }
+
+    fn total_rows(&self) -> usize {
+        self.patterns.len()
+            + self.phonemes.len()
+            + self.phones.len()
+            + self.supplemental_terms.len()
+            + self.pie_roots.len()
     }
 }
 
@@ -3299,6 +3496,11 @@ fn read_jsonl<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
         })?);
     }
     Ok(rows)
+}
+
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
 fn write_vocab_with_progress(out: &Path, examples: &[TrainingExample]) -> Result<()> {
