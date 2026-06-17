@@ -29,6 +29,21 @@ The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{
 
 Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Model-facing rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, and language-guessing tasks.
 
+Preparation writes durable checkpoints while it parses and expands:
+
+| Path | When written | Resume behavior |
+|---|---|---|
+| `prepare-checkpoints/parse-pronunciation/pages-START-END.json` | During XML parsing, for the first few pages and then every 1,000 pages, plus the final tail. | If final parse artifacts are missing, prepare reloads these shards, skips already checkpointed XML pages, and continues from the next page. |
+| `patterns.jsonl`, `phonemes.jsonl`, `phones.jsonl`, `supplemental_terms.jsonl` | After parsing completes, written through `.writing.part` files and renamed atomically. | If all four exist, prepare resumes from them without reparsing the dump. |
+| `expanded.jsonl.writing.part` | While model-facing rows are expanded. | If `expanded.jsonl` exists with the current schema marker, prepare resumes from it. Interrupted partials are archived before rebuilding. |
+| `train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`, `dataset_config.json`, `README.md` | Final split and metadata phase, written atomically. | Existing completed parse/expanded artifacts are reused if final split files need to be rebuilt. |
+
+For the default Just recipe, pass the model-family command through Just:
+
+```sh
+just wiktionary prepare --out datasets/wiktionary/enwiktionary-2026-06-01-cleanup-v0
+```
+
 Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
 
 Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching pronunciation rows with domain variety tags for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without a pronunciation row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.

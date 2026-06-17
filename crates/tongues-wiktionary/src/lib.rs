@@ -889,15 +889,15 @@ fn parse_xml_pages_with_progress<R: BufRead>(
     let mut title = String::new();
     let mut text = String::new();
     let mut in_text = false;
-    let mut pages_seen = resume.pages_seen;
-    if pages_seen > 0 {
+    let mut pages_seen = 0_usize;
+    if resume.pages_seen > 0 {
         progress(PrepareProgress::Stage {
             message: format!(
                 "Resuming Wiktionary parse from {} checkpointed pages",
-                pages_seen
+                resume.pages_seen
             ),
         });
-        maybe_report_parse_progress(progress, pages_seen, &data);
+        maybe_report_parse_progress(progress, resume.pages_seen, &data);
     }
 
     for line in reader.lines() {
@@ -4285,6 +4285,80 @@ From {{inh|en|enm|thorp}}, from {{inh|en|ang|þorp}}, from {{der|en|ine-pro|*tra
         assert_eq!(second.train_examples, first.train_examples);
         assert_eq!(second.valid_examples, first.valid_examples);
         assert_eq!(second.test_examples, first.test_examples);
+    }
+
+    #[test]
+    fn parse_checkpoints_are_written_and_reused() {
+        let root = std::env::temp_dir().join(format!(
+            "tongues-wiktionary-parse-checkpoint-test-{}",
+            std::process::id()
+        ));
+        let checkpoint_dir = root.join("checkpoints");
+        let dump_path = root.join("fixture.xml");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        fs::write(&dump_path, wiktionary_xml_fixture_pages(12)).expect("write initial fixture");
+        let config = WiktionaryConfig {
+            languages: vec!["eng".to_string()],
+            include_cleanup_corpus: false,
+            include_reverse: false,
+            include_language_guessing: false,
+            ..WiktionaryConfig::default()
+        };
+
+        let first = parse_dump_with_progress_and_checkpoints(
+            &dump_path,
+            &config,
+            &mut |_| {},
+            Some(&checkpoint_dir),
+        )
+        .expect("initial checkpointed parse");
+        assert_eq!(first.phonemes.len(), 12);
+        assert!(checkpoint_dir
+            .join("pages-000000001-000000001.json")
+            .exists());
+        assert!(checkpoint_dir
+            .join("pages-000000011-000000012.json")
+            .exists());
+
+        fs::write(&dump_path, wiktionary_xml_fixture_pages(13)).expect("extend fixture");
+        let second = parse_dump_with_progress_and_checkpoints(
+            &dump_path,
+            &config,
+            &mut |_| {},
+            Some(&checkpoint_dir),
+        )
+        .expect("resumed checkpointed parse");
+        assert_eq!(second.phonemes.len(), 13);
+        assert!(second
+            .phonemes
+            .iter()
+            .any(|entry| entry.spelling == "word13" && entry.ipa == "/wɝd13/"));
+        assert!(checkpoint_dir
+            .join("pages-000000013-000000013.json")
+            .exists());
+
+        fs::remove_dir_all(&root).expect("clean temp dir");
+    }
+
+    fn wiktionary_xml_fixture_pages(count: usize) -> String {
+        let mut xml = String::from("<mediawiki>\n");
+        for index in 1..=count {
+            xml.push_str(&format!(
+                r#"<page>
+  <title>word{index}</title>
+  <revision>
+    <text xml:space="preserve">==English==
+===Pronunciation===
+* {{{{IPA|en|/wɝd{index}/}}}}
+</text>
+  </revision>
+</page>
+"#
+            ));
+        }
+        xml.push_str("</mediawiki>\n");
+        xml
     }
 
     #[test]
