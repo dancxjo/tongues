@@ -759,7 +759,7 @@ enum Head2PhonesCommands {
         #[arg(long, default_value = "datasets/head2phones/v0")]
         out: PathBuf,
 
-        /// Ask an Ollama model to passively verify a sample of prepared train rows
+        /// Ask an Ollama model to passively scan prepared train rows
         #[arg(long)]
         verify_ollama: bool,
 
@@ -771,7 +771,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_url: Option<String>,
 
-        /// Number of train rows to pass to Ollama
+        /// Maximum train rows to pass to Ollama per scan request
         #[arg(long)]
         ollama_rows: Option<usize>,
 
@@ -779,7 +779,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_max_chars: Option<usize>,
 
-        /// Fail prepare if Ollama reports the sampled data is not sane
+        /// Fail prepare if Ollama reports scanned data is not sane
         #[arg(long)]
         ollama_strict: bool,
     },
@@ -803,7 +803,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_url: Option<String>,
 
-        /// Number of train rows to pass to Ollama
+        /// Maximum train rows to pass to Ollama per scan request
         #[arg(long)]
         ollama_rows: Option<usize>,
 
@@ -811,7 +811,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_max_chars: Option<usize>,
 
-        /// Exit non-zero if Ollama reports the sampled data is not sane
+        /// Exit non-zero if Ollama reports scanned data is not sane
         #[arg(long)]
         strict: bool,
     },
@@ -838,7 +838,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         prepare: bool,
 
-        /// Ask an Ollama model to passively verify a sample when preparing data
+        /// Ask an Ollama model to passively scan train rows when preparing data
         #[arg(long)]
         verify_ollama: bool,
 
@@ -850,7 +850,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_url: Option<String>,
 
-        /// Number of train rows to pass to Ollama
+        /// Maximum train rows to pass to Ollama per scan request
         #[arg(long)]
         ollama_rows: Option<usize>,
 
@@ -858,7 +858,7 @@ enum Head2PhonesCommands {
         #[arg(long)]
         ollama_max_chars: Option<usize>,
 
-        /// Fail prepare if Ollama reports the sampled data is not sane
+        /// Fail prepare if Ollama reports scanned data is not sane
         #[arg(long)]
         ollama_strict: bool,
 
@@ -2308,9 +2308,17 @@ fn head2phones_prepare_progress_message(progress: tongues_head2phones::PreparePr
             format_count(complete),
             format_count(no_head)
         ),
-        tongues_head2phones::PrepareProgress::Verify { model, url, rows } => format!(
-            "Asking Ollama model {model} at {url} to verify {} head2phones train rows",
-            format_count(rows)
+        tongues_head2phones::PrepareProgress::Verify {
+            model,
+            url,
+            rows,
+            total_rows,
+            path,
+        } => format!(
+            "Asking Ollama model {model} at {url} to scan {}/{} head2phones train rows into {}",
+            format_count(rows),
+            format_count(total_rows),
+            path
         ),
         tongues_head2phones::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {path}", format_count(rows))
@@ -2355,16 +2363,18 @@ fn print_head2phones_ollama_report(report: &tongues_head2phones::OllamaVerificat
         .unwrap_or_else(|| "not written".to_string());
     if report.sane {
         println!(
-            "Ollama verification passed: model={} rows={} report={}",
+            "Ollama verification passed: model={} rows={} chunks={} report={}",
             report.model,
             format_count(report.rows),
+            format_count(report.chunks),
             path
         );
     } else {
         println!(
-            "Ollama verification reported an issue: model={} rows={} report={}\n{}",
+            "Ollama verification reported an issue: model={} rows={} chunks={} report={}\n{}",
             report.model,
             format_count(report.rows),
+            format_count(report.chunks),
             path,
             report
                 .issue
@@ -2466,22 +2476,49 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
                 "Verifying existing head2phones train rows in {}",
                 data.display()
             ));
-            let report =
-                tongues_head2phones::verify_prepared_training_data_with_ollama(&data, &config)?;
+            let train_path = data.join("train.jsonl");
+            let rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
+                read_jsonl_as(&train_path)?;
+            let report_path = data.join("ollama_verification.json");
+            let chunks_path = data.join("ollama_verification_chunks.jsonl");
+            let report = tongues_head2phones::verify_training_data_with_ollama(
+                &config,
+                &rows,
+                &report_path,
+                &chunks_path,
+                {
+                    let pb = pb.clone();
+                    let model = config.ollama_model.clone();
+                    let url = config.ollama_url.clone();
+                    let total_rows = rows.len();
+                    let chunks_path = chunks_path.display().to_string();
+                    move |scanned_rows| {
+                        pb.set_message(format!(
+                            "Asking Ollama model {model} at {url} to scan {}/{} head2phones train rows into {}",
+                            format_count(scanned_rows),
+                            format_count(total_rows),
+                            chunks_path
+                        ));
+                    }
+                },
+            )
+            .with_context(|| format!("verifying {}", train_path.display()))?;
             if report.sane {
                 finish_status(
                     pb,
                     format!(
-                        "Ollama verification passed for {} sampled head2phones train rows",
-                        format_count(report.rows)
+                        "Ollama verification passed for {} head2phones train rows in {} chunks",
+                        format_count(report.rows),
+                        format_count(report.chunks)
                     ),
                 );
             } else {
                 finish_status(
                     pb,
                     format!(
-                        "Ollama verification found an issue in {} sampled head2phones train rows",
-                        format_count(report.rows)
+                        "Ollama verification found an issue after scanning {} head2phones train rows in {} chunks",
+                        format_count(report.rows),
+                        format_count(report.chunks)
                     ),
                 );
             }
@@ -2489,7 +2526,7 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             if strict {
                 anyhow::ensure!(
                     report.sane,
-                    "Ollama verification failed for {} sampled head2phones training rows: {}",
+                    "Ollama verification failed for {} scanned head2phones training rows: {}",
                     report.rows,
                     report
                         .issue

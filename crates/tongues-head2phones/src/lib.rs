@@ -218,7 +218,7 @@ fn default_ollama_url() -> String {
 }
 
 fn default_ollama_model() -> String {
-    "gemma4:latest".to_string()
+    "gpt-oss:20b".to_string()
 }
 
 fn default_ollama_verify_rows() -> usize {
@@ -291,12 +291,34 @@ pub struct OllamaVerificationReport {
     pub model: String,
     pub url: String,
     pub rows: usize,
+    #[serde(default)]
+    pub total_rows: usize,
+    #[serde(default)]
+    pub chunks: usize,
+    #[serde(default)]
+    pub completed: bool,
     pub sane: bool,
     pub issue: Option<String>,
     pub raw_response: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_response_json: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_path: Option<PathBuf>,
     pub report_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OllamaVerificationChunkReport {
+    pub model: String,
+    pub url: String,
+    pub chunk: usize,
+    pub start_row: usize,
+    pub rows: usize,
+    pub sane: bool,
+    pub issue: Option<String>,
+    pub raw_response: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response_json: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +403,8 @@ pub enum PrepareProgress {
         model: String,
         url: String,
         rows: usize,
+        total_rows: usize,
+        path: String,
     },
     Write {
         path: String,
@@ -669,15 +693,17 @@ pub fn prepare_dataset_with_progress(
 
     if config.verify_with_ollama {
         let report_path = out.join("ollama_verification.json");
-        let rows = train.len().min(config.ollama_verify_rows);
-        progress(PrepareProgress::Verify {
-            model: config.ollama_model.clone(),
-            url: config.ollama_url.clone(),
-            rows,
-        });
-        let mut verification = verify_training_chunk_with_ollama(config, &train)?;
-        verification.report_path = Some(report_path.clone());
-        write_json_file_atomic(&report_path, &verification)?;
+        let chunks_path = out.join("ollama_verification_chunks.jsonl");
+        let verification =
+            verify_training_data_with_ollama(config, &train, &report_path, &chunks_path, |rows| {
+                progress(PrepareProgress::Verify {
+                    model: config.ollama_model.clone(),
+                    url: config.ollama_url.clone(),
+                    rows,
+                    total_rows: train.len(),
+                    path: chunks_path.display().to_string(),
+                });
+            })?;
         progress(PrepareProgress::Write {
             path: report_path.display().to_string(),
             rows: verification.rows,
@@ -685,7 +711,7 @@ pub fn prepare_dataset_with_progress(
         if config.ollama_verify_strict {
             anyhow::ensure!(
                 verification.sane,
-                "Ollama verification failed for {} sampled head2phones training rows: {}",
+                "Ollama verification failed for {} scanned head2phones training rows: {}",
                 verification.rows,
                 verification
                     .issue
@@ -2857,12 +2883,106 @@ pub fn verify_prepared_training_data_with_ollama(
 ) -> Result<OllamaVerificationReport> {
     let train_path = data_dir.join("train.jsonl");
     let rows: Vec<Head2PhonesTrainingExample> = read_jsonl(&train_path)?;
-    let mut report = verify_training_chunk_with_ollama(config, &rows)
-        .with_context(|| format!("verifying {}", train_path.display()))?;
     let report_path = data_dir.join("ollama_verification.json");
-    report.report_path = Some(report_path.clone());
-    write_json_file_atomic(&report_path, &report)?;
-    Ok(report)
+    let chunks_path = data_dir.join("ollama_verification_chunks.jsonl");
+    verify_training_data_with_ollama(config, &rows, &report_path, &chunks_path, |_| {})
+        .with_context(|| format!("verifying {}", train_path.display()))
+}
+
+pub fn verify_training_data_with_ollama(
+    config: &Head2PhonesConfig,
+    rows: &[Head2PhonesTrainingExample],
+    report_path: &Path,
+    chunks_path: &Path,
+    mut progress: impl FnMut(usize),
+) -> Result<OllamaVerificationReport> {
+    anyhow::ensure!(
+        config.ollama_verify_rows > 0,
+        "ollama_verify_rows must be greater than zero"
+    );
+    anyhow::ensure!(!rows.is_empty(), "no head2phones training rows to verify");
+
+    if let Some(parent) = chunks_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let chunks_part_path = chunks_path.with_extension(format!(
+        "{}part",
+        chunks_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}."))
+            .unwrap_or_default()
+    ));
+    let mut chunks_writer = BufWriter::new(
+        File::create(&chunks_part_path)
+            .with_context(|| format!("creating {}", chunks_part_path.display()))?,
+    );
+
+    let mut start = 0usize;
+    let mut chunk_index = 0usize;
+    let mut sane = true;
+    let mut issue = None;
+    let mut raw_response = String::new();
+    let mut raw_response_json = None;
+    while start < rows.len() {
+        let end = (start + config.ollama_verify_rows).min(rows.len());
+        let report = verify_training_chunk_with_ollama(config, &rows[start..end])?;
+        let scanned = report.rows.max(1).min(end - start);
+        let chunk = OllamaVerificationChunkReport {
+            model: report.model.clone(),
+            url: report.url.clone(),
+            chunk: chunk_index,
+            start_row: start,
+            rows: scanned,
+            sane: report.sane,
+            issue: report.issue.clone(),
+            raw_response: report.raw_response.clone(),
+            raw_response_json: report.raw_response_json.clone(),
+        };
+        serde_json::to_writer(&mut chunks_writer, &chunk)
+            .with_context(|| format!("writing {}", chunks_part_path.display()))?;
+        chunks_writer.write_all(b"\n")?;
+        chunks_writer.flush()?;
+
+        if !report.sane {
+            sane = false;
+            if issue.is_none() {
+                issue = report.issue.clone();
+            }
+        }
+        raw_response = report.raw_response;
+        raw_response_json = report.raw_response_json;
+        start += scanned;
+        chunk_index += 1;
+        progress(start);
+    }
+
+    chunks_writer.flush()?;
+    drop(chunks_writer);
+    fs::rename(&chunks_part_path, chunks_path).with_context(|| {
+        format!(
+            "renaming {} to {}",
+            chunks_part_path.display(),
+            chunks_path.display()
+        )
+    })?;
+
+    let aggregate = OllamaVerificationReport {
+        model: config.ollama_model.clone(),
+        url: config.ollama_url.clone(),
+        rows: start,
+        total_rows: rows.len(),
+        chunks: chunk_index,
+        completed: start == rows.len(),
+        sane,
+        issue,
+        raw_response,
+        raw_response_json,
+        chunks_path: Some(chunks_path.to_path_buf()),
+        report_path: Some(report_path.to_path_buf()),
+    };
+    write_json_file_atomic(report_path, &aggregate)?;
+    Ok(aggregate)
 }
 
 pub fn verify_training_chunk_with_ollama(
@@ -2880,7 +3000,8 @@ pub fn verify_training_chunk_with_ollama(
     let sample_rows = rows.len().min(config.ollama_verify_rows);
     anyhow::ensure!(sample_rows > 0, "no head2phones training rows to verify");
 
-    let prompt = ollama_verification_prompt(config, &rows[..sample_rows])?;
+    let (prompt, prompt_rows) =
+        ollama_verification_prompt_with_row_count(config, &rows[..sample_rows])?;
     let url = format!(
         "{}/api/generate",
         config.ollama_url.trim().trim_end_matches('/')
@@ -2941,11 +3062,15 @@ pub fn verify_training_chunk_with_ollama(
     Ok(OllamaVerificationReport {
         model: config.ollama_model.clone(),
         url: config.ollama_url.clone(),
-        rows: sample_rows,
+        rows: prompt_rows,
+        total_rows: prompt_rows,
+        chunks: 1,
+        completed: true,
         sane: judgement.sane,
         issue,
         raw_response: generated.response,
         raw_response_json,
+        chunks_path: None,
         report_path: None,
     })
 }
@@ -2962,11 +3087,20 @@ struct OllamaVerificationJudgement {
     issue: Option<String>,
 }
 
+#[cfg(test)]
 fn ollama_verification_prompt(
     config: &Head2PhonesConfig,
     rows: &[Head2PhonesTrainingExample],
 ) -> Result<String> {
+    Ok(ollama_verification_prompt_with_row_count(config, rows)?.0)
+}
+
+fn ollama_verification_prompt_with_row_count(
+    config: &Head2PhonesConfig,
+    rows: &[Head2PhonesTrainingExample],
+) -> Result<(String, usize)> {
     let mut jsonl = String::new();
+    let mut included_rows = 0usize;
     for row in rows {
         let line = serde_json::to_string(row)?;
         if !jsonl.is_empty() && jsonl.len() + line.len() + 1 > config.ollama_verify_max_chars {
@@ -2974,8 +3108,9 @@ fn ollama_verification_prompt(
         }
         jsonl.push_str(&line);
         jsonl.push('\n');
+        included_rows += 1;
     }
-    Ok(format!(
+    Ok((format!(
         "You are auditing head2phones seq2seq training rows. Do not translate, classify, summarize, extract, or rewrite the row text. Your only task is to return the audit judgement JSON object.\n\
          Each JSONL row has an input rolling text buffer and an output. A sane row must obey these rules:\n\
          - output is exactly {NO_HEAD}, a {HEAD_FOUND} block with {HEAD_LENGTH}, {PHONES_OPEN} phone text {PHONES_CLOSE}, and {SPLIT_AFTER} Unicode grapheme split offset, a {LANG_MISMATCH} block with no phones, a {LANGUAGE_SPANS_OPEN} block with plain <lang id=\"...\">...</lang> spans, or an {ERROR_REPAIR} repair row containing that same {HEAD_FOUND} block.\n\
@@ -2988,7 +3123,7 @@ fn ollama_verification_prompt(
          - report data-shape, offset, label, transcription, escaping, or consistency problems.\n\n\
          Return only compact JSON with this exact schema: {{\"sane\":true,\"issue\":null}} or {{\"sane\":false,\"issue\":\"exact issue with row evidence\"}}.\n\n\
          JSONL rows to audit:\n{jsonl}"
-    ))
+    ), included_rows))
 }
 
 fn ollama_verification_response_schema() -> serde_json::Value {

@@ -2327,6 +2327,7 @@ fn clean_wikitext_cell(cell: &str) -> String {
     text = replace_label_templates(&text);
     text = replace_note_templates(&text);
     text = replace_links(&text);
+    text = replace_angle_links(&text);
     text = strip_markup(&text);
     text.lines()
         .map(str::trim)
@@ -2465,6 +2466,25 @@ fn replace_links(text: &str) -> String {
         let link = &text[start + 2..end];
         let label = link.rsplit_once('|').map_or(link, |(_, label)| label);
         out.push_str(label);
+        offset = end + 2;
+    }
+    out.push_str(&text[offset..]);
+    out
+}
+
+fn replace_angle_links(text: &str) -> String {
+    let mut out = String::new();
+    let mut offset = 0;
+    while let Some(relative_start) = text[offset..].find("<<") {
+        let start = offset + relative_start;
+        out.push_str(&text[offset..start]);
+        let Some(end) = text[start + 2..].find(">>").map(|end| start + 2 + end) else {
+            out.push_str(&text[start..]);
+            return out;
+        };
+        let link = &text[start + 2..end];
+        let label = link.rsplit_once('|').map_or(link, |(_, label)| label);
+        out.push_str(label.trim());
         offset = end + 2;
     }
     out.push_str(&text[offset..]);
@@ -4526,6 +4546,35 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
             "en-US.GenAm"
         );
         assert_eq!(canonicalize_accent("eng", "foot break should go here"), "");
+    }
+
+    #[test]
+    fn extracts_angle_linked_audio_accents() {
+        let config = WiktionaryConfig::default();
+        let text = r#"==French==
+===Pronunciation===
+* {{audio|fr|LL-Q150 (fra)-WikiLucas00-outre-Rhin.wav|a=<<France>> (<<Lyon>>)}}
+==German==
+===Pronunciation===
+* {{audio|de|De-Nonnenkloster.ogg|a=<<Germany>> (<<Berlin>>)}}
+"#;
+
+        let data = extract_page_data("outre-Rhin", text, &config);
+
+        assert!(data.patterns.iter().any(|pattern| {
+            pattern.kind == "audio"
+                && pattern.wiktionary_lang == "fr"
+                && pattern.accent.as_deref() == Some("France (Lyon)")
+        }));
+        assert!(data.patterns.iter().any(|pattern| {
+            pattern.kind == "audio"
+                && pattern.wiktionary_lang == "de"
+                && pattern.accent.as_deref() == Some("Germany (Berlin)")
+        }));
+        assert!(data
+            .patterns
+            .iter()
+            .all(|pattern| pattern.accent.as_deref() != Some("(>)")));
     }
 
     #[test]
