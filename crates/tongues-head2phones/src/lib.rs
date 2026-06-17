@@ -49,6 +49,7 @@ pub const CONFIDENCE_LOW: &str = "low";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
 const PREPARE_SCHEMA_VERSION: &str = "head2phones-prepare-v2";
 const USER_AGENT: &str = "tongues-head2phones/0.1";
+const CONFIG_FINGERPRINT_OLLAMA_MODEL: &str = "gpt-oss:20b";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
     "https://www.gutenberg.org/cache/epub/84/pg84.txt",
@@ -293,6 +294,8 @@ pub struct OllamaVerificationReport {
     pub sane: bool,
     pub issue: Option<String>,
     pub raw_response: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response_json: Option<serde_json::Value>,
     pub report_path: Option<PathBuf>,
 }
 
@@ -860,7 +863,7 @@ fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
     let mut dataset_config = config.clone();
     dataset_config.verify_with_ollama = false;
     dataset_config.ollama_url = default_ollama_url();
-    dataset_config.ollama_model = default_ollama_model();
+    dataset_config.ollama_model = CONFIG_FINGERPRINT_OLLAMA_MODEL.to_string();
     dataset_config.ollama_verify_rows = default_ollama_verify_rows();
     dataset_config.ollama_verify_max_chars = default_ollama_verify_max_chars();
     dataset_config.ollama_verify_strict = false;
@@ -2886,7 +2889,10 @@ pub fn verify_training_chunk_with_ollama(
         "model": config.ollama_model,
         "prompt": prompt,
         "stream": false,
-        "format": "json"
+        "format": ollama_verification_response_schema(),
+        "options": {
+            "temperature": 0
+        }
     }))?;
     let response = ureq::post(&url)
         .header("Content-Type", "application/json")
@@ -2906,23 +2912,40 @@ pub fn verify_training_chunk_with_ollama(
     );
     let generated: OllamaGenerateResponse =
         serde_json::from_str(&raw).with_context(|| format!("parsing Ollama response: {raw}"))?;
-    let judgement = parse_ollama_verification_judgement(&generated.response)?;
-    if !judgement.sane {
-        anyhow::ensure!(
+    let raw_response_json = serde_json::from_str(&generated.response).ok();
+    let judgement =
+        parse_ollama_verification_judgement(&generated.response).unwrap_or_else(|error| {
+            let detail = error.to_string();
+            let detail = detail
+                .strip_prefix("parsing verifier judgement: ")
+                .unwrap_or(&detail);
+            OllamaVerificationJudgement {
+                sane: false,
+                issue: Some(format!(
+                    "verifier response did not match expected schema: {detail}"
+                )),
+            }
+        });
+    let issue = if !judgement.sane {
+        Some(
             judgement
                 .issue
-                .as_deref()
-                .is_some_and(|issue| !issue.trim().is_empty()),
-            "Ollama reported unsane head2phones data but did not provide an exact issue"
-        );
-    }
+                .filter(|issue| !issue.trim().is_empty())
+                .unwrap_or_else(|| {
+                    "Ollama reported unsane head2phones data without an exact issue".to_string()
+                }),
+        )
+    } else {
+        judgement.issue
+    };
     Ok(OllamaVerificationReport {
         model: config.ollama_model.clone(),
         url: config.ollama_url.clone(),
         rows: sample_rows,
         sane: judgement.sane,
-        issue: judgement.issue,
+        issue,
         raw_response: generated.response,
+        raw_response_json,
         report_path: None,
     })
 }
@@ -2953,7 +2976,8 @@ fn ollama_verification_prompt(
         jsonl.push('\n');
     }
     Ok(format!(
-        "You are auditing head2phones seq2seq training rows. Each JSONL row has an input rolling text buffer and an output. A sane row must obey these rules:\n\
+        "You are auditing head2phones seq2seq training rows. Do not translate, classify, summarize, extract, or rewrite the row text. Your only task is to return the audit judgement JSON object.\n\
+         Each JSONL row has an input rolling text buffer and an output. A sane row must obey these rules:\n\
          - output is exactly {NO_HEAD}, a {HEAD_FOUND} block with {HEAD_LENGTH}, {PHONES_OPEN} phone text {PHONES_CLOSE}, and {SPLIT_AFTER} Unicode grapheme split offset, a {LANG_MISMATCH} block with no phones, a {LANGUAGE_SPANS_OPEN} block with plain <lang id=\"...\">...</lang> spans, or an {ERROR_REPAIR} repair row containing that same {HEAD_FOUND} block.\n\
          - rows with input_has_variety=false intentionally omit the input variety control and should include {DETECTED_LANG} using a normal language tag before phones or language spans.\n\
          - {LANG_MISMATCH} rows should include {DETECTED_LANG}, {EXPECTED_LANG}, {HEAD_LENGTH}, and {SPLIT_AFTER}; they should not include {PHONES_OPEN}.\n\
@@ -2965,6 +2989,23 @@ fn ollama_verification_prompt(
          Return only compact JSON with this exact schema: {{\"sane\":true,\"issue\":null}} or {{\"sane\":false,\"issue\":\"exact issue with row evidence\"}}.\n\n\
          JSONL rows to audit:\n{jsonl}"
     ))
+}
+
+fn ollama_verification_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sane": { "type": "boolean" },
+            "issue": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "null" }
+                ]
+            }
+        },
+        "required": ["sane", "issue"],
+        "additionalProperties": false
+    })
 }
 
 fn parse_ollama_verification_judgement(raw: &str) -> Result<OllamaVerificationJudgement> {
@@ -3833,6 +3874,23 @@ mod tests {
                 .expect("bad judgement");
         assert!(!bad.sane);
         assert_eq!(bad.issue.as_deref(), Some("row 3 offset wrong"));
+    }
+
+    #[test]
+    fn config_fingerprint_ignores_ollama_verifier_settings() {
+        let base = Head2PhonesConfig::default();
+        let mut changed = base.clone();
+        changed.verify_with_ollama = !base.verify_with_ollama;
+        changed.ollama_url = "http://example.invalid:11434".to_string();
+        changed.ollama_model = "different-model:latest".to_string();
+        changed.ollama_verify_rows = base.ollama_verify_rows + 17;
+        changed.ollama_verify_max_chars = base.ollama_verify_max_chars + 1024;
+        changed.ollama_verify_strict = !base.ollama_verify_strict;
+
+        assert_eq!(
+            config_fingerprint(&base).expect("base fingerprint"),
+            config_fingerprint(&changed).expect("changed fingerprint")
+        );
     }
 
     #[test]
