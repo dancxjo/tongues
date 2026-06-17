@@ -654,6 +654,14 @@ fn is_bare_row_reference(compact: &str) -> bool {
 }
 
 fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bool {
+    let says_no_issue = lower.contains("no issue")
+        || lower.contains("no issues")
+        || lower.contains("none found")
+        || lower.contains("none detected")
+        || lower.contains("none of the rows violate")
+        || lower.contains("all rows are consistent")
+        || lower.contains("dataset is consistent")
+        || lower.contains("dataset appears consistent");
     let mentions_invented_split = compact.contains("missingrequiredfieldsplit")
         || compact.contains("splittag")
         || compact.contains("splitpoint")
@@ -673,13 +681,29 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
     let mentions_lang_mismatch_example = compact.contains("langmismatch")
         && compact.contains("contains")
         && (compact.contains("phones") || compact.contains("phonemes"));
+    let mentions_grapheme_recalculation = compact.contains("headlength")
+        && (compact.contains("splitafter") || compact.contains("splitlength"))
+        && (compact.contains("matches")
+            || compact.contains("graphemes")
+            || compact.contains("characters")
+            || compact.contains("stringlength"));
+    let looks_like_placeholder = compact.starts_with("headlengthmismatch")
+        || compact.starts_with("auditrow")
+            && (compact.contains("headmismatch")
+                || compact.contains("missinghead")
+                || compact.contains("splitmismatch"))
+        || compact.starts_with("auditfailed")
+        || compact.starts_with("transcriptionerror");
 
-    mentions_invented_split
+    says_no_issue
+        || mentions_invented_split
         || mentions_invented_phone_marker
         || mentions_no_head_split_zero
         || mentions_missing_head_split
         || mentions_verifier_contract
         || mentions_lang_mismatch_example
+        || mentions_grapheme_recalculation
+        || looks_like_placeholder
 }
 
 fn read_jsonl_file<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
@@ -1220,6 +1244,12 @@ mod tests {
             r#"{"issue":"audit-1","sane":false}"#,
             r#"{"issue":"audit_row 18","sane":false}"#,
             r#"{"issue":"row 18","sane":false}"#,
+            r#"{"issue":"none found, all rows are consistent","sane":false}"#,
+            r#"{"issue":"No issues found. The dataset is consistent with the specification.","sane":false}"#,
+            r#"{"issue":"head_length_mismatch_1_2_3_4_5_6","sane":false}"#,
+            r#"{"issue":"audit_row 6: head length 48 but split_after 48, but head contains 48 graphemes? No issue.","sane":false}"#,
+            r#"{"issue":"audit_failed_1_1_1_1_1_1","sane":false}"#,
+            r#"{"issue":"transcription_error_1_1_1_1_1_1","sane":false}"#,
         ] {
             let judgement = parse_ollama_verification_judgement(raw)
                 .expect("bare audit reference should parse as verifier failure");

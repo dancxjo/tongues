@@ -3783,7 +3783,20 @@ fn sanitize_accent_label(value: &str) -> Option<String> {
 fn sanitize_ipa_template_value(value: &str) -> Option<String> {
     let cleaned = sanitize_ipa_text(value);
     let trimmed = cleaned.trim();
-    ipa_notation(trimmed).map(|_| trimmed.to_string())
+    let _ = ipa_notation(trimmed)?;
+    (!is_partial_ipa_alternate(trimmed)).then(|| trimmed.to_string())
+}
+
+fn is_partial_ipa_alternate(value: &str) -> bool {
+    let trimmed = value.trim();
+    let payload = if (trimmed.starts_with('/') && trimmed.ends_with('/'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        trimmed[1..trimmed.len() - 1].trim()
+    } else {
+        trimmed
+    };
+    payload.starts_with('-') || payload.ends_with('-')
 }
 
 fn sanitize_ipa_text(value: &str) -> String {
@@ -4979,6 +4992,43 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
             .patterns
             .iter()
             .any(|pattern| pattern.kind == "rhymes" && pattern.values == ["iː"]));
+    }
+
+    #[test]
+    fn drops_partial_ipa_alternates_from_pronunciation_entries() {
+        let config = WiktionaryConfig::default();
+        let text = r#"==English==
+===Pronunciation===
+* {{IPA|en|/ˈsaɪnəʃʊɹ/|/ˈsɪn-/|/-ʃɚ/|a=GA}}
+==German==
+===Pronunciation===
+* {{IPA|de|/minɪsˈteːʁiʊm/|/mɪnɪsˈteːʁiʊm/|[-ʁi̯ʊm]}}
+* {{IPA|de|/ɡeˈfyːl/|[ɡ̥e-]|aa=Austria,South German,Switzerland}}
+"#;
+
+        let english = extract_page_data("cynosure", text, &config);
+        assert!(english
+            .phonemes
+            .iter()
+            .any(|entry| entry.ipa == "/ˈsaɪnəʃʊɹ/"));
+        assert!(!english
+            .phonemes
+            .iter()
+            .any(|entry| entry.ipa == "/ˈsɪn-/" || entry.ipa == "/-ʃɚ/"));
+
+        let german = extract_page_data("Ministerium", text, &config);
+        assert!(german
+            .phonemes
+            .iter()
+            .any(|entry| entry.ipa == "/minɪsˈteːʁiʊm/"));
+        assert!(german
+            .phonemes
+            .iter()
+            .any(|entry| entry.ipa == "/mɪnɪsˈteːʁiʊm/"));
+        assert!(!german
+            .phones
+            .iter()
+            .any(|entry| entry.ipa == "[-ʁi̯ʊm]" || entry.ipa == "[ɡ̥e-]"));
     }
 
     #[test]

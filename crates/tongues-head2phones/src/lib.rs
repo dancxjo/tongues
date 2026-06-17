@@ -97,7 +97,7 @@ pub struct Head2PhonesConfig {
     pub min_head_graphemes: usize,
     #[serde(default = "default_max_head_graphemes")]
     pub max_head_graphemes: usize,
-    #[serde(default)]
+    #[serde(default = "default_verify_with_ollama")]
     pub verify_with_ollama: bool,
     #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
@@ -211,6 +211,10 @@ fn default_min_head_graphemes() -> usize {
 
 fn default_max_head_graphemes() -> usize {
     220
+}
+
+fn default_verify_with_ollama() -> bool {
+    true
 }
 
 fn default_ollama_url() -> String {
@@ -406,6 +410,7 @@ pub fn prepare_dataset_with_progress(
             "000-synthetic",
             "synthetic buffers",
             &config_fingerprint,
+            config,
             &mut progress,
             || {
                 let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "synthetic"));
@@ -483,6 +488,7 @@ pub fn prepare_dataset_with_progress(
             "001-exceptional",
             "exceptional buffers",
             &config_fingerprint,
+            config,
             &mut progress,
             || {
                 let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "exceptional"));
@@ -544,6 +550,7 @@ pub fn prepare_dataset_with_progress(
             &shard_id,
             &label,
             &config_fingerprint,
+            config,
             &mut progress,
             || {
                 let mut rng = StdRng::seed_from_u64(unit_seed(
@@ -755,6 +762,7 @@ fn build_or_load_prepare_shard(
     id: &str,
     label: &str,
     config_fingerprint: &str,
+    config: &Head2PhonesConfig,
     progress: &mut impl FnMut(PrepareProgress),
     build: impl FnOnce() -> Result<PrepareShardData>,
 ) -> Result<PrepareShardManifest> {
@@ -808,6 +816,9 @@ fn build_or_load_prepare_shard(
     } else {
         None
     };
+    if config.verify_with_ollama && !data.examples.is_empty() {
+        verify_prepare_shard_with_ollama(config, id, &data.examples, checkpoint_dir, progress)?;
+    }
     let manifest = PrepareShardManifest {
         id: id.to_string(),
         label: label.to_string(),
@@ -825,6 +836,51 @@ fn build_or_load_prepare_shard(
         rows: manifest.examples,
     });
     Ok(manifest)
+}
+
+fn verify_prepare_shard_with_ollama(
+    config: &Head2PhonesConfig,
+    id: &str,
+    rows: &[Head2PhonesTrainingExample],
+    checkpoint_dir: &Path,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
+    let report_path = checkpoint_dir.join(format!("{id}.ollama_verification.json"));
+    let chunks_path = checkpoint_dir.join(format!("{id}.ollama_verification_chunks.jsonl"));
+    let active_chunks_path = chunks_path.with_extension("jsonl.part");
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Preflight verifying checkpoint shard {id} with Ollama into {}",
+            active_chunks_path.display()
+        ),
+    });
+    let verification =
+        verify_training_data_with_ollama(config, rows, &report_path, &chunks_path, |scanned| {
+            progress(PrepareProgress::Verify {
+                model: config.ollama_model.clone(),
+                url: config.ollama_url.clone(),
+                rows: scanned,
+                total_rows: rows.len(),
+                path: active_chunks_path.display().to_string(),
+            });
+        })
+        .with_context(|| format!("preflight verifying checkpoint shard {id}"))?;
+    progress(PrepareProgress::Write {
+        path: report_path.display().to_string(),
+        rows: verification.rows,
+    });
+    if config.ollama_verify_strict {
+        anyhow::ensure!(
+            verification.sane,
+            "Ollama preflight failed for checkpoint shard {id} after {} scanned head2phones rows: {}",
+            verification.rows,
+            verification
+                .issue
+                .as_deref()
+                .unwrap_or("model reported the shard is not sane without a specific issue")
+        );
+    }
+    Ok(())
 }
 
 fn ensure_checkpoint_file(path: &Path) -> Result<()> {
@@ -3261,6 +3317,14 @@ fn is_bare_row_reference(compact: &str) -> bool {
 
 #[cfg(test)]
 fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bool {
+    let says_no_issue = lower.contains("no issue")
+        || lower.contains("no issues")
+        || lower.contains("none found")
+        || lower.contains("none detected")
+        || lower.contains("none of the rows violate")
+        || lower.contains("all rows are consistent")
+        || lower.contains("dataset is consistent")
+        || lower.contains("dataset appears consistent");
     let mentions_invented_split = compact.contains("missingrequiredfieldsplit")
         || compact.contains("splittag")
         || compact.contains("splitpoint")
@@ -3280,13 +3344,29 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
     let mentions_lang_mismatch_example = compact.contains("langmismatch")
         && compact.contains("contains")
         && (compact.contains("phones") || compact.contains("phonemes"));
+    let mentions_grapheme_recalculation = compact.contains("headlength")
+        && (compact.contains("splitafter") || compact.contains("splitlength"))
+        && (compact.contains("matches")
+            || compact.contains("graphemes")
+            || compact.contains("characters")
+            || compact.contains("stringlength"));
+    let looks_like_placeholder = compact.starts_with("headlengthmismatch")
+        || compact.starts_with("auditrow")
+            && (compact.contains("headmismatch")
+                || compact.contains("missinghead")
+                || compact.contains("splitmismatch"))
+        || compact.starts_with("auditfailed")
+        || compact.starts_with("transcriptionerror");
 
-    mentions_invented_split
+    says_no_issue
+        || mentions_invented_split
         || mentions_invented_phone_marker
         || mentions_no_head_split_zero
         || mentions_missing_head_split
         || mentions_verifier_contract
         || mentions_lang_mismatch_example
+        || mentions_grapheme_recalculation
+        || looks_like_placeholder
 }
 
 fn dataset_readme(
@@ -4262,6 +4342,12 @@ mod tests {
             r#"{"issue":"audit-1","sane":false}"#,
             r#"{"issue":"audit_row 2","sane":false}"#,
             r#"{"issue":"audit_row 18","sane":false}"#,
+            r#"{"issue":"none found, all rows are consistent","sane":false}"#,
+            r#"{"issue":"No issues found. The dataset is consistent with the specification.","sane":false}"#,
+            r#"{"issue":"head_length_mismatch_1_2_3_4_5_6","sane":false}"#,
+            r#"{"issue":"audit_row 6: head length 48 but split_after 48, but head contains 48 graphemes? No issue.","sane":false}"#,
+            r#"{"issue":"audit_failed_1_1_1_1_1_1","sane":false}"#,
+            r#"{"issue":"transcription_error_1_1_1_1_1_1","sane":false}"#,
             r#"{"issue":"data","sane":false}"#,
         ] {
             let judgement = parse_ollama_verification_judgement(raw)
@@ -4347,6 +4433,15 @@ mod tests {
             config_fingerprint(&base).expect("base fingerprint"),
             config_fingerprint(&changed).expect("changed fingerprint")
         );
+    }
+
+    #[test]
+    fn deserialized_config_defaults_ollama_verifier_on() {
+        let config: Head2PhonesConfig =
+            serde_json::from_str(r#"{"dataset_id":"serde-default-test"}"#)
+                .expect("minimal config should deserialize");
+
+        assert!(config.verify_with_ollama);
     }
 
     #[test]
