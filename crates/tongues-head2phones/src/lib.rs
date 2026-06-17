@@ -3269,6 +3269,14 @@ fn ollama_verification_prompt_with_row_count(
          - {NO_HEAD} rows should not visibly contain a full sentence or complete speakable head chunk.\n\
          - phone text is serialized speaking IR, not pure IPA. Stress marks, syllable dots, word-boundary bars, punctuation tokens, commas, periods, question marks, exclamation marks, and intonation arrows such as ↘ or → are valid and should not be reported by themselves.\n\
          - detect and report only obvious data-shape, label, transcription, language-tag, escaping, missing-marker, extra-marker, and consistency problems.\n\n\
+         Good examples that should return {{\"sane\":true,\"issue\":null}}:\n\
+         - {{\"audit_row\":1,\"variety\":\"la-Ecclesiastical\",\"input\":\"गृहं सिद्धम् अस्ति. καὶ πλείονες λέξεις τάχα ἥξουσιν.\",\"output\":\"{HEAD_FOUND}\\n{LANG_MISMATCH}\\n{DETECTED_LANG} sa\\n{EXPECTED_LANG} la\\n{HEAD_LENGTH} 10\\n{SPLIT_AFTER} 10\",\"head\":\"गृहं सिद्धम् अस्ति.\",\"split_after\":10}} is sane: {LANG_MISMATCH} intentionally says the detected head language differs from the requested variety.\n\
+         - {{\"audit_row\":2,\"variety\":\"el-GR-Standard\",\"input\":\"Το φθινόπωρον του 1820 επανήλθεν...\",\"output\":\"{HEAD_FOUND}\\n{HEAD_LENGTH} 382\\n{PHONES_OPEN} ˈto | fθi.no.po.ron | ˈtu ... ↘ . {PHONES_CLOSE}\\n{SPLIT_AFTER} 382\",\"head\":\"Το φθινόπωρον του 1820 επανήλθεν...\",\"split_after\":382}} is sane: {PHONES_OPEN} contains serialized speaking IR, not strict IPA.\n\
+         - {{\"audit_row\":3,\"variety\":\"de-DE-Standard\",\"input\":\"Notizen des Herausgebers\\nDiese Seite...\",\"output\":\"{HEAD_FOUND}\\n{HEAD_LENGTH} 24\\n{PHONES_OPEN} ˈno.ti.t͡sən | ... ↘ . {PHONES_CLOSE}\\n{SPLIT_AFTER} 25\",\"head\":\"Notizen des Herausgebers\",\"split_after\":25}} is sane: a newline can make {SPLIT_AFTER} one grapheme larger than the trimmed head length.\n\n\
+         Bad examples that should return sane=false:\n\
+         - {{\"audit_row\":4,\"output\":\"{HEAD_FOUND}\\n{HEAD_LENGTH} 12\\n{PHONES_OPEN} hɛloʊ {PHONES_CLOSE}\",\"head\":\"Hello there.\",\"split_after\":12}} is bad: {SPLIT_AFTER} is missing from output.\n\
+         - {{\"audit_row\":5,\"output\":\"{HEAD_FOUND}\\n{LANG_MISMATCH}\\n{DETECTED_LANG} en\\n{EXPECTED_LANG} es\\n{PHONES_OPEN} hɛloʊ {PHONES_CLOSE}\\n{HEAD_LENGTH} 12\\n{SPLIT_AFTER} 12\"}} is bad: {LANG_MISMATCH} blocks must not contain {PHONES_OPEN}.\n\
+         - {{\"audit_row\":6,\"output\":\"{NO_HEAD}\",\"head\":\"Hello there.\",\"split_after\":12}} is bad: {NO_HEAD} rows must have null head and null split_after.\n\n\
          JSONL rows to audit:\n{jsonl}"
     ), included_rows))
 }
@@ -4301,6 +4309,15 @@ mod tests {
         assert!(prompt.contains("intentionally omits <PHONES>"));
         assert!(prompt.contains("Do not require every head to continue to a full stop"));
         assert!(prompt.contains("serialized speaking IR, not pure IPA"));
+        assert!(prompt.contains("Good examples that should return"));
+        assert!(prompt.contains("Bad examples that should return sane=false"));
+        assert!(prompt
+            .contains("<LANG_MISMATCH> intentionally says the detected head language differs"));
+        assert!(prompt.contains("<LANG_MISMATCH> blocks must not contain <PHONES>"));
+        assert!(prompt.contains(
+            "a newline can make <SPLIT_AFTER> one grapheme larger than the trimmed head length"
+        ));
+        assert!(prompt.contains("<NO_HEAD> rows must have null head and null split_after"));
     }
 
     #[test]
