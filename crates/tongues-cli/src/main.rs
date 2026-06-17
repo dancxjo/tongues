@@ -63,6 +63,7 @@ const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-parser/v0";
 const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-parser/v0";
 const DEFAULT_HEAD2PHONES_DATA_DIR: &str = "datasets/head2phones/v0";
 const DEFAULT_HEAD2PHONES_MODEL_DIR: &str = "models/head2phones/v0";
+const DEFAULT_HEAD2PHONES_BATCH_SIZE: usize = 8;
 const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
 const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
 const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.35;
@@ -879,7 +880,7 @@ enum Head2PhonesCommands {
         dropout: f64,
 
         /// Mini-batch size
-        #[arg(long, default_value_t = 64)]
+        #[arg(long, default_value_t = DEFAULT_HEAD2PHONES_BATCH_SIZE)]
         batch_size: usize,
 
         /// Maximum training epochs
@@ -1521,6 +1522,37 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{} B", format_count(bytes))
     }
+}
+
+fn estimate_logits_bytes(batch_size: usize, seq_len: usize, vocab_size: usize) -> u64 {
+    let bytes = (batch_size as u128)
+        .saturating_mul(seq_len as u128)
+        .saturating_mul(vocab_size as u128)
+        .saturating_mul(std::mem::size_of::<f32>() as u128);
+    bytes.min(u64::MAX as u128) as u64
+}
+
+fn has_model_checkpoint(out: &Path, model_path: &Path) -> bool {
+    if out.join("train_state.json").exists() || model_path.with_extension("bin").exists() {
+        return true;
+    }
+    let Some(stem) = model_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    fs::read_dir(out)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            let path = entry.path();
+            path.extension().and_then(|ext| ext.to_str()) == Some("bin")
+                && path
+                    .file_stem()
+                    .and_then(|file_stem| file_stem.to_str())
+                    .map(|file_stem| file_stem.starts_with(&format!("{stem}-epoch-")))
+                    .unwrap_or(false)
+        })
 }
 
 fn counted_progress_style() -> Result<indicatif::ProgressStyle> {
@@ -2558,17 +2590,9 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             wait_for_prepare,
         } => {
             if wait_for_prepare {
-                wait_for_prepared_dataset(
-                    &data,
-                    &["vocab.json", "train.jsonl", "valid.jsonl"],
-                    "head2phones",
-                )?;
+                wait_for_prepared_dataset(&data, &["train.jsonl", "valid.jsonl"], "head2phones")?;
             }
-            if prepare
-                || !data.join("vocab.json").exists()
-                || !data.join("train.jsonl").exists()
-                || !data.join("valid.jsonl").exists()
-            {
+            if prepare || !data.join("train.jsonl").exists() || !data.join("valid.jsonl").exists() {
                 let mut config_data = read_head2phones_config(&config)?;
                 if !inputs.is_empty() {
                     config_data.source_paths = inputs;
@@ -2650,25 +2674,71 @@ fn cmd_head2phones_train(
     device_arg: DeviceArg,
 ) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    let vocab: Vocab = read_json_file(&data.join("vocab.json"))?;
     let train_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
         read_jsonl_as(&data.join("train.jsonl"))?;
     let valid_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
         read_jsonl_as(&data.join("valid.jsonl"))?;
+    let test_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
+        if data.join("test.jsonl").exists() {
+            read_jsonl_as(&data.join("test.jsonl"))?
+        } else {
+            Vec::new()
+        };
     anyhow::ensure!(!train_rows.is_empty(), "head2phones train split is empty");
     anyhow::ensure!(!valid_rows.is_empty(), "head2phones valid split is empty");
 
+    let data_vocab_path = data.join("vocab.json");
+    let prepared_vocab = read_json_file::<Vocab>(&data_vocab_path).ok();
+    let vocab = tongues_head2phones::build_vocab_from_examples(
+        train_rows
+            .iter()
+            .chain(valid_rows.iter())
+            .chain(test_rows.iter()),
+    );
+    match prepared_vocab.as_ref() {
+        Some(prepared_vocab) if prepared_vocab.size() != vocab.size() => {
+            println!(
+                "Rebuilt compact head2phones vocab from prepared rows: {} -> {} tokens",
+                format_count(prepared_vocab.size()),
+                format_count(vocab.size())
+            );
+            fs::write(&data_vocab_path, serde_json::to_string_pretty(&vocab)?)
+                .with_context(|| format!("writing {}", data_vocab_path.display()))?;
+        }
+        None => {
+            println!(
+                "Built head2phones vocab from prepared rows: {} tokens",
+                format_count(vocab.size())
+            );
+            fs::write(&data_vocab_path, serde_json::to_string_pretty(&vocab)?)
+                .with_context(|| format!("writing {}", data_vocab_path.display()))?;
+        }
+        _ => {}
+    }
+
     let train_examples = tongues_head2phones::make_seq2seq_examples(&train_rows, &vocab);
     let valid_examples = tongues_head2phones::make_seq2seq_examples(&valid_rows, &vocab);
+    let model_path = out.join("model");
     let model_config = if out.join("model_config.json").exists() {
         let existing: ModelConfig = read_json_file(&out.join("model_config.json"))?;
-        anyhow::ensure!(
-            existing.vocab_size == vocab.size(),
-            "existing model_config.json vocab_size={} does not match vocab size {}; use a fresh --out directory after rebuilding head2phones data",
-            existing.vocab_size,
-            vocab.size()
-        );
-        existing
+        if existing.vocab_size == vocab.size() {
+            existing
+        } else {
+            anyhow::ensure!(
+                !has_model_checkpoint(out, &model_path),
+                "existing model_config.json vocab_size={} does not match compact vocab size {}; use a fresh --out directory or remove the existing head2phones checkpoints",
+                existing.vocab_size,
+                vocab.size()
+            );
+            println!(
+                "Replacing stale head2phones model config without checkpoints: vocab_size {} -> {}",
+                format_count(existing.vocab_size),
+                format_count(vocab.size())
+            );
+            ModelConfig::new(vocab.size())
+                .with_dropout(dropout)
+                .with_max_seq_len(256)
+        }
     } else {
         ModelConfig::new(vocab.size())
             .with_dropout(dropout)
@@ -2713,7 +2783,6 @@ fn cmd_head2phones_train(
         .with_task("head-chunk-to-phones"),
     )?;
 
-    let model_path = out.join("model");
     println!("Starting head2phones seq2seq training...");
     println!(
         "  examples={} train / {} valid vocab={} lr={} wd={} dropout={} epochs={} patience={} batch_size={} max_seq_len={}",
@@ -2728,6 +2797,20 @@ fn cmd_head2phones_train(
         format_count(batch_size),
         format_count(train_config.max_seq_len)
     );
+    let logits_bytes = estimate_logits_bytes(
+        batch_size,
+        train_config.max_seq_len,
+        model_config.vocab_size,
+    );
+    println!(
+        "  estimated_logits_memory_per_batch: {}",
+        format_bytes(logits_bytes)
+    );
+    if matches!(device_arg, DeviceArg::Cuda) && logits_bytes >= 2 * 1024 * 1024 * 1024 {
+        println!(
+            "  warning: large CUDA logits allocation; lower --batch-size if training hits GPU memory errors"
+        );
+    }
     println!("  train_state: {}", out.join("train_state.json").display());
     println!("  early_stop_metric: val_loss");
     println!(
