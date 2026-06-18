@@ -140,7 +140,7 @@ impl Default for Head2PhonesConfig {
             seed: default_seed(),
             min_head_graphemes: default_min_head_graphemes(),
             max_head_graphemes: default_max_head_graphemes(),
-            verify_with_ollama: true,
+            verify_with_ollama: default_verify_with_ollama(),
             ollama_url: default_ollama_url(),
             ollama_model: default_ollama_model(),
             ollama_verify_rows: default_ollama_verify_rows(),
@@ -214,7 +214,7 @@ fn default_max_head_graphemes() -> usize {
 }
 
 fn default_verify_with_ollama() -> bool {
-    true
+    false
 }
 
 fn default_ollama_url() -> String {
@@ -3981,6 +3981,15 @@ mod tests {
         let head = first_complete_head(&text).expect("title break should create a head");
         assert_eq!(text[..head.end_byte].trim(), "Hidden Letter");
 
+        let text =
+            synthetic_buffer_text("परिशिष्टस्य सामग्री", " et d'autres mots viendront bientôt.");
+        assert_eq!(
+            text,
+            "परिशिष्टस्य सामग्री\net d'autres mots viendront bientôt."
+        );
+        let head = first_complete_head(&text).expect("title break should create a Sanskrit head");
+        assert_eq!(text[..head.end_byte].trim(), "परिशिष्टस्य सामग्री");
+
         assert_eq!(
             synthetic_buffer_text("Stop right there!", " Luego descanso."),
             "Stop right there! Luego descanso."
@@ -4517,12 +4526,12 @@ mod tests {
     }
 
     #[test]
-    fn deserialized_config_defaults_ollama_verifier_on() {
+    fn deserialized_config_defaults_ollama_verifier_off() {
         let config: Head2PhonesConfig =
             serde_json::from_str(r#"{"dataset_id":"serde-default-test"}"#)
                 .expect("minimal config should deserialize");
 
-        assert!(config.verify_with_ollama);
+        assert!(!config.verify_with_ollama);
     }
 
     #[test]

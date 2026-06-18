@@ -54,7 +54,9 @@ min_head_graphemes = 4
 max_head_graphemes = 220
 
 # Passive sanity scan with a local Ollama server during prepare.
-verify_with_ollama = true
+# Keep disabled by default; use `head2phones verify` or `--verify-ollama`
+# when you explicitly want a model audit.
+verify_with_ollama = false
 ollama_url = "http://localhost:11434"
 ollama_model = "gpt-oss:20b"
 ollama_verify_rows = 32
