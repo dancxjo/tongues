@@ -12,6 +12,7 @@ hound = { workspace = true }
 indicatif = { workspace = true }
 md5 = "0.7"
 rand = { workspace = true }
+rayon = "1"
 seams = "0.1.2"
 serde = { workspace = true }
 serde_json = { workspace = true }

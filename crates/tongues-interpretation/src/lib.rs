@@ -7,6 +7,7 @@
 //! CTC loss over compact target sequences.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use burn::tensor::activation::log_softmax;
 use burn::tensor::backend::AutodiffBackend;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
@@ -47,6 +49,7 @@ pub const DEFAULT_MAX_WIKTIONARY_AUDIO: usize = 250;
 pub const DEFAULT_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const DEFAULT_MEL_BINS: usize = 80;
 pub const COMPACT_AUDIO_EXTRA_BINS: usize = 7;
+pub const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 pub const DEFAULT_COMPACT_AUDIO_FEATURE_BINS: usize =
     DEFAULT_MEL_BINS + DEFAULT_MEL_BINS + COMPACT_AUDIO_EXTRA_BINS;
 pub const CTC_BLANK: &str = "<CTC_BLANK>";
@@ -700,7 +703,7 @@ fn prepare_dataset_inner(
     out: &Path,
     config: &InterpretationConfig,
     progress: &mut impl FnMut(PrepareProgress),
-    _refresh_rows: bool,
+    use_transcript_refiner: bool,
     mut transcript_refiner: impl FnMut(&str, &Path, &[f32], &str) -> Result<TranscriptRefinement>,
 ) -> Result<PrepareReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -742,7 +745,19 @@ fn prepare_dataset_inner(
         }
     }
 
-    let transcripts = discover_transcripts(&source_dir)?;
+    let prepare_threads = prepare_worker_threads();
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Preparing with {} worker thread{}",
+            prepare_threads,
+            if prepare_threads == 1 { "" } else { "s" }
+        ),
+    });
+    let prepare_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(prepare_threads)
+        .build()
+        .context("building interpretation prepare thread pool")?;
+    let transcripts = discover_transcripts_with_pool(&source_dir, &prepare_pool)?;
     progress(PrepareProgress::Parse {
         transcripts: transcripts.len(),
     });
@@ -780,6 +795,7 @@ fn prepare_dataset_inner(
             .open(&utterances_path)
             .with_context(|| format!("opening {}", utterances_path.display()))?,
     );
+    let mut pending_transcripts = Vec::new();
     for item in selected_transcripts {
         if let Some(existing) = row_by_id.get(&item.utterance_id) {
             progress(PrepareProgress::Reuse {
@@ -789,80 +805,119 @@ fn prepare_dataset_inner(
             });
             continue;
         }
-        let samples = read_flac_mono(&item.audio_path)?;
-        let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", item.utterance_id));
-        let mel_path = out.join(&rel_mel);
-        let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
-            Some(frames) => {
-                progress(PrepareProgress::Reuse {
-                    utterance_id: item.utterance_id.clone(),
-                    rows: frames,
-                    path: mel_path.display().to_string(),
-                });
-                frames
+        pending_transcripts.push(item);
+    }
+
+    if use_transcript_refiner {
+        for item in pending_transcripts {
+            let samples = read_flac_mono(&item.audio_path)?;
+            let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", item.utterance_id));
+            let mel_path = out.join(&rel_mel);
+            let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
+                Some(frames) => {
+                    progress(PrepareProgress::Reuse {
+                        utterance_id: item.utterance_id.clone(),
+                        rows: frames,
+                        path: mel_path.display().to_string(),
+                    });
+                    frames
+                }
+                None => {
+                    let features = audio_features(&samples, config);
+                    write_mel_file(&mel_path, &features, feature_bins)?;
+                    progress(PrepareProgress::Features {
+                        utterance_id: item.utterance_id.clone(),
+                        rows: features.len(),
+                        path: mel_path.display().to_string(),
+                    });
+                    features.len()
+                }
+            };
+            progress(PrepareProgress::Transcribe {
+                utterance_id: item.utterance_id.clone(),
+                path: item.audio_path.display().to_string(),
+            });
+            let transcript = match transcript_refiner(
+                &item.utterance_id,
+                &item.audio_path,
+                &samples,
+                &item.transcript,
+            )? {
+                TranscriptRefinement::Use(text) => normalize_asr_transcript(&text),
+                TranscriptRefinement::KeepOriginal => normalize_librispeech_text(&item.transcript),
+                TranscriptRefinement::Omit { reason } => {
+                    progress(PrepareProgress::Omit {
+                        utterance_id: item.utterance_id,
+                        reason,
+                    });
+                    continue;
+                }
+            };
+            let transcript = if transcript.trim().is_empty() {
+                normalize_librispeech_text(&item.transcript)
+            } else {
+                transcript
+            };
+            let sentences = sentence_supervision(&detector, &transcript, frames, config)?;
+            let repair_examples = repair_supervision(&sentences);
+            let word_supervision = word_supervision(&sentences);
+            let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
+            let row = LibriSpeechUtterance {
+                utterance_id: item.utterance_id,
+                speaker_id: item.speaker_id,
+                chapter_id: item.chapter_id,
+                audio_path: item.audio_path.display().to_string(),
+                mel_path: rel_mel.display().to_string(),
+                num_frames: frames,
+                sample_rate_hz: config.sample_rate_hz,
+                duration_ms: samples.len() as u64 * 1000 / config.sample_rate_hz as u64,
+                transcript,
+                sentences,
+                repair_examples,
+                word_supervision,
+                masked_word_examples,
+            };
+            writeln!(utterance_writer, "{}", serde_json::to_string(&row)?)?;
+            utterance_writer.flush()?;
+            row_by_id.insert(row.utterance_id.clone(), row.clone());
+            rows.push(row);
+        }
+    } else {
+        let mut prepared_rows = prepare_pool.install(|| {
+            pending_transcripts
+                .par_iter()
+                .enumerate()
+                .map_init(
+                    || SentenceDetectorDialog::new().context("initializing seams detector worker"),
+                    |detector_result, (index, item)| {
+                        let detector = detector_result.as_ref().map_err(|err| {
+                            anyhow::anyhow!("initializing seams detector worker: {err:#}")
+                        })?;
+                        process_librispeech_item_without_refiner(
+                            index,
+                            item,
+                            out,
+                            config,
+                            feature_bins,
+                            detector,
+                        )
+                    },
+                )
+                .collect::<Result<Vec<_>>>()
+        })?;
+        prepared_rows.sort_by_key(|row| row.index);
+        for prepared in prepared_rows {
+            for event in prepared.progress {
+                progress(event);
             }
-            None => {
-                let features = audio_features(&samples, config);
-                write_mel_file(&mel_path, &features, feature_bins)?;
-                progress(PrepareProgress::Features {
-                    utterance_id: item.utterance_id.clone(),
-                    rows: features.len(),
-                    path: mel_path.display().to_string(),
-                });
-                features.len()
-            }
-        };
-        progress(PrepareProgress::Transcribe {
-            utterance_id: item.utterance_id.clone(),
-            path: item.audio_path.display().to_string(),
-        });
-        let transcript = match transcript_refiner(
-            &item.utterance_id,
-            &item.audio_path,
-            &samples,
-            &item.transcript,
-        )? {
-            TranscriptRefinement::Use(text) => normalize_asr_transcript(&text),
-            TranscriptRefinement::KeepOriginal => normalize_librispeech_text(&item.transcript),
-            TranscriptRefinement::Omit { reason } => {
-                progress(PrepareProgress::Omit {
-                    utterance_id: item.utterance_id,
-                    reason,
-                });
-                continue;
-            }
-        };
-        let transcript = if transcript.trim().is_empty() {
-            normalize_librispeech_text(&item.transcript)
-        } else {
-            transcript
-        };
-        let sentences = sentence_supervision(&detector, &transcript, frames, config)?;
-        let repair_examples = repair_supervision(&sentences);
-        let word_supervision = word_supervision(&sentences);
-        let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
-        let row = LibriSpeechUtterance {
-            utterance_id: item.utterance_id,
-            speaker_id: item.speaker_id,
-            chapter_id: item.chapter_id,
-            audio_path: item.audio_path.display().to_string(),
-            mel_path: rel_mel.display().to_string(),
-            num_frames: frames,
-            sample_rate_hz: config.sample_rate_hz,
-            duration_ms: samples.len() as u64 * 1000 / config.sample_rate_hz as u64,
-            transcript,
-            sentences,
-            repair_examples,
-            word_supervision,
-            masked_word_examples,
-        };
-        writeln!(utterance_writer, "{}", serde_json::to_string(&row)?)?;
-        utterance_writer.flush()?;
-        row_by_id.insert(row.utterance_id.clone(), row.clone());
-        rows.push(row);
+            writeln!(utterance_writer, "{}", serde_json::to_string(&prepared.row)?)?;
+            utterance_writer.flush()?;
+            row_by_id.insert(prepared.row.utterance_id.clone(), prepared.row.clone());
+            rows.push(prepared.row);
+        }
     }
     utterance_writer.flush()?;
-    let imported = import_wiktionary_audio_rows(out, config, feature_bins, &detector, progress)?;
+    let imported = import_wiktionary_audio_rows(out, config, feature_bins, &prepare_pool, progress)?;
     if !imported.is_empty() {
         for row in &imported {
             writeln!(utterance_writer, "{}", serde_json::to_string(row)?)?;
@@ -961,11 +1016,85 @@ fn enrich_row_supervision(
     Ok(())
 }
 
+#[derive(Debug)]
+struct PreparedLibriSpeechRow {
+    index: usize,
+    progress: Vec<PrepareProgress>,
+    row: LibriSpeechUtterance,
+}
+
+fn process_librispeech_item_without_refiner(
+    index: usize,
+    item: &TranscriptItem,
+    out: &Path,
+    config: &InterpretationConfig,
+    feature_bins: usize,
+    detector: &SentenceDetectorDialog,
+) -> Result<PreparedLibriSpeechRow> {
+    let mut progress = Vec::new();
+    let samples = read_flac_mono(&item.audio_path)?;
+    let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", item.utterance_id));
+    let mel_path = out.join(&rel_mel);
+    let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
+        Some(frames) => {
+            progress.push(PrepareProgress::Reuse {
+                utterance_id: item.utterance_id.clone(),
+                rows: frames,
+                path: mel_path.display().to_string(),
+            });
+            frames
+        }
+        None => {
+            let features = audio_features(&samples, config);
+            write_mel_file(&mel_path, &features, feature_bins)?;
+            progress.push(PrepareProgress::Features {
+                utterance_id: item.utterance_id.clone(),
+                rows: features.len(),
+                path: mel_path.display().to_string(),
+            });
+            features.len()
+        }
+    };
+    progress.push(PrepareProgress::Transcribe {
+        utterance_id: item.utterance_id.clone(),
+        path: item.audio_path.display().to_string(),
+    });
+    let transcript = normalize_librispeech_text(&item.transcript);
+    let transcript = if transcript.trim().is_empty() {
+        normalize_librispeech_text(&item.transcript)
+    } else {
+        transcript
+    };
+    let sentences = sentence_supervision(detector, &transcript, frames, config)?;
+    let repair_examples = repair_supervision(&sentences);
+    let word_supervision = word_supervision(&sentences);
+    let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
+    Ok(PreparedLibriSpeechRow {
+        index,
+        progress,
+        row: LibriSpeechUtterance {
+            utterance_id: item.utterance_id.clone(),
+            speaker_id: item.speaker_id.clone(),
+            chapter_id: item.chapter_id.clone(),
+            audio_path: item.audio_path.display().to_string(),
+            mel_path: rel_mel.display().to_string(),
+            num_frames: frames,
+            sample_rate_hz: config.sample_rate_hz,
+            duration_ms: samples.len() as u64 * 1000 / config.sample_rate_hz as u64,
+            transcript,
+            sentences,
+            repair_examples,
+            word_supervision,
+            masked_word_examples,
+        },
+    })
+}
+
 fn import_wiktionary_audio_rows(
     out: &Path,
     config: &InterpretationConfig,
     feature_bins: usize,
-    _detector: &SentenceDetectorDialog,
+    pool: &rayon::ThreadPool,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<Vec<LibriSpeechUtterance>> {
     let Some(data_dir) = &config.wiktionary_audio_data_dir else {
@@ -981,8 +1110,7 @@ fn import_wiktionary_audio_rows(
     });
     let audio_dir = out.join("source").join("wiktionary-audio");
     fs::create_dir_all(&audio_dir).with_context(|| format!("creating {}", audio_dir.display()))?;
-    let mut rows = Vec::new();
-    let mut seen = BTreeSet::new();
+    let mut jobs = Vec::new();
     for (index, pattern) in patterns.into_iter().enumerate() {
         let key = normalize_audio_key(&pattern.spelling);
         let Some(bundle) = pronunciations.remove(&key) else {
@@ -995,80 +1123,125 @@ fn import_wiktionary_audio_rows(
             continue;
         };
         let utterance_id = format!("wiktionary-audio-{index:06}");
-        if !seen.insert(utterance_id.clone()) {
-            continue;
-        }
         let audio_path = audio_dir.join(safe_audio_filename(index, filename));
-        if (!audio_path.exists() || audio_path.metadata()?.len() == 0)
-            && config.download_wiktionary_audio
-        {
-            download_to_part(&url, &audio_path, progress)?;
-        }
-        if !audio_path.exists() || audio_path.metadata()?.len() == 0 {
-            progress(PrepareProgress::Omit {
-                utterance_id,
-                reason: format!(
-                    "wiktionary audio not downloaded; pass --download-wiktionary-audio for {}",
-                    url
-                ),
-            });
-            continue;
-        }
-        let samples = match read_audio_mono_16k(&audio_path) {
-            Ok(samples) => samples,
-            Err(err) => {
-                progress(PrepareProgress::Omit {
-                    utterance_id,
-                    reason: format!("could not decode {}: {err:#}", audio_path.display()),
-                });
-                continue;
-            }
-        };
-        let rel_mel = PathBuf::from("features").join(format!("{utterance_id}.mel.bin"));
-        let mel_path = out.join(&rel_mel);
-        let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
-            Some(frames) => frames,
-            None => {
-                let features = audio_features(&samples, config);
-                write_mel_file(&mel_path, &features, feature_bins)?;
-                progress(PrepareProgress::Features {
-                    utterance_id: utterance_id.clone(),
-                    rows: features.len(),
-                    path: mel_path.display().to_string(),
-                });
-                features.len()
-            }
-        };
-        let transcript = normalize_asr_transcript(&pattern.spelling);
-        let phones = bundle
-            .narrow
-            .clone()
-            .unwrap_or_else(|| bundle.broad.clone());
-        let sentence = SentenceSupervision {
-            text: transcript.clone(),
-            start_char: 0,
-            end_char: transcript.len(),
-            start_frame: 0,
-            end_frame: frames,
-            boundary_label: BOUNDARY_EMIT.to_string(),
-            terminal: None,
-            phonemes: bundle.broad.clone(),
-            phones,
-            phoneme_tokens: Vec::new(),
-            phone_tokens: Vec::new(),
-            syllables: Vec::new(),
-            boundaries: Vec::new(),
-            prosody: ProsodyTrack::default(),
-            warnings: Vec::new(),
-            syntax: SyntaxSupervision::default(),
-        };
-        let sentences = vec![sentence];
-        let word_supervision = word_supervision(&sentences);
-        rows.push(LibriSpeechUtterance {
+        jobs.push(WiktionaryAudioJob {
+            index,
             utterance_id,
+            lang: pattern.lang,
+            spelling: pattern.spelling,
+            audio_path,
+            url,
+            bundle,
+        });
+    }
+    let mut prepared = pool.install(|| {
+        jobs.par_iter()
+            .map(|job| process_wiktionary_audio_job(job, out, config, feature_bins))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    prepared.sort_by_key(|item| item.index);
+    let mut rows = Vec::with_capacity(prepared.len());
+    for prepared_row in prepared {
+        for event in prepared_row.progress {
+            progress(event);
+        }
+        if let Some(row) = prepared_row.row {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
+fn process_wiktionary_audio_job(
+    job: &WiktionaryAudioJob,
+    out: &Path,
+    config: &InterpretationConfig,
+    feature_bins: usize,
+) -> Result<PreparedWiktionaryAudioRow> {
+    let mut progress = Vec::new();
+    if (!job.audio_path.exists() || job.audio_path.metadata()?.len() == 0)
+        && config.download_wiktionary_audio
+    {
+        let mut download_progress = |event| progress.push(event);
+        download_to_part(&job.url, &job.audio_path, &mut download_progress)?;
+    }
+    if !job.audio_path.exists() || job.audio_path.metadata()?.len() == 0 {
+        progress.push(PrepareProgress::Omit {
+            utterance_id: job.utterance_id.clone(),
+            reason: format!(
+                "wiktionary audio not downloaded; pass --download-wiktionary-audio for {}",
+                job.url
+            ),
+        });
+        return Ok(PreparedWiktionaryAudioRow {
+            index: job.index,
+            progress,
+            row: None,
+        });
+    }
+    let samples = match read_audio_mono_16k(&job.audio_path) {
+        Ok(samples) => samples,
+        Err(err) => {
+            progress.push(PrepareProgress::Omit {
+                utterance_id: job.utterance_id.clone(),
+                reason: format!("could not decode {}: {err:#}", job.audio_path.display()),
+            });
+            return Ok(PreparedWiktionaryAudioRow {
+                index: job.index,
+                progress,
+                row: None,
+            });
+        }
+    };
+    let rel_mel = PathBuf::from("features").join(format!("{}.mel.bin", job.utterance_id));
+    let mel_path = out.join(&rel_mel);
+    let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
+        Some(frames) => frames,
+        None => {
+            let features = audio_features(&samples, config);
+            write_mel_file(&mel_path, &features, feature_bins)?;
+            progress.push(PrepareProgress::Features {
+                utterance_id: job.utterance_id.clone(),
+                rows: features.len(),
+                path: mel_path.display().to_string(),
+            });
+            features.len()
+        }
+    };
+    let transcript = normalize_asr_transcript(&job.spelling);
+    let phones = job
+        .bundle
+        .narrow
+        .clone()
+        .unwrap_or_else(|| job.bundle.broad.clone());
+    let sentence = SentenceSupervision {
+        text: transcript.clone(),
+        start_char: 0,
+        end_char: transcript.len(),
+        start_frame: 0,
+        end_frame: frames,
+        boundary_label: BOUNDARY_EMIT.to_string(),
+        terminal: None,
+        phonemes: job.bundle.broad.clone(),
+        phones,
+        phoneme_tokens: Vec::new(),
+        phone_tokens: Vec::new(),
+        syllables: Vec::new(),
+        boundaries: Vec::new(),
+        prosody: ProsodyTrack::default(),
+        warnings: Vec::new(),
+        syntax: SyntaxSupervision::default(),
+    };
+    let sentences = vec![sentence];
+    let word_supervision = word_supervision(&sentences);
+    Ok(PreparedWiktionaryAudioRow {
+        index: job.index,
+        progress,
+        row: Some(LibriSpeechUtterance {
+            utterance_id: job.utterance_id.clone(),
             speaker_id: "wiktionary".to_string(),
-            chapter_id: pattern.lang.clone(),
-            audio_path: audio_path.display().to_string(),
+            chapter_id: job.lang.clone(),
+            audio_path: job.audio_path.display().to_string(),
             mel_path: rel_mel.display().to_string(),
             num_frames: frames,
             sample_rate_hz: config.sample_rate_hz,
@@ -1078,9 +1251,84 @@ fn import_wiktionary_audio_rows(
             masked_word_examples: masked_word_examples(&word_supervision, &transcript),
             word_supervision,
             sentences,
-        });
+        }),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct WiktionaryAudioJob {
+    index: usize,
+    utterance_id: String,
+    lang: String,
+    spelling: String,
+    audio_path: PathBuf,
+    url: String,
+    bundle: WiktionaryPronunciationBundle,
+}
+
+#[derive(Debug)]
+struct PreparedWiktionaryAudioRow {
+    index: usize,
+    progress: Vec<PrepareProgress>,
+    row: Option<LibriSpeechUtterance>,
+}
+
+fn prepare_worker_threads() -> usize {
+    let detected = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let configured = env::var("TONGUES_PREPARE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(detected);
+    configured.clamp(1, DEFAULT_PREPARE_MAX_THREADS)
+}
+
+fn discover_transcripts_with_pool(
+    root: &Path,
+    pool: &rayon::ThreadPool,
+) -> Result<Vec<TranscriptItem>> {
+    let mut transcript_files = Vec::new();
+    collect_files(root, "trans.txt", &mut transcript_files)?;
+    let batches = pool.install(|| {
+        transcript_files
+            .par_iter()
+            .map(|path| parse_transcript_file(path))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    let mut out = Vec::new();
+    for mut batch in batches {
+        out.append(&mut batch);
     }
-    Ok(rows)
+    out.sort_by(|left, right| left.utterance_id.cmp(&right.utterance_id));
+    Ok(out)
+}
+
+fn parse_transcript_file(path: &Path) -> Result<Vec<TranscriptItem>> {
+    let parent = path.parent().context("transcript path has no parent")?;
+    let file = File::open(path)?;
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        let Some((id, text)) = line.split_once(' ') else {
+            continue;
+        };
+        let mut parts = id.split('-');
+        let speaker_id = parts.next().unwrap_or("").to_string();
+        let chapter_id = parts.next().unwrap_or("").to_string();
+        let audio_path = parent.join(format!("{id}.flac"));
+        if audio_path.exists() {
+            out.push(TranscriptItem {
+                utterance_id: id.to_string(),
+                speaker_id,
+                chapter_id,
+                transcript: text.to_string(),
+                audio_path,
+            });
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone)]
@@ -1360,27 +1608,7 @@ fn discover_transcripts(root: &Path) -> Result<Vec<TranscriptItem>> {
     collect_files(root, "trans.txt", &mut transcript_files)?;
     let mut out = Vec::new();
     for path in transcript_files {
-        let parent = path.parent().context("transcript path has no parent")?;
-        let file = File::open(&path)?;
-        for line in BufReader::new(file).lines() {
-            let line = line?;
-            let Some((id, text)) = line.split_once(' ') else {
-                continue;
-            };
-            let mut parts = id.split('-');
-            let speaker_id = parts.next().unwrap_or("").to_string();
-            let chapter_id = parts.next().unwrap_or("").to_string();
-            let audio_path = parent.join(format!("{id}.flac"));
-            if audio_path.exists() {
-                out.push(TranscriptItem {
-                    utterance_id: id.to_string(),
-                    speaker_id,
-                    chapter_id,
-                    transcript: text.to_string(),
-                    audio_path,
-                });
-            }
-        }
+        out.extend(parse_transcript_file(&path)?);
     }
     Ok(out)
 }
