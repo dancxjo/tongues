@@ -56,6 +56,8 @@ type CudaInferBackend = Cuda<f32, i32>;
 type CudaTrainBackend = Autodiff<CudaInferBackend>;
 
 const DEFAULT_WIKTIONARY_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
+const DEFAULT_WIKTIONARY_CONFIG_PATH: &str = "configs/wiktionary/default.toml";
+const DEFAULT_WIKTIONARY_CACHE_DIR: &str = "data/wiktionary";
 const DEFAULT_WIKTIONARY_DATA_DIR: &str = "datasets/wiktionary/enwiktionary-2026-06-01-v0";
 const DEFAULT_WIKTIONARY_MODEL_DIR: &str = "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
 const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
@@ -3315,6 +3317,53 @@ fn effective_wiktionary_model_path(
     }
 }
 
+fn wiktionary_audio_dataset_ready(path: &Path) -> bool {
+    path.join("patterns.jsonl").exists()
+        && (path.join("phonemes.jsonl").exists() || path.join("phones.jsonl").exists())
+}
+
+fn ensure_wiktionary_audio_dataset_available(path: &Path) -> Result<()> {
+    if wiktionary_audio_dataset_ready(path) {
+        return Ok(());
+    }
+
+    let config_path = Path::new(DEFAULT_WIKTIONARY_CONFIG_PATH);
+    let config = tongues_wiktionary::read_config(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let cache_dir = PathBuf::from(DEFAULT_WIKTIONARY_CACHE_DIR);
+
+    let pb = status_spinner(format!(
+        "Wiktionary audio metadata missing; preparing dataset at {}",
+        path.display()
+    ));
+    let report = tongues_wiktionary::prepare_dataset_with_progress(path, &cache_dir, &config, {
+        let pb = pb.clone();
+        move |progress| {
+            pb.set_message(wiktionary_prepare_progress_message(progress));
+        }
+    })?;
+    finish_status(
+        pb,
+        format!(
+            "Prepared Wiktionary dataset at {} from {}",
+            path.display(),
+            report.dump_path
+        ),
+    );
+
+    if config.verify_with_ollama {
+        maybe_print_wiktionary_ollama_report(path)?;
+    }
+
+    anyhow::ensure!(
+        wiktionary_audio_dataset_ready(path),
+        "Wiktionary prepare completed but {} is missing required audio metadata files",
+        path.display()
+    );
+
+    Ok(())
+}
+
 fn print_wiktionary_ollama_report(report: &tongues_wiktionary::OllamaVerificationReport) {
     let path = report
         .report_path
@@ -5047,6 +5096,9 @@ fn run_interpretation_command(
             if no_download_wiktionary_audio {
                 config.download_wiktionary_audio = false;
             }
+            if let Some(wiktionary_data_dir) = &config.wiktionary_audio_data_dir {
+                ensure_wiktionary_audio_dataset_available(Path::new(wiktionary_data_dir))?;
+            }
             let pb = status_spinner(format!(
                 "Preparing interpretation dataset at {}",
                 out.display()
@@ -5150,6 +5202,9 @@ fn run_interpretation_command(
                 || !data.join("valid.jsonl").exists()
             {
                 let config = InterpretationConfig::default();
+                if let Some(wiktionary_data_dir) = &config.wiktionary_audio_data_dir {
+                    ensure_wiktionary_audio_dataset_available(Path::new(wiktionary_data_dir))?;
+                }
                 let pb = status_spinner(format!(
                     "Training data missing; preparing LibriSpeech ASR dataset at {}",
                     data.display()
