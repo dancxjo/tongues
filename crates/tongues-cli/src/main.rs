@@ -19,6 +19,7 @@ use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{any::Any, panic};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -1231,16 +1232,30 @@ enum RefinementSourceArg {
     SightWords,
 }
 
-fn is_cuda_available() -> bool {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = std::panic::catch_unwind(|| {
+fn cuda_probe_failure_reason() -> Option<String> {
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(|| {
         let device = CudaDevice::default();
         type B = Cuda<f32, i32>;
         let _tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
     });
-    std::panic::set_hook(default_hook);
-    result.is_ok()
+    panic::set_hook(default_hook);
+
+    match result {
+        Ok(_) => None,
+        Err(payload) => Some(format_panic_payload(payload.as_ref())),
+    }
+}
+
+fn format_panic_payload(payload: &(dyn Any + Send)) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        (*msg).to_string()
+    } else if let Some(msg) = payload.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "unknown CUDA initialization failure".to_string()
+    }
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
@@ -1259,14 +1274,22 @@ fn main() -> Result<()> {
     set_quiet_output(output_mode.quiet);
 
     // Determine target device (CUDA with fallback to CPU, or forced CPU)
+    let cuda_failure = if cli.cpu {
+        None
+    } else {
+        cuda_probe_failure_reason()
+    };
     let device_arg = if cli.cpu {
         DeviceArg::Cpu
-    } else if is_cuda_available() {
+    } else if cuda_failure.is_none() {
         DeviceArg::Cuda
     } else {
         // Only warn for commands that actually run model computations on the device
         if command_needs_device(&command) && output_mode.verbose() {
-            println!("Warning: CUDA is not available. Falling back to CPU.");
+            println!(
+                "Warning: CUDA is not available ({}). Falling back to CPU.",
+                cuda_failure.as_deref().unwrap_or("unknown reason")
+            );
         }
         DeviceArg::Cpu
     };
