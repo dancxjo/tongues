@@ -10,6 +10,7 @@ claxon = "0.4"
 flate2 = "1"
 hound = { workspace = true }
 indicatif = { workspace = true }
+md5 = "0.7"
 rand = { workspace = true }
 seams = "0.1.2"
 serde = { workspace = true }
@@ -18,4 +19,5 @@ speaking = { path = "../speaking" }
 tar = "0.4"
 tongues-core = { path = "../tongues-core" }
 tongues-neural = { path = "../tongues-neural" }
+tongues-wiktionary = { path = "../tongues-wiktionary" }
 ureq = { workspace = true }

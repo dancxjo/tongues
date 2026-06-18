@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -40,6 +41,9 @@ use tongues_neural::{make_recorder, write_manifest, ModelArtifactManifest};
 pub const FAMILY: &str = "interpretation";
 pub const ARCHITECTURE: &str = "streaming-mel-native-ctc";
 pub const DEFAULT_DATASET_ID: &str = "librispeech-mini-v0";
+pub const DEFAULT_WIKTIONARY_AUDIO_DATA_DIR: &str =
+    "datasets/wiktionary/enwiktionary-2026-06-01-v0";
+pub const DEFAULT_MAX_WIKTIONARY_AUDIO: usize = 250;
 pub const DEFAULT_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const DEFAULT_MEL_BINS: usize = 80;
 pub const COMPACT_AUDIO_EXTRA_BINS: usize = 7;
@@ -102,6 +106,12 @@ pub struct InterpretationConfig {
     pub variety: String,
     pub max_utterances: Option<usize>,
     pub download_url: String,
+    #[serde(default)]
+    pub wiktionary_audio_data_dir: Option<String>,
+    #[serde(default)]
+    pub max_wiktionary_audio: Option<usize>,
+    #[serde(default)]
+    pub download_wiktionary_audio: bool,
 }
 
 impl Default for InterpretationConfig {
@@ -121,6 +131,9 @@ impl Default for InterpretationConfig {
             variety: "en-US".to_string(),
             max_utterances: None,
             download_url: subset.archive_url().to_string(),
+            wiktionary_audio_data_dir: Some(DEFAULT_WIKTIONARY_AUDIO_DATA_DIR.to_string()),
+            max_wiktionary_audio: Some(DEFAULT_MAX_WIKTIONARY_AUDIO),
+            download_wiktionary_audio: true,
         }
     }
 }
@@ -139,6 +152,8 @@ pub struct InterpretationTrainConfig {
     pub phoneme_loss_weight: f32,
     #[serde(default = "default_phone_loss_weight")]
     pub phone_loss_weight: f32,
+    #[serde(default = "default_feature_ctc_loss_weight")]
+    pub feature_ctc_loss_weight: f32,
     #[serde(default = "default_prev_word_loss_weight")]
     pub prev_word_loss_weight: f32,
     #[serde(default = "default_current_word_loss_weight")]
@@ -174,6 +189,10 @@ pub struct InterpretationTrainConfig {
 
 fn default_phone_loss_weight() -> f32 {
     0.25
+}
+
+fn default_feature_ctc_loss_weight() -> f32 {
+    0.35
 }
 
 fn default_prev_word_loss_weight() -> f32 {
@@ -254,6 +273,7 @@ impl Default for InterpretationTrainConfig {
             boundary_loss_weight: 0.15,
             phoneme_loss_weight: 0.25,
             phone_loss_weight: 0.25,
+            feature_ctc_loss_weight: default_feature_ctc_loss_weight(),
             prev_word_loss_weight: 0.1,
             current_word_loss_weight: 0.2,
             next_word_loss_weight: 0.15,
@@ -282,6 +302,20 @@ pub struct ModelConfig {
     pub phone_vocab_size: usize,
     pub word_vocab_size: usize,
     #[config(default = 8)]
+    pub place_vocab_size: usize,
+    #[config(default = 7)]
+    pub manner_vocab_size: usize,
+    #[config(default = 4)]
+    pub voicing_vocab_size: usize,
+    #[config(default = 4)]
+    pub syllabic_vocab_size: usize,
+    #[config(default = 6)]
+    pub height_vocab_size: usize,
+    #[config(default = 5)]
+    pub backness_vocab_size: usize,
+    #[config(default = 4)]
+    pub rounding_vocab_size: usize,
+    #[config(default = 8)]
     pub syntax_pos_vocab_size: usize,
     #[config(default = 16)]
     pub syntax_link_vocab_size: usize,
@@ -302,6 +336,13 @@ impl ModelConfig {
             boundary: LinearConfig::new(self.hidden_size, 3).init(device),
             phoneme: LinearConfig::new(self.hidden_size, self.phoneme_vocab_size).init(device),
             phone: LinearConfig::new(self.hidden_size, self.phone_vocab_size).init(device),
+            place: LinearConfig::new(self.hidden_size, self.place_vocab_size).init(device),
+            manner: LinearConfig::new(self.hidden_size, self.manner_vocab_size).init(device),
+            voicing: LinearConfig::new(self.hidden_size, self.voicing_vocab_size).init(device),
+            syllabic: LinearConfig::new(self.hidden_size, self.syllabic_vocab_size).init(device),
+            height: LinearConfig::new(self.hidden_size, self.height_vocab_size).init(device),
+            backness: LinearConfig::new(self.hidden_size, self.backness_vocab_size).init(device),
+            rounding: LinearConfig::new(self.hidden_size, self.rounding_vocab_size).init(device),
             prev_word: LinearConfig::new(self.hidden_size, self.word_vocab_size).init(device),
             current_word: LinearConfig::new(self.hidden_size, self.word_vocab_size).init(device),
             next_word: LinearConfig::new(self.hidden_size, self.word_vocab_size).init(device),
@@ -333,6 +374,13 @@ pub struct AsrModel<B: Backend> {
     boundary: Linear<B>,
     phoneme: Linear<B>,
     phone: Linear<B>,
+    place: Linear<B>,
+    manner: Linear<B>,
+    voicing: Linear<B>,
+    syllabic: Linear<B>,
+    height: Linear<B>,
+    backness: Linear<B>,
+    rounding: Linear<B>,
     prev_word: Linear<B>,
     current_word: Linear<B>,
     next_word: Linear<B>,
@@ -356,6 +404,13 @@ impl<B: Backend> AsrModel<B> {
             boundary_logits: self.boundary.forward(hidden.clone()),
             phoneme_logits: self.phoneme.forward(hidden.clone()),
             phone_logits: self.phone.forward(hidden.clone()),
+            place_logits: self.place.forward(hidden.clone()),
+            manner_logits: self.manner.forward(hidden.clone()),
+            voicing_logits: self.voicing.forward(hidden.clone()),
+            syllabic_logits: self.syllabic.forward(hidden.clone()),
+            height_logits: self.height.forward(hidden.clone()),
+            backness_logits: self.backness.forward(hidden.clone()),
+            rounding_logits: self.rounding.forward(hidden.clone()),
             prev_word_logits: self.prev_word.forward(hidden.clone()),
             current_word_logits: self.current_word.forward(hidden.clone()),
             next_word_logits: self.next_word.forward(hidden.clone()),
@@ -378,6 +433,13 @@ pub struct AsrForward<B: Backend> {
     pub boundary_logits: Tensor<B, 3>,
     pub phoneme_logits: Tensor<B, 3>,
     pub phone_logits: Tensor<B, 3>,
+    pub place_logits: Tensor<B, 3>,
+    pub manner_logits: Tensor<B, 3>,
+    pub voicing_logits: Tensor<B, 3>,
+    pub syllabic_logits: Tensor<B, 3>,
+    pub height_logits: Tensor<B, 3>,
+    pub backness_logits: Tensor<B, 3>,
+    pub rounding_logits: Tensor<B, 3>,
     pub prev_word_logits: Tensor<B, 3>,
     pub current_word_logits: Tensor<B, 3>,
     pub next_word_logits: Tensor<B, 3>,
@@ -431,6 +493,10 @@ pub enum PrepareProgress {
     Transcribe {
         utterance_id: String,
         path: String,
+    },
+    ImportAudio {
+        source: String,
+        rows: usize,
     },
     Omit {
         utterance_id: String,
@@ -796,6 +862,15 @@ fn prepare_dataset_inner(
         rows.push(row);
     }
     utterance_writer.flush()?;
+    let imported = import_wiktionary_audio_rows(out, config, feature_bins, &detector, progress)?;
+    if !imported.is_empty() {
+        for row in &imported {
+            writeln!(utterance_writer, "{}", serde_json::to_string(row)?)?;
+            row_by_id.insert(row.utterance_id.clone(), row.clone());
+        }
+        utterance_writer.flush()?;
+        rows.extend(imported);
+    }
     write_prepare_state(out, "utterances", config, rows.len(), None)?;
 
     let mut shuffled = rows;
@@ -835,6 +910,12 @@ fn prepare_dataset_inner(
         &out.join("word_vocab.json"),
         serde_json::to_string_pretty(&word_vocab)?,
     )?;
+    for (name, vocab) in feature_vocabs() {
+        write_text_atomic(
+            &out.join(format!("{name}_vocab.json")),
+            serde_json::to_string_pretty(&vocab)?,
+        )?;
+    }
     let syntax_pos_vocab =
         build_syntax_pos_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
     write_text_atomic(
@@ -878,6 +959,356 @@ fn enrich_row_supervision(
     row.word_supervision = word_supervision(&row.sentences);
     row.masked_word_examples = masked_word_examples(&row.word_supervision, &row.transcript);
     Ok(())
+}
+
+fn import_wiktionary_audio_rows(
+    out: &Path,
+    config: &InterpretationConfig,
+    feature_bins: usize,
+    _detector: &SentenceDetectorDialog,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<Vec<LibriSpeechUtterance>> {
+    let Some(data_dir) = &config.wiktionary_audio_data_dir else {
+        return Ok(Vec::new());
+    };
+    let data_dir = Path::new(data_dir);
+    let patterns_path = data_dir.join("patterns.jsonl");
+    let mut pronunciations = load_wiktionary_pronunciation_map(data_dir)?;
+    let patterns = read_wiktionary_audio_patterns(&patterns_path, config.max_wiktionary_audio)?;
+    progress(PrepareProgress::ImportAudio {
+        source: patterns_path.display().to_string(),
+        rows: patterns.len(),
+    });
+    let audio_dir = out.join("source").join("wiktionary-audio");
+    fs::create_dir_all(&audio_dir).with_context(|| format!("creating {}", audio_dir.display()))?;
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (index, pattern) in patterns.into_iter().enumerate() {
+        let key = normalize_audio_key(&pattern.spelling);
+        let Some(bundle) = pronunciations.remove(&key) else {
+            continue;
+        };
+        let Some(filename) = pattern.values.first() else {
+            continue;
+        };
+        let Some(url) = commons_upload_url(filename) else {
+            continue;
+        };
+        let utterance_id = format!("wiktionary-audio-{index:06}");
+        if !seen.insert(utterance_id.clone()) {
+            continue;
+        }
+        let audio_path = audio_dir.join(safe_audio_filename(index, filename));
+        if (!audio_path.exists() || audio_path.metadata()?.len() == 0)
+            && config.download_wiktionary_audio
+        {
+            download_to_part(&url, &audio_path, progress)?;
+        }
+        if !audio_path.exists() || audio_path.metadata()?.len() == 0 {
+            progress(PrepareProgress::Omit {
+                utterance_id,
+                reason: format!(
+                    "wiktionary audio not downloaded; pass --download-wiktionary-audio for {}",
+                    url
+                ),
+            });
+            continue;
+        }
+        let samples = match read_audio_mono_16k(&audio_path) {
+            Ok(samples) => samples,
+            Err(err) => {
+                progress(PrepareProgress::Omit {
+                    utterance_id,
+                    reason: format!("could not decode {}: {err:#}", audio_path.display()),
+                });
+                continue;
+            }
+        };
+        let rel_mel = PathBuf::from("features").join(format!("{utterance_id}.mel.bin"));
+        let mel_path = out.join(&rel_mel);
+        let frames = match recover_feature_frames(&mel_path, feature_bins, config)? {
+            Some(frames) => frames,
+            None => {
+                let features = audio_features(&samples, config);
+                write_mel_file(&mel_path, &features, feature_bins)?;
+                progress(PrepareProgress::Features {
+                    utterance_id: utterance_id.clone(),
+                    rows: features.len(),
+                    path: mel_path.display().to_string(),
+                });
+                features.len()
+            }
+        };
+        let transcript = normalize_asr_transcript(&pattern.spelling);
+        let phones = bundle
+            .narrow
+            .clone()
+            .unwrap_or_else(|| bundle.broad.clone());
+        let sentence = SentenceSupervision {
+            text: transcript.clone(),
+            start_char: 0,
+            end_char: transcript.len(),
+            start_frame: 0,
+            end_frame: frames,
+            boundary_label: BOUNDARY_EMIT.to_string(),
+            terminal: None,
+            phonemes: bundle.broad.clone(),
+            phones,
+            phoneme_tokens: Vec::new(),
+            phone_tokens: Vec::new(),
+            syllables: Vec::new(),
+            boundaries: Vec::new(),
+            prosody: ProsodyTrack::default(),
+            warnings: Vec::new(),
+            syntax: SyntaxSupervision::default(),
+        };
+        let sentences = vec![sentence];
+        let word_supervision = word_supervision(&sentences);
+        rows.push(LibriSpeechUtterance {
+            utterance_id,
+            speaker_id: "wiktionary".to_string(),
+            chapter_id: pattern.lang.clone(),
+            audio_path: audio_path.display().to_string(),
+            mel_path: rel_mel.display().to_string(),
+            num_frames: frames,
+            sample_rate_hz: config.sample_rate_hz,
+            duration_ms: samples.len() as u64 * 1000 / config.sample_rate_hz as u64,
+            transcript: transcript.clone(),
+            repair_examples: Vec::new(),
+            masked_word_examples: masked_word_examples(&word_supervision, &transcript),
+            word_supervision,
+            sentences,
+        });
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Clone)]
+struct WiktionaryPronunciationBundle {
+    broad: String,
+    narrow: Option<String>,
+}
+
+fn load_wiktionary_pronunciation_map(
+    data_dir: &Path,
+) -> Result<BTreeMap<String, WiktionaryPronunciationBundle>> {
+    let mut map = BTreeMap::new();
+    load_wiktionary_pronunciation_file(&data_dir.join("phonemes.jsonl"), true, &mut map)?;
+    load_wiktionary_pronunciation_file(&data_dir.join("phones.jsonl"), false, &mut map)?;
+    Ok(map)
+}
+
+fn load_wiktionary_pronunciation_file(
+    path: &Path,
+    broad: bool,
+    map: &mut BTreeMap<String, WiktionaryPronunciationBundle>,
+) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry: tongues_wiktionary::PronunciationEntry =
+            serde_json::from_str(&line).with_context(|| format!("parsing {}", path.display()))?;
+        let key = normalize_audio_key(&entry.spelling);
+        let ipa = strip_ipa_delimiters(&entry.ipa);
+        let bundle = map
+            .entry(key)
+            .or_insert_with(|| WiktionaryPronunciationBundle {
+                broad: ipa.clone(),
+                narrow: None,
+            });
+        if broad {
+            bundle.broad = ipa;
+        } else {
+            bundle.narrow.get_or_insert(ipa);
+        }
+    }
+    Ok(())
+}
+
+fn read_wiktionary_audio_patterns(
+    path: &Path,
+    max_rows: Option<usize>,
+) -> Result<Vec<tongues_wiktionary::WiktionaryPattern>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let pattern: tongues_wiktionary::WiktionaryPattern =
+            serde_json::from_str(&line).with_context(|| format!("parsing {}", path.display()))?;
+        if pattern.kind == "audio" && !pattern.values.is_empty() {
+            out.push(pattern);
+            if out.len() >= max_rows.unwrap_or(usize::MAX) {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn read_audio_mono_16k(path: &Path) -> Result<Vec<f32>> {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("flac") => read_flac_mono(path),
+        Some("wav") => read_wav_mono_16k(path),
+        _ => read_audio_mono_16k_with_ffmpeg(path),
+    }
+}
+
+fn read_wav_mono_16k(path: &Path) -> Result<Vec<f32>> {
+    let mut reader =
+        hound::WavReader::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let spec = reader.spec();
+    anyhow::ensure!(
+        spec.sample_rate == DEFAULT_SAMPLE_RATE_HZ,
+        "expected 16 kHz WAV"
+    );
+    let channels = spec.channels.max(1) as usize;
+    let mut samples = Vec::new();
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            let mut acc = 0.0f32;
+            let mut channel = 0usize;
+            for sample in reader.samples::<f32>() {
+                acc += sample?;
+                channel += 1;
+                if channel == channels {
+                    samples.push(acc / channels as f32);
+                    acc = 0.0;
+                    channel = 0;
+                }
+            }
+        }
+        hound::SampleFormat::Int => {
+            let max = ((1_i64 << (spec.bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
+            let mut acc = 0.0f32;
+            let mut channel = 0usize;
+            for sample in reader.samples::<i32>() {
+                acc += sample? as f32 / max;
+                channel += 1;
+                if channel == channels {
+                    samples.push(acc / channels as f32);
+                    acc = 0.0;
+                    channel = 0;
+                }
+            }
+        }
+    }
+    Ok(samples)
+}
+
+fn read_audio_mono_16k_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
+    let output = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(path)
+        .arg("-f")
+        .arg("f32le")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg(DEFAULT_SAMPLE_RATE_HZ.to_string())
+        .arg("pipe:1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("running ffmpeg for {}", path.display()))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "ffmpeg failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut samples = Vec::with_capacity(output.stdout.len() / 4);
+    for chunk in output.stdout.chunks_exact(4) {
+        samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    Ok(samples)
+}
+
+fn commons_upload_url(filename_or_title: &str) -> Option<String> {
+    let filename = filename_or_title
+        .strip_prefix("File:")
+        .unwrap_or(filename_or_title)
+        .replace(' ', "_");
+    if filename.is_empty() {
+        return None;
+    }
+    let digest = format!("{:x}", md5::compute(filename.as_bytes()));
+    Some(format!(
+        "https://upload.wikimedia.org/wikipedia/commons/{}/{}/{}",
+        &digest[0..1],
+        &digest[0..2],
+        percent_encode(filename.as_bytes())
+    ))
+}
+
+fn safe_audio_filename(index: usize, filename_or_title: &str) -> String {
+    let filename = filename_or_title
+        .strip_prefix("File:")
+        .unwrap_or(filename_or_title);
+    let safe = filename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase();
+    format!(
+        "{index:06}-{}",
+        if safe.is_empty() { "audio" } else { &safe }
+    )
+}
+
+fn normalize_audio_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_ipa_delimiters(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('/')
+        .trim_start_matches('[')
+        .trim_end_matches('/')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+fn percent_encode(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -2228,6 +2659,65 @@ pub fn build_syntax_head_offset_vocab(rows: &[LibriSpeechUtterance]) -> Vocab {
     }
 }
 
+fn fixed_vocab(tokens: &[&str]) -> Vocab {
+    let tokens = tokens
+        .iter()
+        .map(|token| token.to_string())
+        .collect::<Vec<_>>();
+    let token_to_id = tokens
+        .iter()
+        .enumerate()
+        .map(|(idx, token)| (token.clone(), idx as u32))
+        .collect();
+    Vocab {
+        tokens,
+        token_to_id,
+    }
+}
+
+pub fn feature_vocabs() -> Vec<(&'static str, Vocab)> {
+    vec![
+        (
+            "place",
+            fixed_vocab(&[
+                CTC_BLANK, "none", "labial", "coronal", "dorsal", "front", "back", "central",
+            ]),
+        ),
+        (
+            "manner",
+            fixed_vocab(&[
+                CTC_BLANK,
+                "none",
+                "stop",
+                "fricative",
+                "nasal",
+                "approximant",
+                "vowel",
+            ]),
+        ),
+        (
+            "voicing",
+            fixed_vocab(&[CTC_BLANK, "none", "-voice", "+voice"]),
+        ),
+        (
+            "syllabic",
+            fixed_vocab(&[CTC_BLANK, "none", "-syllabic", "+syllabic"]),
+        ),
+        (
+            "height",
+            fixed_vocab(&[CTC_BLANK, "none", "high", "mid", "low", "nonvowel"]),
+        ),
+        (
+            "backness",
+            fixed_vocab(&[CTC_BLANK, "none", "front", "central", "back"]),
+        ),
+        (
+            "rounding",
+            fixed_vocab(&[CTC_BLANK, "none", "-round", "+round"]),
+        ),
+    ]
+}
+
 fn syntax_head_offset_label(offset: i32) -> String {
     offset.clamp(-7, 7).to_string()
 }
@@ -2246,6 +2736,15 @@ pub fn save_artifact_files(
     )?;
     fs::copy(data.join("phone_vocab.json"), out.join("phone_vocab.json"))?;
     fs::copy(data.join("word_vocab.json"), out.join("word_vocab.json"))?;
+    for (name, vocab) in feature_vocabs() {
+        let src = data.join(format!("{name}_vocab.json"));
+        let dst = out.join(format!("{name}_vocab.json"));
+        if src.exists() {
+            fs::copy(src, dst)?;
+        } else {
+            fs::write(dst, serde_json::to_string_pretty(&vocab)?)?;
+        }
+    }
     fs::copy(
         data.join("syntax_pos_vocab.json"),
         out.join("syntax_pos_vocab.json"),
@@ -2796,6 +3295,24 @@ struct AsrBatch<B: Backend> {
     phoneme_labels: Tensor<B, 2, Int>,
     phone_labels: Tensor<B, 2, Int>,
     input_lengths: Tensor<B, 1, Int>,
+    phoneme_targets: Tensor<B, 2, Int>,
+    phoneme_target_lengths: Tensor<B, 1, Int>,
+    phone_targets: Tensor<B, 2, Int>,
+    phone_target_lengths: Tensor<B, 1, Int>,
+    place_targets: Tensor<B, 2, Int>,
+    place_target_lengths: Tensor<B, 1, Int>,
+    manner_targets: Tensor<B, 2, Int>,
+    manner_target_lengths: Tensor<B, 1, Int>,
+    voicing_targets: Tensor<B, 2, Int>,
+    voicing_target_lengths: Tensor<B, 1, Int>,
+    syllabic_targets: Tensor<B, 2, Int>,
+    syllabic_target_lengths: Tensor<B, 1, Int>,
+    height_targets: Tensor<B, 2, Int>,
+    height_target_lengths: Tensor<B, 1, Int>,
+    backness_targets: Tensor<B, 2, Int>,
+    backness_target_lengths: Tensor<B, 1, Int>,
+    rounding_targets: Tensor<B, 2, Int>,
+    rounding_target_lengths: Tensor<B, 1, Int>,
     prev_word_targets: Tensor<B, 2, Int>,
     prev_word_target_lengths: Tensor<B, 1, Int>,
     current_word_targets: Tensor<B, 2, Int>,
@@ -2852,6 +3369,15 @@ fn make_batch<B: Backend>(
     let mut next_word_sequences = Vec::new();
     let mut masked_word_sequences = Vec::new();
     let mut masked_word_phoneme_sequences = Vec::new();
+    let mut phoneme_sequences = Vec::new();
+    let mut phone_sequences = Vec::new();
+    let mut place_sequences = Vec::new();
+    let mut manner_sequences = Vec::new();
+    let mut voicing_sequences = Vec::new();
+    let mut syllabic_sequences = Vec::new();
+    let mut height_sequences = Vec::new();
+    let mut backness_sequences = Vec::new();
+    let mut rounding_sequences = Vec::new();
     for row in rows {
         let input_len = row.num_frames.min(max_frames).max(1);
         input_lengths.push(input_len as i32);
@@ -2884,6 +3410,42 @@ fn make_batch<B: Backend>(
         ));
         parse_ok_labels.extend(parse_ok_labels_for(row, max_frames));
         phrase_boundary_labels.extend(phrase_boundary_labels_for(row, max_frames));
+        phoneme_sequences.push(ctc_target_within_input(
+            phoneme_targets(row, phoneme_vocab),
+            input_len,
+        ));
+        phone_sequences.push(ctc_target_within_input(
+            phone_targets(row, phone_vocab),
+            input_len,
+        ));
+        place_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Place),
+            input_len,
+        ));
+        manner_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Manner),
+            input_len,
+        ));
+        voicing_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Voicing),
+            input_len,
+        ));
+        syllabic_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Syllabic),
+            input_len,
+        ));
+        height_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Height),
+            input_len,
+        ));
+        backness_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Backness),
+            input_len,
+        ));
+        rounding_sequences.push(ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Rounding),
+            input_len,
+        ));
         prev_word_sequences.push(ctc_target_within_input(
             previous_word_targets(row, word_vocab),
             input_len,
@@ -2915,6 +3477,24 @@ fn make_batch<B: Backend>(
         pad_compact_targets(masked_word_sequences, word_vocab.get_id(WORD_UNK));
     let (masked_word_phoneme_targets, masked_word_phoneme_target_lengths, masked_phoneme_width) =
         pad_compact_targets(masked_word_phoneme_sequences, 1);
+    let (phoneme_targets, phoneme_target_lengths, phoneme_width) =
+        pad_compact_targets(phoneme_sequences, 1);
+    let (phone_targets, phone_target_lengths, phone_width) =
+        pad_compact_targets(phone_sequences, 1);
+    let (place_targets, place_target_lengths, place_width) =
+        pad_compact_targets(place_sequences, 1);
+    let (manner_targets, manner_target_lengths, manner_width) =
+        pad_compact_targets(manner_sequences, 1);
+    let (voicing_targets, voicing_target_lengths, voicing_width) =
+        pad_compact_targets(voicing_sequences, 1);
+    let (syllabic_targets, syllabic_target_lengths, syllabic_width) =
+        pad_compact_targets(syllabic_sequences, 1);
+    let (height_targets, height_target_lengths, height_width) =
+        pad_compact_targets(height_sequences, 1);
+    let (backness_targets, backness_target_lengths, backness_width) =
+        pad_compact_targets(backness_sequences, 1);
+    let (rounding_targets, rounding_target_lengths, rounding_width) =
+        pad_compact_targets(rounding_sequences, 1);
     Ok(AsrBatch {
         mel: Tensor::<B, 3>::from_data(
             TensorData::new(mel, [rows.len(), max_frames, mel_bins]),
@@ -2946,6 +3526,78 @@ fn make_batch<B: Backend>(
         ),
         input_lengths: Tensor::<B, 1, Int>::from_data(
             TensorData::new(input_lengths, [rows.len()]),
+            device,
+        ),
+        phoneme_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(phoneme_targets, [rows.len(), phoneme_width]),
+            device,
+        ),
+        phoneme_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(phoneme_target_lengths, [rows.len()]),
+            device,
+        ),
+        phone_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(phone_targets, [rows.len(), phone_width]),
+            device,
+        ),
+        phone_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(phone_target_lengths, [rows.len()]),
+            device,
+        ),
+        place_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(place_targets, [rows.len(), place_width]),
+            device,
+        ),
+        place_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(place_target_lengths, [rows.len()]),
+            device,
+        ),
+        manner_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(manner_targets, [rows.len(), manner_width]),
+            device,
+        ),
+        manner_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(manner_target_lengths, [rows.len()]),
+            device,
+        ),
+        voicing_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(voicing_targets, [rows.len(), voicing_width]),
+            device,
+        ),
+        voicing_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(voicing_target_lengths, [rows.len()]),
+            device,
+        ),
+        syllabic_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(syllabic_targets, [rows.len(), syllabic_width]),
+            device,
+        ),
+        syllabic_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(syllabic_target_lengths, [rows.len()]),
+            device,
+        ),
+        height_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(height_targets, [rows.len(), height_width]),
+            device,
+        ),
+        height_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(height_target_lengths, [rows.len()]),
+            device,
+        ),
+        backness_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(backness_targets, [rows.len(), backness_width]),
+            device,
+        ),
+        backness_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(backness_target_lengths, [rows.len()]),
+            device,
+        ),
+        rounding_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(rounding_targets, [rows.len(), rounding_width]),
+            device,
+        ),
+        rounding_target_lengths: Tensor::<B, 1, Int>::from_data(
+            TensorData::new(rounding_target_lengths, [rows.len()]),
             device,
         ),
         prev_word_targets: Tensor::<B, 2, Int>::from_data(
@@ -3022,8 +3674,67 @@ fn weighted_loss<B: Backend>(
     let transcript_loss = ce_loss(output.transcript_logits, batch.transcript_labels, 0);
     let seq2seq_loss = ce_loss(output.seq2seq_transcript_logits, batch.seq2seq_labels, 0);
     let boundary_loss = ce_loss(output.boundary_logits, batch.boundary_labels, usize::MAX);
-    let phoneme_loss = ce_loss(output.phoneme_logits, batch.phoneme_labels, 0);
-    let phone_loss = ce_loss(output.phone_logits, batch.phone_labels, 0);
+    let phoneme_frame_loss = ce_loss(output.phoneme_logits.clone(), batch.phoneme_labels, 0);
+    let phone_frame_loss = ce_loss(output.phone_logits.clone(), batch.phone_labels, 0);
+    let phoneme_ctc_loss = ctc_loss(
+        output.phoneme_logits,
+        batch.phoneme_targets,
+        batch.input_lengths.clone(),
+        batch.phoneme_target_lengths,
+        0,
+    );
+    let phone_ctc_loss = ctc_loss(
+        output.phone_logits,
+        batch.phone_targets,
+        batch.input_lengths.clone(),
+        batch.phone_target_lengths,
+        0,
+    );
+    let phoneme_loss = phoneme_frame_loss + phoneme_ctc_loss;
+    let phone_loss = phone_frame_loss + phone_ctc_loss;
+    let feature_ctc_loss = ctc_loss(
+        output.place_logits,
+        batch.place_targets,
+        batch.input_lengths.clone(),
+        batch.place_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.manner_logits,
+        batch.manner_targets,
+        batch.input_lengths.clone(),
+        batch.manner_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.voicing_logits,
+        batch.voicing_targets,
+        batch.input_lengths.clone(),
+        batch.voicing_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.syllabic_logits,
+        batch.syllabic_targets,
+        batch.input_lengths.clone(),
+        batch.syllabic_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.height_logits,
+        batch.height_targets,
+        batch.input_lengths.clone(),
+        batch.height_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.backness_logits,
+        batch.backness_targets,
+        batch.input_lengths.clone(),
+        batch.backness_target_lengths,
+        0,
+    ) + ctc_loss(
+        output.rounding_logits,
+        batch.rounding_targets,
+        batch.input_lengths.clone(),
+        batch.rounding_target_lengths,
+        0,
+    );
     let prev_word_loss = ctc_loss(
         output.prev_word_logits,
         batch.prev_word_targets,
@@ -3077,6 +3788,7 @@ fn weighted_loss<B: Backend>(
         + boundary_loss * (config.boundary_loss_weight + config.repair_loss_weight)
         + phoneme_loss * config.phoneme_loss_weight
         + phone_loss * config.phone_loss_weight
+        + feature_ctc_loss * config.feature_ctc_loss_weight
         + prev_word_loss * config.prev_word_loss_weight
         + current_word_loss * config.current_word_loss_weight
         + next_word_loss * config.next_word_loss_weight
@@ -3204,6 +3916,202 @@ fn masked_word_phoneme_targets(row: &LibriSpeechUtterance, vocab: &Vocab) -> Vec
         .flat_map(|masked| masked.masked_word_phonemes.split_whitespace())
         .map(|phoneme| nonblank_id(vocab, phoneme) as i32)
         .collect()
+}
+
+fn phoneme_targets(row: &LibriSpeechUtterance, vocab: &Vocab) -> Vec<i32> {
+    row.sentences
+        .iter()
+        .flat_map(sentence_phoneme_labels)
+        .map(|phoneme| nonblank_id(vocab, &phoneme) as i32)
+        .collect()
+}
+
+fn phone_targets(row: &LibriSpeechUtterance, vocab: &Vocab) -> Vec<i32> {
+    row.sentences
+        .iter()
+        .flat_map(|sentence| sentence.phones.split_whitespace())
+        .map(|phone| nonblank_id(vocab, phone) as i32)
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum FeatureAxis {
+    Place,
+    Manner,
+    Voicing,
+    Syllabic,
+    Height,
+    Backness,
+    Rounding,
+}
+
+fn feature_targets(row: &LibriSpeechUtterance, axis: FeatureAxis) -> Vec<i32> {
+    row.sentences
+        .iter()
+        .flat_map(|sentence| sentence.phones.split_whitespace())
+        .map(|phone| feature_id(axis, phone) as i32)
+        .collect()
+}
+
+fn feature_id(axis: FeatureAxis, phone: &str) -> u32 {
+    match axis {
+        FeatureAxis::Place => match phone_place(phone) {
+            "labial" => 2,
+            "coronal" => 3,
+            "dorsal" => 4,
+            "front" => 5,
+            "back" => 6,
+            "central" => 7,
+            _ => 1,
+        },
+        FeatureAxis::Manner => match phone_manner(phone) {
+            "stop" => 2,
+            "fricative" => 3,
+            "nasal" => 4,
+            "approximant" => 5,
+            "vowel" => 6,
+            _ => 1,
+        },
+        FeatureAxis::Voicing => {
+            if phone_is_vowel(phone)
+                || phone_is_sonorant(phone)
+                || voiced_obstruents().contains(&phone_base(phone))
+            {
+                3
+            } else if voiceless_obstruents().contains(&phone_base(phone)) {
+                2
+            } else {
+                1
+            }
+        }
+        FeatureAxis::Syllabic => {
+            if phone_is_vowel(phone) {
+                3
+            } else {
+                2
+            }
+        }
+        FeatureAxis::Height => match phone_height(phone) {
+            "high" => 2,
+            "mid" => 3,
+            "low" => 4,
+            "nonvowel" => 5,
+            _ => 1,
+        },
+        FeatureAxis::Backness => match phone_backness(phone) {
+            "front" => 2,
+            "central" => 3,
+            "back" => 4,
+            _ => 1,
+        },
+        FeatureAxis::Rounding => {
+            if phone_is_vowel(phone) || phone_base(phone) == "w" {
+                if rounded_phones().contains(&phone_base(phone)) {
+                    3
+                } else {
+                    2
+                }
+            } else {
+                1
+            }
+        }
+    }
+}
+
+fn phone_base(phone: &str) -> &str {
+    phone
+        .trim_matches(|ch: char| matches!(ch, 'ˈ' | 'ˌ' | 'ː' | 'ʰ' | 'ʲ' | 'ʷ' | 'ˠ'))
+        .split(['͡', '͜'])
+        .next()
+        .unwrap_or(phone)
+}
+
+fn phone_is_vowel(phone: &str) -> bool {
+    "aeiouyæɑɒɔəɚɛɜɞɪiʊuʌøœɯɨɐ"
+        .chars()
+        .any(|ch| phone_base(phone).starts_with(ch))
+}
+
+fn phone_is_sonorant(phone: &str) -> bool {
+    ["m", "n", "ŋ", "ɲ", "l", "ɫ", "r", "ɹ", "ɾ", "j", "w", "ʋ"].contains(&phone_base(phone))
+}
+
+fn voiced_obstruents() -> &'static [&'static str] {
+    &["b", "d", "g", "v", "z", "ʒ", "ð", "ɣ", "ʁ"]
+}
+
+fn voiceless_obstruents() -> &'static [&'static str] {
+    &["p", "t", "k", "f", "s", "ʃ", "θ", "x", "h", "q", "χ", "ʔ"]
+}
+
+fn rounded_phones() -> &'static [&'static str] {
+    &["u", "ʊ", "o", "ɔ", "ø", "œ", "w"]
+}
+
+fn phone_place(phone: &str) -> &'static str {
+    let base = phone_base(phone);
+    if ["p", "b", "m", "f", "v", "ʋ", "w"].contains(&base) {
+        "labial"
+    } else if [
+        "t", "d", "s", "z", "ʃ", "ʒ", "θ", "ð", "ɹ", "ɾ", "ɫ", "l", "n",
+    ]
+    .contains(&base)
+    {
+        "coronal"
+    } else if ["k", "g", "x", "ɣ", "ŋ", "q", "χ", "ʁ"].contains(&base) {
+        "dorsal"
+    } else if phone_is_vowel(base) {
+        phone_backness(base)
+    } else {
+        "none"
+    }
+}
+
+fn phone_manner(phone: &str) -> &'static str {
+    let base = phone_base(phone);
+    if phone_is_vowel(base) {
+        "vowel"
+    } else if ["p", "b", "t", "d", "k", "g", "q", "ʔ"].contains(&base) {
+        "stop"
+    } else if [
+        "f", "v", "s", "z", "ʃ", "ʒ", "θ", "ð", "x", "h", "ɣ", "χ", "ʁ",
+    ]
+    .contains(&base)
+    {
+        "fricative"
+    } else if ["m", "n", "ŋ", "ɲ"].contains(&base) {
+        "nasal"
+    } else if ["l", "ɫ", "r", "ɹ", "ɾ", "j", "w", "ʋ"].contains(&base) {
+        "approximant"
+    } else {
+        "none"
+    }
+}
+
+fn phone_height(phone: &str) -> &'static str {
+    let base = phone_base(phone);
+    if !phone_is_vowel(base) {
+        "nonvowel"
+    } else if ["i", "ɪ", "u", "ʊ", "ɨ", "ɯ", "y"].contains(&base) {
+        "high"
+    } else if ["æ", "a", "ɑ", "ɒ"].contains(&base) {
+        "low"
+    } else {
+        "mid"
+    }
+}
+
+fn phone_backness(phone: &str) -> &'static str {
+    let base = phone_base(phone);
+    if !phone_is_vowel(base) {
+        "none"
+    } else if ["i", "ɪ", "e", "ɛ", "æ", "y", "ø", "œ"].contains(&base) {
+        "front"
+    } else if ["u", "ʊ", "o", "ɔ", "ɑ", "ɒ", "ʌ", "ɯ"].contains(&base) {
+        "back"
+    } else {
+        "central"
+    }
 }
 
 fn pad_compact_targets(
@@ -3493,6 +4401,13 @@ pub fn evaluate<B: Backend>(
                 boundary_logits: output.boundary_logits.clone(),
                 phoneme_logits: output.phoneme_logits.clone(),
                 phone_logits: output.phone_logits.clone(),
+                place_logits: output.place_logits.clone(),
+                manner_logits: output.manner_logits.clone(),
+                voicing_logits: output.voicing_logits.clone(),
+                syllabic_logits: output.syllabic_logits.clone(),
+                height_logits: output.height_logits.clone(),
+                backness_logits: output.backness_logits.clone(),
+                rounding_logits: output.rounding_logits.clone(),
                 prev_word_logits: output.prev_word_logits.clone(),
                 current_word_logits: output.current_word_logits.clone(),
                 next_word_logits: output.next_word_logits.clone(),
@@ -3842,6 +4757,65 @@ mod tests {
         };
         assert_eq!(greedy_collapse(&[0, 1, 1, 0, 2], &vocab), "AB");
         assert_eq!(ctc_greedy_decode(&[0, 1, 1, 0, 2], 0), vec![1, 2]);
+    }
+
+    #[test]
+    fn computes_commons_upload_url_for_wiktionary_audio() {
+        assert_eq!(
+            commons_upload_url("Acca_word.ogg").as_deref(),
+            Some("https://upload.wikimedia.org/wikipedia/commons/b/be/Acca_word.ogg")
+        );
+    }
+
+    #[test]
+    fn phoneme_and_phone_targets_are_ctc_sequences() {
+        let row = LibriSpeechUtterance {
+            utterance_id: "u".into(),
+            speaker_id: "s".into(),
+            chapter_id: "c".into(),
+            audio_path: "a.flac".into(),
+            mel_path: "m.bin".into(),
+            num_frames: 20,
+            sample_rate_hz: DEFAULT_SAMPLE_RATE_HZ,
+            duration_ms: 100,
+            transcript: "CAT".into(),
+            sentences: vec![SentenceSupervision {
+                text: "CAT".into(),
+                start_char: 0,
+                end_char: 3,
+                start_frame: 0,
+                end_frame: 20,
+                boundary_label: BOUNDARY_EMIT.into(),
+                terminal: None,
+                phonemes: "k æ t".into(),
+                phones: "kʰ æ t".into(),
+                phoneme_tokens: Vec::new(),
+                phone_tokens: Vec::new(),
+                syllables: Vec::new(),
+                boundaries: Vec::new(),
+                prosody: ProsodyTrack::default(),
+                warnings: Vec::new(),
+                syntax: SyntaxSupervision::default(),
+            }],
+            repair_examples: Vec::new(),
+            word_supervision: Vec::new(),
+            masked_word_examples: Vec::new(),
+        };
+        let phoneme_vocab = build_phoneme_vocab(std::slice::from_ref(&row));
+        let phone_vocab = build_phone_vocab(std::slice::from_ref(&row));
+        assert_eq!(phoneme_targets(&row, &phoneme_vocab).len(), 3);
+        assert_eq!(phone_targets(&row, &phone_vocab).len(), 3);
+        assert!(phoneme_targets(&row, &phoneme_vocab)
+            .iter()
+            .all(|id| *id > 0));
+        assert!(phone_targets(&row, &phone_vocab).iter().all(|id| *id > 0));
+        assert_eq!(feature_targets(&row, FeatureAxis::Place), vec![4, 5, 3]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Manner), vec![2, 6, 2]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Voicing), vec![2, 3, 2]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Syllabic), vec![2, 3, 2]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Height), vec![5, 4, 5]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Backness), vec![1, 2, 1]);
+        assert_eq!(feature_targets(&row, FeatureAxis::Rounding), vec![1, 2, 1]);
     }
 
     #[test]

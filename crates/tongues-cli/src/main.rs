@@ -917,7 +917,7 @@ enum InterpretationCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
-    /// Prepare LibriSpeech ASR data with Mel, sentence, and phoneme supervision
+    /// Prepare sentence and pronunciation audio with Mel, sentence, and phoneme supervision
     Prepare {
         /// LibriSpeech subset: mini or train-clean-100
         #[arg(long, default_value = "mini")]
@@ -930,6 +930,22 @@ enum InterpretationCommands {
         /// Limit utterances for smoke tests
         #[arg(long)]
         max_utterances: Option<usize>,
+
+        /// Prepared Wiktionary dataset to import single-word Commons pronunciation audio from
+        #[arg(long)]
+        wiktionary_audio_data: Option<PathBuf>,
+
+        /// Do not import Wiktionary/Commons pronunciation audio rows
+        #[arg(long)]
+        no_wiktionary_audio: bool,
+
+        /// Limit imported Wiktionary audio rows for smoke tests
+        #[arg(long)]
+        max_wiktionary_audio: Option<usize>,
+
+        /// Do not download missing Wiktionary/Commons pronunciation audio files
+        #[arg(long)]
+        no_download_wiktionary_audio: bool,
 
         /// Whisper ggml model path for transcript recasing/punctuation.
         #[arg(long)]
@@ -4779,6 +4795,10 @@ fn run_interpretation_command(
             subset,
             out,
             max_utterances,
+            wiktionary_audio_data,
+            no_wiktionary_audio,
+            max_wiktionary_audio,
+            no_download_wiktionary_audio,
             whisper_model,
             no_whisper_transcripts,
             max_whisper_wer,
@@ -4799,8 +4819,20 @@ fn run_interpretation_command(
                 ..InterpretationConfig::default()
             };
             config.max_utterances = max_utterances;
+            if let Some(path) = wiktionary_audio_data {
+                config.wiktionary_audio_data_dir = Some(path.display().to_string());
+            }
+            if no_wiktionary_audio {
+                config.wiktionary_audio_data_dir = None;
+            }
+            if let Some(max_wiktionary_audio) = max_wiktionary_audio {
+                config.max_wiktionary_audio = Some(max_wiktionary_audio);
+            }
+            if no_download_wiktionary_audio {
+                config.download_wiktionary_audio = false;
+            }
             let pb = status_spinner(format!(
-                "Preparing LibriSpeech ASR dataset at {}",
+                "Preparing interpretation dataset at {}",
                 out.display()
             ));
             let progress = {
@@ -4863,7 +4895,7 @@ fn run_interpretation_command(
             finish_status(
                 pb,
                 format!(
-                    "Prepared LibriSpeech ASR dataset at {}: {} train / {} valid / {} test utterances",
+                    "Prepared interpretation dataset at {}: {} train / {} valid / {} test utterances",
                     out.display(),
                     format_count(report.train_examples),
                     format_count(report.valid_examples),
@@ -5024,6 +5056,13 @@ fn interpretation_prepare_progress_message(
                 utterance_id, path
             )
         }
+        tongues_interpretation::PrepareProgress::ImportAudio { source, rows } => {
+            format!(
+                "Importing {} Wiktionary audio rows from {}",
+                format_count(rows),
+                source
+            )
+        }
         tongues_interpretation::PrepareProgress::Omit {
             utterance_id,
             reason,
@@ -5162,13 +5201,14 @@ fn cmd_interpretation_train(
     );
     println!("  best model: {}", out.join("model.bin").display());
     println!(
-        "  loss weights: transcript={} seq2seq={} boundary={} repair={} phoneme={} phone={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} syntax={} masked_audio={}",
+        "  loss weights: transcript={} seq2seq={} boundary={} repair={} phoneme(frame+ctc)={} phone(frame+ctc)={} feature_ctc={} prev_word={} current_word={} next_word={} masked_word={} masked_word_phoneme={} syntax={} masked_audio={}",
         train_config.transcript_loss_weight,
         train_config.seq2seq_loss_weight,
         train_config.boundary_loss_weight,
         train_config.repair_loss_weight,
         train_config.phoneme_loss_weight,
         train_config.phone_loss_weight,
+        train_config.feature_ctc_loss_weight,
         train_config.prev_word_loss_weight,
         train_config.current_word_loss_weight,
         train_config.next_word_loss_weight,
@@ -5177,6 +5217,7 @@ fn cmd_interpretation_train(
         train_config.syntax_loss_weight,
         train_config.masked_audio_loss_weight
     );
+    println!("  feature CTC heads: place, manner, voicing, syllabic, height, backness, rounding");
     let model_path = out.join("model");
     let best = match device_arg {
         DeviceArg::Cpu => {

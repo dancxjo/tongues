@@ -47,6 +47,17 @@ repunctuates transcripts with the default Whisper ASR model, and then writes
 `syntax_pos_vocab.json`, `syntax_link_vocab.json`,
 `syntax_head_offset_vocab.json`, `dataset_config.json`, and `README.md`.
 
+By default, prepare also looks for the prepared Wiktionary dataset at
+`datasets/wiktionary/enwiktionary-2026-06-01-v0`. When that dataset exists, it
+reads `patterns.jsonl` for `{{audio}}` rows, joins them to `phonemes.jsonl` and
+`phones.jsonl`, computes the direct Commons upload URL from the audio filename,
+downloads a bounded set of pronunciation audio files, decodes them, writes
+matching `features/*.mel.bin`, and adds those single-word pronunciation rows
+beside the LibriSpeech sentence rows. Use `--no-wiktionary-audio` to skip this,
+`--wiktionary-audio-data` to point at a different prepared Wiktionary dataset,
+`--max-wiktionary-audio` to change the import limit, or
+`--no-download-wiktionary-audio` to reuse only already-downloaded audio.
+
 Despite the `.mel.bin` suffix, new feature files contain the compact acoustic
 vector by default:
 
@@ -147,9 +158,10 @@ checkpoint with a fresh optimizer and reduced resume learning rate.
 
 The v1 model exposes streaming CTC-style greedy collapse, a seq-style transcript
 head, a sentence-boundary head, a repair class, phoneme and phone heads,
-word-context heads, masked-word cloze heads, syntax heads, and masked feature
-reconstruction. The forward objectives train audio to orthographic transcript
-characters, phonemes, phones, and previous/current/next word labels. The
+weakly supervised phonetic-feature CTC heads, word-context heads, masked-word
+cloze heads, syntax heads, and masked feature reconstruction. The forward
+objectives train audio to orthographic transcript characters, phonemes, phones,
+ordered feature axes, and previous/current/next word labels. The
 seq-style transcript objective trains a bounded after-utterance character target
 over the first `max_seq2seq_tokens` positions. The masked cloze objective hides
 a word span and trains the model to recover the word and its phonemes. The
@@ -158,12 +170,18 @@ asks the model to reconstruct the original compact features, which is the first
 `back to audio` training path before adding a vocoder.
 
 The event head learns three frame labels: continue, sentence emit, and repair.
-V1 trains the word heads with Burn's native `CTCLoss`, using CTC-style blank
-tokens, compact target word sequences, input/target lengths, log-probabilities,
-and greedy-collapse decoding. Transcript/phoneme/phone frame heads are still
-simple proportional frame labels. The artifact architecture records this as
-`streaming-mel-native-ctc`; the name is historical, and current prepared inputs
-are compact acoustic features rather than Mel-only frames.
+V1 trains the phoneme, phone, word, masked-word, and masked-word-phoneme heads
+with Burn's native `CTCLoss`, using CTC-style blank tokens, compact target
+sequences, input/target lengths, log-probabilities, and greedy-collapse
+decoding. The phoneme and phone heads also keep a proportional frame-label CE
+auxiliary loss as a stabilizer, but their ordered sequence objective is CTC so
+the alignment can emerge from the audio. The feature heads train separate CTC
+targets for place, manner, voicing, syllabic, vowel height, vowel backness, and
+rounding. They only receive ordered symbolic supervision derived from the phone
+sequence, not forced-alignment spans, so temporal feature ribbons can emerge
+from the audio. The artifact architecture records this as
+`streaming-mel-native-ctc`; current prepared inputs are compact acoustic
+features rather than Mel-only frames.
 
 ## Eval
 
