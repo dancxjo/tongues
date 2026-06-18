@@ -1339,6 +1339,7 @@ pub fn extract_page_data(
     if config.synthesize_spanish
         && allowed.contains("es")
         && has_language_section(wikitext, "Spanish")
+        && should_synthesize_spanish_title(spelling)
     {
         for (variety, ipa) in spanish::synthetic_pronunciations(spelling) {
             let key = format!("spa\t{spelling}\t{ipa}");
@@ -1376,6 +1377,13 @@ pub fn extract_page_data(
     }
     data.etymologies = extract_entry_etymologies(spelling, wikitext, &allowed);
     data
+}
+
+fn should_synthesize_spanish_title(spelling: &str) -> bool {
+    let letters = spelling.chars().filter(|c| c.is_alphabetic());
+    let uppercase = letters.clone().filter(|c| c.is_uppercase()).count();
+    let lowercase = letters.filter(|c| c.is_lowercase()).count();
+    lowercase > 0 && uppercase <= 1
 }
 
 pub fn extract_entry_etymologies(
@@ -4054,7 +4062,8 @@ fn wiktionary_ollama_verification_prompt_with_row_count(
          - EtymologyTranslation rows are used by PIE datasets. input must include <task:etymology_translate>, <from:...>, <to:...>, and =>. output is the target descendant or reconstructed form; leading * on reconstructed forms is valid.\n\n\
          General checks:\n\
          - input should contain exactly one task tag matching the task field.\n\
-         - input should usually contain => separating source-side controls/text from target-side context; report only if the separator is visibly missing.\n\
+         - Do not require => for ordinary source-only tasks; in JSONL rows the output field is the target.\n\
+         - Require => only for task shapes that encode two source-side values, such as GuessLangFromOrthographyAndPhonology and EtymologyTranslation.\n\
          - output should not be empty, null, a placeholder, JSON, Markdown, or an instruction.\n\
          - source should name a source artifact or corpus and should not be empty.\n\
          - Pronunciation text may contain IPA, stress marks, syllable dots, length marks, tie bars, diacritics, spaces, hyphens, apostrophes, and punctuation. Do not report unfamiliar IPA by itself.\n\
@@ -4062,12 +4071,12 @@ fn wiktionary_ollama_verification_prompt_with_row_count(
          - Metadata controls inside <META> ... </META>, such as <accent:rp>, <region:canada>, and <feature:non_ae_tensing>, are valid.\n\
          - Do not verify that a pronunciation, spelling, or etymology is factually correct. Only detect obvious row-shape, task-tag, control-tag, delimiter, escaping, empty-output, and task/output consistency problems.\n\n\
          Good examples that should return {{\"sane\":true,\"issue\":null}}:\n\
-         - {{\"audit_row\":1,\"task\":\"orthography-to-phonology\",\"lang\":\"eng\",\"notation\":\"phonetic\",\"input\":\"<task:orthography_to_phonology> <lang:eng> <repr:phones> disease =>\",\"output\":\"dəˈziːz\",\"source\":\"phones.jsonl\"}}\n\
-         - {{\"audit_row\":2,\"task\":\"phonology-to-orthography\",\"lang\":\"eng\",\"notation\":\"phonemic\",\"input\":\"<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz =>\",\"output\":\"disease\",\"source\":\"phonemes.jsonl\"}}\n\
+         - {{\"audit_row\":1,\"task\":\"orthography-to-phonology\",\"lang\":\"eng\",\"notation\":\"phonetic\",\"input\":\"<task:orthography_to_phonology> <lang:eng> <repr:phones> disease\",\"output\":\"dəˈziːz\",\"source\":\"phones.jsonl\"}}\n\
+         - {{\"audit_row\":2,\"task\":\"phonology-to-orthography\",\"lang\":\"eng\",\"notation\":\"phonemic\",\"input\":\"<task:phonology_to_orthography> <lang:eng> <repr:phonemes> dəˈziːz\",\"output\":\"disease\",\"source\":\"phonemes.jsonl\"}}\n\
          - {{\"audit_row\":3,\"task\":\"etymology-translation\",\"input\":\"<task:etymology_translate> <from:ine-pro> <to:la> *meh2ter =>\",\"output\":\"mater\",\"source\":\"pie_roots.jsonl\"}}\n\n\
          Bad examples that should return sane=false:\n\
-         - {{\"audit_row\":4,\"task\":\"orthography-to-phonology\",\"lang\":\"eng\",\"notation\":\"phonetic\",\"input\":\"<task:phonology_to_orthography> <lang:eng> <repr:phones> disease =>\",\"output\":\"dəˈziːz\",\"source\":\"phones.jsonl\"}} is bad: task field and input task tag disagree.\n\
-         - {{\"audit_row\":5,\"task\":\"phonetic-realization\",\"lang\":\"eng\",\"notation\":\"phonemic\",\"input\":\"<task:phonetic_realization> <lang:eng> ˈaɪələnd =>\",\"output\":\"\",\"source\":\"phones.jsonl\"}} is bad: output is empty.\n\
+         - {{\"audit_row\":4,\"task\":\"orthography-to-phonology\",\"lang\":\"eng\",\"notation\":\"phonetic\",\"input\":\"<task:phonology_to_orthography> <lang:eng> <repr:phones> disease\",\"output\":\"dəˈziːz\",\"source\":\"phones.jsonl\"}} is bad: task field and input task tag disagree.\n\
+         - {{\"audit_row\":5,\"task\":\"phonetic-realization\",\"lang\":\"eng\",\"notation\":\"phonemic\",\"input\":\"<task:phonetic_realization> <lang:eng> ˈaɪələnd\",\"output\":\"\",\"source\":\"phones.jsonl\"}} is bad: output is empty.\n\
          - {{\"audit_row\":6,\"task\":\"etymology-translation\",\"input\":\"<task:etymology_translate> <from:ine-pro> *meh2ter =>\",\"output\":\"mater\",\"source\":\"pie_roots.jsonl\"}} is bad: <to:...> is missing.\n\n\
          JSONL rows to audit:\n{jsonl}"
     ), included_rows))
@@ -4324,7 +4333,7 @@ mod tests {
                 lang: Some("eng".to_string()),
                 notation: Some("phonetic".to_string()),
                 accent: None,
-                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> disease =>"
+                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> disease"
                     .to_string(),
                 output: "dəˈziːz".to_string(),
                 source: "phones.jsonl".to_string(),
@@ -4344,6 +4353,7 @@ mod tests {
         assert_eq!(included, 2);
         assert!(prompt.contains("<task:orthography_to_phonology>"));
         assert!(prompt.contains("<task:etymology_translate>"));
+        assert!(prompt.contains("Do not require => for ordinary source-only tasks"));
         assert!(prompt.contains("VerifyPronunciation rows are contrastive GOOD/BAD"));
         assert!(prompt.contains("\"audit_row\":1"));
     }
@@ -4358,7 +4368,7 @@ mod tests {
                 lang: Some("eng".to_string()),
                 notation: Some("phonetic".to_string()),
                 accent: None,
-                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> disease =>"
+                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> disease"
                     .to_string(),
                 output: "dəˈziːz".to_string(),
                 source: "phones.jsonl".to_string(),
@@ -4368,7 +4378,7 @@ mod tests {
                 lang: Some("eng".to_string()),
                 notation: Some("phonetic".to_string()),
                 accent: None,
-                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> Ireland =>"
+                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> Ireland"
                     .to_string(),
                 output: "ˈɑɪələnd".to_string(),
                 source: "phones.jsonl".to_string(),
@@ -5066,6 +5076,23 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
                 && example.output == "θaˈpato"
                 && example.source == "synthetic-spanish-orthography+enwiktionary-title"
         }));
+    }
+
+    #[test]
+    fn skips_synthetic_spanish_for_acronym_cased_titles() {
+        let config = WiktionaryConfig {
+            languages: vec!["spa".to_string()],
+            ..WiktionaryConfig::default()
+        };
+        let text = r#"==Spanish==
+===Noun===
+{{es-noun|m}}
+"#;
+
+        let data = extract_page_data("JJOO", text, &config);
+
+        assert!(data.phonemes.is_empty());
+        assert!(data.phones.is_empty());
     }
 
     #[test]
