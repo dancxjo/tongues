@@ -91,7 +91,10 @@ impl CmudictLexicon {
         let mut lexicon = Self {
             entries: HashMap::new(),
         };
-        lexicon.extend_from_str(include_str!("cmudict.dict"), "base cmu");
+        lexicon.extend_from_str(
+            include_str!(concat!(env!("OUT_DIR"), "/cmudict.dict")),
+            "base cmu",
+        );
         lexicon.extend_from_str(
             "\
 mm M
