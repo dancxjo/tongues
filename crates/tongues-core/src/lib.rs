@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod progress;
+pub use progress::{get_multi_progress, register_progress_bar};
+
 // ── Special control token IDs ──────────────────────────────────────────────
 
 pub const PAD_ID: u32 = 0;

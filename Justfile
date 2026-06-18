@@ -114,3 +114,11 @@ refine *args:
 # Fine-tune the model on the built-in Dolch sight-word list
 sight-words *args:
     cargo run --bin tongues -- g2p2g refine --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0-sight-words --source sight-words --task both --verbose "$@"
+
+# Fetch all public emotion audio datasets into datasets/
+fetch-corpora *args:
+    cargo run --bin tongues -- fetch-corpora "$@"
+
+# Start the web interface on localhost:3000
+serve *args:
+    cargo run --bin tongues-server "$@"

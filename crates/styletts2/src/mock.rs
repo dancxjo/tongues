@@ -39,6 +39,7 @@ impl StyleTts2Backend for MockStyleTts2Backend {
                 pcm_mono_f32: Vec::new(),
                 realized_utterance: None,
                 timings: Vec::new(),
+                style_vector: Vec::new(),
             });
         }
 
@@ -53,6 +54,7 @@ impl StyleTts2Backend for MockStyleTts2Backend {
             pcm_mono_f32,
             realized_utterance: None,
             timings: Vec::new(),
+            style_vector: Vec::new(),
         })
     }
 
@@ -67,6 +69,7 @@ impl StyleTts2Backend for MockStyleTts2Backend {
                 pcm_mono_f32: Vec::new(),
                 realized_utterance: None,
                 timings: Vec::new(),
+                style_vector: Vec::new(),
             });
         }
 
@@ -90,6 +93,7 @@ impl StyleTts2Backend for MockStyleTts2Backend {
             pcm_mono_f32,
             realized_utterance: None,
             timings: Vec::new(),
+            style_vector: Vec::new(),
         })
     }
 }

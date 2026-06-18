@@ -3510,7 +3510,7 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     let mut indices: Vec<_> = (0..rows.len()).collect();
     indices.shuffle(rng);
     let batches = (rows.len() + config.batch_size - 1) / config.batch_size;
-    let pb = indicatif::ProgressBar::new(batches as u64);
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(batches as u64));
     let template = format!(
         "{{spinner:.green}} LibriSpeech epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} loss={{msg}}",
         format_count(epoch),

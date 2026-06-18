@@ -512,7 +512,7 @@ pub fn evaluate<B: Backend, R: Rng>(
     };
 
     let eval_batches = (examples.len() + 63) / 64;
-    let pb = indicatif::ProgressBar::new(eval_batches as u64);
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(eval_batches as u64));
     pb.set_style(
         counted_progress_style(
             "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ETA {eta_precise} {msg}",
@@ -607,7 +607,7 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
     };
 
     let eval_batches = (eval_examples.len() + 63) / 64;
-    let pb = indicatif::ProgressBar::new(eval_batches as u64);
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(eval_batches as u64));
     pb.set_style(
         counted_progress_style(
             "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ETA {eta_precise} {msg}",
@@ -999,7 +999,7 @@ where
     for epoch in start_epoch..=train_config.epochs {
         let n_batches =
             (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
-        let pb = indicatif::ProgressBar::new(n_batches as u64);
+        let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(n_batches as u64));
         let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
             last_train_loss,
             last_val_loss,
@@ -1269,7 +1269,7 @@ where
     for epoch in start_epoch..=train_config.epochs {
         let n_batches =
             (train_examples.len() + train_config.batch_size - 1) / train_config.batch_size;
-        let pb = indicatif::ProgressBar::new(n_batches as u64);
+        let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(n_batches as u64));
         let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
             last_train_loss,
             last_val_loss,

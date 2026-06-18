@@ -13,6 +13,8 @@
 pub mod models;
 mod piper;
 mod speak;
+mod styletts2_cmds;
+mod fetch_corpora;
 
 use std::fs;
 use std::io::{BufRead, Read, Write};
@@ -169,6 +171,13 @@ enum Commands {
         /// Output path for the downloaded file
         #[arg(long, default_value = "data/cmudict.dict")]
         out: PathBuf,
+    },
+
+    /// Download and extract public emotion corpora for StyleTTS2 signatures
+    FetchCorpora {
+        /// Output directory for the datasets
+        #[arg(long, default_value = "datasets/emotions")]
+        out_dir: PathBuf,
     },
 
     /// Compare pronunciations from lexicons, rules, and trained models
@@ -415,6 +424,12 @@ enum Commands {
     Models {
         #[command(subcommand)]
         command: Option<models::ModelsCommand>,
+    },
+
+    /// Tools for the StyleTTS2 backend
+    Styletts2 {
+        #[command(subcommand)]
+        command: Styletts2Commands,
     },
 }
 
@@ -1089,7 +1104,7 @@ enum WiktionaryCommands {
 
         /// Add extra training copies of matching English Dolch sight-word rows.
         /// Enabled by default; pass --sight-words=false to disable.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
         sight_words: bool,
 
         /// Wait for an in-progress prepare in --data to finish, then start training
@@ -1156,6 +1171,71 @@ enum WiktionaryCommands {
 
         /// Input orthography, phoneme/phone sequence, or raw tagged source string
         input: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Styletts2Commands {
+    /// Sample random diffusion parameters and speed, and synthesize variants of the parsed text
+    Discover {
+        /// Text to process
+        text: String,
+
+        /// Output directory for synthesized WAVs and metadata
+        #[arg(long)]
+        out_dir: PathBuf,
+
+        /// Number of samples to generate
+        #[arg(long, default_value_t = 10)]
+        num_samples: usize,
+
+        /// Model path for the head2phones parser
+        #[arg(long, default_value = "models/head2phones/v0")]
+        head2phones_model: PathBuf,
+
+        /// Language variety
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+        
+        /// Seed to use for the RNG to generate configurations (for reproducibility)
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+        
+        /// Discovery tier (1: diffusion, 2: empirical reference styles, 3: feral randomness)
+        #[arg(long, default_value_t = 1)]
+        tier: u8,
+        
+        /// Directory containing WAV files for tier 2 empirical randomness
+        #[arg(long)]
+        references_dir: Option<PathBuf>,
+    },
+
+    /// Batch-encode reference WAV files into StyleTTS2 style vectors
+    EncodeStyle {
+        /// Glob or directory containing reference WAV files
+        refs: PathBuf,
+
+        /// Output JSONL file for the style vectors
+        #[arg(long, default_value = "style_vectors.jsonl")]
+        out: PathBuf,
+
+        /// JSONL labels mapping paths to emotions and speakers
+        #[arg(long, default_value = "labels.jsonl")]
+        labels: PathBuf,
+    },
+
+    /// Compute delta signatures from encoded style vectors
+    EmotionSignatures {
+        /// Input JSONL of encoded style vectors
+        style_vectors: PathBuf,
+
+        /// Method for computing signatures
+        #[arg(long, default_value = "speaker-neutral-delta")]
+        method: String,
+
+        /// Output JSON file path
+        #[arg(long, default_value = "emotion_signatures.json")]
+        out: PathBuf,
     },
 }
 
@@ -1300,6 +1380,7 @@ fn main() -> Result<()> {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
+        Commands::Styletts2 { command } => styletts2_cmds::run_styletts2_command(command, device_arg),
         Commands::Interpretation { command } => {
             run_interpretation_command(command, device_arg, output_mode)
         }
@@ -1307,6 +1388,7 @@ fn main() -> Result<()> {
             run_wiktionary_command(command, device_arg, output_mode)
         }
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
+        Commands::FetchCorpora { out_dir } => fetch_corpora::cmd_fetch_corpora(&out_dir),
         Commands::Discrepancies {
             out,
             limit,
@@ -1523,7 +1605,7 @@ fn status_spinner(message: impl Into<String>) -> indicatif::ProgressBar {
     );
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(message.into());
-    pb
+    tongues_core::register_progress_bar(pb)
 }
 
 fn finish_status(pb: indicatif::ProgressBar, message: impl AsRef<str>) {
@@ -6107,7 +6189,7 @@ where
             format_count(words.len()),
             format_count(providers.len())
         ));
-        pb
+        tongues_core::register_progress_bar(pb)
     };
 
     let records = speaking::find_pronunciation_discrepancies_with_progress(
@@ -6628,7 +6710,7 @@ fn cmd_prepare(
     println!("Writing OpenEPD data splits ...");
 
     // Setup indicatif progress bar!
-    let pb = ProgressBar::new(total_words as u64);
+    let pb = tongues_core::register_progress_bar(ProgressBar::new(total_words as u64));
     pb.set_style(counted_progress_style()?);
 
     // Deterministic FNV-1a hash function for thread-safe split assignment
@@ -7909,7 +7991,7 @@ fn collect_discrepancies<B: Backend>(
         .iter()
         .map(|(_, lexemes)| lexemes.len() * tasks.len())
         .sum();
-    let pb = indicatif::ProgressBar::new(total as u64);
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(total as u64));
     pb.set_style(counted_progress_style()?);
 
     let mut records = Vec::new();
@@ -8055,7 +8137,7 @@ fn collect_sight_word_refinement<B: Backend>(
         sight_words.insert((*word).to_string());
     }
 
-    let pb = indicatif::ProgressBar::new((sight_words.len() * tasks.len()) as u64);
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new((sight_words.len() * tasks.len()) as u64));
     pb.set_style(counted_progress_style()?);
 
     let mut records = Vec::new();

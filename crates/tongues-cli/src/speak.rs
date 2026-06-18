@@ -65,6 +65,15 @@ pub struct SpeakCommand {
     pub style_beta: f32,
     #[arg(
         long,
+        help = "Path to a JSON file containing emotion signatures (deltas)"
+    )]
+    pub emotion_signatures: Option<PathBuf>,
+    #[arg(long, help = "Name of the target emotion to apply (requires --emotion-signatures)")]
+    pub emotion: Option<String>,
+    #[arg(long, default_value_t = 1.0, help = "Multiplier for the emotion delta vector")]
+    pub emotion_strength: f32,
+    #[arg(
+        long,
         default_value_t = 1.0,
         help = "StyleTTS2 diffusion embedding scale"
     )]
@@ -150,6 +159,9 @@ pub struct SpeechSynthesisOptions {
     pub speed: f64,
     pub max_tts_symbols: usize,
     pub no_tts_chunking: bool,
+    pub emotion_signatures: Option<PathBuf>,
+    pub emotion: Option<String>,
+    pub emotion_strength: f32,
 }
 
 impl From<&SpeakCommand> for SpeechSynthesisOptions {
@@ -166,6 +178,9 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
             speed: command.speed,
             max_tts_symbols: command.max_tts_symbols,
             no_tts_chunking: command.no_tts_chunking,
+            emotion_signatures: command.emotion_signatures.clone(),
+            emotion: command.emotion.clone(),
+            emotion_strength: command.emotion_strength,
         }
     }
 }
@@ -236,14 +251,43 @@ impl BackendInstance {
                 let voice_ref = options.voice_wav.as_ref().unwrap_or(&default_refs.voice);
                 let style_ref = options.style_wav.as_ref().unwrap_or(&default_refs.style);
 
+                let mut style_ref_clone = plan.style.clone();
+                let style_uri = style_ref.display().to_string();
+
+                if let (Some(signatures_path), Some(emotion_name)) = (&options.emotion_signatures, &options.emotion) {
+                    let mut base_style_vector = backend.reference_style_vector(&format!("file://{}", style_uri)).context("Failed to get base style vector")?;
+
+                    let sig_file = std::fs::File::open(signatures_path).context("Failed to open emotion signatures")?;
+                    let sigs: serde_json::Value = serde_json::from_reader(sig_file).context("Failed to parse emotion signatures")?;
+                    
+                    if let Some(sig) = sigs.get(emotion_name) {
+                        if let Some(delta_vec) = sig.get("vector").and_then(|v| v.as_array()) {
+                            let delta: Vec<f32> = delta_vec.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
+                            for i in 0..256 {
+                                base_style_vector[i] += delta[i] * options.emotion_strength;
+                            }
+                            
+                            style_ref_clone = Some(speaking::StyleRef {
+                                description: None,
+                                source: speaking::StyleSource::Embedding {
+                                    kind: "styletts2.emotion.v1".into(),
+                                    values: base_style_vector,
+                                }
+                            });
+                        }
+                    } else {
+                        anyhow::bail!("Emotion {} not found in signatures file", emotion_name);
+                    }
+                }
+
                 let request = StyleTts2SynthesisRequest::from_backend_plan(
                     styletts2_plan,
                     plan.speaker.clone(),
-                    plan.style.clone(),
+                    style_ref_clone,
                     plan.target_prosody.clone(),
                 )
                 .with_speaker_reference_audio_uri(voice_ref.display().to_string())
-                .with_style_reference_audio_uri(style_ref.display().to_string());
+                .with_style_reference_audio_uri(style_uri);
 
                 let mut pcm_mono_f32 = Vec::new();
                 let output = backend
@@ -809,7 +853,7 @@ fn token_feature_bool(token: &speaking::PhonemeToken, name: &str) -> Option<bool
     }
 }
 
-fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f32]) -> Result<()> {
+pub(crate) fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f32]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

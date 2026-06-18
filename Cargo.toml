@@ -11,7 +11,7 @@ members = [
     "crates/tongues-cli",
     "crates/speaking",
     "crates/styletts2",
-    "xtask",
+    "xtask", "crates/tongues-server",
 ]
 resolver = "2"
 

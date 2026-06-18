@@ -54,6 +54,7 @@ pub struct StyleTts2SynthesisOutput {
     pub pcm_mono_f32: Vec<f32>,
     pub realized_utterance: Option<Utterance>,
     pub timings: Vec<StyleTts2Timing>,
+    pub style_vector: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

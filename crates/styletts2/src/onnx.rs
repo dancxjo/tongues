@@ -296,10 +296,12 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
                 pcm_mono_f32: Vec::new(),
                 realized_utterance: None,
                 timings,
+                style_vector: self.style_vector.clone(),
             });
         }
 
         let mut pcm_mono_f32 = Vec::new();
+        let mut first_style_vector = Vec::new();
         for (index, chunk) in request.backend_plan.chunks.iter().enumerate() {
             let chunk_started = Instant::now();
             let token_ids = styletts2_token_ids_for_symbols(&chunk.symbols)?;
@@ -307,6 +309,9 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
                 continue;
             }
             let output = self.synthesize_token_ids(request, token_ids)?;
+            if first_style_vector.is_empty() {
+                first_style_vector = output.style_vector;
+            }
             pcm_mono_f32.extend(output.pcm_mono_f32);
             let chunk_prefix = format!("chunk_{}", index + 1);
             timings.extend(
@@ -319,11 +324,16 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
         }
         timings.push(timing("total", total_started));
 
+        if first_style_vector.is_empty() {
+            first_style_vector = self.style_vector.clone();
+        }
+
         Ok(StyleTts2SynthesisOutput {
             sample_rate_hz: SAMPLE_RATE_HZ,
             pcm_mono_f32,
             realized_utterance: None,
             timings,
+            style_vector: first_style_vector,
         })
     }
 
@@ -343,10 +353,12 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
                 pcm_mono_f32: Vec::new(),
                 realized_utterance: None,
                 timings,
+                style_vector: self.style_vector.clone(),
             });
         }
 
         let mut pcm_mono_f32 = Vec::new();
+        let mut first_style_vector = Vec::new();
         let chunk_count = request.backend_plan.chunks.len();
         for (index, chunk) in request.backend_plan.chunks.iter().enumerate() {
             let chunk_started = Instant::now();
@@ -355,6 +367,9 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
                 continue;
             }
             let output = self.synthesize_token_ids(request, token_ids)?;
+            if first_style_vector.is_empty() {
+                first_style_vector = output.style_vector;
+            }
             sink.emit(StyleTts2AudioChunk {
                 chunk_index: index,
                 is_final: index + 1 == chunk_count,
@@ -375,11 +390,16 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
         }
         timings.push(timing("total", total_started));
 
+        if first_style_vector.is_empty() {
+            first_style_vector = self.style_vector.clone();
+        }
+
         Ok(StyleTts2SynthesisOutput {
             sample_rate_hz: SAMPLE_RATE_HZ,
             pcm_mono_f32,
             realized_utterance: None,
             timings,
+            style_vector: first_style_vector,
         })
     }
 }
@@ -387,6 +407,7 @@ impl StyleTts2Backend for StyleTts2OnnxBackend {
 struct OnnxChunkSynthesisOutput {
     pcm_mono_f32: Vec<f32>,
     timings: Vec<StyleTts2Timing>,
+    style_vector: Vec<f32>,
 }
 
 impl StyleTts2OnnxBackend {
@@ -430,7 +451,7 @@ impl StyleTts2OnnxBackend {
                 backend_error(format!("failed to build decoder hidden input: {error}"))
             })?
             .upcast();
-        let style = Tensor::from_array((vec![1_i64, STYLE_VECTOR_DIMS as i64], style_vector))
+        let style = Tensor::from_array((vec![1_i64, STYLE_VECTOR_DIMS as i64], style_vector.clone()))
             .map_err(|error| {
                 backend_error(format!("failed to build decoder style input: {error}"))
             })?
@@ -450,17 +471,18 @@ impl StyleTts2OnnxBackend {
                 ("d".to_string(), speed),
             ])
             .map_err(|error| backend_error(format!("StyleTTS2 decoder failed: {error}")))?;
-        let (_, samples) = extract_f32_tensor(&decoder_outputs, "z")?;
-        if samples.is_empty() {
-            return Err(invalid_output(
-                "StyleTTS2 decoder returned an empty waveform",
-            ));
+        let (decoder_shape, decoder_values) = extract_f32_tensor(&decoder_outputs, "z")?;
+        if decoder_shape.len() != 3 || decoder_shape[0] != 1 || decoder_shape[1] != 1 {
+            return Err(invalid_output(format!(
+                "StyleTTS2 decoder returned unexpected shape {decoder_shape:?}"
+            )));
         }
         timings.push(timing("decoder", decoder_started));
 
         Ok(OnnxChunkSynthesisOutput {
-            pcm_mono_f32: samples,
+            pcm_mono_f32: decoder_values,
             timings,
+            style_vector,
         })
     }
 
@@ -507,14 +529,19 @@ impl StyleTts2OnnxBackend {
             .or_else(|| reference_audio_uri_from_style(request.style.as_ref()))
             .map(str::to_string);
 
-        let reference_features = match (speaker_uri.as_deref(), style_uri.as_deref()) {
-            (Some(speaker_uri), Some(style_uri)) => {
-                let speaker = self.reference_style_vector(speaker_uri)?;
-                let style = self.reference_style_vector(style_uri)?;
-                merge_speaker_and_style_vectors(&speaker, &style)
+        let reference_features = if let Some(speaking::StyleSource::Embedding { values, .. }) = request.style.as_ref().map(|s| &s.source) {
+            validate_style_vector(values)?;
+            values.clone()
+        } else {
+            match (speaker_uri.as_deref(), style_uri.as_deref()) {
+                (Some(speaker_uri), Some(style_uri)) => {
+                    let speaker = self.reference_style_vector(speaker_uri)?;
+                    let style = self.reference_style_vector(style_uri)?;
+                    merge_speaker_and_style_vectors(&speaker, &style)
+                }
+                (Some(uri), None) | (None, Some(uri)) => self.reference_style_vector(uri)?,
+                (None, None) => self.style_vector.clone(),
             }
-            (Some(uri), None) | (None, Some(uri)) => self.reference_style_vector(uri)?,
-            (None, None) => self.style_vector.clone(),
         };
 
         if !should_sample_diffusion_style(&self.diffusion_options) {
@@ -531,7 +558,7 @@ impl StyleTts2OnnxBackend {
         ))
     }
 
-    fn reference_style_vector(&mut self, uri: &str) -> Result<Vec<f32>, StyleTts2Error> {
+    pub fn reference_style_vector(&mut self, uri: &str) -> Result<Vec<f32>, StyleTts2Error> {
         if let Some(vector) = self.reference_cache.get(uri) {
             return Ok(vector.clone());
         }
