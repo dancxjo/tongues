@@ -38,9 +38,10 @@ include_wiktionary_supplements = true
 # broad-vs-narrow phonetic equivalences.
 include_cleanup_corpus = true
 
-# Passive sanity scan with a local Ollama server during prepare. This runs after
-# train.jsonl exists, including prepare runs that reuse parsed/expanded data.
-verify_with_ollama = true
+# Optional passive sanity scan with a local Ollama server during prepare. Keep
+# this disabled by default because full Wiktionary prepare runs are expensive
+# enough without waiting on a local verifier.
+verify_with_ollama = false
 ollama_url = "http://localhost:11434"
 ollama_model = "gpt-oss:20b"
 ollama_verify_rows = 32

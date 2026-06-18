@@ -188,7 +188,7 @@ fn default_include_cleanup_corpus() -> bool {
 }
 
 fn default_verify_with_ollama() -> bool {
-    true
+    false
 }
 
 fn default_ollama_url() -> String {
@@ -4353,7 +4353,7 @@ mod tests {
         );
         assert_eq!(config.train_task, "all");
         assert_eq!(config.train_notations, ["phonemic", "phonetic"]);
-        assert!(config.verify_with_ollama);
+        assert!(!config.verify_with_ollama);
     }
 
     #[test]
