@@ -4095,12 +4095,20 @@ fn write_vocab_with_progress(out: &Path, examples: &[TrainingExample]) -> Result
     )
 }
 
-pub fn build_stable_wiktionary_vocab(_examples: &[TrainingExample]) -> Vocab {
-    Vocab::build(
-        &stable_wiktionary_vocab_inputs(),
-        &stable_wiktionary_vocab_outputs(),
-        &[],
-    )
+pub fn build_stable_wiktionary_vocab(examples: &[TrainingExample]) -> Vocab {
+    let mut inputs = stable_wiktionary_vocab_inputs();
+    let mut outputs = stable_wiktionary_vocab_outputs();
+
+    for example in english_cleanup_training_examples() {
+        inputs.push(example.input);
+        outputs.push(example.output);
+    }
+    for example in examples {
+        inputs.push(example.input.clone());
+        outputs.push(example.output.clone());
+    }
+
+    Vocab::build(&inputs, &outputs, &[])
 }
 
 fn stable_wiktionary_vocab_inputs() -> Vec<String> {
@@ -4121,6 +4129,14 @@ fn stable_wiktionary_vocab_inputs() -> Vec<String> {
         "<task:align> <lang:eng> audio_features + text".to_string(),
         "<WORD> <LETTER> <PHONEME> <LETTER_PLURAL> <COMPOUND> <weak> <strong> <en-US> <en-UK>".to_string(),
         "<META> <accent:genam> <region:us> <feature:weak_form> </META>".to_string(),
+        stable_vocab_range_seed(&[
+            0x0020..=0x007e, // Printable ASCII punctuation, digits, and base Latin.
+            0x00a0..=0x017f, // Latin-1 and Latin Extended-A.
+            0x0300..=0x036f, // Combining diacritical marks.
+            0x0370..=0x03ff, // Greek and Coptic.
+            0x0900..=0x097f, // Devanagari.
+            0x1f00..=0x1fff, // Greek Extended.
+        ]),
     ];
 
     for lang in ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"] {
@@ -4137,6 +4153,11 @@ fn stable_wiktionary_vocab_outputs() -> Vec<String> {
     let mut outputs = vec![
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string(),
         "əɚɝɡɪiːʊuːɛeɪæɑɔoʊʌθðʃʒt͡ʃd͡ʒŋɹɫɾʔ ˈˌ.-|‿͜͡".to_string(),
+        stable_vocab_range_seed(&[
+            0x0250..=0x02af, // IPA Extensions.
+            0x02b0..=0x02ff, // Spacing modifier letters.
+            0x0300..=0x036f, // Combining diacritical marks used in narrow phones.
+        ]),
         "GOOD BAD".to_string(),
         "how | do | you | do".to_string(),
         "<rel:inherited> <from:enm> thorp <gloss> village".to_string(),
@@ -4166,6 +4187,18 @@ fn stable_wiktionary_vocab_outputs() -> Vec<String> {
     }
 
     outputs
+}
+
+fn stable_vocab_range_seed(ranges: &[std::ops::RangeInclusive<u32>]) -> String {
+    let mut seed = String::new();
+    for range in ranges {
+        for codepoint in range.clone() {
+            if let Some(ch) = char::from_u32(codepoint) {
+                seed.push(ch);
+            }
+        }
+    }
+    seed
 }
 
 fn write_text_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -4599,7 +4632,7 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
     }
 
     #[test]
-    fn stable_wiktionary_vocab_seeds_tasks_controls_and_ascii() {
+    fn stable_wiktionary_vocab_seeds_core_scripts_without_becoming_unbounded() {
         let vocab = build_stable_wiktionary_vocab(&[]);
 
         for token in [
@@ -4620,11 +4653,44 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
             assert_ne!(vocab.get_id(token), UNK_ID, "{token} should be seeded");
         }
 
-        for ch in ['<', '>', 'A', 'z', '0', ':', 'θ', 'ɚ'] {
+        for ch in [
+            '<', '>', 'A', 'z', '0', ':', 'θ', 'ɚ', 'ɲ', 'ʁ', 'ø', 'ç', 'ʍ', '̩', 'ā', 'ñ', 'ö',
+            'ἄ', 'ν', 'φ', 'क', 'र', '्', 'ष', 'े',
+        ] {
             assert_ne!(
                 vocab.get_id(&ch.to_string()),
                 UNK_ID,
                 "{ch} should be seeded"
+            );
+        }
+
+        assert!(
+            vocab.size() < 2_000,
+            "stable Wiktionary vocab should stay compact, got {} tokens",
+            vocab.size()
+        );
+    }
+
+    #[test]
+    fn stable_wiktionary_vocab_extends_from_training_rows() {
+        let examples = vec![TrainingExample {
+            task: WiktionaryTask::OrthographyToPhonology,
+            lang: Some("eng".to_string()),
+            notation: Some("phonetic".to_string()),
+            accent: None,
+            input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> word(rareꞵ)"
+                .to_string(),
+            output: "wɝd‽".to_string(),
+            source: "test".to_string(),
+        }];
+
+        let vocab = build_stable_wiktionary_vocab(&examples);
+
+        for ch in ['(', ')', 'ꞵ', '‽'] {
+            assert_ne!(
+                vocab.get_id(&ch.to_string()),
+                UNK_ID,
+                "{ch} should be learned from training rows"
             );
         }
     }
