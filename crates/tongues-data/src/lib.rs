@@ -656,10 +656,18 @@ fn is_bare_row_reference(compact: &str) -> bool {
 fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bool {
     let says_no_issue = lower.contains("no issue")
         || lower.contains("no issues")
+        || lower.contains("no problem")
         || lower.contains("none found")
         || lower.contains("none detected")
+        || lower.contains("no problems found")
         || lower.contains("none of the rows violate")
         || lower.contains("all rows are consistent")
+        || lower.contains("all rows are valid")
+        || lower.contains("correctly formatted")
+        || lower.contains("consistent with the expected")
+        || lower.contains("conform to the specification")
+        || lower.contains("conform to the expected")
+        || lower.contains("valid according to the specification")
         || lower.contains("dataset is consistent")
         || lower.contains("dataset appears consistent");
     let mentions_invented_split = compact.contains("missingrequiredfieldsplit")
@@ -687,11 +695,47 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
             || compact.contains("graphemes")
             || compact.contains("characters")
             || compact.contains("stringlength"));
+    let mentions_random_cut_prefix_as_head = (compact.contains("nohead")
+        || compact.contains("noheadfound")
+        || compact.contains("missinghead"))
+        && (compact.contains("singlecharacter")
+            || compact.contains("completeword")
+            || compact.contains("validstartofaword")
+            || compact.contains("nonemptyinput")
+            || compact.contains("partialword")
+            || compact.contains("wordfragment")
+            || compact.contains("longerhead")
+            || compact.contains("couldbeapartofalongerhead")
+            || compact.contains("couldformahead"));
+    let mentions_structural_language_span_false_positive = compact.contains("languagespans")
+        && (compact.contains("missingphones")
+            || compact.contains("missingphonetic")
+            || compact.contains("phonesblock")
+            || compact.contains("phonestag")
+            || compact.contains("missingdetectedlang")
+            || compact.contains("detectedlangtagisnotallowed")
+            || compact.contains("detectedlangshouldonlyappear"));
+    let mentions_detected_lang_forbidden = compact.contains("detectedlang")
+        && (compact.contains("shouldonlyappear") || compact.contains("isnotallowed"));
+    let mentions_transcription_quality = compact.contains("phonetictranscription")
+        || compact.contains("phoneticvariants")
+        || compact.contains("pronunciation")
+        || compact.contains("invalidipasymbol")
+        || compact.contains("validipasymbol")
+        || compact.contains("diacritic")
+        || compact.contains("wrongvowel")
+        || compact.contains("dialects")
+        || compact.contains("varieties");
     let looks_like_placeholder = compact.starts_with("headlengthmismatch")
         || compact.starts_with("auditrow")
             && (compact.contains("headmismatch")
                 || compact.contains("missinghead")
                 || compact.contains("splitmismatch"))
+        || compact.starts_with("auditissue")
+        || compact.starts_with("audit")
+            && compact.chars().filter(|ch| ch.is_ascii_digit()).count() > 8
+        || compact.starts_with("noneissueidentified")
+        || compact.contains("111111")
         || compact.starts_with("auditfailed")
         || compact.starts_with("transcriptionerror");
 
@@ -703,6 +747,10 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
         || mentions_verifier_contract
         || mentions_lang_mismatch_example
         || mentions_grapheme_recalculation
+        || mentions_random_cut_prefix_as_head
+        || mentions_structural_language_span_false_positive
+        || mentions_detected_lang_forbidden
+        || mentions_transcription_quality
         || looks_like_placeholder
 }
 
@@ -1250,6 +1298,15 @@ mod tests {
             r#"{"issue":"audit_row 6: head length 48 but split_after 48, but head contains 48 graphemes? No issue.","sane":false}"#,
             r#"{"issue":"audit_failed_1_1_1_1_1_1","sane":false}"#,
             r#"{"issue":"transcription_error_1_1_1_1_1_1","sane":false}"#,
+            r#"{"issue":"No problem found in the supplied rows","sane":false}"#,
+            r#"{"issue":"All rows are valid according to the specification. No problems detected.","sane":false}"#,
+            r#"{"issue":"No head found for a partial word that could be part of a longer head","sane":false}"#,
+            r#"{"issue":"No head for a single-character input that is a valid start of a word","sane":false}"#,
+            r#"{"issue":"synthesized language-spans block missing a <PHONES> block","sane":false}"#,
+            r#"{"issue":"The <HEAD_FOUND> block contains a <DETECTED_LANG> tag that should only appear elsewhere","sane":false}"#,
+            r#"{"issue":"Inconsistent phonetic transcription for the same head across different varieties","sane":false}"#,
+            r#"{"issue":"PHONES contains a diacritic that is not a valid IPA symbol","sane":false}"#,
+            r#"{"issue":"audit_issue_1_1_1_1_1_1_1_1_1_1","sane":false}"#,
         ] {
             let judgement = parse_ollama_verification_judgement(raw)
                 .expect("bare audit reference should parse as verifier failure");

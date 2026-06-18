@@ -47,7 +47,7 @@ pub const ROLLBACK_GRAPHEMES: &str = "<ROLLBACK_GRAPHEMES>";
 pub const CONFIDENCE: &str = "<CONFIDENCE>";
 pub const CONFIDENCE_LOW: &str = "low";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
-const PREPARE_SCHEMA_VERSION: &str = "head2phones-prepare-v2";
+const PREPARE_SCHEMA_VERSION: &str = "head2phones-prepare-v3";
 const USER_AGENT: &str = "tongues-head2phones/0.1";
 const CONFIG_FINGERPRINT_OLLAMA_MODEL: &str = "gpt-oss:20b";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
@@ -2008,12 +2008,20 @@ fn synthetic_buffers(
             let rest = remainder_material.remainders
                 [rng.gen_range(0..remainder_material.remainders.len())];
             SyntheticBuffer {
-                text: format!("{head}{rest}"),
+                text: synthetic_buffer_text(head, rest),
                 head_language: head_material.language.to_string(),
                 remainder_language: remainder_material.language.to_string(),
             }
         })
         .collect()
+}
+
+fn synthetic_buffer_text(head: &str, rest: &str) -> String {
+    if rest.is_empty() || first_complete_head(head).is_some() {
+        format!("{head}{rest}")
+    } else {
+        format!("{head}\n{}", rest.trim_start())
+    }
 }
 
 fn synthetic_language_materials(config: &Head2PhonesConfig) -> Vec<SyntheticLanguageMaterial> {
@@ -3069,13 +3077,14 @@ fn head2phones_ollama_verification_prompt_with_row_count(
          - an {ERROR_REPAIR} row must contain a repaired {HEAD_FOUND} block with the same required {HEAD_LENGTH}, {PHONES_OPEN}, {PHONES_CLOSE}, and {SPLIT_AFTER} markers.\n\
          - a {LANG_MISMATCH} diagnostic block must include {DETECTED_LANG}, {EXPECTED_LANG}, {HEAD_LENGTH}, and {SPLIT_AFTER}; it must not include {PHONES_OPEN}.\n\
          - a {LANGUAGE_SPANS_OPEN} code-switch block must include {HEAD_LENGTH} and {SPLIT_AFTER}, contain plain <lang id=\"...\">...</lang> spans, and intentionally omits {PHONES_OPEN}.\n\
-         - rows with input_has_variety=false intentionally omit the input variety control and should include {DETECTED_LANG} using a normal language tag before phones or language spans.\n\
+         - rows with input_has_variety=false intentionally omit the input variety control and should include {DETECTED_LANG} using a normal language tag before phones or language spans. Rows with input_has_variety=true normally omit {DETECTED_LANG} unless they are {LANG_MISMATCH} rows.\n\
          - heads may end at a sentence boundary or at a useful early chunk boundary such as a colon, semicolon, comma, dash, title break, or end-of-text flush. Do not require every head to continue to a full stop.\n\
          - {HEAD_LENGTH} and {SPLIT_AFTER} are Unicode grapheme-cluster counts, not byte counts or Unicode scalar counts. {SPLIT_AFTER} can exceed the trimmed head length when a consumed boundary such as a newline is not part of head. Do not recalculate grapheme counts or offsets. Only report lengths or offsets if they are obviously impossible by inspection, such as negative, missing, non-numeric, or wildly out of range.\n\
          - if head is null, output should not claim a normal complete head unless the row is explicitly a repair or language diagnostic row.\n\
          - {NO_HEAD} rows must have head:null and split_after:null. Do not require split_after to be 0.\n\
-         - {NO_HEAD} rows should not visibly contain a full sentence or complete speakable head chunk.\n\
-         - phone text is serialized speaking IR, not pure IPA. Stress marks, syllable dots, word-boundary bars, punctuation tokens, commas, periods, question marks, exclamation marks, and intonation arrows such as ↘ or → are valid and should not be reported by themselves.\n\
+         - {NO_HEAD} random-cut rows may contain single letters, complete words, or incomplete phrase fragments. Do not report a {NO_HEAD} row merely because the input is non-empty, starts a word, contains a complete word, or could become a longer head after more text arrives.\n\
+         - {NO_HEAD} rows should not visibly contain a complete sentence, an explicit {END_OF_TEXT} flush, or another complete speakable head chunk.\n\
+         - phone text is serialized speaking IR, not pure IPA. Stress marks, syllable dots, word-boundary bars, punctuation tokens, commas, periods, question marks, exclamation marks, and intonation arrows such as ↘ or → are valid and should not be reported by themselves. Do not critique transcription quality, dialectal pronunciation, or cross-variety consistency unless the phone marker itself is structurally malformed.\n\
          - detect and report only obvious data-shape, label, transcription, language-tag, escaping, missing-marker, extra-marker, and consistency problems.\n\n\
          The examples below are not audit rows. Do not report an issue about an example. Use them only to understand the row contract.\n\n\
          Sane examples:\n\
@@ -3319,10 +3328,18 @@ fn is_bare_row_reference(compact: &str) -> bool {
 fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bool {
     let says_no_issue = lower.contains("no issue")
         || lower.contains("no issues")
+        || lower.contains("no problem")
         || lower.contains("none found")
         || lower.contains("none detected")
+        || lower.contains("no problems found")
         || lower.contains("none of the rows violate")
         || lower.contains("all rows are consistent")
+        || lower.contains("all rows are valid")
+        || lower.contains("correctly formatted")
+        || lower.contains("consistent with the expected")
+        || lower.contains("conform to the specification")
+        || lower.contains("conform to the expected")
+        || lower.contains("valid according to the specification")
         || lower.contains("dataset is consistent")
         || lower.contains("dataset appears consistent");
     let mentions_invented_split = compact.contains("missingrequiredfieldsplit")
@@ -3350,11 +3367,47 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
             || compact.contains("graphemes")
             || compact.contains("characters")
             || compact.contains("stringlength"));
+    let mentions_random_cut_prefix_as_head = (compact.contains("nohead")
+        || compact.contains("noheadfound")
+        || compact.contains("missinghead"))
+        && (compact.contains("singlecharacter")
+            || compact.contains("completeword")
+            || compact.contains("validstartofaword")
+            || compact.contains("nonemptyinput")
+            || compact.contains("partialword")
+            || compact.contains("wordfragment")
+            || compact.contains("longerhead")
+            || compact.contains("couldbeapartofalongerhead")
+            || compact.contains("couldformahead"));
+    let mentions_structural_language_span_false_positive = compact.contains("languagespans")
+        && (compact.contains("missingphones")
+            || compact.contains("missingphonetic")
+            || compact.contains("phonesblock")
+            || compact.contains("phonestag")
+            || compact.contains("missingdetectedlang")
+            || compact.contains("detectedlangtagisnotallowed")
+            || compact.contains("detectedlangshouldonlyappear"));
+    let mentions_detected_lang_forbidden = compact.contains("detectedlang")
+        && (compact.contains("shouldonlyappear") || compact.contains("isnotallowed"));
+    let mentions_transcription_quality = compact.contains("phonetictranscription")
+        || compact.contains("phoneticvariants")
+        || compact.contains("pronunciation")
+        || compact.contains("invalidipasymbol")
+        || compact.contains("validipasymbol")
+        || compact.contains("diacritic")
+        || compact.contains("wrongvowel")
+        || compact.contains("dialects")
+        || compact.contains("varieties");
     let looks_like_placeholder = compact.starts_with("headlengthmismatch")
         || compact.starts_with("auditrow")
             && (compact.contains("headmismatch")
                 || compact.contains("missinghead")
                 || compact.contains("splitmismatch"))
+        || compact.starts_with("auditissue")
+        || compact.starts_with("audit")
+            && compact.chars().filter(|ch| ch.is_ascii_digit()).count() > 8
+        || compact.starts_with("noneissueidentified")
+        || compact.contains("111111")
         || compact.starts_with("auditfailed")
         || compact.starts_with("transcriptionerror");
 
@@ -3366,6 +3419,10 @@ fn looks_like_known_head2phones_false_positive(lower: &str, compact: &str) -> bo
         || mentions_verifier_contract
         || mentions_lang_mismatch_example
         || mentions_grapheme_recalculation
+        || mentions_random_cut_prefix_as_head
+        || mentions_structural_language_span_false_positive
+        || mentions_detected_lang_forbidden
+        || mentions_transcription_quality
         || looks_like_placeholder
 }
 
@@ -3918,6 +3975,19 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_title_heads_insert_boundary_before_remainder() {
+        let text = synthetic_buffer_text("Hidden Letter", " Luego descanso.");
+        assert_eq!(text, "Hidden Letter\nLuego descanso.");
+        let head = first_complete_head(&text).expect("title break should create a head");
+        assert_eq!(text[..head.end_byte].trim(), "Hidden Letter");
+
+        assert_eq!(
+            synthetic_buffer_text("Stop right there!", " Luego descanso."),
+            "Stop right there! Luego descanso."
+        );
+    }
+
+    #[test]
     fn synthetic_guess_rows_omit_input_variety_and_emit_detected_lang() {
         let config = Head2PhonesConfig {
             varieties: vec!["fr-FR-Standard".to_string(), "es-ES-Castilian".to_string()],
@@ -4254,6 +4324,8 @@ mod tests {
         ));
         assert!(prompt.contains("<NO_HEAD> rows must have head:null and split_after:null"));
         assert!(prompt.contains("Do not require split_after to be 0"));
+        assert!(prompt.contains("<NO_HEAD> random-cut rows may contain single letters"));
+        assert!(prompt.contains("Do not critique transcription quality"));
     }
 
     #[test]
@@ -4348,6 +4420,15 @@ mod tests {
             r#"{"issue":"audit_row 6: head length 48 but split_after 48, but head contains 48 graphemes? No issue.","sane":false}"#,
             r#"{"issue":"audit_failed_1_1_1_1_1_1","sane":false}"#,
             r#"{"issue":"transcription_error_1_1_1_1_1_1","sane":false}"#,
+            r#"{"issue":"No problem found in the supplied rows","sane":false}"#,
+            r#"{"issue":"All rows are valid according to the specification. No problems detected.","sane":false}"#,
+            r#"{"issue":"No head found for a partial word that could be part of a longer head","sane":false}"#,
+            r#"{"issue":"No head for a single-character input that is a valid start of a word","sane":false}"#,
+            r#"{"issue":"synthesized language-spans block missing a <PHONES> block","sane":false}"#,
+            r#"{"issue":"The <HEAD_FOUND> block contains a <DETECTED_LANG> tag that should only appear elsewhere","sane":false}"#,
+            r#"{"issue":"Inconsistent phonetic transcription for the same head across different varieties","sane":false}"#,
+            r#"{"issue":"PHONES contains a diacritic that is not a valid IPA symbol","sane":false}"#,
+            r#"{"issue":"audit_issue_1_1_1_1_1_1_1_1_1_1","sane":false}"#,
             r#"{"issue":"data","sane":false}"#,
         ] {
             let judgement = parse_ollama_verification_judgement(raw)
