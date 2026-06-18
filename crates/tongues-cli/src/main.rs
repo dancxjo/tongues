@@ -1577,7 +1577,7 @@ fn counted_progress_style() -> Result<indicatif::ProgressStyle> {
 
     Ok(indicatif::ProgressStyle::default_bar()
         .template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ({percent}%) {msg}",
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ({percent}%) ETA {eta_precise} {msg}",
         )?
         .with_key(
             "human_pos",

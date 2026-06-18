@@ -514,12 +514,9 @@ pub fn evaluate<B: Backend, R: Rng>(
     let eval_batches = (examples.len() + 63) / 64;
     let pb = indicatif::ProgressBar::new(eval_batches as u64);
     pb.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-            )
-            .expect("valid template")
-            .progress_chars("#>-"),
+        counted_progress_style(
+            "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ETA {eta_precise} {msg}",
+        ),
     );
     pb.set_message("loss=...");
 
@@ -612,12 +609,9 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
     let eval_batches = (eval_examples.len() + 63) / 64;
     let pb = indicatif::ProgressBar::new(eval_batches as u64);
     pb.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-            )
-            .expect("valid template")
-            .progress_chars("#>-"),
+        counted_progress_style(
+            "{spinner:.green} Validation [{elapsed_precise}] [{bar:40.cyan/blue}] {human_pos}/{human_len} ETA {eta_precise} {msg}",
+        ),
     );
     pb.set_message("loss=...");
 
@@ -777,6 +771,8 @@ fn print_loss_chart(train_history: &[(f32, f32)], val_history: &[(f32, f32)]) {
     if train_history.len() < 2 {
         return;
     }
+    let latest_train_loss = train_history.last().map(|&(_, loss)| loss);
+    let latest_val_loss = val_history.last().map(|&(_, loss)| loss);
     let x_max = train_history
         .last()
         .map(|&(x, _)| x)
@@ -803,7 +799,11 @@ fn print_loss_chart(train_history: &[(f32, f32)], val_history: &[(f32, f32)]) {
     } else {
         y_max
     };
-    println!("  ── train ─── · val ·····  (epoch loss)");
+    println!(
+        "  ── train ─── · val ·····  (epoch loss, train={:.4} val={:.4})",
+        latest_train_loss.unwrap_or(0.0),
+        latest_val_loss.unwrap_or(0.0)
+    );
     Chart::new_with_y_range(120, 20, 1.0, x_max, y_min, y_max)
         .lineplot(&Shape::Lines(train_history))
         .lineplot(&Shape::Lines(val_history))
@@ -825,6 +825,42 @@ fn format_optional_metric(metric: Option<f32>) -> String {
     metric
         .map(|metric| format!("{metric:.3}"))
         .unwrap_or_else(|| "none".to_string())
+}
+
+fn format_count(value: impl std::fmt::Display) -> String {
+    let value = value.to_string();
+    let mut grouped = String::with_capacity(value.len() + value.len() / 3);
+    let mut digits = 0usize;
+
+    for ch in value.chars().rev() {
+        if digits == 3 && ch != '-' {
+            grouped.push(',');
+            digits = 0;
+        }
+        grouped.push(ch);
+        digits += 1;
+    }
+
+    grouped.chars().rev().collect()
+}
+
+fn counted_progress_style(template: &str) -> indicatif::ProgressStyle {
+    use std::fmt::Write;
+
+    indicatif::ProgressStyle::default_bar()
+        .template(template)
+        .expect("valid template")
+        .with_key("human_pos", |state: &indicatif::ProgressState, w: &mut dyn Write| {
+            write!(w, "{}", format_count(state.pos())).expect("write to progress key")
+        })
+        .with_key("human_len", |state: &indicatif::ProgressState, w: &mut dyn Write| {
+            let len = state
+                .len()
+                .map(format_count)
+                .unwrap_or_else(|| "?".to_string());
+            write!(w, "{len}").expect("write to progress key")
+        })
+        .progress_chars("#>-")
 }
 
 pub fn train<B: AutodiffBackend, R: Rng>(
@@ -971,9 +1007,9 @@ where
             last_val_token_acc,
         ) {
             format!(
-                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
-                epoch,
-                train_config.epochs,
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
+                format_count(epoch),
+                format_count(train_config.epochs),
                 tl,
                 vl,
                 va,
@@ -981,19 +1017,14 @@ where
             )
         } else {
             format!(
-                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} ({} train / {} valid)",
-                epoch,
-                train_config.epochs,
-                train_lexemes.len(),
-                valid_lexemes.len()
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} Loss: {{msg}} ({} train / {} valid)",
+                format_count(epoch),
+                format_count(train_config.epochs),
+                format_count(train_lexemes.len()),
+                format_count(valid_lexemes.len())
             )
         };
-        pb.set_style(
-            indicatif::ProgressStyle::default_bar()
-                .template(&template)
-                .expect("valid template")
-                .progress_chars("#>-"),
-        );
+        pb.set_style(counted_progress_style(&template));
         pb.set_message("...");
 
         let train_loss = train_epoch(
@@ -1023,8 +1054,8 @@ where
         pb.finish_and_clear();
 
         println!(
-            "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
-            epoch, train_loss, val_loss, val_acc, val_token_acc
+            "Epoch {} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
+            format_count(epoch), train_loss, val_loss, val_acc, val_token_acc
         );
 
         last_train_loss = Some(train_loss);
@@ -1246,9 +1277,9 @@ where
             last_val_token_acc,
         ) {
             format!(
-                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
-                epoch,
-                train_config.epochs,
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} Loss: {{msg}} (prev: train={:.4} val={:.4} exact={:.3} token={:.3})",
+                format_count(epoch),
+                format_count(train_config.epochs),
                 tl,
                 vl,
                 va,
@@ -1256,19 +1287,14 @@ where
             )
         } else {
             format!(
-                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} Loss: {{msg}} ({} train / {} valid)",
-                epoch,
-                train_config.epochs,
-                train_examples.len(),
-                valid_examples.len()
+                "{{spinner:.green}} Epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} Loss: {{msg}} ({} train / {} valid)",
+                format_count(epoch),
+                format_count(train_config.epochs),
+                format_count(train_examples.len()),
+                format_count(valid_examples.len())
             )
         };
-        pb.set_style(
-            indicatif::ProgressStyle::default_bar()
-                .template(&template)
-                .expect("valid template")
-                .progress_chars("#>-"),
-        );
+        pb.set_style(counted_progress_style(&template));
         pb.set_message("...");
 
         let train_loss = train_seq2seq_epoch(
@@ -1294,8 +1320,8 @@ where
         pb.finish_and_clear();
 
         println!(
-            "Epoch {:3} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
-            epoch, train_loss, val_loss, val_acc, val_token_acc
+            "Epoch {} | train_loss={:.4}  val_loss={:.4}  val_exact_match={:.3}  val_token_acc={:.3}",
+            format_count(epoch), train_loss, val_loss, val_acc, val_token_acc
         );
 
         last_train_loss = Some(train_loss);

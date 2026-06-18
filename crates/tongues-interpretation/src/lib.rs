@@ -62,6 +62,42 @@ pub const BOUNDARY_CONTINUE: &str = "<boundary:continue>";
 pub const BOUNDARY_EMIT: &str = "<boundary:emit>";
 pub const BOUNDARY_REPAIR: &str = "<boundary:repair>";
 
+fn format_count(value: impl std::fmt::Display) -> String {
+    let value = value.to_string();
+    let mut grouped = String::with_capacity(value.len() + value.len() / 3);
+    let mut digits = 0usize;
+
+    for ch in value.chars().rev() {
+        if digits == 3 && ch != '-' {
+            grouped.push(',');
+            digits = 0;
+        }
+        grouped.push(ch);
+        digits += 1;
+    }
+
+    grouped.chars().rev().collect()
+}
+
+fn counted_progress_style(template: &str) -> indicatif::ProgressStyle {
+    use std::fmt::Write;
+
+    indicatif::ProgressStyle::default_bar()
+        .template(template)
+        .expect("valid template")
+        .with_key("human_pos", |state: &indicatif::ProgressState, w: &mut dyn Write| {
+            write!(w, "{}", format_count(state.pos())).expect("write to progress key")
+        })
+        .with_key("human_len", |state: &indicatif::ProgressState, w: &mut dyn Write| {
+            let len = state
+                .len()
+                .map(format_count)
+                .unwrap_or_else(|| "?".to_string());
+            write!(w, "{len}").expect("write to progress key")
+        })
+        .progress_chars("#>-")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LibriSpeechSubset {
@@ -3270,8 +3306,8 @@ where
             break;
         }
         println!(
-            "Epoch {:3} | train_loss={:.4} val_loss={:.4} wer={:.3} boundary_f1={:.3} repair_f1={:.3} phoneme_ter={:.3} phone_ter={:.3} audio_mse={:.4}",
-            epoch,
+            "Epoch {} | train_loss={:.4} val_loss={:.4} wer={:.3} boundary_f1={:.3} repair_f1={:.3} phoneme_ter={:.3} phone_ter={:.3} audio_mse={:.4}",
+            format_count(epoch),
             loss,
             report.loss,
             report.word_error_rate,
@@ -3475,9 +3511,12 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
     indices.shuffle(rng);
     let batches = (rows.len() + config.batch_size - 1) / config.batch_size;
     let pb = indicatif::ProgressBar::new(batches as u64);
-    pb.set_style(indicatif::ProgressStyle::default_bar().template(
-        &format!("{{spinner:.green}} LibriSpeech epoch {epoch}/{} [{{bar:40.cyan/blue}}] {{pos}}/{{len}} loss={{msg}}", config.epochs)
-    )?.progress_chars("#>-"));
+    let template = format!(
+        "{{spinner:.green}} LibriSpeech epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} loss={{msg}}",
+        format_count(epoch),
+        format_count(config.epochs)
+    );
+    pb.set_style(counted_progress_style(&template));
     let mut total = 0.0;
     let mut n = 0usize;
     for chunk in indices.chunks(config.batch_size) {
