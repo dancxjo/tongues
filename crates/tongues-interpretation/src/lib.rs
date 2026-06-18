@@ -3558,6 +3558,186 @@ struct AsrBatch<B: Backend> {
     phrase_boundary_labels: Tensor<B, 2, Int>,
 }
 
+#[derive(Debug)]
+struct AsrBatchRowParts {
+    index: usize,
+    input_len: i32,
+    mel: Vec<f32>,
+    mel_target: Vec<f32>,
+    transcript_labels: Vec<i32>,
+    seq2seq_labels: Vec<i32>,
+    boundary_labels: Vec<i32>,
+    phoneme_labels: Vec<i32>,
+    phone_labels: Vec<i32>,
+    syntax_pos_labels: Vec<i32>,
+    syntax_link_labels: Vec<i32>,
+    syntax_head_offset_labels: Vec<i32>,
+    parse_ok_labels: Vec<i32>,
+    phrase_boundary_labels: Vec<i32>,
+    prev_word_sequence: Vec<i32>,
+    current_word_sequence: Vec<i32>,
+    next_word_sequence: Vec<i32>,
+    masked_word_sequence: Vec<i32>,
+    masked_word_phoneme_sequence: Vec<i32>,
+    phoneme_sequence: Vec<i32>,
+    phone_sequence: Vec<i32>,
+    place_sequence: Vec<i32>,
+    manner_sequence: Vec<i32>,
+    voicing_sequence: Vec<i32>,
+    syllabic_sequence: Vec<i32>,
+    height_sequence: Vec<i32>,
+    backness_sequence: Vec<i32>,
+    rounding_sequence: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EvalSampleStats {
+    token_errors: usize,
+    token_total: usize,
+    seq2seq_token_errors: usize,
+    seq2seq_token_total: usize,
+    word_errors: usize,
+    word_total: usize,
+    boundary_tp: usize,
+    boundary_fp: usize,
+    boundary_fn: usize,
+    repair_tp: usize,
+    repair_fp: usize,
+    repair_fn: usize,
+    phoneme_errors: usize,
+    phoneme_total: usize,
+    phone_errors: usize,
+    phone_total: usize,
+    prev_correct: usize,
+    prev_total: usize,
+    current_correct: usize,
+    current_total: usize,
+    next_correct: usize,
+    next_total: usize,
+    masked_word_correct: usize,
+    masked_word_total: usize,
+    masked_phoneme_errors: usize,
+    masked_phoneme_total: usize,
+}
+
+impl EvalSampleStats {
+    fn merge(&mut self, other: EvalSampleStats) {
+        self.token_errors += other.token_errors;
+        self.token_total += other.token_total;
+        self.seq2seq_token_errors += other.seq2seq_token_errors;
+        self.seq2seq_token_total += other.seq2seq_token_total;
+        self.word_errors += other.word_errors;
+        self.word_total += other.word_total;
+        self.boundary_tp += other.boundary_tp;
+        self.boundary_fp += other.boundary_fp;
+        self.boundary_fn += other.boundary_fn;
+        self.repair_tp += other.repair_tp;
+        self.repair_fp += other.repair_fp;
+        self.repair_fn += other.repair_fn;
+        self.phoneme_errors += other.phoneme_errors;
+        self.phoneme_total += other.phoneme_total;
+        self.phone_errors += other.phone_errors;
+        self.phone_total += other.phone_total;
+        self.prev_correct += other.prev_correct;
+        self.prev_total += other.prev_total;
+        self.current_correct += other.current_correct;
+        self.current_total += other.current_total;
+        self.next_correct += other.next_correct;
+        self.next_total += other.next_total;
+        self.masked_word_correct += other.masked_word_correct;
+        self.masked_word_total += other.masked_word_total;
+        self.masked_phoneme_errors += other.masked_phoneme_errors;
+        self.masked_phoneme_total += other.masked_phoneme_total;
+    }
+}
+
+fn prepare_asr_batch_row(
+    index: usize,
+    data_dir: &Path,
+    row: &LibriSpeechUtterance,
+    vocab: &Vocab,
+    phoneme_vocab: &Vocab,
+    phone_vocab: &Vocab,
+    word_vocab: &Vocab,
+    syntax_pos_vocab: &Vocab,
+    syntax_link_vocab: &Vocab,
+    syntax_head_offset_vocab: &Vocab,
+    config: &InterpretationTrainConfig,
+    max_frames: usize,
+    mel_bins: usize,
+) -> Result<AsrBatchRowParts> {
+    let input_len = row.num_frames.min(max_frames).max(1);
+    let features = read_mel_file(&data_dir.join(&row.mel_path))?;
+    let mut mel = Vec::with_capacity(max_frames * mel_bins);
+    let mut mel_target = Vec::with_capacity(max_frames * mel_bins);
+    for frame in 0..max_frames {
+        let src = features.get(frame);
+        let masked = frame_is_masked(frame, config) || frame_is_word_masked(row, frame, config);
+        for bin in 0..mel_bins {
+            let value = src.and_then(|r| r.get(bin)).copied().unwrap_or(0.0);
+            mel_target.push(value);
+            mel.push(if masked { 0.0 } else { value });
+        }
+    }
+    Ok(AsrBatchRowParts {
+        index,
+        input_len: input_len as i32,
+        mel,
+        mel_target,
+        transcript_labels: proportional_labels(&row.transcript, vocab, max_frames),
+        seq2seq_labels: seq2seq_labels_for(
+            &row.transcript,
+            vocab,
+            config.max_seq2seq_tokens.min(max_frames).max(1),
+            max_frames,
+        ),
+        boundary_labels: boundary_labels_for(row, max_frames),
+        phoneme_labels: proportional_phoneme_labels(row, phoneme_vocab, max_frames),
+        phone_labels: proportional_phone_labels(row, phone_vocab, max_frames),
+        syntax_pos_labels: syntax_pos_labels_for(row, syntax_pos_vocab, max_frames),
+        syntax_link_labels: syntax_link_labels_for(row, syntax_link_vocab, max_frames),
+        syntax_head_offset_labels: syntax_head_offset_labels_for(
+            row,
+            syntax_head_offset_vocab,
+            max_frames,
+        ),
+        parse_ok_labels: parse_ok_labels_for(row, max_frames),
+        phrase_boundary_labels: phrase_boundary_labels_for(row, max_frames),
+        phoneme_sequence: ctc_target_within_input(phoneme_targets(row, phoneme_vocab), input_len),
+        phone_sequence: ctc_target_within_input(phone_targets(row, phone_vocab), input_len),
+        place_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Place), input_len),
+        manner_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Manner), input_len),
+        voicing_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Voicing),
+            input_len,
+        ),
+        syllabic_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Syllabic),
+            input_len,
+        ),
+        height_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Height), input_len),
+        backness_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Backness),
+            input_len,
+        ),
+        rounding_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Rounding),
+            input_len,
+        ),
+        prev_word_sequence: ctc_target_within_input(previous_word_targets(row, word_vocab), input_len),
+        current_word_sequence: ctc_target_within_input(
+            current_word_targets(row, word_vocab),
+            input_len,
+        ),
+        next_word_sequence: ctc_target_within_input(next_word_targets(row, word_vocab), input_len),
+        masked_word_sequence: ctc_target_within_input(masked_word_targets(row, word_vocab), input_len),
+        masked_word_phoneme_sequence: ctc_target_within_input(
+            masked_word_phoneme_targets(row, phoneme_vocab),
+            input_len,
+        ),
+    })
+}
+
 fn make_batch<B: Backend>(
     data_dir: &Path,
     rows: &[LibriSpeechUtterance],
@@ -3606,94 +3786,56 @@ fn make_batch<B: Backend>(
     let mut height_sequences = Vec::new();
     let mut backness_sequences = Vec::new();
     let mut rounding_sequences = Vec::new();
-    for row in rows {
-        let input_len = row.num_frames.min(max_frames).max(1);
-        input_lengths.push(input_len as i32);
-        let features = read_mel_file(&data_dir.join(&row.mel_path))?;
-        for frame in 0..max_frames {
-            let src = features.get(frame);
-            let masked = frame_is_masked(frame, config) || frame_is_word_masked(row, frame, config);
-            for bin in 0..mel_bins {
-                let value = src.and_then(|r| r.get(bin)).copied().unwrap_or(0.0);
-                mel_target.push(value);
-                mel.push(if masked { 0.0 } else { value });
-            }
-        }
-        transcript_labels.extend(proportional_labels(&row.transcript, vocab, max_frames));
-        seq2seq_labels.extend(seq2seq_labels_for(
-            &row.transcript,
-            vocab,
-            config.max_seq2seq_tokens.min(max_frames).max(1),
-            max_frames,
-        ));
-        boundary_labels.extend(boundary_labels_for(row, max_frames));
-        phoneme_labels.extend(proportional_phoneme_labels(row, phoneme_vocab, max_frames));
-        phone_labels.extend(proportional_phone_labels(row, phone_vocab, max_frames));
-        syntax_pos_labels.extend(syntax_pos_labels_for(row, syntax_pos_vocab, max_frames));
-        syntax_link_labels.extend(syntax_link_labels_for(row, syntax_link_vocab, max_frames));
-        syntax_head_offset_labels.extend(syntax_head_offset_labels_for(
-            row,
-            syntax_head_offset_vocab,
-            max_frames,
-        ));
-        parse_ok_labels.extend(parse_ok_labels_for(row, max_frames));
-        phrase_boundary_labels.extend(phrase_boundary_labels_for(row, max_frames));
-        phoneme_sequences.push(ctc_target_within_input(
-            phoneme_targets(row, phoneme_vocab),
-            input_len,
-        ));
-        phone_sequences.push(ctc_target_within_input(
-            phone_targets(row, phone_vocab),
-            input_len,
-        ));
-        place_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Place),
-            input_len,
-        ));
-        manner_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Manner),
-            input_len,
-        ));
-        voicing_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Voicing),
-            input_len,
-        ));
-        syllabic_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Syllabic),
-            input_len,
-        ));
-        height_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Height),
-            input_len,
-        ));
-        backness_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Backness),
-            input_len,
-        ));
-        rounding_sequences.push(ctc_target_within_input(
-            feature_targets(row, FeatureAxis::Rounding),
-            input_len,
-        ));
-        prev_word_sequences.push(ctc_target_within_input(
-            previous_word_targets(row, word_vocab),
-            input_len,
-        ));
-        current_word_sequences.push(ctc_target_within_input(
-            current_word_targets(row, word_vocab),
-            input_len,
-        ));
-        next_word_sequences.push(ctc_target_within_input(
-            next_word_targets(row, word_vocab),
-            input_len,
-        ));
-        masked_word_sequences.push(ctc_target_within_input(
-            masked_word_targets(row, word_vocab),
-            input_len,
-        ));
-        masked_word_phoneme_sequences.push(ctc_target_within_input(
-            masked_word_phoneme_targets(row, phoneme_vocab),
-            input_len,
-        ));
+    let mut prepared_rows = rows
+        .par_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            prepare_asr_batch_row(
+                index,
+                data_dir,
+                row,
+                vocab,
+                phoneme_vocab,
+                phone_vocab,
+                word_vocab,
+                syntax_pos_vocab,
+                syntax_link_vocab,
+                syntax_head_offset_vocab,
+                config,
+                max_frames,
+                mel_bins,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    prepared_rows.sort_by_key(|row| row.index);
+    for prepared in prepared_rows {
+        input_lengths.push(prepared.input_len);
+        mel.extend(prepared.mel);
+        mel_target.extend(prepared.mel_target);
+        transcript_labels.extend(prepared.transcript_labels);
+        seq2seq_labels.extend(prepared.seq2seq_labels);
+        boundary_labels.extend(prepared.boundary_labels);
+        phoneme_labels.extend(prepared.phoneme_labels);
+        phone_labels.extend(prepared.phone_labels);
+        syntax_pos_labels.extend(prepared.syntax_pos_labels);
+        syntax_link_labels.extend(prepared.syntax_link_labels);
+        syntax_head_offset_labels.extend(prepared.syntax_head_offset_labels);
+        parse_ok_labels.extend(prepared.parse_ok_labels);
+        phrase_boundary_labels.extend(prepared.phrase_boundary_labels);
+        phoneme_sequences.push(prepared.phoneme_sequence);
+        phone_sequences.push(prepared.phone_sequence);
+        place_sequences.push(prepared.place_sequence);
+        manner_sequences.push(prepared.manner_sequence);
+        voicing_sequences.push(prepared.voicing_sequence);
+        syllabic_sequences.push(prepared.syllabic_sequence);
+        height_sequences.push(prepared.height_sequence);
+        backness_sequences.push(prepared.backness_sequence);
+        rounding_sequences.push(prepared.rounding_sequence);
+        prev_word_sequences.push(prepared.prev_word_sequence);
+        current_word_sequences.push(prepared.current_word_sequence);
+        next_word_sequences.push(prepared.next_word_sequence);
+        masked_word_sequences.push(prepared.masked_word_sequence);
+        masked_word_phoneme_sequences.push(prepared.masked_word_phoneme_sequence);
     }
     let (prev_word_targets, prev_word_target_lengths, prev_word_width) =
         pad_compact_targets(prev_word_sequences, word_vocab.get_id(WORD_UNK));
@@ -4577,33 +4719,8 @@ pub fn evaluate<B: Backend>(
     }
     let mut total_loss = 0.0;
     let mut batches = 0usize;
-    let mut token_errors = 0usize;
-    let mut token_total = 0usize;
-    let mut seq2seq_token_errors = 0usize;
-    let mut seq2seq_token_total = 0usize;
-    let mut word_errors = 0usize;
-    let mut word_total = 0usize;
-    let mut boundary_tp = 0usize;
-    let mut boundary_fp = 0usize;
-    let mut boundary_fn = 0usize;
-    let mut repair_tp = 0usize;
-    let mut repair_fp = 0usize;
-    let mut repair_fn = 0usize;
-    let mut phoneme_errors = 0usize;
-    let mut phoneme_total = 0usize;
-    let mut phone_errors = 0usize;
-    let mut phone_total = 0usize;
+    let mut stats = EvalSampleStats::default();
     let mut audio_mse_total = 0.0f32;
-    let mut prev_correct = 0usize;
-    let mut prev_total = 0usize;
-    let mut current_correct = 0usize;
-    let mut current_total = 0usize;
-    let mut next_correct = 0usize;
-    let mut next_total = 0usize;
-    let mut masked_word_correct = 0usize;
-    let mut masked_word_total = 0usize;
-    let mut masked_phoneme_errors = 0usize;
-    let mut masked_phoneme_total = 0usize;
     for chunk in eval_rows.chunks(config.batch_size.max(1)) {
         let batch = make_batch::<B>(
             data_dir,
@@ -4664,94 +4781,114 @@ pub fn evaluate<B: Backend>(
         let next_word_preds = argmax_ids(output.next_word_logits);
         let masked_word_preds = argmax_ids(output.masked_word_logits);
         let masked_word_phoneme_preds = argmax_ids(output.masked_word_phoneme_logits);
-        for (i, row) in chunk.iter().enumerate() {
-            let decoded = greedy_collapse(&transcript_preds[i], vocab);
-            let ref_chars = row.transcript.chars().collect::<Vec<_>>();
-            let hyp_chars = decoded.chars().collect::<Vec<_>>();
-            token_errors += edit_distance(&ref_chars, &hyp_chars);
-            token_total += ref_chars.len();
-            let seq2seq_decoded = seq2seq_decode(&seq2seq_preds[i], vocab);
-            let seq2seq_hyp_chars = seq2seq_decoded.chars().collect::<Vec<_>>();
-            seq2seq_token_errors += edit_distance(&ref_chars, &seq2seq_hyp_chars);
-            seq2seq_token_total += ref_chars.len();
-            let ref_words = row.transcript.split_whitespace().collect::<Vec<_>>();
-            let hyp_words = decoded.split_whitespace().collect::<Vec<_>>();
-            word_errors += edit_distance(&ref_words, &hyp_words);
-            word_total += ref_words.len();
-            let gold = boundary_labels_for(row, boundary_preds[i].len());
-            for (pred, gold) in boundary_preds[i].iter().zip(gold) {
-                match (*pred == 1, gold == 1) {
-                    (true, true) => boundary_tp += 1,
-                    (true, false) => boundary_fp += 1,
-                    (false, true) => boundary_fn += 1,
-                    _ => {}
+        let chunk_stats = chunk
+            .par_iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let mut local = EvalSampleStats::default();
+                let decoded = greedy_collapse(&transcript_preds[i], vocab);
+                let ref_chars = row.transcript.chars().collect::<Vec<_>>();
+                let hyp_chars = decoded.chars().collect::<Vec<_>>();
+                local.token_errors += edit_distance(&ref_chars, &hyp_chars);
+                local.token_total += ref_chars.len();
+
+                let seq2seq_decoded = seq2seq_decode(&seq2seq_preds[i], vocab);
+                let seq2seq_hyp_chars = seq2seq_decoded.chars().collect::<Vec<_>>();
+                local.seq2seq_token_errors += edit_distance(&ref_chars, &seq2seq_hyp_chars);
+                local.seq2seq_token_total += ref_chars.len();
+
+                let ref_words = row.transcript.split_whitespace().collect::<Vec<_>>();
+                let hyp_words = decoded.split_whitespace().collect::<Vec<_>>();
+                local.word_errors += edit_distance(&ref_words, &hyp_words);
+                local.word_total += ref_words.len();
+
+                let gold = boundary_labels_for(row, boundary_preds[i].len());
+                for (pred, gold) in boundary_preds[i].iter().zip(gold) {
+                    match (*pred == 1, gold == 1) {
+                        (true, true) => local.boundary_tp += 1,
+                        (true, false) => local.boundary_fp += 1,
+                        (false, true) => local.boundary_fn += 1,
+                        _ => {}
+                    }
+                    match (*pred == 2, gold == 2) {
+                        (true, true) => local.repair_tp += 1,
+                        (true, false) => local.repair_fp += 1,
+                        (false, true) => local.repair_fn += 1,
+                        _ => {}
+                    }
                 }
-                match (*pred == 2, gold == 2) {
-                    (true, true) => repair_tp += 1,
-                    (true, false) => repair_fp += 1,
-                    (false, true) => repair_fn += 1,
-                    _ => {}
-                }
-            }
-            let decoded_phonemes = greedy_collapse(&phoneme_preds[i], phoneme_vocab);
-            let ref_phonemes = row
-                .sentences
-                .iter()
-                .flat_map(|s| s.phonemes.split_whitespace())
-                .collect::<Vec<_>>();
-            let hyp_phonemes = decoded_phonemes.split_whitespace().collect::<Vec<_>>();
-            phoneme_errors += edit_distance(&ref_phonemes, &hyp_phonemes);
-            phoneme_total += ref_phonemes.len();
-            let decoded_phones = greedy_collapse(&phone_preds[i], phone_vocab);
-            let ref_phones = row
-                .sentences
-                .iter()
-                .flat_map(|s| s.phones.split_whitespace())
-                .collect::<Vec<_>>();
-            let hyp_phones = decoded_phones.split_whitespace().collect::<Vec<_>>();
-            phone_errors += edit_distance(&ref_phones, &hyp_phones);
-            phone_total += ref_phones.len();
-            let decoded_prev = ctc_greedy_decode(&prev_word_preds[i], 0);
-            let target_prev = previous_word_targets(row, word_vocab);
-            let (correct, total) = sequence_accuracy(&decoded_prev, &target_prev);
-            prev_correct += correct;
-            prev_total += total;
-            let decoded_current = ctc_greedy_decode(&current_word_preds[i], 0);
-            let target_current = current_word_targets(row, word_vocab);
-            let (correct, total) = sequence_accuracy(&decoded_current, &target_current);
-            current_correct += correct;
-            current_total += total;
-            let decoded_next = ctc_greedy_decode(&next_word_preds[i], 0);
-            let target_next = next_word_targets(row, word_vocab);
-            let (correct, total) = sequence_accuracy(&decoded_next, &target_next);
-            next_correct += correct;
-            next_total += total;
-            let decoded_masked_word = ctc_greedy_decode(&masked_word_preds[i], 0);
-            let target_masked_word = masked_word_targets(row, word_vocab);
-            let (correct, total) = sequence_accuracy(&decoded_masked_word, &target_masked_word);
-            masked_word_correct += correct;
-            masked_word_total += total;
-            let decoded_masked_phonemes = ctc_greedy_decode(&masked_word_phoneme_preds[i], 0);
-            let decoded_masked_phonemes = decoded_masked_phonemes
-                .into_iter()
-                .map(|id| id as i32)
-                .collect::<Vec<_>>();
-            let target_masked_phonemes = masked_word_phoneme_targets(row, phoneme_vocab);
-            masked_phoneme_errors +=
-                edit_distance(&target_masked_phonemes, &decoded_masked_phonemes);
-            masked_phoneme_total += target_masked_phonemes.len();
-        }
+
+                let decoded_phonemes = greedy_collapse(&phoneme_preds[i], phoneme_vocab);
+                let ref_phonemes = row
+                    .sentences
+                    .iter()
+                    .flat_map(|s| s.phonemes.split_whitespace())
+                    .collect::<Vec<_>>();
+                let hyp_phonemes = decoded_phonemes.split_whitespace().collect::<Vec<_>>();
+                local.phoneme_errors += edit_distance(&ref_phonemes, &hyp_phonemes);
+                local.phoneme_total += ref_phonemes.len();
+
+                let decoded_phones = greedy_collapse(&phone_preds[i], phone_vocab);
+                let ref_phones = row
+                    .sentences
+                    .iter()
+                    .flat_map(|s| s.phones.split_whitespace())
+                    .collect::<Vec<_>>();
+                let hyp_phones = decoded_phones.split_whitespace().collect::<Vec<_>>();
+                local.phone_errors += edit_distance(&ref_phones, &hyp_phones);
+                local.phone_total += ref_phones.len();
+
+                let decoded_prev = ctc_greedy_decode(&prev_word_preds[i], 0);
+                let target_prev = previous_word_targets(row, word_vocab);
+                let (correct, total) = sequence_accuracy(&decoded_prev, &target_prev);
+                local.prev_correct += correct;
+                local.prev_total += total;
+
+                let decoded_current = ctc_greedy_decode(&current_word_preds[i], 0);
+                let target_current = current_word_targets(row, word_vocab);
+                let (correct, total) = sequence_accuracy(&decoded_current, &target_current);
+                local.current_correct += correct;
+                local.current_total += total;
+
+                let decoded_next = ctc_greedy_decode(&next_word_preds[i], 0);
+                let target_next = next_word_targets(row, word_vocab);
+                let (correct, total) = sequence_accuracy(&decoded_next, &target_next);
+                local.next_correct += correct;
+                local.next_total += total;
+
+                let decoded_masked_word = ctc_greedy_decode(&masked_word_preds[i], 0);
+                let target_masked_word = masked_word_targets(row, word_vocab);
+                let (correct, total) = sequence_accuracy(&decoded_masked_word, &target_masked_word);
+                local.masked_word_correct += correct;
+                local.masked_word_total += total;
+
+                let decoded_masked_phonemes = ctc_greedy_decode(&masked_word_phoneme_preds[i], 0)
+                    .into_iter()
+                    .map(|id| id as i32)
+                    .collect::<Vec<_>>();
+                let target_masked_phonemes = masked_word_phoneme_targets(row, phoneme_vocab);
+                local.masked_phoneme_errors +=
+                    edit_distance(&target_masked_phonemes, &decoded_masked_phonemes);
+                local.masked_phoneme_total += target_masked_phonemes.len();
+                local
+            })
+            .reduce(EvalSampleStats::default, |mut acc, item| {
+                acc.merge(item);
+                acc
+            });
+        stats.merge(chunk_stats);
     }
-    let precision = boundary_tp as f32 / (boundary_tp + boundary_fp).max(1) as f32;
-    let recall = boundary_tp as f32 / (boundary_tp + boundary_fn).max(1) as f32;
-    let repair_precision = repair_tp as f32 / (repair_tp + repair_fp).max(1) as f32;
-    let repair_recall = repair_tp as f32 / (repair_tp + repair_fn).max(1) as f32;
+    let precision = stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fp).max(1) as f32;
+    let recall = stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fn).max(1) as f32;
+    let repair_precision = stats.repair_tp as f32 / (stats.repair_tp + stats.repair_fp).max(1) as f32;
+    let repair_recall = stats.repair_tp as f32 / (stats.repair_tp + stats.repair_fn).max(1) as f32;
     Ok(EvalReport {
         examples: eval_rows.len(),
         loss: total_loss / batches.max(1) as f32,
-        token_error_rate: token_errors as f32 / token_total.max(1) as f32,
-        word_error_rate: word_errors as f32 / word_total.max(1) as f32,
-        seq2seq_token_error_rate: seq2seq_token_errors as f32 / seq2seq_token_total.max(1) as f32,
+        token_error_rate: stats.token_errors as f32 / stats.token_total.max(1) as f32,
+        word_error_rate: stats.word_errors as f32 / stats.word_total.max(1) as f32,
+        seq2seq_token_error_rate: stats.seq2seq_token_errors as f32
+            / stats.seq2seq_token_total.max(1) as f32,
         boundary_f1: if precision + recall > 0.0 {
             2.0 * precision * recall / (precision + recall)
         } else {
@@ -4762,15 +4899,16 @@ pub fn evaluate<B: Backend>(
         } else {
             0.0
         },
-        phoneme_token_error_rate: phoneme_errors as f32 / phoneme_total.max(1) as f32,
-        phone_token_error_rate: phone_errors as f32 / phone_total.max(1) as f32,
+        phoneme_token_error_rate: stats.phoneme_errors as f32 / stats.phoneme_total.max(1) as f32,
+        phone_token_error_rate: stats.phone_errors as f32 / stats.phone_total.max(1) as f32,
         masked_audio_mse: audio_mse_total / batches.max(1) as f32,
-        prev_word_accuracy: prev_correct as f32 / prev_total.max(1) as f32,
-        current_word_accuracy: current_correct as f32 / current_total.max(1) as f32,
-        next_word_accuracy: next_correct as f32 / next_total.max(1) as f32,
-        masked_word_accuracy: masked_word_correct as f32 / masked_word_total.max(1) as f32,
-        masked_word_phoneme_token_error_rate: masked_phoneme_errors as f32
-            / masked_phoneme_total.max(1) as f32,
+        prev_word_accuracy: stats.prev_correct as f32 / stats.prev_total.max(1) as f32,
+        current_word_accuracy: stats.current_correct as f32 / stats.current_total.max(1) as f32,
+        next_word_accuracy: stats.next_correct as f32 / stats.next_total.max(1) as f32,
+        masked_word_accuracy: stats.masked_word_correct as f32
+            / stats.masked_word_total.max(1) as f32,
+        masked_word_phoneme_token_error_rate: stats.masked_phoneme_errors as f32
+            / stats.masked_phoneme_total.max(1) as f32,
     })
 }
 
