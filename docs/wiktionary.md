@@ -58,6 +58,8 @@ just wiktionary train \
 
 `--while-preparing` watches `expanded.jsonl.writing.part` and `expanded.jsonl`, reads only complete JSONL rows, and advances one training epoch whenever enough new expanded rows are available. Once `train.jsonl`, `valid.jsonl`, `test.jsonl`, and `vocab.json` are complete, normal prepared training resumes from the same `train_state.json` and checkpoints.
 
+`wiktionary train` now applies OpenEPD rarity weighting and English Dolch sight-word oversampling by default. This happens in training memory and is also written to `train.augmented.jsonl` for inspection/reuse, while leaving `train.jsonl`, `valid.jsonl`, `test.jsonl`, and `vocab.json` unchanged. Pass `--sight-words=false` to disable the sight-word oversampling layer.
+
 Spanish page titles with a Spanish section also get synthetic phonemic rows when `synthesize_spanish = true` in the Wiktionary config, which is the default. The generator emits Castilian Spanish and standard Latin American Spanish variants from regular orthography, including `c/z` seseo-vs-`θ`, `ll/y`, silent `h`, `qu/gu`, contextual `c/g`, and `r/rr`.
 
 Supplemental Wiktionary collation is enabled by default with `include_wiktionary_supplements = true`. It writes `supplemental_terms.jsonl` and duplicates matching pronunciation rows with domain variety tags for English Greek-derived names, Latin, neo-Latin/scientific names, and legal Latin. Terms without a pronunciation row are preserved in `supplemental_terms.jsonl` for review but are not fabricated into pronunciation examples.
@@ -89,6 +91,8 @@ cargo run --release -- wiktionary train \
 ```
 
 When continuing an existing Wiktionary model, training reuses the saved `vocab.json`. Newly prepared examples containing tokens outside that vocabulary are skipped with a count instead of being silently encoded as `<UNK>`. Use a fresh `--out` directory when you want to train the full expanded language set with a rebuilt vocabulary.
+
+This means `just wiktionary train ...` is safe to rerun against existing prepared datasets: it refreshes `train.augmented.jsonl` and keeps the baseline dataset files and model vocabulary stable.
 
 ## Inference
 

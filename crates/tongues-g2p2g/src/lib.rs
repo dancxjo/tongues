@@ -3,10 +3,12 @@
 //! Maps between Spelling (Graphemes), Phonemes (Broad IPA), and Phones (Narrow IPA)
 //! using task prefix tokens.
 
+use std::collections::VecDeque;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use burn::module::AutodiffModule;
+use textplots::{Chart, Plot, Shape};
 use burn::nn::{
     transformer::{
         TransformerDecoder, TransformerDecoderConfig, TransformerDecoderInput, TransformerEncoder,
@@ -300,6 +302,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
 
     let mut total_loss = 0f32;
     let mut n_batches = 0usize;
+    let mut recent_losses: VecDeque<f32> = VecDeque::with_capacity(32);
 
     for chunk in indices.chunks(config.batch_size) {
         let examples: Vec<Seq2SeqExample> = chunk
@@ -353,7 +356,16 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
         let loss_val: f32 = loss.into_scalar().elem();
         total_loss += loss_val;
         n_batches += 1;
-        pb.set_message(format!("{:.4}", total_loss / n_batches as f32));
+        recent_losses.push_back(loss_val);
+        if recent_losses.len() > 32 {
+            recent_losses.pop_front();
+        }
+        let spark = sparkline(&recent_losses.iter().copied().collect::<Vec<_>>());
+        pb.set_message(format!(
+            "{:.4}  {}",
+            total_loss / n_batches as f32,
+            spark
+        ));
         pb.inc(1);
     }
 
@@ -379,6 +391,7 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
 
     let mut total_loss = 0f32;
     let mut n_batches = 0usize;
+    let mut recent_losses: VecDeque<f32> = VecDeque::with_capacity(32);
 
     for chunk in indices.chunks(config.batch_size) {
         let examples = chunk
@@ -427,7 +440,16 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
         let loss_val: f32 = loss.into_scalar().elem();
         total_loss += loss_val;
         n_batches += 1;
-        pb.set_message(format!("{:.4}", total_loss / n_batches as f32));
+        recent_losses.push_back(loss_val);
+        if recent_losses.len() > 32 {
+            recent_losses.pop_front();
+        }
+        let spark = sparkline(&recent_losses.iter().copied().collect::<Vec<_>>());
+        pb.set_message(format!(
+            "{:.4}  {}",
+            total_loss / n_batches as f32,
+            spark
+        ));
         pb.inc(1);
     }
 
@@ -724,6 +746,70 @@ fn seq2seq_eval_batch_stats<B: Backend>(
         })
 }
 
+// ── Terminal visualisation helpers ─────────────────────────────────────────
+
+/// Render a compact unicode sparkline for a window of f32 values.
+/// Uses block-drawing characters ▁▂▃▄▅▆▇█ scaled to the local min/max.
+fn sparkline(values: &[f32]) -> String {
+    const BLOCKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    if values.is_empty() {
+        return String::new();
+    }
+    let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let range = max - min;
+    values
+        .iter()
+        .map(|&v| {
+            let idx = if range < 1e-7 {
+                3
+            } else {
+                ((v - min) / range * 7.0).round() as usize
+            };
+            BLOCKS[idx.min(7)]
+        })
+        .collect()
+}
+
+/// Print a two-series loss chart (train + val) using textplots.
+/// `train_history` and `val_history` are `(epoch_f32, loss)` pairs.
+fn print_loss_chart(train_history: &[(f32, f32)], val_history: &[(f32, f32)]) {
+    if train_history.len() < 2 {
+        return;
+    }
+    let x_max = train_history
+        .last()
+        .map(|&(x, _)| x)
+        .unwrap_or(1.0)
+        .max(1.0);
+    let all_y: Vec<f32> = train_history
+        .iter()
+        .chain(val_history.iter())
+        .map(|&(_, y)| y)
+        .collect();
+    let y_min = (all_y
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min)
+        * 0.95)
+        .max(0.0);
+    let y_max = all_y
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
+        * 1.05;
+    let y_max = if (y_max - y_min).abs() < 1e-6 {
+        y_min + 0.01
+    } else {
+        y_max
+    };
+    println!("  ── train ─── · val ·····  (epoch loss)");
+    Chart::new_with_y_range(120, 20, 1.0, x_max, y_min, y_max)
+        .lineplot(&Shape::Lines(train_history))
+        .lineplot(&Shape::Lines(val_history))
+        .display();
+}
+
 // ── Full training loop ─────────────────────────────────────────────────────
 
 /// Run the complete training loop with early stopping, loading state from disk if present.
@@ -871,6 +957,8 @@ where
     let mut last_val_loss = None;
     let mut last_val_acc = None;
     let mut last_val_token_acc = None;
+    let mut train_loss_history: Vec<(f32, f32)> = Vec::new();
+    let mut val_loss_history: Vec<(f32, f32)> = Vec::new();
 
     for epoch in start_epoch..=train_config.epochs {
         let n_batches =
@@ -943,6 +1031,8 @@ where
         last_val_loss = Some(val_loss);
         last_val_acc = Some(val_acc);
         last_val_token_acc = Some(val_token_acc);
+        train_loss_history.push((epoch as f32, train_loss));
+        val_loss_history.push((epoch as f32, val_loss));
 
         // Save progress for resume
         let current_state = TrainState {
@@ -1001,9 +1091,12 @@ where
             );
             if patience_counter >= train_config.early_stopping_patience {
                 println!("Early stopping at epoch {}", epoch);
+                print_loss_chart(&train_loss_history, &val_loss_history);
                 break;
             }
         }
+
+        print_loss_chart(&train_loss_history, &val_loss_history);
     }
 
     Ok(best_val_loss)
@@ -1139,6 +1232,8 @@ where
     let mut last_val_loss = None;
     let mut last_val_acc = None;
     let mut last_val_token_acc = None;
+    let mut train_loss_history: Vec<(f32, f32)> = Vec::new();
+    let mut val_loss_history: Vec<(f32, f32)> = Vec::new();
 
     for epoch in start_epoch..=train_config.epochs {
         let n_batches =
@@ -1207,6 +1302,8 @@ where
         last_val_loss = Some(val_loss);
         last_val_acc = Some(val_acc);
         last_val_token_acc = Some(val_token_acc);
+        train_loss_history.push((epoch as f32, train_loss));
+        val_loss_history.push((epoch as f32, val_loss));
 
         let current_state = TrainState {
             current_epoch: epoch,
@@ -1260,9 +1357,12 @@ where
             );
             if patience_counter >= train_config.early_stopping_patience {
                 println!("Early stopping at epoch {}", epoch);
+                print_loss_chart(&train_loss_history, &val_loss_history);
                 break;
             }
         }
+
+        print_loss_chart(&train_loss_history, &val_loss_history);
     }
 
     Ok(best_val_loss)

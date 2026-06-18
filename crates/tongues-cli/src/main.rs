@@ -1084,8 +1084,9 @@ enum WiktionaryCommands {
         #[arg(long)]
         prepare: bool,
 
-        /// Add extra training copies of matching English Dolch sight-word rows
-        #[arg(long)]
+        /// Add extra training copies of matching English Dolch sight-word rows.
+        /// Enabled by default; pass --sight-words=false to disable.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         sight_words: bool,
 
         /// Wait for an in-progress prepare in --data to finish, then start training
@@ -2784,8 +2785,8 @@ fn cmd_head2phones_train(
         early_stopping_patience: patience,
         max_seq_len: model_config.max_seq_len,
         task: None,
-        max_frequency_repeat: 1,
-        frequency_rarity_cap: 0.0,
+        max_frequency_repeat: DEFAULT_MAX_FREQUENCY_REPEAT,
+        frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
     };
 
     fs::write(
@@ -3624,14 +3625,48 @@ fn cmd_wiktionary_train_while_preparing(
         }
 
         let next_epoch = completed_epoch + 1;
-        let (train_rows, valid_rows, _) =
+        let (base_train_rows, valid_rows, _) =
             split_wiktionary_examples(rows, config.train_frac, config.valid_frac, config.seed);
-        if train_rows.is_empty() || valid_rows.is_empty() {
+        if base_train_rows.is_empty() || valid_rows.is_empty() {
             std::thread::sleep(Duration::from_secs(20));
             continue;
         }
+        let rarity_by_word = load_openepd_rarity_by_word()?;
+        let (mut train_rows, frequency_matched_rows, frequency_added_rows) =
+            expand_wiktionary_frequency_weighted_training_examples(
+                &base_train_rows,
+                &rarity_by_word,
+                DEFAULT_MAX_FREQUENCY_REPEAT,
+                DEFAULT_FREQUENCY_RARITY_CAP,
+            );
+        if frequency_added_rows > 0 {
+            println!(
+                "  rolling epoch rarity expansion matched {} rows (+{} rows)",
+                format_count(frequency_matched_rows),
+                format_count(frequency_added_rows)
+            );
+        }
+        if sight_words {
+            let added = add_wiktionary_sight_word_training_examples(
+                &mut train_rows,
+                [&valid_rows[..], (&[] as &[tongues_wiktionary::TrainingExample])],
+            );
+            if added > 0 {
+                println!(
+                    "  rolling epoch included {} extra Wiktionary sight-word rows",
+                    format_count(added)
+                );
+            }
+        }
         let train_examples = wiktionary_seq2seq_examples(&train_rows, &vocab);
         let valid_examples = wiktionary_seq2seq_examples(&valid_rows, &vocab);
+        write_wiktionary_augmented_train_rows(
+            data,
+            &base_train_rows,
+            &valid_rows,
+            &[],
+            sight_words,
+        )?;
         println!(
             "Rolling Wiktionary epoch {} from {} usable rows ({} train / {} valid) in {}",
             format_count(next_epoch),
@@ -3793,6 +3828,24 @@ fn cmd_wiktionary_train(
     let pb = status_spinner("Splitting rows, building vocabulary, and encoding examples");
     let (mut train_rows, mut valid_rows, _test_rows) =
         split_wiktionary_examples(examples, config.train_frac, config.valid_frac, config.seed);
+    let rarity_by_word = load_openepd_rarity_by_word()?;
+    let (frequency_expanded_rows, frequency_matched_rows, frequency_added_rows) =
+        expand_wiktionary_frequency_weighted_training_examples(
+            &train_rows,
+            &rarity_by_word,
+            DEFAULT_MAX_FREQUENCY_REPEAT,
+            DEFAULT_FREQUENCY_RARITY_CAP,
+        );
+    train_rows = frequency_expanded_rows;
+    if frequency_added_rows > 0 {
+        println!(
+            "  expanded {} English Wiktionary rows by OpenEPD rarity (+{} rows, max_repeat={} rarity_cap={})",
+            format_count(frequency_matched_rows),
+            format_count(frequency_added_rows),
+            format_count(DEFAULT_MAX_FREQUENCY_REPEAT),
+            DEFAULT_FREQUENCY_RARITY_CAP
+        );
+    }
     if sight_words {
         let added = add_wiktionary_sight_word_training_examples(
             &mut train_rows,
@@ -3904,6 +3957,11 @@ fn cmd_wiktionary_train_prepared_rows(
         read_jsonl_as(&data.join("train.jsonl"))?;
     let valid_rows_raw: Vec<tongues_wiktionary::TrainingExample> =
         read_jsonl_as(&data.join("valid.jsonl"))?;
+    let test_rows_raw: Vec<tongues_wiktionary::TrainingExample> = if data.join("test.jsonl").exists() {
+        read_jsonl_as(&data.join("test.jsonl"))?
+    } else {
+        Vec::new()
+    };
     finish_status(
         pb,
         format!(
@@ -3912,6 +3970,14 @@ fn cmd_wiktionary_train_prepared_rows(
             format_count(valid_rows_raw.len())
         ),
     );
+
+    write_wiktionary_augmented_train_rows(
+        data,
+        &train_rows_raw,
+        &valid_rows_raw,
+        &test_rows_raw,
+        sight_words,
+    )?;
 
     let pb = status_spinner(format!("Filtering prepared rows for task={task}"));
     let mut train_rows = filter_wiktionary_examples(
@@ -3922,16 +3988,32 @@ fn cmd_wiktionary_train_prepared_rows(
         filter_wiktionary_examples_by_notation(valid_rows_raw, notations),
         task,
     )?;
-    let test_rows = if sight_words && data.join("test.jsonl").exists() {
-        let rows: Vec<tongues_wiktionary::TrainingExample> =
-            read_jsonl_as(&data.join("test.jsonl"))?;
+    let test_rows = if sight_words && !test_rows_raw.is_empty() {
         filter_wiktionary_examples(
-            filter_wiktionary_examples_by_notation(rows, notations),
+            filter_wiktionary_examples_by_notation(test_rows_raw, notations),
             task,
         )?
     } else {
         Vec::new()
     };
+    let rarity_by_word = load_openepd_rarity_by_word()?;
+    let (frequency_expanded_rows, frequency_matched_rows, frequency_added_rows) =
+        expand_wiktionary_frequency_weighted_training_examples(
+            &train_rows,
+            &rarity_by_word,
+            DEFAULT_MAX_FREQUENCY_REPEAT,
+            DEFAULT_FREQUENCY_RARITY_CAP,
+        );
+    train_rows = frequency_expanded_rows;
+    if frequency_added_rows > 0 {
+        println!(
+            "  expanded {} English Wiktionary rows by OpenEPD rarity (+{} rows, max_repeat={} rarity_cap={})",
+            format_count(frequency_matched_rows),
+            format_count(frequency_added_rows),
+            format_count(DEFAULT_MAX_FREQUENCY_REPEAT),
+            DEFAULT_FREQUENCY_RARITY_CAP
+        );
+    }
     if sight_words {
         let added = add_wiktionary_sight_word_training_examples(
             &mut train_rows,
@@ -4111,15 +4193,126 @@ fn add_wiktionary_sight_word_training_examples<const N: usize>(
     added
 }
 
+fn expand_wiktionary_frequency_weighted_training_examples(
+    train_rows: &[tongues_wiktionary::TrainingExample],
+    rarity_by_word: &std::collections::BTreeMap<String, f32>,
+    max_repeat: usize,
+    rarity_cap: f32,
+) -> (Vec<tongues_wiktionary::TrainingExample>, usize, usize) {
+    let mut expanded = Vec::new();
+    let mut matched_rows = 0usize;
+    let mut added_rows = 0usize;
+
+    for row in train_rows {
+        let repeat = wiktionary_frequency_repeat_count_for_example(
+            row,
+            rarity_by_word,
+            max_repeat,
+            rarity_cap,
+        );
+        if repeat > 1 {
+            matched_rows += 1;
+            added_rows += repeat - 1;
+        }
+        for _ in 0..repeat {
+            expanded.push(row.clone());
+        }
+    }
+
+    (expanded, matched_rows, added_rows)
+}
+
+fn wiktionary_frequency_repeat_count_for_example(
+    row: &tongues_wiktionary::TrainingExample,
+    rarity_by_word: &std::collections::BTreeMap<String, f32>,
+    max_repeat: usize,
+    rarity_cap: f32,
+) -> usize {
+    if !wiktionary_example_is_english(row) {
+        return 1;
+    }
+    let Some(candidate) = wiktionary_training_word_candidate(row) else {
+        return 1;
+    };
+    let Some(rarity) = rarity_by_word.get(candidate.as_str()) else {
+        return 1;
+    };
+    frequency_repeat_count(*rarity, max_repeat, rarity_cap)
+}
+
+fn write_wiktionary_augmented_train_rows(
+    data: &Path,
+    train_rows: &[tongues_wiktionary::TrainingExample],
+    valid_rows: &[tongues_wiktionary::TrainingExample],
+    test_rows: &[tongues_wiktionary::TrainingExample],
+    sight_words: bool,
+) -> Result<()> {
+    let rarity_by_word = load_openepd_rarity_by_word()?;
+    let (mut augmented_rows, matched_rows, added_rows) =
+        expand_wiktionary_frequency_weighted_training_examples(
+            train_rows,
+            &rarity_by_word,
+            DEFAULT_MAX_FREQUENCY_REPEAT,
+            DEFAULT_FREQUENCY_RARITY_CAP,
+        );
+    let sight_added = if sight_words {
+        add_wiktionary_sight_word_training_examples(&mut augmented_rows, [valid_rows, test_rows])
+    } else {
+        0
+    };
+
+    let out_path = data.join("train.augmented.jsonl");
+    write_training_example_jsonl_atomic(&out_path, &augmented_rows)?;
+    println!(
+        "Updated {} with {} rows (rarity matched={} +{} rows; sight words +{} rows)",
+        out_path.display(),
+        format_count(augmented_rows.len()),
+        format_count(matched_rows),
+        format_count(added_rows),
+        format_count(sight_added)
+    );
+
+    Ok(())
+}
+
+fn write_training_example_jsonl_atomic(
+    path: &Path,
+    rows: &[tongues_wiktionary::TrainingExample],
+) -> Result<()> {
+    let part = atomic_part_path(path);
+    archive_interrupted_part(path)?;
+    let mut writer = std::io::BufWriter::new(
+        fs::File::create(&part).with_context(|| format!("creating {}", part.display()))?,
+    );
+    for row in rows {
+        writeln!(writer, "{}", serde_json::to_string(row)?)?;
+    }
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    drop(writer);
+    fs::rename(&part, path)
+        .with_context(|| format!("moving {} to {}", part.display(), path.display()))?;
+    Ok(())
+}
+
 fn wiktionary_sight_word_for_example(
     row: &tongues_wiktionary::TrainingExample,
     sight_words: &std::collections::BTreeSet<&str>,
 ) -> Option<String> {
-    use tongues_wiktionary::WiktionaryTask;
-
     if !wiktionary_example_is_english(row) {
         return None;
     }
+    let candidate = wiktionary_training_word_candidate(row)?;
+    sight_words
+        .contains(candidate.as_str())
+        .then_some(candidate)
+}
+
+fn wiktionary_training_word_candidate(
+    row: &tongues_wiktionary::TrainingExample,
+) -> Option<String> {
+    use tongues_wiktionary::WiktionaryTask;
 
     let candidate = match row.task {
         WiktionaryTask::OrthographyToPhonology | WiktionaryTask::GuessLangFromOrthography => {
@@ -4135,10 +4328,10 @@ fn wiktionary_sight_word_for_example(
     }?;
 
     let candidate = candidate.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '\'');
-    let candidate = candidate.to_ascii_lowercase();
-    sight_words
-        .contains(candidate.as_str())
-        .then_some(candidate)
+    if candidate.is_empty() {
+        return None;
+    }
+    Some(candidate.to_ascii_lowercase())
 }
 
 fn wiktionary_example_is_english(row: &tongues_wiktionary::TrainingExample) -> bool {
@@ -6222,6 +6415,11 @@ struct OpenEpdEntry {
     ipa: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct OpenEpdRarityEntry {
+    rarity: f32,
+}
+
 const OPENEPD_SOURCE_PREFERENCE: &[&str] = &[
     "misaki_gold",
     "cmu",
@@ -6588,6 +6786,16 @@ fn read_jsonl(path: &Path) -> Result<Vec<Lexeme>> {
         out.push(lex);
     }
     Ok(out)
+}
+
+fn load_openepd_rarity_by_word() -> Result<std::collections::BTreeMap<String, f32>> {
+    let raw: std::collections::BTreeMap<String, OpenEpdRarityEntry> =
+        serde_json::from_str(open_english_pronouncing_dictionary::CORPUS_JSON)
+            .context("parsing embedded OpenEPD rarity JSON")?;
+    Ok(raw
+        .into_iter()
+        .map(|(word, entry)| (word.to_ascii_lowercase(), entry.rarity))
+        .collect())
 }
 
 const SIGHT_WORD_TRAINING_REPEATS: usize = 24;
@@ -8542,6 +8750,60 @@ mod tests {
         assert!(!train_rows
             .iter()
             .any(|row| row.lang.as_deref() == Some("deu")));
+    }
+
+    #[test]
+    fn wiktionary_frequency_weighting_expands_english_rows_by_openepd_rarity() {
+        let train_rows = vec![
+            tongues_wiktionary::TrainingExample {
+                task: tongues_wiktionary::WiktionaryTask::OrthographyToPhonology,
+                lang: Some("eng".to_string()),
+                notation: Some("phonetic".to_string()),
+                accent: None,
+                input: "<task:orthography_to_phonology> <lang:eng> <repr:phones> the".to_string(),
+                output: "ðə".to_string(),
+                source: "test".to_string(),
+            },
+            tongues_wiktionary::TrainingExample {
+                task: tongues_wiktionary::WiktionaryTask::OrthographyToPhonology,
+                lang: Some("deu".to_string()),
+                notation: Some("phonetic".to_string()),
+                accent: None,
+                input: "<task:orthography_to_phonology> <lang:deu> <repr:phones> die".to_string(),
+                output: "diː".to_string(),
+                source: "test".to_string(),
+            },
+        ];
+        let rarity_by_word = std::collections::BTreeMap::from([
+            ("the".to_string(), 0.0_f32),
+            ("die".to_string(), 0.0_f32),
+        ]);
+
+        let (expanded, matched_rows, added_rows) =
+            expand_wiktionary_frequency_weighted_training_examples(
+                &train_rows,
+                &rarity_by_word,
+                8,
+                50_000.0,
+            );
+
+        assert_eq!(matched_rows, 1);
+        assert_eq!(added_rows, 7);
+        assert_eq!(expanded.len(), 9);
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|row| row.input.ends_with(" the"))
+                .count(),
+            8
+        );
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|row| row.input.ends_with(" die"))
+                .count(),
+            1
+        );
     }
 
     #[test]
