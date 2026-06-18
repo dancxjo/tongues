@@ -19,6 +19,7 @@ use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use tongues_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
@@ -316,7 +317,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
 
     for chunk in indices.chunks(config.batch_size) {
         let examples: Vec<Seq2SeqExample> = chunk
-            .iter()
+            .par_iter()
             .enumerate()
             .map(|(position, &i)| {
                 let lex = &lexemes[i];
@@ -395,7 +396,7 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
 
     for chunk in indices.chunks(config.batch_size) {
         let examples = chunk
-            .iter()
+            .par_iter()
             .map(|&i| examples[i].clone())
             .collect::<Vec<_>>();
 
@@ -486,25 +487,21 @@ pub fn evaluate<B: Backend, R: Rng>(
         lexemes
     };
 
-    let mut total_examples = 0usize;
-    let examples: Vec<Seq2SeqExample> = eval_lexemes
-        .iter()
-        .map(|lex| {
-            let task = match task_filter {
-                Some(t) => t,
-                None => {
-                    let t = if total_examples % 2 == 0 {
-                        Task::G2P
-                    } else {
-                        Task::P2G
-                    };
-                    total_examples += 1;
-                    t
-                }
-            };
-            make_seq2seq_example(lex, task, vocab)
-        })
-        .collect();
+    let examples: Vec<Seq2SeqExample> = if let Some(task) = task_filter {
+        eval_lexemes
+            .par_iter()
+            .map(|lex| make_seq2seq_example(lex, task, vocab))
+            .collect()
+    } else {
+        eval_lexemes
+            .par_iter()
+            .enumerate()
+            .map(|(index, lex)| {
+                let task = if index % 2 == 0 { Task::G2P } else { Task::P2G };
+                make_seq2seq_example(lex, task, vocab)
+            })
+            .collect()
+    };
 
     let eval_batches = (examples.len() + 63) / 64;
     let pb = indicatif::ProgressBar::new(eval_batches as u64);
@@ -520,20 +517,19 @@ pub fn evaluate<B: Backend, R: Rng>(
 
     for chunk in examples.chunks(64) {
         let max_src = chunk
-            .iter()
+            .par_iter()
             .map(|ex| ex.src_ids.len())
             .max()
             .unwrap_or(1)
             .min(max_seq_len);
         let max_tgt = chunk
-            .iter()
+            .par_iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
             .unwrap_or(1)
             .min(max_seq_len);
         let batch = collate_batch(chunk, max_src, max_tgt);
 
-        let b = batch.size;
         let batch = tensor_seq2seq_batch(
             batch.src_ids,
             batch.tgt_in_ids,
@@ -555,36 +551,10 @@ pub fn evaluate<B: Backend, R: Rng>(
         pb.set_message(format!("loss={:.4}", total_loss / n_batches as f32));
         pb.inc(1);
 
-        let [_, tgt_len, vocab_size] = logits.dims();
-        for i in 0..b {
-            let mut matched = true;
-            for j in 0..tgt_len {
-                let tgt_id = chunk[i].tgt_out_ids.get(j).copied().unwrap_or(PAD_ID);
-                if tgt_id == PAD_ID {
-                    break;
-                }
-                total_tokens += 1;
-                let pos_logits = logits
-                    .clone()
-                    .slice([i..i + 1, j..j + 1, 0..vocab_size])
-                    .reshape([vocab_size]);
-                let pos_logits_vec: Vec<f32> = pos_logits.into_data().to_vec().unwrap();
-                let pred = pos_logits_vec
-                    .iter()
-                    .enumerate()
-                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(idx, _)| idx as u32)
-                    .unwrap_or(0);
-                if pred == tgt_id {
-                    matched_tokens += 1;
-                } else {
-                    matched = false;
-                }
-            }
-            if matched {
-                exact_matches += 1;
-            }
-        }
+        let batch_stats = seq2seq_eval_batch_stats(&logits, chunk);
+        exact_matches += batch_stats.exact_matches;
+        total_tokens += batch_stats.total_tokens;
+        matched_tokens += batch_stats.matched_tokens;
     }
     pb.finish_and_clear();
 
@@ -645,20 +615,19 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
 
     for chunk in eval_examples.chunks(64) {
         let max_src = chunk
-            .iter()
+            .par_iter()
             .map(|ex| ex.src_ids.len())
             .max()
             .unwrap_or(1)
             .min(max_seq_len);
         let max_tgt = chunk
-            .iter()
+            .par_iter()
             .map(|ex| ex.tgt_in_ids.len())
             .max()
             .unwrap_or(1)
             .min(max_seq_len);
         let batch = collate_batch(chunk, max_src, max_tgt);
 
-        let b = batch.size;
         let batch = tensor_seq2seq_batch(
             batch.src_ids,
             batch.tgt_in_ids,
@@ -680,36 +649,10 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
         pb.set_message(format!("loss={:.4}", total_loss / n_batches as f32));
         pb.inc(1);
 
-        let [_, tgt_len, vocab_size] = logits.dims();
-        for i in 0..b {
-            let mut matched = true;
-            for j in 0..tgt_len {
-                let tgt_id = chunk[i].tgt_out_ids.get(j).copied().unwrap_or(PAD_ID);
-                if tgt_id == PAD_ID {
-                    break;
-                }
-                total_tokens += 1;
-                let pos_logits = logits
-                    .clone()
-                    .slice([i..i + 1, j..j + 1, 0..vocab_size])
-                    .reshape([vocab_size]);
-                let pos_logits_vec: Vec<f32> = pos_logits.into_data().to_vec().unwrap();
-                let pred = pos_logits_vec
-                    .iter()
-                    .enumerate()
-                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(idx, _)| idx as u32)
-                    .unwrap_or(0);
-                if pred == tgt_id {
-                    matched_tokens += 1;
-                } else {
-                    matched = false;
-                }
-            }
-            if matched {
-                exact_matches += 1;
-            }
-        }
+        let batch_stats = seq2seq_eval_batch_stats(&logits, chunk);
+        exact_matches += batch_stats.exact_matches;
+        total_tokens += batch_stats.total_tokens;
+        matched_tokens += batch_stats.matched_tokens;
     }
     pb.finish_and_clear();
 
@@ -726,6 +669,73 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
     };
 
     (mean_loss, acc, token_acc)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EvalSeq2SeqBatchStats {
+    exact_matches: usize,
+    total_tokens: usize,
+    matched_tokens: usize,
+}
+
+impl EvalSeq2SeqBatchStats {
+    fn merge(&mut self, other: EvalSeq2SeqBatchStats) {
+        self.exact_matches += other.exact_matches;
+        self.total_tokens += other.total_tokens;
+        self.matched_tokens += other.matched_tokens;
+    }
+}
+
+fn seq2seq_eval_batch_stats<B: Backend>(
+    logits: &Tensor<B, 3>,
+    examples: &[Seq2SeqExample],
+) -> EvalSeq2SeqBatchStats {
+    let [_, tgt_len, vocab_size] = logits.dims();
+    let logits_data = logits.clone().into_data().to_vec().unwrap();
+    let row_stride = tgt_len * vocab_size;
+
+    examples
+        .par_iter()
+        .enumerate()
+        .map(|(index, example)| {
+            let mut stats = EvalSeq2SeqBatchStats::default();
+            let mut matched = true;
+            let row_offset = index * row_stride;
+
+            for position in 0..tgt_len {
+                let tgt_id = example.tgt_out_ids.get(position).copied().unwrap_or(PAD_ID);
+                if tgt_id == PAD_ID {
+                    break;
+                }
+                stats.total_tokens += 1;
+                let pos_offset = row_offset + position * vocab_size;
+                let pos_logits: &[f32] = &logits_data[pos_offset..pos_offset + vocab_size];
+                let pred = pos_logits
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, left), (_, right)| {
+                        left.partial_cmp(right)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(idx, _)| idx as u32)
+                    .unwrap_or(0);
+                if pred == tgt_id {
+                    stats.matched_tokens += 1;
+                } else {
+                    matched = false;
+                }
+            }
+
+            if matched {
+                stats.exact_matches = 1;
+            }
+
+            stats
+        })
+        .reduce(EvalSeq2SeqBatchStats::default, |mut left, right| {
+            left.merge(right);
+            left
+        })
 }
 
 // ── Full training loop ─────────────────────────────────────────────────────
