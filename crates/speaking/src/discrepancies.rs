@@ -33,16 +33,51 @@ pub trait PronunciationProvider {
     fn pronounce(&mut self, word: &str) -> PronouncerResult;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscrepancyProgress {
+    pub word_index: usize,
+    pub words_total: usize,
+    pub provider_index: usize,
+    pub providers_total: usize,
+    pub word: String,
+    pub provider: String,
+}
+
 pub fn find_pronunciation_discrepancies(
     words: &[String],
     providers: &mut [&mut dyn PronunciationProvider],
 ) -> Vec<PronunciationDiscrepancy> {
+    find_pronunciation_discrepancies_with_progress(words, providers, |_| {})
+}
+
+pub fn find_pronunciation_discrepancies_with_progress<F>(
+    words: &[String],
+    providers: &mut [&mut dyn PronunciationProvider],
+    mut progress: F,
+) -> Vec<PronunciationDiscrepancy>
+where
+    F: FnMut(DiscrepancyProgress),
+{
     let mut records = Vec::new();
-    for word in words {
-        let sources = providers
-            .iter_mut()
-            .map(|provider| provider.pronounce(word))
-            .collect::<Vec<_>>();
+    let words_total = words.len();
+    let providers_total = providers.len();
+
+    for (word_index, word) in words.iter().enumerate() {
+        let mut sources = Vec::with_capacity(providers_total);
+        for (provider_index, provider) in providers.iter_mut().enumerate() {
+            let provider_name = provider.name().to_string();
+            let source = provider.pronounce(word);
+            progress(DiscrepancyProgress {
+                word_index: word_index + 1,
+                words_total,
+                provider_index: provider_index + 1,
+                providers_total,
+                word: word.clone(),
+                provider: provider_name,
+            });
+            sources.push(source);
+        }
+
         let mut comparison_keys = sources
             .iter()
             .filter_map(|source| source.output.as_deref())

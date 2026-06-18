@@ -5824,7 +5824,37 @@ where
             provider_names.join(", ")
         );
     }
-    let records = speaking::find_pronunciation_discrepancies(&words, &mut providers);
+
+    let total_checks = words.len().saturating_mul(providers.len());
+    let pb = if quiet_output() {
+        indicatif::ProgressBar::hidden()
+    } else {
+        let pb = indicatif::ProgressBar::new(total_checks as u64);
+        pb.set_style(counted_progress_style()?);
+        pb.set_message(format!(
+            "Checking {} words across {} providers",
+            format_count(words.len()),
+            format_count(providers.len())
+        ));
+        pb
+    };
+
+    let records = speaking::find_pronunciation_discrepancies_with_progress(
+        &words,
+        &mut providers,
+        |progress| {
+            pb.inc(1);
+            pb.set_message(format!(
+                "word {}/{} via {} ({})",
+                format_count(progress.word_index),
+                format_count(progress.words_total),
+                progress.provider,
+                progress.word
+            ));
+        },
+    );
+    pb.finish_and_clear();
+
     let report = speaking::render_discrepancy_markdown(&records, &provider_names, words.len());
     write_atomic_text(out, &report)?;
     println!(

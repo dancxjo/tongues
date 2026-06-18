@@ -151,15 +151,41 @@ cargo run --release -- wiktionary infer \
 
 ## Race Smoke Test
 
-`just race` demonstrates the G2P2G and Wiktionary defaults without trying every word against every language.
+`just race` is the compact smoke test for the active model families. It keeps the
+Wiktionary family honest while `head2phones` and `interpretation` are still
+training in parallel.
 
 ```sh
 just race --cpu
 just race --skip-build through brötchen mañana धर्मक्षेत्र
+
+just wiktionary prepare --out datasets/wiktionary/enwiktionary-2026-06-01-v0
+just wiktionary train --data datasets/wiktionary/enwiktionary-2026-06-01-v0 --out models/wiktionary/enwiktionary-2026-06-01-v0-phones
+just wiktionary eval --data datasets/wiktionary/enwiktionary-2026-06-01-v0 --model models/wiktionary/enwiktionary-2026-06-01-v0-phones --split valid
+just wiktionary infer --model models/wiktionary/enwiktionary-2026-06-01-v0-phones --task orthography-to-phones --lang eng --notation phones "cat"
+just wiktionary clean --all
+
+just head2phones prepare --out datasets/head2phones/v0
+just head2phones train --data datasets/head2phones/v0 --out models/head2phones/v0 --prepare --wait-for-prepare
+
+just interpretation prepare --subset mini --out datasets/interpretation/mini-v0
+just interpretation train --data datasets/interpretation/mini-v0 --out models/interpretation/mini-v0 --wait-for-prepare
 ```
 
-The default list is deliberately jagged: sight words, common English irregulars, regular multi-morphemic English words, plausible nonce words, dinosaur and taxonomic names, and Unicode-heavy forms such as `mañana`, `brötchen`, `Łódź`, `Dvořák`, `ἄνθρωπος`, and `कर्म`. The Wiktionary round-trip sample also includes real and imaginary-looking probes across the default target languages: English, Spanish, French, German, Latin, Greek, and Sanskrit.
+The default list is deliberately jagged: sight words, common English irregulars,
+regular multi-morphemic English words, plausible nonce words, dinosaur and
+taxonomic names, and Unicode-heavy forms such as `mañana`, `brötchen`, `Łódź`,
+`Dvořák`, `ἄνθρωπος`, and `कर्म`. The Wiktionary round-trip sample also includes
+real and imaginary-looking probes across the default target languages:
+English, Spanish, French, German, Latin, Greek, and Sanskrit.
 
-The race output prints abbreviated counts up front, for example `g2p2g=54 rt`, `wiktionary=29 rt`, and `wiktionary task demos=9 + raw`. "Successful" means the inference command completed; it is not an exact-match score.
+The race output prints abbreviated counts up front, for example `g2p2g=54 rt`,
+`wiktionary=29 rt`, and `wiktionary task demos=9 + raw`. "Successful" means
+the inference command completed; it is not an exact-match score.
 
-The run is useful mostly as a smoke test and terminology check. It exercises phonemes and phones as distinct representations, runs phonetic realization from phonemes to phones, uses task-specific probes for language guessing, and keeps the raw-control example visible so vocabulary/control-token regressions are easy to spot.
+The run is useful mostly as a smoke test and terminology check. It exercises
+phonemes and phones as distinct representations, runs phonetic realization from
+phonemes to phones, uses task-specific probes for language guessing, keeps the
+raw-control example visible so vocabulary/control-token regressions are easy to
+spot, and gives the nearby head2phones/interpretation training loops a
+consistent companion example set.

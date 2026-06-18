@@ -112,7 +112,7 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just sight-words` | Fine-tune on built-in Dolch sight words. |
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
-| `just race --cpu` | Run a compact smoke test across model families. |
+| `just race --cpu` | Run a compact smoke test across the active model families. |
 
 The model-family `just` recipes forward their arguments to the `tongues` CLI.
 
