@@ -8,12 +8,14 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, thread};
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
+use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,7 @@ pub const CONTINUE_TOKEN: &str = "<boundary:continue>";
 pub const MISSING_HEAD_TOKEN: &str = "<boundary:missing_head>";
 pub const REPAIR_TOKEN: &str = "<boundary:repair>";
 const USER_AGENT: &str = "tongues-sentence-parser/0.1";
+const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
     "https://www.gutenberg.org/cache/epub/84/pg84.txt",
@@ -269,6 +272,22 @@ struct PrepareShardData {
     discrepancies: Vec<BoundaryTrainingExample>,
 }
 
+#[derive(Debug)]
+struct PreparedSourceShard {
+    index: usize,
+    path: String,
+    progress: Vec<PrepareProgress>,
+    manifest: PrepareShardManifest,
+}
+
+#[derive(Debug)]
+struct LoadedPrepareShard {
+    index: usize,
+    sentences: Vec<SentenceRecord>,
+    examples: Vec<BoundaryTrainingExample>,
+    discrepancies: Vec<BoundaryTrainingExample>,
+}
+
 pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<PrepareReport> {
     prepare_dataset_with_progress(out, config, |_| {})
 }
@@ -328,6 +347,18 @@ pub fn prepare_dataset_with_progress(
     let checkpoint_dir = out.join("prepare-checkpoints");
     fs::create_dir_all(&checkpoint_dir)
         .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
+    let prepare_threads = prepare_worker_threads();
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Preparing with {} worker thread{}",
+            prepare_threads,
+            if prepare_threads == 1 { "" } else { "s" }
+        ),
+    });
+    let prepare_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(prepare_threads)
+        .build()
+        .context("building sentence-parser prepare thread pool")?;
     let config_fingerprint = config_fingerprint(config)?;
     let mut shard_manifests = Vec::new();
 
@@ -362,57 +393,75 @@ pub fn prepare_dataset_with_progress(
         shard_manifests.push(manifest);
     }
 
-    for (file_index, path) in files.iter().enumerate() {
-        let shard_id = format!(
-            "{:03}-source-{}",
-            file_index + 1,
-            sanitize_checkpoint_id(path)
-        );
-        let label = path.display().to_string();
-        let manifest = build_or_load_prepare_shard(
-            &checkpoint_dir,
-            &shard_id,
-            &label,
-            &config_fingerprint,
-            &mut progress,
-            || {
-                let raw = fs::read_to_string(path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                let sentences =
-                    detect_sentences_for_text(&raw, &path.display().to_string(), config)?;
-                let sentence_pairs = sentences
-                    .iter()
-                    .map(|record| (record.sentence.clone(), record.source.clone()))
-                    .collect::<Vec<_>>();
-                let mut examples = build_boundary_examples(&sentence_pairs, config);
-                let discrepancies = if config.include_naive_discrepancies {
-                    build_naive_discrepancy_examples(
-                        &sentences
+    let mut prepared_source_shards = prepare_pool.install(|| {
+        files
+            .par_iter()
+            .enumerate()
+            .map(|(file_index, path)| {
+                let path = path.clone();
+                let shard_id =
+                    format!("{:03}-source-{}", file_index + 1, sanitize_checkpoint_id(&path));
+                let label = path.display().to_string();
+                let mut shard_progress = Vec::new();
+                let mut collect = |event| shard_progress.push(event);
+                let manifest = build_or_load_prepare_shard(
+                    &checkpoint_dir,
+                    &shard_id,
+                    &label,
+                    &config_fingerprint,
+                    &mut collect,
+                    || {
+                        let raw = fs::read_to_string(&path)
+                            .with_context(|| format!("reading {}", path.display()))?;
+                        let sentences =
+                            detect_sentences_for_text(&raw, &path.display().to_string(), config)?;
+                        let sentence_pairs = sentences
                             .iter()
-                            .map(|record| record.sentence.clone())
-                            .collect::<Vec<_>>(),
-                        &path.display().to_string(),
-                        config,
-                    )
-                } else {
-                    Vec::new()
-                };
-                examples.extend(discrepancies.clone());
-                Ok(PrepareShardData {
-                    sentences,
-                    examples,
-                    discrepancies,
+                            .map(|record| (record.sentence.clone(), record.source.clone()))
+                            .collect::<Vec<_>>();
+                        let mut examples = build_boundary_examples(&sentence_pairs, config);
+                        let discrepancies = if config.include_naive_discrepancies {
+                            build_naive_discrepancy_examples(
+                                &sentences
+                                    .iter()
+                                    .map(|record| record.sentence.clone())
+                                    .collect::<Vec<_>>(),
+                                &path.display().to_string(),
+                                config,
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        examples.extend(discrepancies.clone());
+                        Ok(PrepareShardData {
+                            sentences,
+                            examples,
+                            discrepancies,
+                        })
+                    },
+                )?;
+                Ok(PreparedSourceShard {
+                    index: file_index,
+                    path: path.display().to_string(),
+                    progress: shard_progress,
+                    manifest,
                 })
-            },
-        )?;
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    prepared_source_shards.sort_by_key(|item| item.index);
+    for prepared in prepared_source_shards {
+        for event in prepared.progress {
+            progress(event);
+        }
         progress(PrepareProgress::Detect {
-            path: path.display().to_string(),
-            files_done: file_index + 1,
+            path: prepared.path,
+            files_done: prepared.index + 1,
             files_total: files.len(),
-            sentences: manifest.sentences,
-            naive_discrepancies: manifest.discrepancies,
+            sentences: prepared.manifest.sentences,
+            naive_discrepancies: prepared.manifest.discrepancies,
         });
-        shard_manifests.push(manifest);
+        shard_manifests.push(prepared.manifest);
     }
 
     write_prepare_state(
@@ -426,18 +475,33 @@ pub fn prepare_dataset_with_progress(
     let mut sentences = Vec::new();
     let mut examples = Vec::new();
     let mut correction_examples = Vec::new();
-    for manifest in &shard_manifests {
-        let mut shard_sentences: Vec<SentenceRecord> = read_jsonl(&manifest.sentences_path)?;
-        let mut shard_examples: Vec<BoundaryTrainingExample> = read_jsonl(&manifest.examples_path)?;
-        let mut shard_discrepancies: Vec<BoundaryTrainingExample> = manifest
-            .discrepancies_path
-            .as_ref()
-            .map(|path| read_jsonl(path))
-            .transpose()?
-            .unwrap_or_default();
-        sentences.append(&mut shard_sentences);
-        examples.append(&mut shard_examples);
-        correction_examples.append(&mut shard_discrepancies);
+    let mut loaded_shards = prepare_pool.install(|| {
+        shard_manifests
+            .par_iter()
+            .enumerate()
+            .map(|(index, manifest)| {
+                let sentences: Vec<SentenceRecord> = read_jsonl(&manifest.sentences_path)?;
+                let examples: Vec<BoundaryTrainingExample> = read_jsonl(&manifest.examples_path)?;
+                let discrepancies: Vec<BoundaryTrainingExample> = manifest
+                    .discrepancies_path
+                    .as_ref()
+                    .map(|path| read_jsonl(path))
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(LoadedPrepareShard {
+                    index,
+                    sentences,
+                    examples,
+                    discrepancies,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    loaded_shards.sort_by_key(|item| item.index);
+    for mut loaded in loaded_shards {
+        sentences.append(&mut loaded.sentences);
+        examples.append(&mut loaded.examples);
+        correction_examples.append(&mut loaded.discrepancies);
     }
     let naive_discrepancy_examples = correction_examples.len();
     anyhow::ensure!(
@@ -687,6 +751,18 @@ fn write_prepare_state(
 fn config_fingerprint(config: &SentenceParserConfig) -> Result<String> {
     let json = serde_json::to_string(config)?;
     Ok(format!("{:016x}", stable_hash(json.as_bytes())))
+}
+
+fn prepare_worker_threads() -> usize {
+    let detected = thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let configured = env::var("TONGUES_PREPARE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(detected);
+    configured.clamp(1, DEFAULT_PREPARE_MAX_THREADS)
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {

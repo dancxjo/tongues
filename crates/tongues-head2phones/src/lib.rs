@@ -9,11 +9,13 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, thread};
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -49,6 +51,7 @@ pub const CONFIDENCE_LOW: &str = "low";
 pub const END_OF_TEXT: &str = "<END_OF_TEXT>";
 const PREPARE_SCHEMA_VERSION: &str = "head2phones-prepare-v3";
 const USER_AGENT: &str = "tongues-head2phones/0.1";
+const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 const CONFIG_FINGERPRINT_OLLAMA_MODEL: &str = "gpt-oss:20b";
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
@@ -348,6 +351,22 @@ struct ResolvedSourceFile {
     varieties: Vec<VarietyId>,
 }
 
+#[derive(Debug)]
+struct PreparedSourceShard {
+    index: usize,
+    path: String,
+    progress: Vec<PrepareProgress>,
+    manifest: PrepareShardManifest,
+}
+
+#[derive(Debug)]
+struct LoadedPrepareShard {
+    index: usize,
+    source_buffers: usize,
+    examples: Vec<Head2PhonesTrainingExample>,
+    discrepancies: Vec<NaiveSeamsDiscrepancy>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareProgress {
     Stage {
@@ -401,6 +420,18 @@ pub fn prepare_dataset_with_progress(
     let checkpoint_dir = out.join("prepare-checkpoints");
     fs::create_dir_all(&checkpoint_dir)
         .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
+    let prepare_threads = prepare_worker_threads();
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Preparing with {} worker thread{}",
+            prepare_threads,
+            if prepare_threads == 1 { "" } else { "s" }
+        ),
+    });
+    let prepare_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(prepare_threads)
+        .build()
+        .context("building head2phones prepare thread pool")?;
     let config_fingerprint = config_fingerprint(config)?;
     let mut shard_manifests = Vec::new();
 
@@ -540,68 +571,88 @@ pub fn prepare_dataset_with_progress(
     }
 
     let source_files = resolve_source_files_with_progress(out, config, &mut progress)?;
-    for (index, source_file) in source_files.iter().enumerate() {
-        let path = &source_file.path;
-        let source_varieties = source_file.varieties.clone();
-        let shard_id = format!("{:03}-source-{}", index + 2, sanitize_checkpoint_id(path));
-        let label = path.display().to_string();
-        let manifest = build_or_load_prepare_shard(
-            &checkpoint_dir,
-            &shard_id,
-            &label,
-            &config_fingerprint,
-            config,
-            &mut progress,
-            || {
-                let mut rng = StdRng::seed_from_u64(unit_seed(
-                    config.seed,
-                    &format!("source:{}", path.display()),
-                ));
-                let raw = fs::read_to_string(path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                let seams_sentences = seams_sentences_from_text(&raw);
-                let discrepancies = if config.include_naive_seams_discrepancies {
-                    build_naive_seams_discrepancies(
-                        &seams_sentences,
-                        &path.display().to_string(),
-                        config.max_naive_seams_discrepancies_per_file,
-                    )
-                } else {
-                    Vec::new()
-                };
-                let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
-                let mut examples = Vec::new();
-                for buffer in &buffers {
-                    add_examples_for_buffer_with_varieties(
-                        buffer,
-                        &path.display().to_string(),
-                        TrainingRowSource::SourceText,
-                        config,
-                        &source_varieties,
-                        &mut rng,
-                        &mut examples,
-                    )?;
-                }
-                add_repair_examples_for_discrepancies_with_varieties(
-                    &discrepancies,
+    let mut prepared_source_shards = prepare_pool.install(|| {
+        source_files
+            .par_iter()
+            .enumerate()
+            .map(|(index, source_file)| {
+                let path = source_file.path.clone();
+                let source_varieties = source_file.varieties.clone();
+                let shard_id = format!("{:03}-source-{}", index + 2, sanitize_checkpoint_id(&path));
+                let label = path.display().to_string();
+                let mut shard_progress = Vec::new();
+                let mut collect = |event| shard_progress.push(event);
+                let manifest = build_or_load_prepare_shard(
+                    &checkpoint_dir,
+                    &shard_id,
+                    &label,
+                    &config_fingerprint,
                     config,
-                    &source_varieties,
-                    &mut examples,
-                );
-                Ok(PrepareShardData {
-                    source_buffers: buffers.len(),
-                    examples,
-                    discrepancies,
-                    synthetic_buffers: None,
+                    &mut collect,
+                    || {
+                        let mut rng = StdRng::seed_from_u64(unit_seed(
+                            config.seed,
+                            &format!("source:{}", path.display()),
+                        ));
+                        let raw =
+                            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+                        let seams_sentences = seams_sentences_from_text(&raw);
+                        let discrepancies = if config.include_naive_seams_discrepancies {
+                            build_naive_seams_discrepancies(
+                                &seams_sentences,
+                                &path.display().to_string(),
+                                config.max_naive_seams_discrepancies_per_file,
+                            )
+                        } else {
+                            Vec::new()
+                        };
+                        let buffers = source_buffers_from_sentences(&raw, &seams_sentences);
+                        let mut examples = Vec::new();
+                        for buffer in &buffers {
+                            add_examples_for_buffer_with_varieties(
+                                buffer,
+                                &path.display().to_string(),
+                                TrainingRowSource::SourceText,
+                                config,
+                                &source_varieties,
+                                &mut rng,
+                                &mut examples,
+                            )?;
+                        }
+                        add_repair_examples_for_discrepancies_with_varieties(
+                            &discrepancies,
+                            config,
+                            &source_varieties,
+                            &mut examples,
+                        );
+                        Ok(PrepareShardData {
+                            source_buffers: buffers.len(),
+                            examples,
+                            discrepancies,
+                            synthetic_buffers: None,
+                        })
+                    },
+                )?;
+                Ok(PreparedSourceShard {
+                    index,
+                    path: path.display().to_string(),
+                    progress: shard_progress,
+                    manifest,
                 })
-            },
-        )?;
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    prepared_source_shards.sort_by_key(|item| item.index);
+    for prepared in prepared_source_shards {
+        for event in prepared.progress {
+            progress(event);
+        }
         progress(PrepareProgress::Read {
-            path: path.display().to_string(),
-            buffers: manifest.source_buffers,
-            naive_seams_discrepancies: manifest.discrepancies,
+            path: prepared.path,
+            buffers: prepared.manifest.source_buffers,
+            naive_seams_discrepancies: prepared.manifest.discrepancies,
         });
-        shard_manifests.push(manifest);
+        shard_manifests.push(prepared.manifest);
     }
 
     write_prepare_state(
@@ -616,18 +667,32 @@ pub fn prepare_dataset_with_progress(
     let mut examples = Vec::new();
     let mut naive_seams_discrepancies = Vec::new();
     let mut source_buffers = 0usize;
-    for manifest in &shard_manifests {
-        let mut shard_examples: Vec<Head2PhonesTrainingExample> =
-            read_jsonl(&manifest.examples_path)?;
-        let mut shard_discrepancies: Vec<NaiveSeamsDiscrepancy> = manifest
-            .discrepancies_path
-            .as_ref()
-            .map(|path| read_jsonl(path))
-            .transpose()?
-            .unwrap_or_default();
-        source_buffers += manifest.source_buffers;
-        examples.append(&mut shard_examples);
-        naive_seams_discrepancies.append(&mut shard_discrepancies);
+    let mut loaded_shards = prepare_pool.install(|| {
+        shard_manifests
+            .par_iter()
+            .enumerate()
+            .map(|(index, manifest)| {
+                let examples: Vec<Head2PhonesTrainingExample> = read_jsonl(&manifest.examples_path)?;
+                let discrepancies: Vec<NaiveSeamsDiscrepancy> = manifest
+                    .discrepancies_path
+                    .as_ref()
+                    .map(|path| read_jsonl(path))
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(LoadedPrepareShard {
+                    index,
+                    source_buffers: manifest.source_buffers,
+                    examples,
+                    discrepancies,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    loaded_shards.sort_by_key(|item| item.index);
+    for mut loaded in loaded_shards {
+        source_buffers += loaded.source_buffers;
+        examples.append(&mut loaded.examples);
+        naive_seams_discrepancies.append(&mut loaded.discrepancies);
     }
 
     let complete_examples = examples
@@ -927,6 +992,18 @@ fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
 
 fn unit_seed(base_seed: u64, label: &str) -> u64 {
     base_seed ^ stable_hash(label.as_bytes())
+}
+
+fn prepare_worker_threads() -> usize {
+    let detected = thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let configured = env::var("TONGUES_PREPARE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(detected);
+    configured.clamp(1, DEFAULT_PREPARE_MAX_THREADS)
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {

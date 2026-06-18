@@ -10,12 +10,14 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, thread};
 
 use anyhow::{Context, Result};
 use bzip2::read::BzDecoder;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use speaking::data::spanish;
 use tongues_core::Vocab;
@@ -34,6 +36,7 @@ pub const DEFAULT_PIE_WIKIPEDIA_RAW_URL: &str =
 const USER_AGENT: &str = "tongues-wiktionary/0.1";
 const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-etymology-v3";
 const PARSE_CHECKPOINT_PAGE_INTERVAL: usize = 1_000;
+const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
@@ -390,6 +393,19 @@ pub enum PrepareProgress {
     },
 }
 
+#[derive(Debug)]
+struct PreparedWikipediaSource {
+    index: usize,
+    path: PathBuf,
+    progress: Vec<PrepareProgress>,
+}
+
+#[derive(Debug)]
+struct PreparedPieSupplementRoots {
+    index: usize,
+    roots: Vec<PieEtymologyEntry>,
+}
+
 pub type OllamaVerificationReport = tongues_data::OllamaVerificationReport;
 pub type OllamaVerificationChunkReport = tongues_data::OllamaVerificationChunkReport;
 
@@ -646,6 +662,18 @@ fn prepare_pie_dataset(
     config: &WiktionaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
+    let prepare_threads = prepare_worker_threads();
+    let prepare_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(prepare_threads)
+        .build()
+        .context("building wiktionary prepare thread pool")?;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Preparing with {} worker thread{}",
+            prepare_threads,
+            if prepare_threads == 1 { "" } else { "s" }
+        ),
+    });
     let dump_path = resolve_dump_path_with_progress(cache_dir, config, progress)?;
     let extracted = parse_dump_with_progress(&dump_path, config, progress)?;
     write_prepare_state(out, "parsed", config, None)?;
@@ -654,13 +682,32 @@ fn prepare_pie_dataset(
     let wikipedia_paths =
         resolve_wikipedia_source_paths_with_progress(cache_dir, config, progress)?;
     source_paths.extend(wikipedia_paths.iter().cloned());
-    for path in &wikipedia_paths {
+    if !wikipedia_paths.is_empty() {
         progress(PrepareProgress::Stage {
-            message: format!("Reading supplemental source {}", path.display()),
+            message: format!(
+                "Reading {} supplemental source file{} in parallel",
+                wikipedia_paths.len(),
+                if wikipedia_paths.len() == 1 { "" } else { "s" }
+            ),
         });
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        roots.extend(extract_pie_etymology_entries(&raw, config));
+        let mut prepared_roots = prepare_pool.install(|| {
+            wikipedia_paths
+                .par_iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    let raw = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    Ok(PreparedPieSupplementRoots {
+                        index,
+                        roots: extract_pie_etymology_entries(&raw, config),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        prepared_roots.sort_by_key(|item| item.index);
+        for prepared in prepared_roots {
+            roots.extend(prepared.roots);
+        }
     }
     progress(PrepareProgress::Stage {
         message: format!("Sorting and deduplicating {} PIE root rows", roots.len()),
@@ -747,18 +794,53 @@ fn resolve_wikipedia_source_paths_with_progress(
         return Ok(vec![PathBuf::from(path)]);
     }
     let urls = config.wikipedia_raw_urls.clone();
-    let mut paths = Vec::new();
-    for (index, url) in urls.iter().enumerate() {
-        let filename = wikipedia_cache_filename(url, index);
-        let path = cache_dir.join(filename);
-        if !path.exists() || path.metadata()?.len() == 0 {
-            download_to_file_with_progress(url, &path, progress)?;
-        } else {
-            progress(PrepareProgress::Stage {
-                message: format!("Using cached supplemental source {}", path.display()),
-            });
+    if urls.is_empty() {
+        return Ok(Vec::new());
+    }
+    let prepare_threads = prepare_worker_threads();
+    let prepare_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(prepare_threads)
+        .build()
+        .context("building wiktionary supplemental download thread pool")?;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Resolving {} supplemental source download{} with {} worker thread{}",
+            urls.len(),
+            if urls.len() == 1 { "" } else { "s" },
+            prepare_threads,
+            if prepare_threads == 1 { "" } else { "s" }
+        ),
+    });
+    let mut prepared = prepare_pool.install(|| {
+        urls.par_iter()
+            .enumerate()
+            .map(|(index, url)| {
+                let filename = wikipedia_cache_filename(url, index);
+                let path = cache_dir.join(filename);
+                let mut events = Vec::new();
+                if !path.exists() || path.metadata()?.len() == 0 {
+                    let mut local_progress = |event| events.push(event);
+                    download_to_file_with_progress(url, &path, &mut local_progress)?;
+                } else {
+                    events.push(PrepareProgress::Stage {
+                        message: format!("Using cached supplemental source {}", path.display()),
+                    });
+                }
+                Ok(PreparedWikipediaSource {
+                    index,
+                    path,
+                    progress: events,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    prepared.sort_by_key(|item| item.index);
+    let mut paths = Vec::with_capacity(prepared.len());
+    for prepared_source in prepared {
+        for event in prepared_source.progress {
+            progress(event);
         }
-        paths.push(path);
+        paths.push(prepared_source.path);
     }
     Ok(paths)
 }
@@ -835,6 +917,18 @@ pub fn resolve_dump_file_url(index_url: &str) -> Result<String> {
         .with_context(|| format!("reading dump index {index_url}"))?;
     let href = find_dump_href(&index).context("no enwiktionary XML bzip2 dump found in index")?;
     Ok(join_url(index_url, href))
+}
+
+fn prepare_worker_threads() -> usize {
+    let detected = thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let configured = env::var("TONGUES_PREPARE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(detected);
+    configured.clamp(1, DEFAULT_PREPARE_MAX_THREADS)
 }
 
 fn find_dump_href(index: &str) -> Option<&str> {

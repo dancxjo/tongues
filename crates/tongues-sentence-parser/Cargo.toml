@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 rand = { workspace = true }
+rayon = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 seams = "0.1.2"
