@@ -866,13 +866,27 @@ function renderNavigation() {
         return `<div class="nav-group"><div class="nav-heading">${group}</div>${links}</div>`;
     }).join('');
 
-    nav.addEventListener('click', (event) => {
+    const handleNavPointer = (event) => {
         const link = event.target.closest('a[data-route]');
         if (!link) return;
         event.preventDefault();
-        history.pushState({}, '', link.getAttribute('href'));
-        renderRoute();
-    });
+        navigateTo(link.getAttribute('href'));
+    };
+    nav.addEventListener('pointerdown', handleNavPointer);
+    nav.addEventListener('mousedown', handleNavPointer);
+    nav.addEventListener('click', handleNavPointer);
+}
+
+function navigateTo(path) {
+    if (!path) return;
+    if (normalizePath(window.location.pathname) !== normalizePath(path)) {
+        history.pushState({}, '', path);
+    }
+    const active = document.activeElement;
+    if (active && typeof active.blur === 'function') {
+        active.blur();
+    }
+    renderRoute();
 }
 
 function renderRoute() {
@@ -921,11 +935,13 @@ function renderDashboard() {
     `).join('');
 
     grid.querySelectorAll('[data-dashboard-route]').forEach((link) => {
-        link.addEventListener('click', (event) => {
+        const handleDashboardPointer = (event) => {
             event.preventDefault();
-            history.pushState({}, '', link.getAttribute('href'));
-            renderRoute();
-        });
+            navigateTo(link.getAttribute('href'));
+        };
+        link.addEventListener('pointerdown', handleDashboardPointer);
+        link.addEventListener('mousedown', handleDashboardPointer);
+        link.addEventListener('click', handleDashboardPointer);
     });
 }
 
