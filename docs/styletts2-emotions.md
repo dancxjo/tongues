@@ -42,6 +42,8 @@ datasets/emotions/labels.jsonl
 
 `labels.jsonl` contains canonical absolute WAV paths plus `emotion`, `speaker`, and `corpus`.
 Keep it paired with the extracted audio directories that produced it.
+The `emotions` classifier family uses the same manifest by default, so fetching
+corpora once supports both classifier training and StyleTTS2 vector encoding.
 
 The fetcher downloads direct public archives when possible. RAVDESS and EmoDB use direct ZIP downloads. CREMA-D uses `git lfs clone`; install `git-lfs` first if that step is skipped. TESS, SAVEE, and IEMOCAP are exposed as selectable corpora, but require manual download or access approval. Put extracted copies at these paths and rerun `fetch-corpora` to add their labels:
 

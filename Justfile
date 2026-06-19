@@ -43,6 +43,10 @@ head2phones *args:
 interpretation *args:
     cargo run --bin tongues -- interpretation "$@"
 
+# Forward a model-family command to the tongues CLI
+emotions *args:
+    cargo run --bin tongues -- emotions "$@"
+
 # Common typo for the interpretation recipe
 interpreation *args:
     cargo run --bin tongues -- interpretation "$@"

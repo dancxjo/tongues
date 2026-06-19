@@ -71,6 +71,8 @@ const DEFAULT_HEAD2PHONES_MODEL_DIR: &str = "models/head2phones/v0";
 const DEFAULT_HEAD2PHONES_BATCH_SIZE: usize = 8;
 const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
 const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
+const DEFAULT_EMOTIONS_DATA_DIR: &str = "datasets/emotions/v0";
+const DEFAULT_EMOTIONS_MODEL_DIR: &str = "models/emotions/v0";
 const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.35;
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
@@ -1048,39 +1050,46 @@ enum InterpretationCommands {
 
 #[derive(Subcommand, Debug)]
 enum EmotionCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
     /// Prepare labeled emotion WAV cuts from a style-vector/source manifest
     Prepare {
-        /// Source JSONL with emotion and path fields
-        #[arg(long, default_value = tongues_emotions::DEFAULT_SOURCE_MANIFEST)]
-        source_manifest: PathBuf,
+        /// TOML config file for the emotion classifier pipeline
+        #[arg(long, default_value = "configs/emotions/default.toml")]
+        config: PathBuf,
+
+        /// Source JSONL with emotion and path fields; overrides config
+        #[arg(long)]
+        source_manifest: Option<PathBuf>,
 
         /// Output directory for prepared data
         #[arg(long, default_value = "datasets/emotions/v0")]
         out: PathBuf,
 
         /// Random cuts per WAV, not counting the optional full-length cut
-        #[arg(long, default_value_t = 8)]
-        cuts_per_wav: usize,
+        #[arg(long)]
+        cuts_per_wav: Option<usize>,
 
         /// Minimum random cut duration
-        #[arg(long, default_value_t = 250)]
-        min_cut_ms: u64,
+        #[arg(long)]
+        min_cut_ms: Option<u64>,
 
         /// Maximum random cut duration
-        #[arg(long, default_value_t = 3500)]
-        max_cut_ms: u64,
+        #[arg(long)]
+        max_cut_ms: Option<u64>,
 
         /// Skip the full-length cut for each WAV
         #[arg(long)]
         no_full_cut: bool,
 
         /// Log-mel bins before mean/std pooling
-        #[arg(long, default_value_t = tongues_interpretation::DEFAULT_MEL_BINS)]
-        mel_bins: usize,
+        #[arg(long)]
+        mel_bins: Option<usize>,
 
         /// Random seed
-        #[arg(long, default_value_t = 42)]
-        seed: u64,
+        #[arg(long)]
+        seed: Option<u64>,
     },
 
     /// Train the emotion classifier
@@ -1903,6 +1912,14 @@ struct G2p2gTrainConfig {
 fn read_g2p2g_config(path: &Path) -> Result<G2p2gFileConfig> {
     if !path.exists() {
         return Ok(G2p2gFileConfig::default());
+    }
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn read_emotion_prepare_config(path: &Path) -> Result<tongues_emotions::EmotionPrepareConfig> {
+    if !path.exists() {
+        return Ok(tongues_emotions::EmotionPrepareConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
@@ -5482,7 +5499,14 @@ fn run_interpretation_command(
 
 fn run_emotions_command(command: EmotionCommands) -> Result<()> {
     match command {
+        EmotionCommands::Clean(args) => cmd_clean_family(
+            "emotions",
+            &args,
+            DEFAULT_EMOTIONS_DATA_DIR,
+            DEFAULT_EMOTIONS_MODEL_DIR,
+        ),
         EmotionCommands::Prepare {
+            config,
             source_manifest,
             out,
             cuts_per_wav,
@@ -5492,16 +5516,28 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
             mel_bins,
             seed,
         } => {
-            let config = tongues_emotions::EmotionPrepareConfig {
-                source_manifest,
-                cuts_per_wav,
-                min_cut_ms,
-                max_cut_ms,
-                include_full_cut: !no_full_cut,
-                mel_bins,
-                seed,
-                ..tongues_emotions::EmotionPrepareConfig::default()
-            };
+            let mut config = read_emotion_prepare_config(&config)?;
+            if let Some(source_manifest) = source_manifest {
+                config.source_manifest = source_manifest;
+            }
+            if let Some(cuts_per_wav) = cuts_per_wav {
+                config.cuts_per_wav = cuts_per_wav;
+            }
+            if let Some(min_cut_ms) = min_cut_ms {
+                config.min_cut_ms = min_cut_ms;
+            }
+            if let Some(max_cut_ms) = max_cut_ms {
+                config.max_cut_ms = max_cut_ms;
+            }
+            if no_full_cut {
+                config.include_full_cut = false;
+            }
+            if let Some(mel_bins) = mel_bins {
+                config.mel_bins = mel_bins;
+            }
+            if let Some(seed) = seed {
+                config.seed = seed;
+            }
             let pb = status_spinner(format!("Preparing emotion cuts at {}", out.display()));
             let progress = {
                 let pb = pb.clone();

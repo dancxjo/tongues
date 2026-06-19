@@ -69,6 +69,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Sentence parser](docs/sentence-parser.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Interpretation](docs/interpretation.md)
+- [Emotions](docs/emotions.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
@@ -84,6 +85,7 @@ crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
 crates/tongues-interpretation   utterance-level Mel ASR with sentence/phoneme supervision
+crates/tongues-emotions          pooled-log-mel audio emotion classifier
 crates/tongues-sentence-parser   cursor-boundary data and model-family code
 crates/tongues-cli               command-line routing and model/data wiring
 crates/speaking                  rule-based phonemicization, realization, and ASR runtime pipeline
@@ -107,6 +109,7 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just train` | Train the default `g2p2g` model. |
 | `just infer "farkle"` | Run one G2P2G prediction. |
 | `just sentence-parser train --training-set all` | Forward a model-family command to `tongues`. |
+| `just emotions prepare --source-manifest datasets/emotions/labels.jsonl` | Prepare emotion classifier cuts from the shared emotion corpora. |
 | `just sentence-parser clean --all` | Archive default sentence-parser data/model artifacts and recreate empty run directories. |
 | `just g2p2g repl` | Start the G2P2G REPL. |
 | `just g2p2g eval --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0` | Evaluate a trained model. |
@@ -124,6 +127,7 @@ Each model-family namespace also has a `clean` subcommand:
 just g2p2g clean --data
 just wiktionary clean --model
 just sentence-parser clean --all
+just emotions clean --all
 ```
 
 `clean` moves selected default artifacts under `archive/<run-id>/...` and recreates empty default directories for the next prepare/train run. With no selection flags it behaves like `--all`; pass `--no-create` to archive without recreating directories.

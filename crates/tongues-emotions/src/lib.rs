@@ -21,7 +21,7 @@ use tongues_neural::{write_manifest, ModelArtifactManifest, TrainState};
 pub const FAMILY: &str = "emotions";
 pub const ARCHITECTURE: &str = "pooled-log-mel-softmax";
 pub const DEFAULT_DATASET_ID: &str = "emotion-cuts-v0";
-pub const DEFAULT_SOURCE_MANIFEST: &str = "style_vectors.jsonl";
+pub const DEFAULT_SOURCE_MANIFEST: &str = "datasets/emotions/labels.jsonl";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmotionPrepareConfig {

@@ -1,0 +1,11 @@
+dataset_id = "emotion-cuts-v0"
+source_manifest = "datasets/emotions/labels.jsonl"
+seed = 42
+train_frac = 0.8
+valid_frac = 0.1
+cuts_per_wav = 8
+min_cut_ms = 250
+max_cut_ms = 3500
+include_full_cut = true
+sample_rate_hz = 16000
+mel_bins = 80
