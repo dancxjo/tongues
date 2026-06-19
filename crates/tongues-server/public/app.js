@@ -291,6 +291,37 @@ const flagControls = new Set([
     '--verbose',
 ]);
 
+const filePathControls = new Set([
+    '--config',
+    '--data',
+    '--dump',
+    '--emotion-signatures',
+    '--g2p2g-model',
+    '--head2phones-model',
+    '--input',
+    '--labels',
+    '--model',
+    '--source-manifest',
+    '--style-wav',
+    '--voice-wav',
+    '--wav',
+    '--whisper-model',
+    '--wiktionary-audio-data',
+    '--wiktionary-model',
+    '--words-file',
+    'refs',
+    'style-vectors',
+    'wav',
+]);
+
+const outputPathControls = new Set([
+    '--archive-dir',
+    '--cache-dir',
+    '--out',
+    '--out-dir',
+    '--output',
+]);
+
 const moduleGuides = {
     Speech: {
         intro: 'Start here when you want immediate output from text. The speech pages are good smoke tests before preparing or training larger datasets.',
@@ -814,6 +845,7 @@ let activePage = null;
 let activeJobId = null;
 let activeJobSource = null;
 let jobOutputLines = [];
+let jobArtifacts = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
     renderNavigation();
@@ -923,6 +955,7 @@ function renderSkeleton(page) {
     byId('skeleton-advanced-fields').innerHTML = advancedFields.map((field) => renderControl(field, page)).join('');
     byId('skeleton-advanced').classList.toggle('hidden', advancedFields.length === 0);
     byId('skeleton-notes').value = `${commandExample(page)}\n\n${page.summary}`;
+    attachFilePickers(page);
 }
 
 function renderControl(field, page) {
@@ -961,14 +994,128 @@ function renderControl(field, page) {
         ? ` value="${escapeHtml(control.default)}"`
         : '';
     const placeholder = control.placeholder || control.default || control.name;
+    const pathControl = isPathControl(control.name);
+    const input = `<input type="${type}" data-control="${escapeHtml(control.name)}" placeholder="${escapeHtml(placeholder)}"${value}>`;
+    const pathButton = pathControl
+        ? `<button type="button" class="browse-button" data-browse-control="${escapeHtml(control.name)}">Browse</button>`
+        : '';
+    const pathBrowser = pathControl
+        ? `<div class="file-browser" data-file-browser="${escapeHtml(control.name)}"></div>`
+        : '';
 
     return `
-        <div class="form-group">
+        <div class="form-group ${pathControl ? 'path-control' : ''}">
             <label>${escapeHtml(control.name)}</label>
-            <input type="${type}" data-control="${escapeHtml(control.name)}" placeholder="${escapeHtml(placeholder)}"${value}>
+            ${pathControl ? `<div class="path-input-row">${input}${pathButton}</div>` : input}
             ${description}
+            ${pathBrowser}
         </div>
     `;
+}
+
+function isPathControl(name) {
+    return filePathControls.has(name) || outputPathControls.has(name);
+}
+
+function attachFilePickers(page) {
+    document.querySelectorAll('#skeleton-page [data-browse-control]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const group = button.closest('.form-group');
+            const input = group?.querySelector('[data-control]');
+            const browser = group?.querySelector('[data-file-browser]');
+            if (!input || !browser) return;
+            const mode = outputPathControls.has(input.dataset.control) ? 'output' : 'input';
+            const startPath = pickerStartPath(input.value || defaultForControl(input.dataset.control, page) || '');
+            await loadFileBrowser(browser, input, startPath, mode);
+        });
+    });
+}
+
+function pickerStartPath(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (text.includes('*')) return text.split('*')[0].replace(/\/[^/]*$/, '');
+    if (/\.[A-Za-z0-9]{1,8}$/.test(text.split('/').pop() || '')) {
+        return text.split('/').slice(0, -1).join('/');
+    }
+    return text;
+}
+
+async function loadFileBrowser(browser, input, path, mode) {
+    browser.classList.add('open');
+    browser.innerHTML = '<div class="file-browser-status">Loading files...</div>';
+    const response = await fetch(`/api/files?path=${encodeURIComponent(path || '')}`);
+    if (!response.ok) {
+        browser.innerHTML = `<div class="file-browser-status">${escapeHtml(await response.text())}</div>`;
+        return;
+    }
+    const data = await response.json();
+    renderFileBrowser(browser, input, data, mode);
+}
+
+function renderFileBrowser(browser, input, data, mode) {
+    const intro = mode === 'output'
+        ? 'Existing files here can be downloaded; choose a path to reuse it.'
+        : 'Choose an existing file or directory for this command.';
+    const entries = (data.entries || []).map((entry) => {
+        const meta = entry.kind === 'file' && entry.size !== null && entry.size !== undefined
+            ? `<span>${formatBytes(entry.size)}</span>`
+            : '<span>folder</span>';
+        const download = entry.download_url
+            ? `<a class="download-link" href="${entry.download_url}">Download</a>`
+            : '';
+        return `
+            <div class="file-row" data-file-path="${escapeHtml(entry.path)}" data-file-kind="${escapeHtml(entry.kind)}">
+                <button type="button" class="file-name">${entry.kind === 'dir' ? 'Folder' : 'File'} ${escapeHtml(entry.name)}</button>
+                ${meta}
+                ${download}
+            </div>
+        `;
+    }).join('');
+    const parent = data.parent
+        ? `<button type="button" class="secondary-button file-parent" data-parent-path="${escapeHtml(data.parent)}">Up one folder</button>`
+        : '';
+    browser.innerHTML = `
+        <div class="file-browser-header">
+            <div>
+                <strong>${escapeHtml(data.path || '.')}</strong>
+                <small>${escapeHtml(intro)}</small>
+            </div>
+            <button type="button" class="secondary-button file-close">Close</button>
+        </div>
+        ${data.error ? `<div class="file-browser-status">${escapeHtml(data.error)}</div>` : ''}
+        <div class="file-browser-actions">${parent}</div>
+        <div class="file-browser-list">${entries || '<div class="file-browser-status">No files found here yet.</div>'}</div>
+    `;
+    browser.querySelector('.file-close')?.addEventListener('click', () => {
+        browser.classList.remove('open');
+        browser.innerHTML = '';
+    });
+    browser.querySelector('[data-parent-path]')?.addEventListener('click', (event) => {
+        loadFileBrowser(browser, input, event.currentTarget.dataset.parentPath, mode);
+    });
+    browser.querySelectorAll('[data-file-path]').forEach((row) => {
+        row.querySelector('.file-name')?.addEventListener('click', () => {
+            input.value = row.dataset.filePath;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            if (row.dataset.fileKind === 'dir') {
+                loadFileBrowser(browser, input, row.dataset.filePath, mode);
+            }
+        });
+    });
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB'];
+    let value = bytes / 1024;
+    let unit = units.shift();
+    while (value >= 1024 && units.length) {
+        value /= 1024;
+        unit = units.shift();
+    }
+    return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
 }
 
 function initJobs() {
@@ -1067,7 +1214,7 @@ async function selectJob(jobId) {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
     if (response.ok) {
         const detail = await response.json();
-        renderJobDetail(detail.summary, detail.output || []);
+        renderJobDetail(detail.summary, detail.output || [], detail.artifacts || []);
     }
     activeJobSource = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
     activeJobSource.onmessage = (message) => {
@@ -1082,7 +1229,7 @@ async function selectJob(jobId) {
 
 function applyJobEvent(event) {
     if (event.type === 'snapshot') {
-        renderJobDetail(event.summary, event.output || []);
+        renderJobDetail(event.summary, event.output || [], jobArtifacts);
     } else if (event.type === 'output') {
         jobOutputLines.push(event);
         renderJobOutput();
@@ -1090,13 +1237,16 @@ function applyJobEvent(event) {
         renderProgress(event.progress);
     } else if (event.type === 'status') {
         renderJobSummary(event.summary);
+        refreshActiveJobArtifacts();
         loadJobs();
     }
 }
 
-function renderJobDetail(summary, output) {
+function renderJobDetail(summary, output, artifacts = []) {
     jobOutputLines = output;
+    jobArtifacts = artifacts;
     renderJobSummary(summary);
+    renderJobArtifacts();
     renderJobOutput();
 }
 
@@ -1124,6 +1274,58 @@ function renderJobOutput() {
         .map((line) => `[${line.stream}] ${line.line}`)
         .join('\n');
     output.scrollTop = output.scrollHeight;
+}
+
+async function refreshActiveJobArtifacts() {
+    if (!activeJobId) return;
+    const response = await fetch(`/api/jobs/${encodeURIComponent(activeJobId)}`);
+    if (!response.ok) return;
+    const detail = await response.json();
+    jobArtifacts = detail.artifacts || [];
+    renderJobArtifacts();
+}
+
+function renderJobArtifacts() {
+    const container = byId('job-artifacts');
+    if (!container) return;
+    if (!jobArtifacts.length) {
+        container.innerHTML = '<div class="artifact-empty">Output files will appear here when the command writes them.</div>';
+        return;
+    }
+    container.innerHTML = `
+        <div class="artifact-title">Files</div>
+        <div class="artifact-list">
+            ${jobArtifacts.map((artifact) => {
+                const size = artifact.size !== null && artifact.size !== undefined ? ` · ${formatBytes(artifact.size)}` : '';
+                const action = artifact.download_url
+                    ? `<a class="download-link" href="${artifact.download_url}">Download</a>`
+                    : `<button type="button" class="secondary-button artifact-browse" data-artifact-path="${escapeHtml(artifact.path)}">Browse</button>`;
+                return `
+                    <div class="artifact-row">
+                        <span>${artifact.kind === 'dir' ? 'Folder' : 'File'} ${escapeHtml(artifact.path)}${escapeHtml(size)}</span>
+                        ${action}
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+    container.querySelectorAll('[data-artifact-path]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const url = `/api/files?path=${encodeURIComponent(button.dataset.artifactPath || '')}`;
+            fetch(url)
+                .then((response) => response.json())
+                .then((data) => {
+                    const files = (data.entries || [])
+                        .filter((entry) => entry.download_url)
+                        .map((entry) => `<a class="download-link" href="${entry.download_url}">${escapeHtml(entry.name)}</a>`)
+                        .join('');
+                    button.closest('.artifact-row').insertAdjacentHTML(
+                        'afterend',
+                        `<div class="artifact-directory-list">${files || 'No downloadable files in this folder yet.'}</div>`,
+                    );
+                });
+        });
+    });
 }
 
 async function cancelActiveJob() {

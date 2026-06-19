@@ -350,6 +350,99 @@ textarea[readonly] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.path-input-row {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.browse-button,
+.secondary-button {
+    background: #eef4f6;
+    color: var(--text-main);
+}
+
+.browse-button {
+    padding-inline: 0.9rem;
+}
+
+.file-browser {
+    display: none;
+}
+
+.file-browser.open {
+    background: #fbfcfd;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.file-browser-header,
+.file-row,
+.artifact-row {
+    align-items: center;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.file-browser-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.file-browser-header strong,
+.file-browser-header small {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.file-browser-list {
+    display: grid;
+    gap: 0.35rem;
+    max-height: 260px;
+    overflow: auto;
+}
+
+.file-row {
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.4rem 0.55rem;
+}
+
+.file-name {
+    background: transparent;
+    color: var(--text-main);
+    justify-content: flex-start;
+    padding: 0.35rem 0;
+    text-align: left;
+}
+
+.file-name:hover:not(:disabled) {
+    background: transparent;
+    color: var(--primary-hover);
+    transform: none;
+}
+
+.file-browser-status,
+.artifact-empty {
+    color: var(--text-muted);
+    font-size: 0.86rem;
+    line-height: 1.4;
+}
+
+.download-link {
+    background: var(--accent-soft);
+    border-radius: 8px;
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-weight: 800;
+    padding: 0.45rem 0.6rem;
+}
+
 .settings-section {
     border-top: 1px solid var(--panel-border);
     margin-top: 0.25rem;
@@ -566,7 +659,7 @@ button {
 .job-detail {
     display: grid;
     gap: 0.75rem;
-    grid-template-rows: auto auto auto minmax(180px, 1fr);
+    grid-template-rows: auto auto auto auto minmax(180px, 1fr);
     padding: 1rem;
     min-width: 0;
 }
@@ -613,6 +706,44 @@ button {
 .progress-label {
     color: var(--text-muted);
     font-size: 0.88rem;
+}
+
+.job-artifacts {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.artifact-title {
+    color: var(--text-main);
+    font-size: 0.8rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.artifact-list {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.artifact-row {
+    background: #f7fbfb;
+    border: 1px solid #d6ebe8;
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+}
+
+.artifact-row span {
+    overflow-wrap: anywhere;
+}
+
+.artifact-directory-list {
+    background: #ffffff;
+    border: 1px dashed var(--panel-border);
+    border-radius: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    padding: 0.65rem;
 }
 
 .job-output {

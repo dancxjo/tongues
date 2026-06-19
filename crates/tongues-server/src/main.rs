@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{StatusCode, header},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -27,6 +27,7 @@ const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference
 const JOB_OUTPUT_LIMIT: usize = 1_000;
 const DEFAULT_HTTP_PORT: u16 = 3000;
 const DEFAULT_HTTPS_PORT: u16 = 8443;
+const FILE_LIST_LIMIT: usize = 500;
 
 #[derive(Clone)]
 struct AppState {
@@ -106,6 +107,8 @@ fn build_app(state: AppState) -> Router {
     let static_dir = state.static_dir.clone();
     Router::new()
         .route("/api/emotions", get(get_emotions))
+        .route("/api/files", get(list_files))
+        .route("/api/files/download/{*path}", get(download_file))
         .route("/api/jobs", get(list_jobs).post(start_job))
         .route("/api/jobs/{job_id}", get(get_job))
         .route("/api/jobs/{job_id}/cancel", post(cancel_job))
@@ -190,6 +193,38 @@ struct StyleTts2SamplesResponse {
     samples: Vec<StyleTts2Sample>,
     defaults: StyleTts2SampleDefaults,
     error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FileListQuery {
+    path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FileListResponse {
+    path: String,
+    parent: Option<String>,
+    entries: Vec<FileEntry>,
+    error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct FileEntry {
+    name: String,
+    path: String,
+    kind: String,
+    size: Option<u64>,
+    modified_ms: Option<u128>,
+    download_url: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct JobArtifact {
+    label: String,
+    path: String,
+    kind: String,
+    size: Option<u64>,
+    download_url: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -321,6 +356,7 @@ enum JobEvent {
 struct JobDetail {
     summary: JobSummary,
     output: Vec<JobOutputLine>,
+    artifacts: Vec<JobArtifact>,
 }
 
 #[derive(Deserialize)]
@@ -354,6 +390,124 @@ async fn get_emotions(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+async fn list_files(
+    State(state): State<AppState>,
+    Query(query): Query<FileListQuery>,
+) -> impl IntoResponse {
+    let requested = query.path.unwrap_or_default();
+    let relative = match safe_relative_path(&requested) {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(FileListResponse {
+                    path: String::new(),
+                    parent: None,
+                    entries: Vec::new(),
+                    error: Some(error),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let mut target = state.workspace_root.join(&relative);
+    let mut list_relative = relative.clone();
+    if target.is_file() {
+        list_relative = relative.parent().unwrap_or_else(|| FsPath::new("")).to_path_buf();
+        target = state.workspace_root.join(&list_relative);
+    }
+
+    let mut entries = Vec::new();
+    let read_dir = match std::fs::read_dir(&target) {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            return Json(FileListResponse {
+                path: path_to_web(&list_relative),
+                parent: parent_web_path(&list_relative),
+                entries,
+                error: Some(format!("Could not read directory: {error}")),
+            })
+            .into_response();
+        }
+    };
+
+    for entry in read_dir.flatten().take(FILE_LIST_LIMIT) {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == ".git" || name == "target" {
+            continue;
+        }
+        let entry_relative = list_relative.join(&name);
+        let is_dir = metadata.is_dir();
+        entries.push(FileEntry {
+            name,
+            path: path_to_web(&entry_relative),
+            kind: if is_dir { "dir" } else { "file" }.into(),
+            size: if is_dir { None } else { Some(metadata.len()) },
+            modified_ms: metadata.modified().ok().and_then(system_time_ms),
+            download_url: if is_dir {
+                None
+            } else {
+                Some(download_url_for(&entry_relative))
+            },
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        let left_dir = left.kind == "dir";
+        let right_dir = right.kind == "dir";
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Json(FileListResponse {
+        path: path_to_web(&list_relative),
+        parent: parent_web_path(&list_relative),
+        entries,
+        error: None,
+    })
+    .into_response()
+}
+
+async fn download_file(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+) -> impl IntoResponse {
+    let relative = match safe_relative_path(&path) {
+        Ok(path) => path,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    let path = state.workspace_root.join(&relative);
+    if !path.is_file() {
+        return (StatusCode::NOT_FOUND, "download path is not a file").into_response();
+    }
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            let filename = relative
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("download")
+                .replace('"', "");
+            Response::builder()
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{filename}\""),
+                )
+                .body(axum::body::Body::from(bytes))
+                .unwrap()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to read download: {error}"),
+        )
+            .into_response(),
+    }
+}
+
 async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
     let mut jobs = state
         .jobs
@@ -367,7 +521,7 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> impl IntoResponse {
-    match job_detail(&state.jobs, &job_id) {
+    match job_detail(&state, &job_id) {
         Some(detail) => Json(detail).into_response(),
         None => (StatusCode::NOT_FOUND, "unknown job").into_response(),
     }
@@ -502,11 +656,15 @@ fn validate_job_request(payload: &StartJobRequest) -> Result<(), String> {
     Ok(())
 }
 
-fn job_detail(jobs: &JobRegistry, job_id: &str) -> Option<JobDetail> {
-    let jobs = jobs.lock().expect("job registry lock");
-    jobs.get(job_id).map(|job| JobDetail {
-        summary: job.summary.clone(),
-        output: job.output.iter().cloned().collect(),
+fn job_detail(state: &AppState, job_id: &str) -> Option<JobDetail> {
+    let jobs = state.jobs.lock().expect("job registry lock");
+    jobs.get(job_id).map(|job| {
+        let summary = job.summary.clone();
+        JobDetail {
+            artifacts: artifacts_for_job(&state.workspace_root, &summary.args),
+            summary,
+            output: job.output.iter().cloned().collect(),
+        }
     })
 }
 
@@ -704,6 +862,144 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn system_time_ms(time: SystemTime) -> Option<u128> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
+fn safe_relative_path(input: &str) -> Result<PathBuf, String> {
+    let input = input.trim().trim_start_matches('/');
+    let path = FsPath::new(input);
+    if path.is_absolute() {
+        return Err("absolute paths are not available through the web file browser".into());
+    }
+    let mut relative = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("paths must stay inside the Tongues workspace".into());
+            }
+        }
+    }
+    Ok(relative)
+}
+
+fn path_to_web(path: &FsPath) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn parent_web_path(path: &FsPath) -> Option<String> {
+    let parent = path.parent()?;
+    let parent = path_to_web(parent);
+    if parent.is_empty() {
+        None
+    } else {
+        Some(parent)
+    }
+}
+
+fn download_url_for(path: &FsPath) -> String {
+    format!("/api/files/download/{}", url_path_escape(&path_to_web(path)))
+}
+
+fn artifacts_for_job(workspace_root: &FsPath, args: &[String]) -> Vec<JobArtifact> {
+    let mut artifacts = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        if output_path_flag(flag) {
+            if let Some(value) = args.get(index + 1) {
+                add_artifacts_for_path(workspace_root, value, flag, &mut artifacts);
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    artifacts
+}
+
+fn output_path_flag(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--out" | "--out-dir" | "--output" | "--archive-dir" | "--cache-dir"
+    )
+}
+
+fn add_artifacts_for_path(
+    workspace_root: &FsPath,
+    value: &str,
+    flag: &str,
+    artifacts: &mut Vec<JobArtifact>,
+) {
+    let Some(relative) = job_path_to_relative(workspace_root, value) else {
+        return;
+    };
+    let path = workspace_root.join(&relative);
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return;
+    };
+    if metadata.is_file() {
+        artifacts.push(JobArtifact {
+            label: format!("{flag} {}", path_to_web(&relative)),
+            path: path_to_web(&relative),
+            kind: "file".into(),
+            size: Some(metadata.len()),
+            download_url: Some(download_url_for(&relative)),
+        });
+        return;
+    }
+
+    if metadata.is_dir() {
+        artifacts.push(JobArtifact {
+            label: format!("{flag} {}", path_to_web(&relative)),
+            path: path_to_web(&relative),
+            kind: "dir".into(),
+            size: None,
+            download_url: None,
+        });
+        if let Ok(read_dir) = std::fs::read_dir(path) {
+            let mut files = read_dir
+                .flatten()
+                .filter_map(|entry| {
+                    let metadata = entry.metadata().ok()?;
+                    if !metadata.is_file() {
+                        return None;
+                    }
+                    let file_relative = relative.join(entry.file_name());
+                    Some(JobArtifact {
+                        label: path_to_web(&file_relative),
+                        path: path_to_web(&file_relative),
+                        kind: "file".into(),
+                        size: Some(metadata.len()),
+                        download_url: Some(download_url_for(&file_relative)),
+                    })
+                })
+                .take(40)
+                .collect::<Vec<_>>();
+            files.sort_by(|left, right| left.path.cmp(&right.path));
+            artifacts.extend(files);
+        }
+    }
+}
+
+fn job_path_to_relative(workspace_root: &FsPath, value: &str) -> Option<PathBuf> {
+    let path = FsPath::new(value.trim());
+    if path.is_absolute() {
+        return path.strip_prefix(workspace_root).ok().map(PathBuf::from);
+    }
+    safe_relative_path(value).ok()
 }
 
 #[derive(Deserialize)]
