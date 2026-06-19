@@ -5426,16 +5426,20 @@ fn run_interpretation_command(
                         if whisper_text.is_empty() {
                             return Ok(TranscriptRefinement::Omit {
                                 reason: "Whisper returned an empty transcript".to_string(),
+                                source_transcript: None,
+                                whisper_transcript: None,
+                                wer: None,
+                                max_wer: None,
                             });
                         }
                         let wer = transcript_word_error_rate(original_transcript, whisper_text);
                         if wer > max_whisper_wer {
-                            return Ok(TranscriptRefinement::Omit {
-                                reason: format!(
-                                    "Whisper transcript diverged from source transcript (WER {:.2} > {:.2})",
-                                    wer, max_whisper_wer
-                                ),
-                            });
+                            return Ok(whisper_transcript_divergence_omit(
+                                original_transcript,
+                                whisper_text,
+                                wer,
+                                max_whisper_wer,
+                            ));
                         }
                         Ok(TranscriptRefinement::Use(whisper_text.to_string()))
                     },
@@ -5524,16 +5528,20 @@ fn run_interpretation_command(
                         if whisper_text.is_empty() {
                             return Ok(TranscriptRefinement::Omit {
                                 reason: "Whisper returned an empty transcript".to_string(),
+                                source_transcript: None,
+                                whisper_transcript: None,
+                                wer: None,
+                                max_wer: None,
                             });
                         }
                         let wer = transcript_word_error_rate(original_transcript, whisper_text);
                         if wer > DEFAULT_WHISPER_TRANSCRIPT_MAX_WER {
-                            return Ok(TranscriptRefinement::Omit {
-                                reason: format!(
-                                    "Whisper transcript diverged from source transcript (WER {:.2} > {:.2})",
-                                    wer, DEFAULT_WHISPER_TRANSCRIPT_MAX_WER
-                                ),
-                            });
+                            return Ok(whisper_transcript_divergence_omit(
+                                original_transcript,
+                                whisper_text,
+                                wer,
+                                DEFAULT_WHISPER_TRANSCRIPT_MAX_WER,
+                            ));
                         }
                         Ok(TranscriptRefinement::Use(whisper_text.to_string()))
                     },
@@ -5775,8 +5783,18 @@ fn interpretation_prepare_progress_message(
         tongues_interpretation::PrepareProgress::Omit {
             utterance_id,
             reason,
+            wer,
+            max_wer,
+            ..
         } => {
-            format!("Omitting {}: {}", utterance_id, reason)
+            if let (Some(wer), Some(max_wer)) = (wer, max_wer) {
+                format!(
+                    "Omitting {}: {} (WER {:.2} > {:.2})",
+                    utterance_id, reason, wer, max_wer
+                )
+            } else {
+                format!("Omitting {}: {}", utterance_id, reason)
+            }
         }
         tongues_interpretation::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {}", format_count(rows), path)
@@ -5792,7 +5810,18 @@ fn update_interpretation_prepare_progress(
         tongues_interpretation::PrepareProgress::Omit {
             utterance_id,
             reason,
-        } => Some(format!("omitting {utterance_id}: {reason}")),
+            source_transcript,
+            whisper_transcript,
+            wer,
+            max_wer,
+        } => Some(interpretation_omit_warning(
+            utterance_id,
+            reason,
+            source_transcript.as_deref(),
+            whisper_transcript.as_deref(),
+            *wer,
+            *max_wer,
+        )),
         _ => None,
     };
     pb.set_message(interpretation_prepare_progress_message(progress));
@@ -5801,6 +5830,45 @@ fn update_interpretation_prepare_progress(
             pb.suspend(|| eprintln!("warning: {warning}"));
         }
     }
+}
+
+fn whisper_transcript_divergence_omit(
+    source_transcript: &str,
+    whisper_transcript: &str,
+    wer: f64,
+    max_wer: f64,
+) -> TranscriptRefinement {
+    TranscriptRefinement::Omit {
+        reason: "Whisper transcript diverged from source transcript".to_string(),
+        source_transcript: Some(source_transcript.trim().to_string()),
+        whisper_transcript: Some(whisper_transcript.trim().to_string()),
+        wer: Some(wer),
+        max_wer: Some(max_wer),
+    }
+}
+
+fn interpretation_omit_warning(
+    utterance_id: &str,
+    reason: &str,
+    source_transcript: Option<&str>,
+    whisper_transcript: Option<&str>,
+    wer: Option<f64>,
+    max_wer: Option<f64>,
+) -> String {
+    let mut warning = if let (Some(wer), Some(max_wer)) = (wer, max_wer) {
+        format!("omitting {utterance_id}: {reason} (WER {wer:.2} > {max_wer:.2})")
+    } else {
+        format!("omitting {utterance_id}: {reason}")
+    };
+    if let Some(source_transcript) = source_transcript {
+        warning.push_str("\n  source transcript: ");
+        warning.push_str(source_transcript);
+    }
+    if let Some(whisper_transcript) = whisper_transcript {
+        warning.push_str("\n  whisper transcript: ");
+        warning.push_str(whisper_transcript);
+    }
+    warning
 }
 
 fn transcript_word_error_rate(reference: &str, candidate: &str) -> f64 {
@@ -9177,6 +9245,23 @@ mod tests {
             "This recording is from LibriVox and has nothing to do with that sentence.",
         );
         assert!(wer > DEFAULT_WHISPER_TRANSCRIPT_MAX_WER);
+    }
+
+    #[test]
+    fn interpretation_omit_warning_shows_conflicting_whisper_transcripts() {
+        let warning = interpretation_omit_warning(
+            "19-198-0001",
+            "Whisper transcript diverged from source transcript",
+            Some("THE SECRET GARDEN WAS FIRST PUBLISHED IN NINETEEN ELEVEN"),
+            Some("This recording is from LibriVox."),
+            Some(0.82),
+            Some(0.25),
+        );
+        assert!(warning.contains("WER 0.82 > 0.25"));
+        assert!(warning.contains(
+            "source transcript: THE SECRET GARDEN WAS FIRST PUBLISHED IN NINETEEN ELEVEN"
+        ));
+        assert!(warning.contains("whisper transcript: This recording is from LibriVox."));
     }
 
     #[test]

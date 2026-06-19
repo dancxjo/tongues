@@ -513,7 +513,7 @@ pub struct PrepareCheckpointState {
     pub report: Option<PrepareReport>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PrepareProgress {
     Stage {
         message: String,
@@ -545,6 +545,10 @@ pub enum PrepareProgress {
     Omit {
         utterance_id: String,
         reason: String,
+        source_transcript: Option<String>,
+        whisper_transcript: Option<String>,
+        wer: Option<f64>,
+        max_wer: Option<f64>,
     },
     Reuse {
         utterance_id: String,
@@ -557,11 +561,17 @@ pub enum PrepareProgress {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptRefinement {
     Use(String),
     KeepOriginal,
-    Omit { reason: String },
+    Omit {
+        reason: String,
+        source_transcript: Option<String>,
+        whisper_transcript: Option<String>,
+        wer: Option<f64>,
+        max_wer: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -886,10 +896,20 @@ fn prepare_dataset_inner(
             )? {
                 TranscriptRefinement::Use(text) => normalize_asr_transcript(&text),
                 TranscriptRefinement::KeepOriginal => normalize_librispeech_text(&item.transcript),
-                TranscriptRefinement::Omit { reason } => {
+                TranscriptRefinement::Omit {
+                    reason,
+                    source_transcript,
+                    whisper_transcript,
+                    wer,
+                    max_wer,
+                } => {
                     progress(PrepareProgress::Omit {
                         utterance_id: item.utterance_id,
                         reason,
+                        source_transcript,
+                        whisper_transcript,
+                        wer,
+                        max_wer,
                     });
                     continue;
                 }
@@ -1216,6 +1236,10 @@ fn process_wiktionary_audio_job(
             progress.push(PrepareProgress::Omit {
                 utterance_id: job.utterance_id.clone(),
                 reason: format!("could not download Wiktionary audio {}: {err:#}", job.url),
+                source_transcript: None,
+                whisper_transcript: None,
+                wer: None,
+                max_wer: None,
             });
             return Ok(PreparedWiktionaryAudioRow {
                 index: job.index,
@@ -1231,6 +1255,10 @@ fn process_wiktionary_audio_job(
                 "wiktionary audio not downloaded; pass --download-wiktionary-audio for {}",
                 job.url
             ),
+            source_transcript: None,
+            whisper_transcript: None,
+            wer: None,
+            max_wer: None,
         });
         return Ok(PreparedWiktionaryAudioRow {
             index: job.index,
@@ -1244,6 +1272,10 @@ fn process_wiktionary_audio_job(
             progress.push(PrepareProgress::Omit {
                 utterance_id: job.utterance_id.clone(),
                 reason: format!("could not decode {}: {err:#}", job.audio_path.display()),
+                source_transcript: None,
+                whisper_transcript: None,
+                wer: None,
+                max_wer: None,
             });
             return Ok(PreparedWiktionaryAudioRow {
                 index: job.index,
