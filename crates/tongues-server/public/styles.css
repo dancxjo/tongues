@@ -22,45 +22,14 @@ body {
     min-height: 100vh;
     display: flex;
     justify-content: center;
-    align-items: center;
-    overflow: hidden;
+    align-items: flex-start;
+    overflow-x: hidden;
     position: relative;
-}
-
-/* Background Blobs for Glassmorphism effect */
-.blob {
-    position: absolute;
-    filter: blur(80px);
-    z-index: -1;
-    opacity: 0.6;
-    animation: float 10s infinite ease-in-out alternate;
-}
-
-.blob-1 {
-    width: 400px;
-    height: 400px;
-    background: radial-gradient(circle, var(--primary), transparent);
-    top: -100px;
-    left: -100px;
-}
-
-.blob-2 {
-    width: 300px;
-    height: 300px;
-    background: radial-gradient(circle, var(--accent), transparent);
-    bottom: -50px;
-    right: -50px;
-    animation-delay: -5s;
-}
-
-@keyframes float {
-    0% { transform: translate(0, 0) scale(1); }
-    100% { transform: translate(30px, 50px) scale(1.1); }
 }
 
 .container {
     width: 100%;
-    max-width: 600px;
+    max-width: 960px;
     padding: 2rem;
     z-index: 1;
 }
@@ -94,7 +63,7 @@ header p {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--glass-border);
-    border-radius: 24px;
+    border-radius: 8px;
     padding: 2rem;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
 }
@@ -113,11 +82,11 @@ label {
     letter-spacing: 1px;
 }
 
-textarea, select {
+textarea, select, input[type="number"] {
     width: 100%;
     background: rgba(0,0,0,0.2);
     border: 1px solid var(--glass-border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 1rem;
     color: var(--text-main);
     font-family: inherit;
@@ -125,12 +94,17 @@ textarea, select {
     transition: all 0.2s ease;
 }
 
+select option {
+    background: #111827;
+    color: var(--text-main);
+}
+
 textarea {
     resize: vertical;
     min-height: 100px;
 }
 
-textarea:focus, select:focus {
+textarea:focus, select:focus, input[type="number"]:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
@@ -140,6 +114,21 @@ textarea:focus, select:focus {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
+}
+
+.settings-section {
+    border-top: 1px solid var(--glass-border);
+    padding-top: 1.5rem;
+    margin-top: 0.25rem;
+}
+
+.section-title {
+    color: var(--text-main);
+    font-size: 0.9rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    margin-bottom: 1rem;
+    text-transform: uppercase;
 }
 
 input[type="range"] {
@@ -172,6 +161,29 @@ input[type="range"] {
     padding: 0.5rem;
 }
 
+.preview-audio {
+    margin-top: 0.75rem;
+}
+
+.preview-audio.empty {
+    display: none;
+}
+
+.checkbox-row {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    letter-spacing: 0;
+    margin-top: 0.25rem;
+    text-transform: none;
+}
+
+.checkbox-row input {
+    accent-color: var(--primary);
+    height: 1rem;
+    width: 1rem;
+}
+
 .strength-presets button:hover {
     box-shadow: none;
 }
@@ -181,7 +193,7 @@ button {
     background: linear-gradient(135deg, var(--primary), var(--primary-hover));
     color: white;
     border: none;
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 1rem;
     font-size: 1.125rem;
     font-weight: 600;
@@ -239,7 +251,7 @@ button.loading .spinner {
 
 .audio-wrapper {
     background: rgba(0,0,0,0.3);
-    border-radius: 16px;
+    border-radius: 8px;
     padding: 1rem;
 }
 
@@ -265,4 +277,18 @@ audio::-webkit-media-controls-panel {
 @keyframes fadeUp {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 720px) {
+    .container {
+        padding: 1rem;
+    }
+
+    .glass-panel {
+        padding: 1rem;
+    }
+
+    .controls-grid {
+        grid-template-columns: 1fr;
+    }
 }

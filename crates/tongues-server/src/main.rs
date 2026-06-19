@@ -1,5 +1,6 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -9,11 +10,12 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::Command;
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
+const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 
 #[derive(Clone)]
 struct AppState {
@@ -28,6 +30,11 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/emotions", get(get_emotions))
+        .route("/api/styletts2-samples", get(get_styletts2_samples))
+        .route(
+            "/api/styletts2-reference-audio/{*sample_id}",
+            get(get_styletts2_reference_audio),
+        )
         .route("/api/speak", post(speak))
         .fallback_service(ServeDir::new(static_dir))
         .with_state(state);
@@ -46,6 +53,29 @@ struct EmotionsResponse {
     emotions: Vec<EmotionSignature>,
     generated_from_style_vectors: bool,
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StyleTts2SamplesResponse {
+    reference_dir: Option<String>,
+    samples: Vec<StyleTts2Sample>,
+    defaults: StyleTts2SampleDefaults,
+    error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct StyleTts2Sample {
+    id: String,
+    label: String,
+    path: String,
+    audio_url: String,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct StyleTts2SampleDefaults {
+    voice: String,
+    style: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -106,9 +136,27 @@ struct SpeakRequest {
     emotion: Option<String>,
     emotion_vector: Option<Vec<f32>>,
     emotion_strength: Option<f32>,
+    voice_sample: Option<String>,
+    style_sample: Option<String>,
+    quality: Option<String>,
+    diffusion_steps: Option<usize>,
+    speaker_reference_strength: Option<f32>,
+    style_reference_strength: Option<f32>,
+    style_alpha: Option<f32>,
+    style_beta: Option<f32>,
+    embedding_scale: Option<f64>,
+    style_seed: Option<u64>,
+    speed: Option<f64>,
+    sample_rate_hz: Option<u32>,
+    max_tts_symbols: Option<usize>,
+    no_tts_chunking: Option<bool>,
 }
 
 async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>) -> impl IntoResponse {
+    if let Err(error) = validate_speak_request(&payload) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+
     let out_wav = state.workspace_root.join(format!("output_{}.wav", uuid::Uuid::new_v4()));
     let temp_signatures = match write_request_emotion_signatures(&state, &payload) {
         Ok(path) => path,
@@ -126,6 +174,85 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
         "--output".to_string(),
         out_wav.to_string_lossy().to_string(),
     ];
+
+    if let Some(sample_rate_hz) = payload.sample_rate_hz {
+        args.push("--sample-rate-hz".to_string());
+        args.push(sample_rate_hz.to_string());
+    }
+
+    if let Some(quality) = payload.quality.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--quality".to_string());
+        args.push(quality.to_string());
+    }
+
+    if let Some(diffusion_steps) = payload.diffusion_steps {
+        args.push("--diffusion-steps".to_string());
+        args.push(diffusion_steps.to_string());
+    }
+
+    if let Some(voice_sample) = payload.voice_sample.as_deref().filter(|value| !value.is_empty()) {
+        match styletts2_sample_path(&state, voice_sample) {
+            Ok(path) => {
+                args.push("--voice-wav".to_string());
+                args.push(path.to_string_lossy().to_string());
+            }
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        }
+    }
+
+    if let Some(style_sample) = payload.style_sample.as_deref().filter(|value| !value.is_empty()) {
+        match styletts2_sample_path(&state, style_sample) {
+            Ok(path) => {
+                args.push("--style-wav".to_string());
+                args.push(path.to_string_lossy().to_string());
+            }
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        }
+    }
+
+    if let Some(strength) = payload.speaker_reference_strength {
+        args.push("--speaker-reference-strength".to_string());
+        args.push(strength.to_string());
+    }
+
+    if let Some(strength) = payload.style_reference_strength {
+        args.push("--style-reference-strength".to_string());
+        args.push(strength.to_string());
+    }
+
+    if let Some(alpha) = payload.style_alpha {
+        args.push("--style-alpha".to_string());
+        args.push(alpha.to_string());
+    }
+
+    if let Some(beta) = payload.style_beta {
+        args.push("--style-beta".to_string());
+        args.push(beta.to_string());
+    }
+
+    if let Some(embedding_scale) = payload.embedding_scale {
+        args.push("--embedding-scale".to_string());
+        args.push(embedding_scale.to_string());
+    }
+
+    if let Some(style_seed) = payload.style_seed {
+        args.push("--style-seed".to_string());
+        args.push(style_seed.to_string());
+    }
+
+    if let Some(speed) = payload.speed {
+        args.push("--speed".to_string());
+        args.push(speed.to_string());
+    }
+
+    if let Some(max_tts_symbols) = payload.max_tts_symbols {
+        args.push("--max-tts-symbols".to_string());
+        args.push(max_tts_symbols.to_string());
+    }
+
+    if payload.no_tts_chunking.unwrap_or(false) {
+        args.push("--no-tts-chunking".to_string());
+    }
 
     let emotion = payload.emotion.as_deref().unwrap_or_default();
     if !emotion.is_empty() {
@@ -184,8 +311,269 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
     }
 }
 
+async fn get_styletts2_samples(State(state): State<AppState>) -> impl IntoResponse {
+    let response = match load_styletts2_samples(&state) {
+        Ok(samples) => StyleTts2SamplesResponse {
+            reference_dir: Some(styletts2_reference_dir(&state).display().to_string()),
+            samples,
+            defaults: StyleTts2SampleDefaults {
+                voice: "1221-135767-0014.wav".into(),
+                style: "amused.wav".into(),
+            },
+            error: None,
+        },
+        Err(error) => StyleTts2SamplesResponse {
+            reference_dir: Some(styletts2_reference_dir(&state).display().to_string()),
+            samples: Vec::new(),
+            defaults: StyleTts2SampleDefaults {
+                voice: "1221-135767-0014.wav".into(),
+                style: "amused.wav".into(),
+            },
+            error: Some(error),
+        },
+    };
+    Json(response)
+}
+
+async fn get_styletts2_reference_audio(
+    State(state): State<AppState>,
+    Path(sample_id): Path<String>,
+) -> impl IntoResponse {
+    let path = match styletts2_sample_path(&state, &sample_id) {
+        Ok(path) => path,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => Response::builder()
+            .header("Content-Type", "audio/wav")
+            .body(axum::body::Body::from(bytes))
+            .unwrap(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            format!("Failed to read {}: {error}", path.display()),
+        )
+            .into_response(),
+    }
+}
+
 fn emotion_signatures_path(state: &AppState) -> PathBuf {
     state.workspace_root.join("emotion_signatures.json")
+}
+
+fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
+    if payload.text.trim().is_empty() {
+        return Err("text is required".into());
+    }
+    if let Some(quality) = payload.quality.as_deref() {
+        if !quality.is_empty() && quality != "balanced" && quality != "fast" {
+            return Err("quality must be `balanced` or `fast`".into());
+        }
+    }
+    if let Some(diffusion_steps) = payload.diffusion_steps {
+        if !(1..=64).contains(&diffusion_steps) {
+            return Err("diffusion_steps must be between 1 and 64".into());
+        }
+    }
+    validate_f32_range(
+        "speaker_reference_strength",
+        payload.speaker_reference_strength,
+        0.0,
+        1.0,
+    )?;
+    validate_f32_range(
+        "style_reference_strength",
+        payload.style_reference_strength,
+        0.0,
+        1.0,
+    )?;
+    validate_f32_range("style_alpha", payload.style_alpha, 0.0, 1.0)?;
+    validate_f32_range("style_beta", payload.style_beta, 0.0, 1.0)?;
+    validate_f64_range("embedding_scale", payload.embedding_scale, 0.0, 5.0)?;
+    validate_f64_range("speed", payload.speed, 0.25, 3.0)?;
+    if let Some(sample_rate_hz) = payload.sample_rate_hz {
+        if !(8_000..=48_000).contains(&sample_rate_hz) {
+            return Err("sample_rate_hz must be between 8000 and 48000".into());
+        }
+    }
+    if let Some(max_tts_symbols) = payload.max_tts_symbols {
+        if !(16..=2048).contains(&max_tts_symbols) {
+            return Err("max_tts_symbols must be between 16 and 2048".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_f32_range(name: &str, value: Option<f32>, min: f32, max: f32) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if !value.is_finite() || value < min || value > max {
+        return Err(format!("{name} must be a finite value from {min} to {max}"));
+    }
+    Ok(())
+}
+
+fn validate_f64_range(name: &str, value: Option<f64>, min: f64, max: f64) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if !value.is_finite() || value < min || value > max {
+        return Err(format!("{name} must be a finite value from {min} to {max}"));
+    }
+    Ok(())
+}
+
+fn styletts2_reference_dir(_state: &AppState) -> PathBuf {
+    resolve_mortar_home()
+        .join(STYLETTS2_REFERENCE_RELATIVE_DIR)
+        .canonicalize()
+        .unwrap_or_else(|_| resolve_mortar_home().join(STYLETTS2_REFERENCE_RELATIVE_DIR))
+}
+
+fn resolve_mortar_home() -> PathBuf {
+    if let Some(home) = std::env::var_os("MORTAR_SEA_HOME") {
+        let home = PathBuf::from(home);
+        if !home.as_os_str().is_empty() {
+            return home;
+        }
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("mortar-sea")
+}
+
+fn load_styletts2_samples(state: &AppState) -> Result<Vec<StyleTts2Sample>, String> {
+    let reference_dir = styletts2_reference_dir(state);
+    if !reference_dir.is_dir() {
+        return Err(format!(
+            "StyleTTS2 reference audio is not extracted at {}. Run `cargo run --bin tongues -- models fetch styletts2` or synthesize once to download it.",
+            reference_dir.display()
+        ));
+    }
+
+    let mut samples = Vec::new();
+    collect_wav_samples(&reference_dir, &reference_dir, &mut samples)?;
+    samples.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+    Ok(samples)
+}
+
+fn collect_wav_samples(
+    reference_dir: &FsPath,
+    dir: &FsPath,
+    samples: &mut Vec<StyleTts2Sample>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|error| format!("Failed to read {}: {error}", dir.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Failed to read entry in {}: {error}", dir.display()))?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Failed to read metadata for {}: {error}", path.display()))?;
+        if metadata.is_dir() {
+            collect_wav_samples(reference_dir, &path, samples)?;
+            continue;
+        }
+        if !metadata.is_file() || !is_wav_path(&path) {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(reference_dir)
+            .map_err(|error| format!("Failed to relativize {}: {error}", path.display()))?;
+        let id = relative_path_id(relative)?;
+        samples.push(StyleTts2Sample {
+            label: sample_label(relative),
+            audio_url: format!("/api/styletts2-reference-audio/{}", url_path_escape(&id)),
+            path: path.display().to_string(),
+            duration_ms: wav_duration_ms(&path),
+            id,
+        });
+    }
+    Ok(())
+}
+
+fn is_wav_path(path: &FsPath) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+}
+
+fn relative_path_id(path: &FsPath) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .ok_or_else(|| "sample path contains non-UTF-8 data".to_string())?;
+                parts.push(part.to_string());
+            }
+            _ => return Err("sample path contains invalid components".into()),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+fn sample_label(path: &FsPath) -> String {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sample")
+        .replace(['_', '-'], " ")
+}
+
+fn url_path_escape(path: &str) -> String {
+    path.split('/')
+        .map(|part| {
+            part.bytes()
+                .flat_map(|byte| match byte {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_' | b'~' => {
+                        vec![byte as char]
+                    }
+                    _ => format!("%{byte:02X}").chars().collect(),
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn styletts2_sample_path(state: &AppState, sample_id: &str) -> Result<PathBuf, String> {
+    if sample_id.trim().is_empty() {
+        return Err("sample id is required".into());
+    }
+    let relative = FsPath::new(sample_id);
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err("sample id must be a relative path under reference_audio".into());
+        }
+    }
+    if !is_wav_path(relative) {
+        return Err("sample id must point to a WAV file".into());
+    }
+
+    let reference_dir = styletts2_reference_dir(state);
+    let path = reference_dir.join(relative);
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("Unknown StyleTTS2 sample `{sample_id}`: {error}"))?;
+    let canonical_reference_dir = reference_dir
+        .canonicalize()
+        .map_err(|error| format!("StyleTTS2 reference directory is unavailable: {error}"))?;
+    if !canonical.starts_with(&canonical_reference_dir) || !canonical.is_file() {
+        return Err("sample id is outside the StyleTTS2 reference directory".into());
+    }
+    Ok(canonical)
+}
+
+fn wav_duration_ms(path: &FsPath) -> Option<u64> {
+    let reader = hound::WavReader::open(path).ok()?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return None;
+    }
+    let samples_per_channel = reader.duration() / u32::from(spec.channels);
+    Some((u64::from(samples_per_channel) * 1_000) / u64::from(spec.sample_rate))
 }
 
 fn load_or_create_emotion_signatures(state: &AppState) -> Result<EmotionsResponse, String> {

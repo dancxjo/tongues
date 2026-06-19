@@ -178,6 +178,14 @@ enum Commands {
         /// Output directory for the datasets
         #[arg(long, default_value = "datasets/emotions")]
         out_dir: PathBuf,
+
+        /// Corpus to fetch/label; repeat to choose a subset. Defaults to all known corpora.
+        #[arg(long = "corpus", value_enum)]
+        corpora: Vec<fetch_corpora::EmotionCorpusArg>,
+
+        /// List available corpora and exit
+        #[arg(long)]
+        list: bool,
     },
 
     /// Compare pronunciations from lexicons, rules, and trained models
@@ -1388,7 +1396,11 @@ fn main() -> Result<()> {
             run_wiktionary_command(command, device_arg, output_mode)
         }
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
-        Commands::FetchCorpora { out_dir } => fetch_corpora::cmd_fetch_corpora(&out_dir),
+        Commands::FetchCorpora {
+            out_dir,
+            corpora,
+            list,
+        } => fetch_corpora::cmd_fetch_corpora(&out_dir, &corpora, list),
         Commands::Discrepancies {
             out,
             limit,

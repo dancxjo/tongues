@@ -9,20 +9,47 @@ The workflow has three artifacts:
 
 ## Fetch Audio
 
-Fetch the public RAVDESS speech audio and generate labels:
+Fetch the configured emotion corpora and generate labels:
 
 ```sh
 just run fetch-corpora --out-dir datasets/emotions
+```
+
+To choose a subset, pass `--corpus` more than once:
+
+```sh
+just run fetch-corpora \
+  --out-dir datasets/emotions \
+  --corpus ravdess \
+  --corpus crema-d \
+  --corpus emodb
+```
+
+To see the supported corpus names:
+
+```sh
+just run fetch-corpora --list
 ```
 
 This creates:
 
 ```text
 datasets/emotions/RAVDESS/
+datasets/emotions/CREMA-D/
+datasets/emotions/EmoDB/
 datasets/emotions/labels.jsonl
 ```
 
-`labels.jsonl` contains canonical absolute WAV paths. Keep it paired with the extracted audio directory that produced it.
+`labels.jsonl` contains canonical absolute WAV paths plus `emotion`, `speaker`, and `corpus`.
+Keep it paired with the extracted audio directories that produced it.
+
+The fetcher downloads direct public archives when possible. RAVDESS and EmoDB use direct ZIP downloads. CREMA-D uses `git lfs clone`; install `git-lfs` first if that step is skipped. TESS, SAVEE, and IEMOCAP are exposed as selectable corpora, but require manual download or access approval. Put extracted copies at these paths and rerun `fetch-corpora` to add their labels:
+
+```text
+datasets/emotions/TESS/
+datasets/emotions/SAVEE/
+datasets/emotions/IEMOCAP/
+```
 
 ## Encode Style Vectors
 
@@ -30,7 +57,7 @@ Style vectors come from StyleTTS2's style encoder. Encode the fetched WAV files:
 
 ```sh
 just run styletts2 encode-style \
-  datasets/emotions/RAVDESS \
+  datasets/emotions \
   --labels datasets/emotions/labels.jsonl \
   --out datasets/emotions/style_vectors.jsonl
 ```
