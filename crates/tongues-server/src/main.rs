@@ -26,7 +26,7 @@ const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 const JOB_OUTPUT_LIMIT: usize = 1_000;
 const DEFAULT_HTTP_PORT: u16 = 3000;
-const DEFAULT_HTTPS_PORT: u16 = 443;
+const DEFAULT_HTTPS_PORT: u16 = 8443;
 
 #[derive(Clone)]
 struct AppState {
