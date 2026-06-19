@@ -8,6 +8,7 @@ use axum::{
     },
     routing::{get, post},
 };
+use axum_server::tls_rustls::RustlsConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -24,6 +25,8 @@ use tower_http::services::ServeDir;
 const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 const JOB_OUTPUT_LIMIT: usize = 1_000;
+const DEFAULT_HTTP_PORT: u16 = 3000;
+const DEFAULT_HTTPS_PORT: u16 = 443;
 
 #[derive(Clone)]
 struct AppState {
@@ -38,13 +41,68 @@ type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
 async fn main() {
     let workspace_root = std::env::current_dir().unwrap();
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
+    let cert_dir = workspace_root.join(".certs");
     let state = AppState {
-        workspace_root,
+        workspace_root: workspace_root.clone(),
         static_dir: static_dir.clone(),
         jobs: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    let app = Router::new()
+    let app = build_app(state);
+
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let http_port = std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_HTTP_PORT);
+    let https_port = std::env::var("HTTPS_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_HTTPS_PORT);
+
+    let http_addr = format!("{host}:{http_port}")
+        .parse::<SocketAddr>()
+        .expect("valid HTTP bind address");
+    let https_addr = format!("{host}:{https_port}")
+        .parse::<SocketAddr>()
+        .expect("valid HTTPS bind address");
+
+    ensure_self_signed_cert(&cert_dir);
+    let tls_config = RustlsConfig::from_pem_file(
+        cert_dir.join("tongues-local.crt"),
+        cert_dir.join("tongues-local.key"),
+    )
+    .await
+    .expect("load local TLS certificate");
+
+    println!("Web server listening on http://{http_addr}");
+    println!("Web server listening on https://{https_addr}");
+    println!("Self-signed certificate: {}", cert_dir.display());
+
+    let http_app = app.clone();
+    let http = async move {
+        axum::serve(
+            tokio::net::TcpListener::bind(&http_addr).await.unwrap(),
+            http_app,
+        )
+        .await
+        .unwrap();
+    };
+    let https = async move {
+        if let Err(error) = axum_server::bind_rustls(https_addr, tls_config)
+            .serve(app.into_make_service())
+            .await
+        {
+            eprintln!("HTTPS listener failed on {https_addr}: {error}");
+        }
+    };
+
+    tokio::join!(http, https);
+}
+
+fn build_app(state: AppState) -> Router {
+    let static_dir = state.static_dir.clone();
+    Router::new()
         .route("/api/emotions", get(get_emotions))
         .route("/api/jobs", get(list_jobs).post(start_job))
         .route("/api/jobs/{job_id}", get(get_job))
@@ -68,17 +126,40 @@ async fn main() {
         .route("/models/{*path}", get(serve_app_index))
         .route("/cli/{*path}", get(serve_app_index))
         .fallback_service(ServeDir::new(static_dir))
-        .with_state(state);
+        .with_state(state)
+}
 
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(3000);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    println!("Web server listening on http://{}", addr);
-    axum::serve(tokio::net::TcpListener::bind(&addr).await.unwrap(), app)
-        .await
-        .unwrap();
+fn ensure_self_signed_cert(cert_dir: &FsPath) {
+    let cert = cert_dir.join("tongues-local.crt");
+    let key = cert_dir.join("tongues-local.key");
+    if cert.exists() && key.exists() {
+        return;
+    }
+    std::fs::create_dir_all(cert_dir).expect("create cert directory");
+    let status = Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "3650",
+            "-nodes",
+            "-keyout",
+            key.to_str().expect("key path utf-8"),
+            "-out",
+            cert.to_str().expect("cert path utf-8"),
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0",
+        ])
+        .status()
+        .expect("run openssl to create local certificate");
+    if !status.success() {
+        panic!("openssl failed to create local certificate");
+    }
 }
 
 async fn serve_app_index(State(state): State<AppState>) -> impl IntoResponse {

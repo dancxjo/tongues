@@ -1,4 +1,5 @@
 target/
+.certs/
 /data/
 /runs/*
 !/runs/*/

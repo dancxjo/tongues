@@ -123,6 +123,6 @@ sight-words *args:
 fetch-corpora *args:
     cargo run --bin tongues -- fetch-corpora "$@"
 
-# Start the web interface on localhost:3000
+# Start the web interface on 0.0.0.0:3000 plus HTTPS on 0.0.0.0:443
 serve *args:
     cargo run --bin tongues-server "$@"
