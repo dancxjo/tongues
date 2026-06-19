@@ -1210,7 +1210,19 @@ fn process_wiktionary_audio_job(
             .lock()
             .map_err(|err| anyhow::anyhow!("wiktionary audio download lock was poisoned: {err}"))?;
         thread::sleep(WIKTIONARY_AUDIO_DOWNLOAD_THROTTLE);
-        download_to_part(&job.url, &job.audio_path, &mut download_progress)?;
+        if let Err(err) = download_to_part(&job.url, &job.audio_path, &mut download_progress) {
+            let part = atomic_part_path(&job.audio_path);
+            let _ = fs::remove_file(&part);
+            progress.push(PrepareProgress::Omit {
+                utterance_id: job.utterance_id.clone(),
+                reason: format!("could not download Wiktionary audio {}: {err:#}", job.url),
+            });
+            return Ok(PreparedWiktionaryAudioRow {
+                index: job.index,
+                progress,
+                row: None,
+            });
+        }
     }
     if !job.audio_path.exists() || job.audio_path.metadata()?.len() == 0 {
         progress.push(PrepareProgress::Omit {
