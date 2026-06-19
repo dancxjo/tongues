@@ -68,9 +68,16 @@ pub struct SpeakCommand {
         help = "Path to a JSON file containing emotion signatures (deltas)"
     )]
     pub emotion_signatures: Option<PathBuf>,
-    #[arg(long, help = "Name of the target emotion to apply (requires --emotion-signatures)")]
+    #[arg(
+        long,
+        help = "Name of the target emotion to apply (requires --emotion-signatures)"
+    )]
     pub emotion: Option<String>,
-    #[arg(long, default_value_t = 1.0, help = "Multiplier for the emotion delta vector")]
+    #[arg(
+        long,
+        default_value_t = 1.0,
+        help = "Multiplier for the emotion delta vector"
+    )]
     pub emotion_strength: f32,
     #[arg(
         long,
@@ -254,25 +261,34 @@ impl BackendInstance {
                 let mut style_ref_clone = plan.style.clone();
                 let style_uri = style_ref.display().to_string();
 
-                if let (Some(signatures_path), Some(emotion_name)) = (&options.emotion_signatures, &options.emotion) {
-                    let mut base_style_vector = backend.reference_style_vector(&format!("file://{}", style_uri)).context("Failed to get base style vector")?;
+                if let (Some(signatures_path), Some(emotion_name)) =
+                    (&options.emotion_signatures, &options.emotion)
+                {
+                    let mut base_style_vector = backend
+                        .reference_style_vector(&format!("file://{}", style_uri))
+                        .context("Failed to get base style vector")?;
 
-                    let sig_file = std::fs::File::open(signatures_path).context("Failed to open emotion signatures")?;
-                    let sigs: serde_json::Value = serde_json::from_reader(sig_file).context("Failed to parse emotion signatures")?;
-                    
+                    let sig_file = std::fs::File::open(signatures_path)
+                        .context("Failed to open emotion signatures")?;
+                    let sigs: serde_json::Value = serde_json::from_reader(sig_file)
+                        .context("Failed to parse emotion signatures")?;
+
                     if let Some(sig) = sigs.get(emotion_name) {
                         if let Some(delta_vec) = sig.get("vector").and_then(|v| v.as_array()) {
-                            let delta: Vec<f32> = delta_vec.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect();
+                            let delta: Vec<f32> = delta_vec
+                                .iter()
+                                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                                .collect();
                             for i in 0..256 {
                                 base_style_vector[i] += delta[i] * options.emotion_strength;
                             }
-                            
+
                             style_ref_clone = Some(speaking::StyleRef {
                                 description: None,
                                 source: speaking::StyleSource::Embedding {
                                     kind: "styletts2.emotion.v1".into(),
                                     values: base_style_vector,
-                                }
+                                },
                             });
                         }
                     } else {

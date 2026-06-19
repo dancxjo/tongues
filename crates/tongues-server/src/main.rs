@@ -1,9 +1,9 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,13 +20,17 @@ const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference
 #[derive(Clone)]
 struct AppState {
     workspace_root: PathBuf,
+    static_dir: PathBuf,
 }
 
 #[tokio::main]
 async fn main() {
     let workspace_root = std::env::current_dir().unwrap();
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
-    let state = AppState { workspace_root };
+    let state = AppState {
+        workspace_root,
+        static_dir: static_dir.clone(),
+    };
 
     let app = Router::new()
         .route("/api/emotions", get(get_emotions))
@@ -36,14 +40,39 @@ async fn main() {
             get(get_styletts2_reference_audio),
         )
         .route("/api/speak", post(speak))
+        .route("/", get(serve_app_index))
+        .route("/styletts2", get(serve_app_index))
+        .route("/styletts2/", get(serve_app_index))
+        .route("/g2p2g/{*path}", get(serve_app_index))
+        .route("/sentence-parser/{*path}", get(serve_app_index))
+        .route("/head2phones/{*path}", get(serve_app_index))
+        .route("/interpretation/{*path}", get(serve_app_index))
+        .route("/wiktionary/{*path}", get(serve_app_index))
+        .route("/models/{*path}", get(serve_app_index))
+        .route("/cli/{*path}", get(serve_app_index))
         .fallback_service(ServeDir::new(static_dir))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(3000);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     println!("Web server listening on http://{}", addr);
     axum::serve(tokio::net::TcpListener::bind(&addr).await.unwrap(), app)
         .await
         .unwrap();
+}
+
+async fn serve_app_index(State(state): State<AppState>) -> impl IntoResponse {
+    match tokio::fs::read_to_string(state.static_dir.join("index.html")).await {
+        Ok(index) => Html(index).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read web app index: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Serialize)]
@@ -152,19 +181,24 @@ struct SpeakRequest {
     no_tts_chunking: Option<bool>,
 }
 
-async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>) -> impl IntoResponse {
+async fn speak(
+    State(state): State<AppState>,
+    Json(payload): Json<SpeakRequest>,
+) -> impl IntoResponse {
     if let Err(error) = validate_speak_request(&payload) {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
 
-    let out_wav = state.workspace_root.join(format!("output_{}.wav", uuid::Uuid::new_v4()));
+    let out_wav = state
+        .workspace_root
+        .join(format!("output_{}.wav", uuid::Uuid::new_v4()));
     let temp_signatures = match write_request_emotion_signatures(&state, &payload) {
         Ok(path) => path,
         Err(error) => {
             return (axum::http::StatusCode::BAD_REQUEST, error).into_response();
         }
     };
-    
+
     let mut args = vec![
         "run".to_string(),
         "--bin".to_string(),
@@ -190,7 +224,11 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
         args.push(diffusion_steps.to_string());
     }
 
-    if let Some(voice_sample) = payload.voice_sample.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(voice_sample) = payload
+        .voice_sample
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         match styletts2_sample_path(&state, voice_sample) {
             Ok(path) => {
                 args.push("--voice-wav".to_string());
@@ -200,7 +238,11 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
         }
     }
 
-    if let Some(style_sample) = payload.style_sample.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(style_sample) = payload
+        .style_sample
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         match styletts2_sample_path(&state, style_sample) {
             Ok(path) => {
                 args.push("--style-wav".to_string());
@@ -292,7 +334,11 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
                     .body(axum::body::Body::from(audio_data))
                     .unwrap()
             } else {
-                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to read generated audio").into_response()
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to read generated audio",
+                )
+                    .into_response()
             }
         }
         Ok(out) => {
@@ -300,13 +346,21 @@ async fn speak(State(state): State<AppState>, Json(payload): Json<SpeakRequest>)
                 let _ = std::fs::remove_file(path);
             }
             let stderr = String::from_utf8_lossy(&out.stderr);
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Synthesis failed: {}", stderr)).into_response()
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Synthesis failed: {}", stderr),
+            )
+                .into_response()
         }
         Err(e) => {
             if let Some(path) = temp_signatures {
                 let _ = std::fs::remove_file(path);
             }
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Command failed: {}", e)).into_response()
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Command failed: {}", e),
+            )
+                .into_response()
         }
     }
 }
@@ -757,7 +811,10 @@ fn build_signatures_from_style_vectors(
                 .zip(&neutral_mean)
                 .map(|(emotion, neutral)| emotion - neutral)
                 .collect::<Vec<_>>();
-            emotion_deltas.entry(emotion.clone()).or_default().push(delta);
+            emotion_deltas
+                .entry(emotion.clone())
+                .or_default()
+                .push(delta);
         }
     }
 
@@ -819,7 +876,8 @@ fn write_emotion_signatures_file(
     let mut writer = std::io::BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, &serde_json::Value::Object(map))
         .map_err(|error| format!("Failed to write {}: {error}", part_path.display()))?;
-    writeln!(writer).map_err(|error| format!("Failed to write {}: {error}", part_path.display()))?;
+    writeln!(writer)
+        .map_err(|error| format!("Failed to write {}: {error}", part_path.display()))?;
     writer
         .flush()
         .map_err(|error| format!("Failed to flush {}: {error}", part_path.display()))?;
@@ -873,7 +931,9 @@ fn validate_emotion_vector(name: &str, vector: &[f32]) -> Result<(), String> {
         ));
     }
     if !vector.iter().all(|value| value.is_finite()) {
-        return Err(format!("Emotion `{name}` vector contains non-finite values"));
+        return Err(format!(
+            "Emotion `{name}` vector contains non-finite values"
+        ));
     }
     Ok(())
 }

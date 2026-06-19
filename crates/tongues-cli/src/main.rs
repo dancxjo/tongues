@@ -10,11 +10,11 @@
 //! tongues sentence-parser parse --model models/sentence-parser/v0 "The quick fox jumps."
 //! ```
 
+mod fetch_corpora;
 pub mod models;
 mod piper;
 mod speak;
 mod styletts2_cmds;
-mod fetch_corpora;
 
 use std::fs;
 use std::io::{BufRead, Read, Write};
@@ -158,6 +158,12 @@ enum Commands {
     Interpretation {
         #[command(subcommand)]
         command: InterpretationCommands,
+    },
+
+    /// Prepare, train, evaluate, and run audio emotion classifiers
+    Emotions {
+        #[command(subcommand)]
+        command: EmotionCommands,
     },
 
     /// Prepare English Wiktionary pronunciation data
@@ -1041,6 +1047,96 @@ enum InterpretationCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum EmotionCommands {
+    /// Prepare labeled emotion WAV cuts from a style-vector/source manifest
+    Prepare {
+        /// Source JSONL with emotion and path fields
+        #[arg(long, default_value = tongues_emotions::DEFAULT_SOURCE_MANIFEST)]
+        source_manifest: PathBuf,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = "datasets/emotions/v0")]
+        out: PathBuf,
+
+        /// Random cuts per WAV, not counting the optional full-length cut
+        #[arg(long, default_value_t = 8)]
+        cuts_per_wav: usize,
+
+        /// Minimum random cut duration
+        #[arg(long, default_value_t = 250)]
+        min_cut_ms: u64,
+
+        /// Maximum random cut duration
+        #[arg(long, default_value_t = 3500)]
+        max_cut_ms: u64,
+
+        /// Skip the full-length cut for each WAV
+        #[arg(long)]
+        no_full_cut: bool,
+
+        /// Log-mel bins before mean/std pooling
+        #[arg(long, default_value_t = tongues_interpretation::DEFAULT_MEL_BINS)]
+        mel_bins: usize,
+
+        /// Random seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
+
+    /// Train the emotion classifier
+    Train {
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/emotions/v0")]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = "models/emotions/v0")]
+        out: PathBuf,
+
+        /// Maximum training epochs
+        #[arg(long)]
+        epochs: Option<usize>,
+
+        /// Mini-batch size
+        #[arg(long)]
+        batch_size: Option<usize>,
+
+        /// Learning rate
+        #[arg(long)]
+        learning_rate: Option<f32>,
+
+        /// Random seed
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Evaluate an emotion classifier
+    Eval {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/emotions/v0")]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = "datasets/emotions/v0")]
+        data: PathBuf,
+
+        /// Split to evaluate: train, valid, or test
+        #[arg(long, default_value = "test")]
+        split: String,
+    },
+
+    /// Predict emotion probabilities for one WAV
+    Infer {
+        /// Directory containing the model
+        #[arg(long, default_value = "models/emotions/v0")]
+        model: PathBuf,
+
+        /// WAV file to classify
+        wav: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum WiktionaryCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
@@ -1204,15 +1300,15 @@ pub enum Styletts2Commands {
         /// Language variety
         #[arg(long, default_value = "en-US")]
         variety: String,
-        
+
         /// Seed to use for the RNG to generate configurations (for reproducibility)
         #[arg(long, default_value_t = 42)]
         seed: u64,
-        
+
         /// Discovery tier (1: diffusion, 2: empirical reference styles, 3: feral randomness)
         #[arg(long, default_value_t = 1)]
         tier: u8,
-        
+
         /// Directory containing WAV files for tier 2 empirical randomness
         #[arg(long)]
         references_dir: Option<PathBuf>,
@@ -1388,10 +1484,13 @@ fn main() -> Result<()> {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
-        Commands::Styletts2 { command } => styletts2_cmds::run_styletts2_command(command, device_arg),
+        Commands::Styletts2 { command } => {
+            styletts2_cmds::run_styletts2_command(command, device_arg)
+        }
         Commands::Interpretation { command } => {
             run_interpretation_command(command, device_arg, output_mode)
         }
+        Commands::Emotions { command } => run_emotions_command(command),
         Commands::Wiktionary { command } => {
             run_wiktionary_command(command, device_arg, output_mode)
         }
@@ -1593,6 +1692,9 @@ fn command_defaults_to_quiet(command: &Commands) -> bool {
         }
         | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
+        }
+        | Commands::Emotions {
+            command: EmotionCommands::Infer { .. },
         }
         | Commands::Predict { .. } => true,
         _ => false,
@@ -3815,7 +3917,10 @@ fn cmd_wiktionary_train_while_preparing(
         if sight_words {
             let added = add_wiktionary_sight_word_training_examples(
                 &mut train_rows,
-                [&valid_rows[..], (&[] as &[tongues_wiktionary::TrainingExample])],
+                [
+                    &valid_rows[..],
+                    (&[] as &[tongues_wiktionary::TrainingExample]),
+                ],
             );
             if added > 0 {
                 println!(
@@ -4123,11 +4228,12 @@ fn cmd_wiktionary_train_prepared_rows(
         read_jsonl_as(&data.join("train.jsonl"))?;
     let valid_rows_raw: Vec<tongues_wiktionary::TrainingExample> =
         read_jsonl_as(&data.join("valid.jsonl"))?;
-    let test_rows_raw: Vec<tongues_wiktionary::TrainingExample> = if data.join("test.jsonl").exists() {
-        read_jsonl_as(&data.join("test.jsonl"))?
-    } else {
-        Vec::new()
-    };
+    let test_rows_raw: Vec<tongues_wiktionary::TrainingExample> =
+        if data.join("test.jsonl").exists() {
+            read_jsonl_as(&data.join("test.jsonl"))?
+        } else {
+            Vec::new()
+        };
     finish_status(
         pb,
         format!(
@@ -4475,9 +4581,7 @@ fn wiktionary_sight_word_for_example(
         .then_some(candidate)
 }
 
-fn wiktionary_training_word_candidate(
-    row: &tongues_wiktionary::TrainingExample,
-) -> Option<String> {
+fn wiktionary_training_word_candidate(row: &tongues_wiktionary::TrainingExample) -> Option<String> {
     use tongues_wiktionary::WiktionaryTask;
 
     let candidate = match row.task {
@@ -5374,6 +5478,144 @@ fn run_interpretation_command(
             cmd_interpretation_stream(&model, &wav, device_arg)
         }
     }
+}
+
+fn run_emotions_command(command: EmotionCommands) -> Result<()> {
+    match command {
+        EmotionCommands::Prepare {
+            source_manifest,
+            out,
+            cuts_per_wav,
+            min_cut_ms,
+            max_cut_ms,
+            no_full_cut,
+            mel_bins,
+            seed,
+        } => {
+            let config = tongues_emotions::EmotionPrepareConfig {
+                source_manifest,
+                cuts_per_wav,
+                min_cut_ms,
+                max_cut_ms,
+                include_full_cut: !no_full_cut,
+                mel_bins,
+                seed,
+                ..tongues_emotions::EmotionPrepareConfig::default()
+            };
+            let pb = status_spinner(format!("Preparing emotion cuts at {}", out.display()));
+            let progress = {
+                let pb = pb.clone();
+                move |progress| update_emotion_prepare_progress(&pb, progress)
+            };
+            let report = tongues_emotions::prepare_dataset_with_progress(&out, &config, progress)?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared emotion dataset at {}: {} train / {} valid / {} test cuts across {} labels",
+                    out.display(),
+                    format_count(report.train_examples),
+                    format_count(report.valid_examples),
+                    format_count(report.test_examples),
+                    format_count(report.labels.len())
+                ),
+            );
+            Ok(())
+        }
+        EmotionCommands::Train {
+            data,
+            out,
+            epochs,
+            batch_size,
+            learning_rate,
+            seed,
+        } => {
+            let mut config = tongues_emotions::EmotionTrainConfig::default();
+            if let Some(epochs) = epochs {
+                config.epochs = epochs;
+            }
+            if let Some(batch_size) = batch_size {
+                config.batch_size = batch_size;
+            }
+            if let Some(learning_rate) = learning_rate {
+                config.learning_rate = learning_rate;
+            }
+            if let Some(seed) = seed {
+                config.seed = seed;
+            }
+            println!("Emotion training artifacts:");
+            println!("  train_state: {}", out.join("train_state.json").display());
+            println!(
+                "  epoch checkpoints: {}",
+                out.join("model-epoch-N.json").display()
+            );
+            println!("  best model: {}", out.join("model.json").display());
+            let best_loss = tongues_emotions::train(&data, &out, &config)?;
+            println!(
+                "Emotion training complete. Best validation loss: {:.4}",
+                best_loss
+            );
+            Ok(())
+        }
+        EmotionCommands::Eval { model, data, split } => {
+            let report = tongues_emotions::evaluate(&model, &data, &split)?;
+            println!(
+                "{} examples={} accuracy={:.3} loss={:.4}",
+                report.split,
+                format_count(report.examples),
+                report.accuracy,
+                report.loss
+            );
+            println!("labels: {}", report.labels.join(", "));
+            println!("confusion rows=true cols=pred");
+            for (label, row) in report.labels.iter().zip(report.confusion.iter()) {
+                println!(
+                    "  {label}: {}",
+                    row.iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+            }
+            Ok(())
+        }
+        EmotionCommands::Infer { model, wav } => {
+            let scores = tongues_emotions::infer(&model, &wav)?;
+            for (label, probability) in scores {
+                println!("{label}\t{probability:.4}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn update_emotion_prepare_progress(
+    pb: &indicatif::ProgressBar,
+    progress: tongues_emotions::PrepareProgress,
+) {
+    let message = match progress {
+        tongues_emotions::PrepareProgress::Stage { message } => message,
+        tongues_emotions::PrepareProgress::Source { rows, labels } => format!(
+            "Loaded {} source WAV rows across {} labels",
+            format_count(rows),
+            format_count(labels)
+        ),
+        tongues_emotions::PrepareProgress::Cut {
+            path,
+            cuts_done,
+            cuts_total,
+            out_path,
+        } => format!(
+            "Prepared {} / {} cuts from {} -> {}",
+            format_count(cuts_done),
+            format_count(cuts_total),
+            path,
+            out_path
+        ),
+        tongues_emotions::PrepareProgress::Write { split, rows, path } => {
+            format!("Wrote {} {} rows to {}", format_count(rows), split, path)
+        }
+    };
+    pb.set_message(message);
 }
 
 fn interpretation_prepare_progress_message(
@@ -8149,7 +8391,9 @@ fn collect_sight_word_refinement<B: Backend>(
         sight_words.insert((*word).to_string());
     }
 
-    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new((sight_words.len() * tasks.len()) as u64));
+    let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(
+        (sight_words.len() * tasks.len()) as u64,
+    ));
     pb.set_style(counted_progress_style()?);
 
     let mut records = Vec::new();

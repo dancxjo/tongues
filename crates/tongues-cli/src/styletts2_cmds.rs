@@ -18,22 +18,22 @@ use speaking::UtteranceId;
 use speaking::UtterancePlan;
 use speaking::VarietyId;
 
-use styletts2::StyleTts2OnnxBackend;
-use styletts2::StyleTts2SynthesisRequest;
 use styletts2::prepare_styletts2_plan;
 use styletts2::styletts2_en_us_symbol_set;
-use styletts2::StyleTts2PlanOptions;
-use styletts2::StyleTts2DiffusionOptions;
 use styletts2::styletts2_text_for_symbols;
+use styletts2::StyleTts2DiffusionOptions;
+use styletts2::StyleTts2OnnxBackend;
+use styletts2::StyleTts2PlanOptions;
+use styletts2::StyleTts2SynthesisRequest;
 
 use styletts2::StyleTts2Backend;
 
-use tongues_g2p2g::ModelConfig;
 use tongues_core::Vocab;
+use tongues_g2p2g::ModelConfig;
 
-use crate::{DeviceArg, Styletts2Commands};
 use crate::models::ensure_styletts2_model_available;
 use crate::speak::write_wav_mono_f32;
+use crate::{DeviceArg, Styletts2Commands};
 
 pub fn run_styletts2_command(command: Styletts2Commands, device_arg: DeviceArg) -> Result<()> {
     match command {
@@ -60,9 +60,11 @@ pub fn run_styletts2_command(command: Styletts2Commands, device_arg: DeviceArg) 
         Styletts2Commands::EncodeStyle { refs, out, labels } => {
             run_encode_style(&refs, &labels, &out)
         }
-        Styletts2Commands::EmotionSignatures { style_vectors, method, out } => {
-            run_emotion_signatures(&style_vectors, &method, &out)
-        }
+        Styletts2Commands::EmotionSignatures {
+            style_vectors,
+            method,
+            out,
+        } => run_emotion_signatures(&style_vectors, &method, &out),
     }
 }
 
@@ -78,7 +80,10 @@ fn run_discover(
     device_arg: DeviceArg,
 ) -> Result<()> {
     // 1. Run text through head2phones parser
-    println!("Loading head2phones model from {}...", head2phones_model.display());
+    println!(
+        "Loading head2phones model from {}...",
+        head2phones_model.display()
+    );
     let manifest_path = head2phones_model.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
     let manifest = tongues_neural::read_manifest(&manifest_path)?;
     anyhow::ensure!(
@@ -93,17 +98,25 @@ fn run_discover(
     let vocab: Vocab = crate::read_json_file(&vocab_path)?;
 
     let input = tongues_head2phones::format_input_for_variety(variety, text);
-    
+
     println!("Predicting sentence boundary and phones...");
     let output = match device_arg {
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
-            let model = tongues_g2p2g::load_model::<crate::CpuInferBackend>(&model_config, &head2phones_model.join("model"), &device)?;
+            let model = tongues_g2p2g::load_model::<crate::CpuInferBackend>(
+                &model_config,
+                &head2phones_model.join("model"),
+                &device,
+            )?;
             crate::predict_sentence_boundary(&model, &input, &vocab, &device)
         }
         DeviceArg::Cuda => {
             let device = CudaDevice::default();
-            let model = tongues_g2p2g::load_model::<crate::CudaInferBackend>(&model_config, &head2phones_model.join("model"), &device)?;
+            let model = tongues_g2p2g::load_model::<crate::CudaInferBackend>(
+                &model_config,
+                &head2phones_model.join("model"),
+                &device,
+            )?;
             crate::predict_sentence_boundary(&model, &input, &vocab, &device)
         }
     };
@@ -113,7 +126,7 @@ fn run_discover(
     // Extract phones
     let phones_open = tongues_head2phones::PHONES_OPEN;
     let phones_close = tongues_head2phones::PHONES_CLOSE;
-    
+
     let phones_str = if let Some(start) = output.find(phones_open) {
         if let Some(end) = output.find(phones_close) {
             output[start + phones_open.len()..end].trim()
@@ -171,7 +184,7 @@ fn run_discover(
     let model_dir = primary_model
         .parent()
         .context("StyleTTS2 primary model path has no parent directory")?;
-    
+
     let mut backend = StyleTts2OnnxBackend::from_model_dir(model_dir)
         .context("failed to load native StyleTTS2 ONNX backend")?;
 
@@ -309,13 +322,16 @@ fn run_discover(
     }
 
     manifest_out.flush()?;
-    println!("Discovery complete! Manifest saved to {}", manifest_out_path.display());
+    println!(
+        "Discovery complete! Manifest saved to {}",
+        manifest_out_path.display()
+    );
     Ok(())
 }
 
 fn run_encode_style(refs: &Path, labels: &Path, out: &Path) -> Result<()> {
-    use std::io::BufRead;
     use serde::Deserialize;
+    use std::io::BufRead;
 
     println!("Loading labels from {}...", labels.display());
     let labels_file = fs::File::open(labels).context("failed to open labels file")?;
@@ -331,7 +347,9 @@ fn run_encode_style(refs: &Path, labels: &Path, out: &Path) -> Result<()> {
     let mut label_map = std::collections::HashMap::new();
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let entry: LabelEntry = serde_json::from_str(&line)?;
         label_map.insert(entry.path.clone(), entry);
     }
@@ -345,12 +363,20 @@ fn run_encode_style(refs: &Path, labels: &Path, out: &Path) -> Result<()> {
     let mut out_writer = std::io::BufWriter::new(out_file);
 
     let mut success_count = 0;
-    
+
     // Instead of using walkdir directly, we just iterate through the mapped files if refs is not a dir,
     // actually refs might be the directory and we iterate over walkdir, checking if they exist in label_map.
-    for entry in walkdir::WalkDir::new(refs).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(refs)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.path().extension().and_then(|e| e.to_str()) == Some("wav") {
-            let path_str = entry.path().canonicalize().unwrap_or(entry.path().to_path_buf()).display().to_string();
+            let path_str = entry
+                .path()
+                .canonicalize()
+                .unwrap_or(entry.path().to_path_buf())
+                .display()
+                .to_string();
             if let Some(lbl) = label_map.get(&path_str) {
                 let uri = format!("file://{}", path_str);
                 match backend.reference_style_vector(&uri) {
@@ -373,9 +399,13 @@ fn run_encode_style(refs: &Path, labels: &Path, out: &Path) -> Result<()> {
             }
         }
     }
-    
+
     out_writer.flush()?;
-    println!("Successfully encoded {} reference styles to {}", success_count, out.display());
+    println!(
+        "Successfully encoded {} reference styles to {}",
+        success_count,
+        out.display()
+    );
 
     Ok(())
 }
@@ -385,8 +415,8 @@ fn run_emotion_signatures(style_vectors_path: &Path, method: &str, out: &Path) -
         anyhow::bail!("Unsupported method: {}", method);
     }
 
-    use std::io::BufRead;
     use serde::Deserialize;
+    use std::io::BufRead;
 
     let in_file = fs::File::open(style_vectors_path)?;
     let reader = std::io::BufReader::new(in_file);
@@ -399,16 +429,27 @@ fn run_emotion_signatures(style_vectors_path: &Path, method: &str, out: &Path) -
     }
 
     // Group by speaker -> emotion -> Vec<Vec<f32>>
-    let mut speaker_map: std::collections::HashMap<String, std::collections::HashMap<String, Vec<Vec<f32>>>> = std::collections::HashMap::new();
+    let mut speaker_map: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, Vec<Vec<f32>>>,
+    > = std::collections::HashMap::new();
 
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let entry: VectorEntry = serde_json::from_str(&line)?;
-        speaker_map.entry(entry.speaker).or_default().entry(entry.emotion).or_default().push(entry.vector);
+        speaker_map
+            .entry(entry.speaker)
+            .or_default()
+            .entry(entry.emotion)
+            .or_default()
+            .push(entry.vector);
     }
 
-    let mut emotion_deltas: std::collections::HashMap<String, Vec<Vec<f32>>> = std::collections::HashMap::new();
+    let mut emotion_deltas: std::collections::HashMap<String, Vec<Vec<f32>>> =
+        std::collections::HashMap::new();
 
     for (speaker, emotions) in &speaker_map {
         if let Some(neutrals) = emotions.get("neutral") {
@@ -424,7 +465,9 @@ fn run_emotion_signatures(style_vectors_path: &Path, method: &str, out: &Path) -
             }
 
             for (emotion, vectors) in emotions {
-                if emotion == "neutral" { continue; }
+                if emotion == "neutral" {
+                    continue;
+                }
 
                 let mut emotion_mean = vec![0.0f32; 256];
                 for v in vectors {
@@ -441,10 +484,16 @@ fn run_emotion_signatures(style_vectors_path: &Path, method: &str, out: &Path) -
                     delta[i] = emotion_mean[i] - neutral_mean[i];
                 }
 
-                emotion_deltas.entry(emotion.clone()).or_default().push(delta);
+                emotion_deltas
+                    .entry(emotion.clone())
+                    .or_default()
+                    .push(delta);
             }
         } else {
-            println!("Warning: speaker {} has no 'neutral' emotion to compute deltas.", speaker);
+            println!(
+                "Warning: speaker {} has no 'neutral' emotion to compute deltas.",
+                speaker
+            );
         }
     }
 
@@ -479,12 +528,16 @@ fn run_emotion_signatures(style_vectors_path: &Path, method: &str, out: &Path) -
                 "strong": 1.10
             }
         });
-        
+
         signatures.insert(emotion, sig);
     }
 
     writeln!(out_writer, "{}", serde_json::to_string_pretty(&signatures)?)?;
-    println!("Saved signatures for {} emotions to {}", signatures.len(), out.display());
+    println!(
+        "Saved signatures for {} emotions to {}",
+        signatures.len(),
+        out.display()
+    );
 
     Ok(())
 }

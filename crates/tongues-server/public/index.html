@@ -3,161 +3,212 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tongues / PETE</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>Tongues Web</title>
+    <link rel="stylesheet" href="/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Tongues <span>Laboratory</span></h1>
-            <p>StyleTTS2 voice, style, and emotion controls</p>
-        </header>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a class="brand" href="/">
+                <span class="brand-mark">T</span>
+                <span>
+                    <strong>Tongues</strong>
+                    <small>Web CLI</small>
+                </span>
+            </a>
+            <nav id="primary-nav" class="primary-nav" aria-label="Command pages"></nav>
+        </aside>
 
-        <main class="glass-panel">
-            <form id="synth-form">
-                <div class="form-group">
-                    <label for="text">Prompt</label>
-                    <textarea id="text" placeholder="Type something for PETE to say..." required>Wow, the magic wand actually worked!</textarea>
+        <div class="workspace">
+            <header class="page-header">
+                <div>
+                    <p id="page-kicker" class="page-kicker">Command surface</p>
+                    <h1 id="page-title">Tongues</h1>
+                    <p id="page-summary">Pick a command page from the navigation.</p>
                 </div>
-                
-                <div class="controls-grid">
-                    <div class="form-group">
-                        <label for="voice_sample">Voice Sample</label>
-                        <select id="voice_sample">
-                            <option value="">Default voice</option>
-                        </select>
-                        <audio id="voice-preview" class="preview-audio" controls></audio>
-                    </div>
+                <code id="page-command" class="command-pill">tongues</code>
+            </header>
 
-                    <div class="form-group">
-                        <label for="style_sample">Style Sample</label>
-                        <select id="style_sample">
-                            <option value="">Default style</option>
-                        </select>
-                        <audio id="style-preview" class="preview-audio" controls></audio>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="emotion">Emotion Signature</label>
-                        <select id="emotion">
-                            <option value="">None (Neutral)</option>
-                        </select>
-                        <div id="emotion-detail" class="emotion-detail">No emotion signature selected</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="emotion_strength">Emotion Strength (<span id="strength-val">0.75</span>)</label>
-                        <input type="range" id="emotion_strength" min="0.0" max="2.0" step="0.05" value="0.75">
-                        <div id="strength-presets" class="strength-presets">
-                            <button type="button" data-preset="subtle">Subtle</button>
-                            <button type="button" data-preset="normal">Normal</button>
-                            <button type="button" data-preset="strong">Strong</button>
-                        </div>
-                    </div>
-                </div>
-
-                <section class="settings-section">
-                    <div class="section-title">StyleTTS2 Settings</div>
-
-                    <div class="controls-grid">
-                        <div class="form-group">
-                            <label for="quality">Quality</label>
-                            <select id="quality">
-                                <option value="balanced">Balanced</option>
-                                <option value="fast">Fast</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="diffusion_steps">Diffusion Steps (<span id="diffusion-steps-val">5</span>)</label>
-                            <input type="range" id="diffusion_steps" min="1" max="32" step="1" value="5">
-                        </div>
-
-                        <div class="form-group">
-                            <label for="blend_mode">Blend Controls</label>
-                            <select id="blend_mode">
-                                <option value="strength">Reference strength</option>
-                                <option value="raw">Raw alpha/beta</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="speed">Speed (<span id="speed-val">1.00</span>)</label>
-                            <input type="range" id="speed" min="0.50" max="1.50" step="0.01" value="1.00">
-                        </div>
-
-                        <div class="form-group blend-strength">
-                            <label for="speaker_reference_strength">Speaker Reference (<span id="speaker-strength-val">0.70</span>)</label>
-                            <input type="range" id="speaker_reference_strength" min="0.0" max="1.0" step="0.01" value="0.70">
-                        </div>
-
-                        <div class="form-group blend-strength">
-                            <label for="style_reference_strength">Style Reference (<span id="style-strength-val">0.90</span>)</label>
-                            <input type="range" id="style_reference_strength" min="0.0" max="1.0" step="0.01" value="0.90">
-                        </div>
-
-                        <div class="form-group blend-raw hidden">
-                            <label for="style_alpha">Alpha (<span id="alpha-val">0.30</span>)</label>
-                            <input type="range" id="style_alpha" min="0.0" max="1.0" step="0.01" value="0.30">
-                        </div>
-
-                        <div class="form-group blend-raw hidden">
-                            <label for="style_beta">Beta (<span id="beta-val">0.10</span>)</label>
-                            <input type="range" id="style_beta" min="0.0" max="1.0" step="0.01" value="0.10">
-                        </div>
-
-                        <div class="form-group">
-                            <label for="embedding_scale">Embedding Scale (<span id="embedding-scale-val">1.00</span>)</label>
-                            <input type="range" id="embedding_scale" min="0.0" max="3.0" step="0.05" value="1.00">
-                        </div>
-
-                        <div class="form-group">
-                            <label for="style_seed">Style Seed</label>
-                            <input type="number" id="style_seed" min="0" step="1" value="0">
-                        </div>
-
-                        <div class="form-group">
-                            <label for="sample_rate_hz">Sample Rate</label>
-                            <select id="sample_rate_hz">
-                                <option value="24000">24000 Hz</option>
-                                <option value="22050">22050 Hz</option>
-                                <option value="16000">16000 Hz</option>
-                                <option value="48000">48000 Hz</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="max_tts_symbols">Max TTS Symbols</label>
-                            <input type="number" id="max_tts_symbols" min="16" max="2048" step="1" value="200">
-                        </div>
-                    </div>
-
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="no_tts_chunking">
-                        <span>Disable TTS chunking</span>
-                    </label>
+            <main>
+                <section id="dashboard-page" class="page-view">
+                    <div id="dashboard-grid" class="command-grid"></div>
                 </section>
 
-                <div class="action-bar">
-                    <button type="submit" id="submit-btn">
-                        <span class="btn-text">Generate Speech</span>
-                        <div class="spinner" id="spinner"></div>
-                    </button>
-                </div>
-            </form>
+                <section id="skeleton-page" class="page-view hidden">
+                    <div class="skeleton-layout">
+                        <form class="glass-panel command-form">
+                            <div class="form-group">
+                                <label for="command-preview">CLI Command</label>
+                                <input id="command-preview" type="text" readonly>
+                            </div>
+                            <div id="skeleton-fields" class="controls-grid"></div>
+                            <div class="form-group">
+                                <label for="skeleton-notes">Notes</label>
+                                <textarea id="skeleton-notes" placeholder="Run output and command status will appear here once this page is wired." readonly></textarea>
+                            </div>
+                            <div class="action-bar">
+                                <button type="button" disabled>Run Command</button>
+                            </div>
+                        </form>
+                        <aside class="side-panel">
+                            <div class="section-title">Implementation Status</div>
+                            <p>
+                                This page reserves the route, primary inputs, and command preview for
+                                the matching CLI command. Execution wiring can be added behind this form.
+                            </p>
+                        </aside>
+                    </div>
+                </section>
 
-            <div id="result-container" class="hidden">
-                <div class="audio-wrapper">
-                    <p class="result-label">Result Audio</p>
-                    <audio id="audio-player" controls></audio>
-                </div>
-            </div>
-        </main>
+                <section id="styletts2-page" class="page-view hidden">
+                    <main class="glass-panel">
+                        <form id="synth-form">
+                            <div class="form-group">
+                                <label for="text">Prompt</label>
+                                <textarea id="text" placeholder="Type something for PETE to say..." required>Wow, the magic wand actually worked!</textarea>
+                            </div>
+
+                            <div class="controls-grid">
+                                <div class="form-group">
+                                    <label for="voice_sample">Voice Sample</label>
+                                    <select id="voice_sample">
+                                        <option value="">Default voice</option>
+                                    </select>
+                                    <audio id="voice-preview" class="preview-audio" controls></audio>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="style_sample">Style Sample</label>
+                                    <select id="style_sample">
+                                        <option value="">Default style</option>
+                                    </select>
+                                    <audio id="style-preview" class="preview-audio" controls></audio>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="emotion">Emotion Signature</label>
+                                    <select id="emotion">
+                                        <option value="">None (Neutral)</option>
+                                    </select>
+                                    <div id="emotion-detail" class="emotion-detail">No emotion signature selected</div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="emotion_strength">Emotion Strength (<span id="strength-val">0.75</span>)</label>
+                                    <input type="range" id="emotion_strength" min="0.0" max="2.0" step="0.05" value="0.75">
+                                    <div id="strength-presets" class="strength-presets">
+                                        <button type="button" data-preset="subtle">Subtle</button>
+                                        <button type="button" data-preset="normal">Normal</button>
+                                        <button type="button" data-preset="strong">Strong</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <section class="settings-section">
+                                <div class="section-title">StyleTTS2 Settings</div>
+
+                                <div class="controls-grid">
+                                    <div class="form-group">
+                                        <label for="quality">Quality</label>
+                                        <select id="quality">
+                                            <option value="balanced">Balanced</option>
+                                            <option value="fast">Fast</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="diffusion_steps">Diffusion Steps (<span id="diffusion-steps-val">5</span>)</label>
+                                        <input type="range" id="diffusion_steps" min="1" max="32" step="1" value="5">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="blend_mode">Blend Controls</label>
+                                        <select id="blend_mode">
+                                            <option value="strength">Reference strength</option>
+                                            <option value="raw">Raw alpha/beta</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="speed">Speed (<span id="speed-val">1.00</span>)</label>
+                                        <input type="range" id="speed" min="0.50" max="1.50" step="0.01" value="1.00">
+                                    </div>
+
+                                    <div class="form-group blend-strength">
+                                        <label for="speaker_reference_strength">Speaker Reference (<span id="speaker-strength-val">0.70</span>)</label>
+                                        <input type="range" id="speaker_reference_strength" min="0.0" max="1.0" step="0.01" value="0.70">
+                                    </div>
+
+                                    <div class="form-group blend-strength">
+                                        <label for="style_reference_strength">Style Reference (<span id="style-strength-val">0.90</span>)</label>
+                                        <input type="range" id="style_reference_strength" min="0.0" max="1.0" step="0.01" value="0.90">
+                                    </div>
+
+                                    <div class="form-group blend-raw hidden">
+                                        <label for="style_alpha">Alpha (<span id="alpha-val">0.30</span>)</label>
+                                        <input type="range" id="style_alpha" min="0.0" max="1.0" step="0.01" value="0.30">
+                                    </div>
+
+                                    <div class="form-group blend-raw hidden">
+                                        <label for="style_beta">Beta (<span id="beta-val">0.10</span>)</label>
+                                        <input type="range" id="style_beta" min="0.0" max="1.0" step="0.01" value="0.10">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="embedding_scale">Embedding Scale (<span id="embedding-scale-val">1.00</span>)</label>
+                                        <input type="range" id="embedding_scale" min="0.0" max="3.0" step="0.05" value="1.00">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="style_seed">Style Seed</label>
+                                        <input type="number" id="style_seed" min="0" step="1" value="0">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="sample_rate_hz">Sample Rate</label>
+                                        <select id="sample_rate_hz">
+                                            <option value="24000">24000 Hz</option>
+                                            <option value="22050">22050 Hz</option>
+                                            <option value="16000">16000 Hz</option>
+                                            <option value="48000">48000 Hz</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="max_tts_symbols">Max TTS Symbols</label>
+                                        <input type="number" id="max_tts_symbols" min="16" max="2048" step="1" value="200">
+                                    </div>
+                                </div>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="no_tts_chunking">
+                                    <span>Disable TTS chunking</span>
+                                </label>
+                            </section>
+
+                            <div class="action-bar">
+                                <button type="submit" id="submit-btn">
+                                    <span class="btn-text">Generate Speech</span>
+                                    <div class="spinner" id="spinner"></div>
+                                </button>
+                            </div>
+                        </form>
+
+                        <div id="result-container" class="hidden">
+                            <div class="audio-wrapper">
+                                <p class="result-label">Result Audio</p>
+                                <audio id="audio-player" controls></audio>
+                            </div>
+                        </div>
+                    </main>
+                </section>
+            </main>
+        </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="/app.js"></script>
 </body>
 </html>

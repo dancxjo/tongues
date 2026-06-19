@@ -1,0 +1,13 @@
+[package]
+name = "tongues-emotions"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+hound.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tongues-interpretation = { path = "../tongues-interpretation" }
+tongues-neural = { path = "../tongues-neural" }
