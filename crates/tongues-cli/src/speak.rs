@@ -3,15 +3,15 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use speaking::{
+    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
     PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, Spec,
     SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
-    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
 };
 use styletts2::{
-    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
-    StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan, styletts2_en_us_symbol_set,
-    styletts2_text_for_symbols, validate_styletts2_plan,
+    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
+    validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
 };
 
 #[cfg(feature = "styletts2-onnx")]
@@ -454,7 +454,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         SpeakBackend::Piper => {
             #[cfg(feature = "piper-onnx")]
             {
-                use crate::piper::{PiperOnnxBackend, PiperVoiceConfig, piper_voice_config_path};
+                use crate::piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
                 let primary_model = crate::models::ensure_piper_voice_model_available()?;
                 let config_path = piper_voice_config_path(&primary_model);
                 let config = PiperVoiceConfig::from_json_file(&config_path)?;
@@ -909,8 +909,8 @@ impl AudioStreamPlayer {
     pub fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         use std::sync::{
-            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
         };
 
         let host = cpal::default_host();

@@ -66,7 +66,32 @@ where
         let mut sources = Vec::with_capacity(providers_total);
         for (provider_index, provider) in providers.iter_mut().enumerate() {
             let provider_name = provider.name().to_string();
-            let source = provider.pronounce(word);
+            let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                provider.pronounce(word)
+            })) {
+                Ok(mut source) => {
+                    if source.source.trim().is_empty() {
+                        source.source.clone_from(&provider_name);
+                    }
+                    if source
+                        .output
+                        .as_deref()
+                        .is_some_and(|output| output.trim().is_empty())
+                    {
+                        source.output = None;
+                        if matches!(source.status, PronouncerStatus::Found) {
+                            source.status = PronouncerStatus::Missing;
+                        }
+                    }
+                    source
+                }
+                Err(_) => PronouncerResult {
+                    source: provider_name.clone(),
+                    output: None,
+                    status: PronouncerStatus::Error,
+                    note: Some("provider panicked".to_string()),
+                },
+            };
             progress(DiscrepancyProgress {
                 word_index: word_index + 1,
                 words_total,
@@ -275,10 +300,18 @@ fn markdown_cell_for_result(result: &PronouncerResult) -> String {
 }
 
 fn markdown_escape(value: &str) -> String {
-    value
-        .replace('|', "\\|")
-        .replace('\n', "<br>")
-        .replace('\r', "")
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '|' => escaped.push_str("\\|"),
+            '\n' => escaped.push_str("<br>"),
+            '\r' => {}
+            '\t' => escaped.push(' '),
+            c if c.is_control() => escaped.push(' '),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -300,5 +333,75 @@ mod tests {
             .map(CmuPhoneme::parse)
             .collect::<Vec<_>>();
         assert_eq!(cmu_phonemes_to_ipa(&phonemes), "ˈloʊdˌstoʊn");
+    }
+
+    struct PanicProvider;
+
+    impl PronunciationProvider for PanicProvider {
+        fn name(&self) -> &str {
+            "panic"
+        }
+
+        fn pronounce(&mut self, _word: &str) -> PronouncerResult {
+            panic!("boom");
+        }
+    }
+
+    struct BlankProvider;
+
+    impl PronunciationProvider for BlankProvider {
+        fn name(&self) -> &str {
+            "blank"
+        }
+
+        fn pronounce(&mut self, _word: &str) -> PronouncerResult {
+            PronouncerResult {
+                source: String::new(),
+                output: Some("   ".to_string()),
+                status: PronouncerStatus::Found,
+                note: None,
+            }
+        }
+    }
+
+    struct FoundProvider;
+
+    impl PronunciationProvider for FoundProvider {
+        fn name(&self) -> &str {
+            "found"
+        }
+
+        fn pronounce(&mut self, _word: &str) -> PronouncerResult {
+            PronouncerResult {
+                source: self.name().to_string(),
+                output: Some("a".to_string()),
+                status: PronouncerStatus::Found,
+                note: None,
+            }
+        }
+    }
+
+    #[test]
+    fn discrepancy_collection_survives_bad_providers() {
+        let words = vec!["word".to_string()];
+        let mut panic = PanicProvider;
+        let mut blank = BlankProvider;
+        let mut found = FoundProvider;
+        let mut providers: Vec<&mut dyn PronunciationProvider> =
+            vec![&mut panic, &mut blank, &mut found];
+
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let records = find_pronunciation_discrepancies(&words, &mut providers);
+        std::panic::set_hook(previous_hook);
+
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn markdown_escapes_table_breaking_characters() {
+        let value = markdown_escape("a|b\nc\td\u{0007}");
+
+        assert_eq!(value, "a\\|b<br>c d ");
     }
 }

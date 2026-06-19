@@ -2944,10 +2944,25 @@ fn cmd_head2phones_train(
     device_arg: DeviceArg,
 ) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+
+    let pb = status_spinner(format!(
+        "Loading head2phones train split from {}",
+        data.join("train.jsonl").display()
+    ));
     let train_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
         read_jsonl_as(&data.join("train.jsonl"))?;
+    pb.set_message(format!(
+        "Loaded {} train rows; loading valid split from {}",
+        format_count(train_rows.len()),
+        data.join("valid.jsonl").display()
+    ));
     let valid_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
         read_jsonl_as(&data.join("valid.jsonl"))?;
+    pb.set_message(format!(
+        "Loaded {} valid rows; checking test split at {}",
+        format_count(valid_rows.len()),
+        data.join("test.jsonl").display()
+    ));
     let test_rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
         if data.join("test.jsonl").exists() {
             read_jsonl_as(&data.join("test.jsonl"))?
@@ -2956,7 +2971,21 @@ fn cmd_head2phones_train(
         };
     anyhow::ensure!(!train_rows.is_empty(), "head2phones train split is empty");
     anyhow::ensure!(!valid_rows.is_empty(), "head2phones valid split is empty");
+    finish_status(
+        pb,
+        format!(
+            "Loaded head2phones rows from {}: {} train / {} valid / {} test",
+            data.display(),
+            format_count(train_rows.len()),
+            format_count(valid_rows.len()),
+            format_count(test_rows.len())
+        ),
+    );
 
+    let pb = status_spinner(format!(
+        "Building head2phones vocab from prepared rows in {}",
+        data.display()
+    ));
     let data_vocab_path = data.join("vocab.json");
     let prepared_vocab = read_json_file::<Vocab>(&data_vocab_path).ok();
     let vocab = tongues_head2phones::build_vocab_from_examples(
@@ -2985,9 +3014,35 @@ fn cmd_head2phones_train(
         }
         _ => {}
     }
+    finish_status(
+        pb,
+        format!(
+            "Ready head2phones vocab at {}: {} tokens",
+            data_vocab_path.display(),
+            format_count(vocab.size())
+        ),
+    );
 
+    let pb = status_spinner(format!(
+        "Converting {} train / {} valid head2phones rows into seq2seq examples",
+        format_count(train_rows.len()),
+        format_count(valid_rows.len())
+    ));
     let train_examples = tongues_head2phones::make_seq2seq_examples(&train_rows, &vocab);
+    pb.set_message(format!(
+        "Converted {} train examples; converting {} valid rows",
+        format_count(train_examples.len()),
+        format_count(valid_rows.len())
+    ));
     let valid_examples = tongues_head2phones::make_seq2seq_examples(&valid_rows, &vocab);
+    finish_status(
+        pb,
+        format!(
+            "Built head2phones seq2seq examples: {} train / {} valid",
+            format_count(train_examples.len()),
+            format_count(valid_examples.len())
+        ),
+    );
     let model_path = out.join("model");
     let model_config = if out.join("model_config.json").exists() {
         let existing: ModelConfig = read_json_file(&out.join("model_config.json"))?;
@@ -3027,6 +3082,10 @@ fn cmd_head2phones_train(
         frequency_rarity_cap: DEFAULT_FREQUENCY_RARITY_CAP,
     };
 
+    let pb = status_spinner(format!(
+        "Writing head2phones training metadata into {}",
+        out.display()
+    ));
     fs::write(
         out.join("model_config.json"),
         serde_json::to_string_pretty(&model_config)?,
@@ -3052,6 +3111,13 @@ fn cmd_head2phones_train(
         )
         .with_task("head-chunk-to-phones"),
     )?;
+    finish_status(
+        pb,
+        format!(
+            "Wrote head2phones model metadata and vocab into {}",
+            out.display()
+        ),
+    );
 
     println!("Starting head2phones seq2seq training...");
     println!(
@@ -6423,18 +6489,30 @@ where
     let mut rules = RuleProvider;
 
     let mut g2p2g = if include_g2p2g {
-        Some(Seq2SeqPronouncer::<B>::load_g2p2g(
-            g2p2g_model,
-            device.clone(),
-        )?)
+        match Seq2SeqPronouncer::<B>::load_g2p2g(g2p2g_model, device.clone()) {
+            Ok(provider) => Some(provider),
+            Err(err) => {
+                println!(
+                    "Warning: skipping g2p2g pronouncer from {}: {err:#}",
+                    g2p2g_model.display()
+                );
+                None
+            }
+        }
     } else {
         None
     };
     let mut wiktionary = if include_wiktionary {
-        Some(Seq2SeqPronouncer::<B>::load_wiktionary(
-            wiktionary_model,
-            device.clone(),
-        )?)
+        match Seq2SeqPronouncer::<B>::load_wiktionary(wiktionary_model, device.clone()) {
+            Ok(provider) => Some(provider),
+            Err(err) => {
+                println!(
+                    "Warning: skipping wiktionary pronouncer from {}: {err:#}",
+                    wiktionary_model.display()
+                );
+                None
+            }
+        }
     } else {
         None
     };

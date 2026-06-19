@@ -12,7 +12,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use burn::module::{AutodiffModule, Module};
@@ -50,6 +52,9 @@ pub const DEFAULT_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const DEFAULT_MEL_BINS: usize = 80;
 pub const COMPACT_AUDIO_EXTRA_BINS: usize = 7;
 pub const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
+const DOWNLOAD_USER_AGENT: &str = "tongues-dataset-prep/0.1";
+const DOWNLOAD_MAX_ATTEMPTS: usize = 6;
+const WIKTIONARY_AUDIO_DOWNLOAD_THROTTLE: Duration = Duration::from_millis(750);
 pub const DEFAULT_COMPACT_AUDIO_FEATURE_BINS: usize =
     DEFAULT_MEL_BINS + DEFAULT_MEL_BINS + COMPACT_AUDIO_EXTRA_BINS;
 pub const CTC_BLANK: &str = "<CTC_BLANK>";
@@ -1170,9 +1175,10 @@ fn import_wiktionary_audio_rows(
             bundle,
         });
     }
+    let download_lock = Mutex::new(());
     let mut prepared = pool.install(|| {
         jobs.par_iter()
-            .map(|job| process_wiktionary_audio_job(job, out, config, feature_bins))
+            .map(|job| process_wiktionary_audio_job(job, out, config, feature_bins, &download_lock))
             .collect::<Result<Vec<_>>>()
     })?;
     prepared.sort_by_key(|item| item.index);
@@ -1193,12 +1199,17 @@ fn process_wiktionary_audio_job(
     out: &Path,
     config: &InterpretationConfig,
     feature_bins: usize,
+    download_lock: &Mutex<()>,
 ) -> Result<PreparedWiktionaryAudioRow> {
     let mut progress = Vec::new();
     if (!job.audio_path.exists() || job.audio_path.metadata()?.len() == 0)
         && config.download_wiktionary_audio
     {
         let mut download_progress = |event| progress.push(event);
+        let _download_guard = download_lock
+            .lock()
+            .map_err(|err| anyhow::anyhow!("wiktionary audio download lock was poisoned: {err}"))?;
+        thread::sleep(WIKTIONARY_AUDIO_DOWNLOAD_THROTTLE);
         download_to_part(&job.url, &job.audio_path, &mut download_progress)?;
     }
     if !job.audio_path.exists() || job.audio_path.metadata()?.len() == 0 {
@@ -1611,9 +1622,7 @@ fn download_to_part(
 ) -> Result<()> {
     let part = atomic_part_path(path);
     archive_interrupted_part(path)?;
-    let response = ureq::get(url)
-        .call()
-        .with_context(|| format!("downloading {url}"))?;
+    let response = download_response_with_retry(url, progress)?;
     let mut reader = response.into_body().into_reader();
     let mut writer = BufWriter::new(File::create(&part)?);
     let mut buf = [0u8; 64 * 1024];
@@ -1637,6 +1646,77 @@ fn download_to_part(
     drop(writer);
     fs::rename(&part, path)?;
     Ok(())
+}
+
+fn download_response_with_retry(
+    url: &str,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<ureq::http::Response<ureq::Body>> {
+    for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
+        match ureq::get(url)
+            .header("User-Agent", DOWNLOAD_USER_AGENT)
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+        {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if status < 400 {
+                    return Ok(response);
+                }
+                if should_retry_download_status(status) && attempt < DOWNLOAD_MAX_ATTEMPTS {
+                    let delay =
+                        retry_after_delay(&response).unwrap_or_else(|| retry_delay(attempt));
+                    progress(PrepareProgress::Stage {
+                        message: format!(
+                            "Download got HTTP {status} for {url}; retrying in {}s ({attempt}/{DOWNLOAD_MAX_ATTEMPTS})",
+                            delay.as_secs().max(1)
+                        ),
+                    });
+                    thread::sleep(delay);
+                } else {
+                    anyhow::bail!("downloading {url}: http status: {status}");
+                }
+            }
+            Err(err) if attempt < DOWNLOAD_MAX_ATTEMPTS => {
+                let delay = retry_delay(attempt);
+                progress(PrepareProgress::Stage {
+                    message: format!(
+                        "Download transport error for {url}: {err}; retrying in {}s ({attempt}/{DOWNLOAD_MAX_ATTEMPTS})",
+                        delay.as_secs().max(1)
+                    ),
+                });
+                thread::sleep(delay);
+            }
+            Err(err) => return Err(err).with_context(|| format!("downloading {url}")),
+        }
+    }
+    unreachable!("download retry loop always returns on the final attempt")
+}
+
+fn should_retry_download_status(status: u16) -> bool {
+    status == 429 || (500..600).contains(&status)
+}
+
+fn retry_after_delay(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds.clamp(1, 120)))
+}
+
+fn retry_delay(attempt: usize) -> Duration {
+    let seconds = match attempt {
+        0 | 1 => 2,
+        2 => 5,
+        3 => 10,
+        4 => 20,
+        _ => 30,
+    };
+    Duration::from_secs(seconds)
 }
 
 fn discover_transcripts(root: &Path) -> Result<Vec<TranscriptItem>> {
