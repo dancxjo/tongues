@@ -472,15 +472,11 @@ impl StyleTts2OnnxBackend {
             ])
             .map_err(|error| backend_error(format!("StyleTTS2 decoder failed: {error}")))?;
         let (decoder_shape, decoder_values) = extract_f32_tensor(&decoder_outputs, "z")?;
-        if decoder_shape.len() != 3 || decoder_shape[0] != 1 || decoder_shape[1] != 1 {
-            return Err(invalid_output(format!(
-                "StyleTTS2 decoder returned unexpected shape {decoder_shape:?}"
-            )));
-        }
+        let pcm_mono_f32 = decoder_pcm_mono_from_output(decoder_shape, decoder_values)?;
         timings.push(timing("decoder", decoder_started));
 
         Ok(OnnxChunkSynthesisOutput {
-            pcm_mono_f32: decoder_values,
+            pcm_mono_f32,
             timings,
             style_vector,
         })
@@ -820,6 +816,24 @@ fn validate_style_vector(style_vector: &[f32]) -> Result<(), StyleTts2Error> {
         ));
     }
     Ok(())
+}
+
+fn decoder_pcm_mono_from_output(
+    shape: Vec<i64>,
+    values: Vec<f32>,
+) -> Result<Vec<f32>, StyleTts2Error> {
+    if shape.is_empty()
+        || shape.iter().any(|dimension| *dimension <= 0)
+        || shape[..shape.len() - 1]
+            .iter()
+            .any(|dimension| *dimension != 1)
+        || usize::try_from(*shape.last().expect("shape is not empty")).ok() != Some(values.len())
+    {
+        return Err(invalid_output(format!(
+            "StyleTTS2 decoder returned unexpected shape {shape:?}"
+        )));
+    }
+    Ok(values)
 }
 
 fn validate_diffusion_options(options: &StyleTts2DiffusionOptions) -> Result<(), StyleTts2Error> {
@@ -1462,6 +1476,30 @@ mod tests {
 
         assert_eq!(&blended[..STYLE_HALF_DIMS], vec![0.3; STYLE_HALF_DIMS]);
         assert_eq!(&blended[STYLE_HALF_DIMS..], vec![0.1; STYLE_HALF_DIMS]);
+    }
+
+    #[test]
+    fn decoder_pcm_accepts_flat_mono_output() {
+        let pcm = decoder_pcm_mono_from_output(vec![3], vec![0.1, -0.1, 0.0])
+            .expect("flat mono decoder output should be accepted");
+
+        assert_eq!(pcm, vec![0.1, -0.1, 0.0]);
+    }
+
+    #[test]
+    fn decoder_pcm_accepts_singleton_batch_and_channel_output() {
+        let pcm = decoder_pcm_mono_from_output(vec![1, 1, 3], vec![0.1, -0.1, 0.0])
+            .expect("batched mono decoder output should be accepted");
+
+        assert_eq!(pcm, vec![0.1, -0.1, 0.0]);
+    }
+
+    #[test]
+    fn decoder_pcm_rejects_ambiguous_multichannel_output() {
+        let error = decoder_pcm_mono_from_output(vec![1, 2, 3], vec![0.0; 6])
+            .expect_err("multi-channel decoder output should be rejected");
+
+        assert!(error.to_string().contains("unexpected shape [1, 2, 3]"));
     }
 
     #[test]

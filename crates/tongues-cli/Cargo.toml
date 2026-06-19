@@ -35,6 +35,7 @@ speaking = { path = "../speaking", features = ["asr-whisper"] }
 styletts2 = { path = "../styletts2" }
 indicatif = { workspace = true }
 toml = { workspace = true }
+walkdir = { workspace = true }
 open-english-pronouncing-dictionary = "0.1.0"
 
 [dependencies.ort]

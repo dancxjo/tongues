@@ -38,4 +38,5 @@ toml = "0.8"
 bzip2 = "0.4"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
+walkdir = "2"
 whisper-cpp-plus = { version = "0.1.4", default-features = false }

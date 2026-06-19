@@ -19,6 +19,10 @@ continue *args:
 parse *args:
     @cargo run -q --bin tongues -- sentence-parser stream "$@"
 
+# Forward directly to the tongues CLI
+run *args:
+    cargo run --bin tongues -- "$@"
+
 # Forward a model-family command to the tongues CLI
 g2p2g *args:
     cargo run --bin tongues -- g2p2g "$@"

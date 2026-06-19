@@ -1,14 +1,13 @@
 use axum::{
-    extract::{Query, State},
-    response::{Html, IntoResponse, Response},
+    extract::State,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use tower_http::services::ServeDir;
 
 #[derive(Clone)]
@@ -19,12 +18,13 @@ struct AppState {
 #[tokio::main]
 async fn main() {
     let workspace_root = std::env::current_dir().unwrap();
+    let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
     let state = AppState { workspace_root };
 
     let app = Router::new()
         .route("/api/emotions", get(get_emotions))
         .route("/api/speak", post(speak))
-        .nest_service("/", ServeDir::new("public"))
+        .fallback_service(ServeDir::new(static_dir))
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
