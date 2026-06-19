@@ -122,6 +122,8 @@ fn build_app(state: AppState) -> Router {
         .route("/", get(serve_app_index))
         .route("/styletts2", get(serve_app_index))
         .route("/styletts2/", get(serve_app_index))
+        .route("/jobs", get(serve_app_index))
+        .route("/jobs/", get(serve_app_index))
         .route("/g2p2g/{*path}", get(serve_app_index))
         .route("/sentence-parser/{*path}", get(serve_app_index))
         .route("/head2phones/{*path}", get(serve_app_index))

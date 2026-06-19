@@ -846,6 +846,7 @@ let activeJobId = null;
 let activeJobSource = null;
 let jobOutputLines = [];
 let jobArtifacts = [];
+let lastNavigationAt = 0;
 
 document.addEventListener('DOMContentLoaded', async () => {
     renderNavigation();
@@ -864,24 +865,37 @@ function renderNavigation() {
             .map((page) => `<a href="${page.path}" data-route="${page.path}">${page.title}</a>`)
             .join('');
         return `<div class="nav-group"><div class="nav-heading">${group}</div>${links}</div>`;
-    }).join('');
+    }).join('') + '<div class="nav-group"><div class="nav-heading">Runtime</div><a href="/jobs" data-route="/jobs">Background Jobs</a></div>';
 
-    const handleNavPointer = (event) => {
+    const handleNavActivation = (event) => {
         const link = event.target.closest('a[data-route]');
         if (!link) return;
         event.preventDefault();
         navigateTo(link.getAttribute('href'));
     };
-    nav.addEventListener('pointerdown', handleNavPointer);
-    nav.addEventListener('mousedown', handleNavPointer);
-    nav.addEventListener('click', handleNavPointer);
+    nav.addEventListener('pointerdown', handleNavActivation);
+    nav.addEventListener('click', (event) => {
+        if (Date.now() - lastNavigationAt < 250) {
+            event.preventDefault();
+            return;
+        }
+        handleNavActivation(event);
+    });
+    nav.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        handleNavActivation(event);
+    });
 }
 
 function navigateTo(path) {
     if (!path) return;
-    if (normalizePath(window.location.pathname) !== normalizePath(path)) {
-        history.pushState({}, '', path);
+    const current = normalizePath(window.location.pathname);
+    const next = normalizePath(path);
+    if (current === next) {
+        return;
     }
+    lastNavigationAt = Date.now();
+    history.pushState({}, '', path);
     const active = document.activeElement;
     if (active && typeof active.blur === 'function') {
         active.blur();
@@ -891,16 +905,28 @@ function navigateTo(path) {
 
 function renderRoute() {
     const path = normalizePath(window.location.pathname);
+    const jobsRoute = path === '/jobs';
     const page = commandPages.find((candidate) => path === candidate.path)
         || commandPages.find((candidate) => path.startsWith(candidate.path + '/'));
 
-    byId('styletts2-page').classList.toggle('hidden', !page?.implemented);
-    byId('dashboard-page').classList.toggle('hidden', Boolean(page));
-    byId('skeleton-page').classList.toggle('hidden', !page || page.implemented);
+    byId('styletts2-page').classList.toggle('hidden', jobsRoute || !page?.implemented);
+    byId('dashboard-page').classList.toggle('hidden', jobsRoute || Boolean(page));
+    byId('skeleton-page').classList.toggle('hidden', jobsRoute || !page || page.implemented);
+    byId('jobs-page').classList.toggle('hidden', !jobsRoute);
 
     document.querySelectorAll('[data-route]').forEach((link) => {
-        link.classList.toggle('active', page && link.dataset.route === page.path);
+        link.classList.toggle('active', (page && link.dataset.route === page.path) || (jobsRoute && link.dataset.route === '/jobs'));
     });
+
+    if (jobsRoute) {
+        activePage = null;
+        byId('page-kicker').textContent = 'Runtime';
+        byId('page-title').textContent = 'Background Jobs';
+        byId('page-summary').textContent = 'Check running commands, watch output, download artifacts, or cancel work.';
+        byId('page-command').textContent = 'jobs';
+        loadJobs();
+        return;
+    }
 
     if (!page) {
         activePage = null;
@@ -935,13 +961,22 @@ function renderDashboard() {
     `).join('');
 
     grid.querySelectorAll('[data-dashboard-route]').forEach((link) => {
-        const handleDashboardPointer = (event) => {
+        const handleDashboardActivation = (event) => {
             event.preventDefault();
             navigateTo(link.getAttribute('href'));
         };
-        link.addEventListener('pointerdown', handleDashboardPointer);
-        link.addEventListener('mousedown', handleDashboardPointer);
-        link.addEventListener('click', handleDashboardPointer);
+        link.addEventListener('pointerdown', handleDashboardActivation);
+        link.addEventListener('click', (event) => {
+            if (Date.now() - lastNavigationAt < 250) {
+                event.preventDefault();
+                return;
+            }
+            handleDashboardActivation(event);
+        });
+        link.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            handleDashboardActivation(event);
+        });
     });
 }
 
