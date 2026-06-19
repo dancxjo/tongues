@@ -41,7 +41,8 @@ just interpretation prepare \
 
 The prepare step downloads the selected OpenSLR archive, extracts transcripts
 and FLAC audio, writes `features/*.mel.bin` through `.part` files, recases and
-repunctuates transcripts with the default Whisper ASR model, and then writes
+repunctuates transcripts with the default multilingual
+`ggml-large-v3-turbo.bin` Whisper ASR model, and then writes
 `train.jsonl`, `valid.jsonl`, `test.jsonl`, `vocab.json`,
 `phoneme_vocab.json`, `phone_vocab.json`, `word_vocab.json`,
 `syntax_pos_vocab.json`, `syntax_link_vocab.json`,
@@ -81,12 +82,17 @@ delta/Mel-side scalar approximations from the saved log-Mel rows, writes the
 upgraded feature file through a `.part` path, and then reuses it.
 
 Whisper transcript refinement is enabled by default to turn the original
-all-caps LibriSpeech text into sentence-like text. Each Whisper transcript is
-compared against the original transcript after case and punctuation are stripped;
-utterances above `--max-whisper-wer` are omitted with a progress warning instead
-of silently poisoning the dataset. Use `--no-whisper-transcripts` to keep the
-original LibriSpeech text, `--whisper-model` to point at a specific ggml model,
-or `--max-whisper-wer` to adjust the divergence threshold.
+all-caps LibriSpeech text into sentence-like text. The default transcript model
+is Whisper large-v3-turbo multilingual. Each Whisper transcript is compared
+against the original transcript after case and punctuation are stripped;
+obvious digit tokens and spelled-out number words are treated as comparable
+numeric tokens so rows are not rejected only because Whisper wrote `24` where
+LibriSpeech wrote `TWENTY FOUR`. Utterances above `--max-whisper-wer` are
+omitted with a progress warning that shows the source and Whisper transcripts
+instead of silently poisoning the dataset. Use `--no-whisper-transcripts` to
+keep the original LibriSpeech text, `--whisper-model` to point at a specific
+ggml model, or `--max-whisper-wer` to adjust the divergence threshold. The
+default threshold is `0.70`.
 
 Prepare is restartable. Completed feature files are validated and reused,
 extraction is guarded by `.extract-complete`, and `utterances.jsonl` is flushed

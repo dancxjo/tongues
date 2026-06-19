@@ -34,7 +34,7 @@ pub struct ModelBundle {
 
 pub const DEFAULT_LLM_MODEL_ID: &str = "gemma-4-e4b-it-q4-k-m";
 pub const DEFAULT_FACE_MODEL_ID: &str = "face-insightface-buffalo-l";
-pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-base-en";
+pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-large-v3-turbo";
 pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
 pub const DEFAULT_PIPER_VOICE_MODEL_ID: &str = "piper-ryan-medium";
 
@@ -115,6 +115,17 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         license: Some("MIT"),
         source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
         notes: None,
+    },
+    ModelAsset {
+        id: "whisper-large-v3-turbo",
+        filename: "ggml-large-v3-turbo.bin",
+        relative_path: "models/whisper/ggml-large-v3-turbo.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        sha256: None,
+        size_bytes: Some(1_624_555_275),
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
+        notes: Some("Multilingual Whisper large-v3-turbo ggml model for transcript refinement."),
     },
     ModelAsset {
         id: "phonemicizer-en-us-builtin",
@@ -320,11 +331,25 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
     },
     ModelBundle {
         id: DEFAULT_ASR_MODEL_ID,
+        display_name: "Whisper Large v3 Turbo Multilingual",
+        kind: ModelKind::Asr,
+        primary_asset_id: "whisper-large-v3-turbo",
+        required_asset_ids: &["whisper-large-v3-turbo"],
+        aliases: &[
+            "asr",
+            "whisper",
+            "whisper-turbo",
+            "large-v3-turbo",
+            "whisper-large-v3-turbo",
+        ],
+    },
+    ModelBundle {
+        id: "whisper-base-en",
         display_name: "Whisper Base English",
         kind: ModelKind::Asr,
         primary_asset_id: "whisper-base-en",
         required_asset_ids: &["whisper-base-en"],
-        aliases: &["asr", "whisper", "whisper-base", "base-en"],
+        aliases: &["whisper-base", "base-en", "whisper-base-en"],
     },
     ModelBundle {
         id: "phonemicizer-en-us",
