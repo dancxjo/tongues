@@ -39,6 +39,8 @@ type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
 
 #[tokio::main]
 async fn main() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let workspace_root = std::env::current_dir().unwrap();
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
     let cert_dir = workspace_root.join(".certs");

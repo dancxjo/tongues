@@ -12,6 +12,7 @@ dirs.workspace = true
 hound.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rustls = { version = "0.23.40", features = ["aws-lc-rs"] }
 speaking = { version = "0.1.0", path = "../speaking" }
 styletts2 = { version = "0.1.0", path = "../styletts2" }
 tokio = { version = "1.52.3", features = ["full"] }
