@@ -69,6 +69,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Sentence parser](docs/sentence-parser.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Interpretation](docs/interpretation.md)
+- [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
 - [Examples](docs/examples.md)
@@ -102,6 +103,7 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | Command | Purpose |
 |---|---|
 | `just prepare` | Prepare default OpenEPD G2P2G data. |
+| `just run ...` | Forward directly to `cargo run --bin tongues -- ...`. |
 | `just train` | Train the default `g2p2g` model. |
 | `just infer "farkle"` | Run one G2P2G prediction. |
 | `just sentence-parser train --training-set all` | Forward a model-family command to `tongues`. |

@@ -148,6 +148,34 @@ input[type="range"] {
     margin-top: 0.5rem;
 }
 
+.emotion-detail {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    margin-top: 0.5rem;
+    min-height: 1.1rem;
+}
+
+.strength-presets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.strength-presets button {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    color: var(--text-main);
+    font-size: 0.75rem;
+    padding: 0.5rem;
+}
+
+.strength-presets button:hover {
+    box-shadow: none;
+}
+
 button {
     width: 100%;
     background: linear-gradient(135deg, var(--primary), var(--primary-hover));
