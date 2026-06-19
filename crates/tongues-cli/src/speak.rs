@@ -3,15 +3,15 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use speaking::{
-    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
     PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, Spec,
     SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
+    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
 };
 use styletts2::{
-    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
-    validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
-    StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
+    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan, styletts2_en_us_symbol_set,
+    styletts2_text_for_symbols, validate_styletts2_plan,
 };
 
 #[cfg(feature = "styletts2-onnx")]
@@ -25,21 +25,29 @@ const DEFAULT_SPEED: f64 = 1.0;
 pub struct SpeakCommand {
     #[arg(help = "The text to speak. If not provided, reads from stdin.")]
     pub text: Option<String>,
-    #[arg(long, default_value = "en-US")]
+    #[arg(
+        long,
+        default_value = "en-US",
+        help = "Language or pronunciation variety tag"
+    )]
     pub variety: String,
-    #[arg(long, value_enum, default_value_t = SpeakBackend::Styletts2)]
+    #[arg(long, value_enum, default_value_t = SpeakBackend::Styletts2, help = "Speech backend to use")]
     pub backend: SpeakBackend,
-    #[arg(long, short)]
+    #[arg(
+        long,
+        short,
+        help = "WAV output path. If omitted, writes speech audio to stdout where supported."
+    )]
     pub output: Option<PathBuf>,
-    #[arg(long, default_value_t = 24_000)]
+    #[arg(long, default_value_t = 24_000, help = "Output sample rate in Hz")]
     pub sample_rate_hz: u32,
-    #[arg(long)]
+    #[arg(long, help = "Reference WAV for speaker timbre")]
     pub voice_wav: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(long, help = "Reference WAV for style and prosody")]
     pub style_wav: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = SpeakQuality::Balanced)]
+    #[arg(long, value_enum, default_value_t = SpeakQuality::Balanced, help = "Quality preset for backend defaults")]
     pub quality: SpeakQuality,
-    #[arg(long)]
+    #[arg(long, help = "Override diffusion steps from the quality preset")]
     pub diffusion_steps: Option<usize>,
     #[arg(
         long,
@@ -85,19 +93,19 @@ pub struct SpeakCommand {
         help = "StyleTTS2 diffusion embedding scale"
     )]
     pub embedding_scale: f64,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help = "Seed for StyleTTS2 style diffusion")]
     pub style_seed: u64,
     #[arg(long, default_value_t = DEFAULT_SPEED, help = "StyleTTS2 decoder speed multiplier")]
     pub speed: f64,
-    #[arg(long)]
+    #[arg(long, help = "Print pronunciation planning diagnostics")]
     pub debug_pronunciation: bool,
-    #[arg(long)]
+    #[arg(long, help = "Emit word and audio timing metadata")]
     pub timings: bool,
-    #[arg(long, default_value_t = DEFAULT_MAX_TTS_SYMBOLS)]
+    #[arg(long, default_value_t = DEFAULT_MAX_TTS_SYMBOLS, help = "Maximum symbols per TTS chunk")]
     pub max_tts_symbols: usize,
-    #[arg(long)]
+    #[arg(long, help = "Disable automatic text chunking before TTS")]
     pub no_tts_chunking: bool,
-    #[arg(long)]
+    #[arg(long, help = "Exit with an error when pronunciation must be guessed")]
     pub fail_on_guessed_pronunciation: bool,
 }
 
@@ -446,7 +454,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         SpeakBackend::Piper => {
             #[cfg(feature = "piper-onnx")]
             {
-                use crate::piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
+                use crate::piper::{PiperOnnxBackend, PiperVoiceConfig, piper_voice_config_path};
                 let primary_model = crate::models::ensure_piper_voice_model_available()?;
                 let config_path = piper_voice_config_path(&primary_model);
                 let config = PiperVoiceConfig::from_json_file(&config_path)?;
@@ -464,7 +472,10 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         match AudioStreamPlayer::new(target_sample_rate) {
             Ok(p) => Some(p),
             Err(e) => {
-                println!("Warning: Failed to initialize audio player: {}. Playing audio will be skipped.", e);
+                println!(
+                    "Warning: Failed to initialize audio player: {}. Playing audio will be skipped.",
+                    e
+                );
                 None
             }
         }
@@ -898,8 +909,8 @@ impl AudioStreamPlayer {
     pub fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         use std::sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
         };
 
         let host = cpal::default_host();

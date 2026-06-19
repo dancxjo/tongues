@@ -1,3 +1,339 @@
+const globalAdvancedControls = ['--cpu', '--quiet', '--verbose'];
+
+const controlDescriptions = {
+    text: 'Text passed to the command as the primary input.',
+    input: 'Input text, orthography, phoneme string, or raw source value for the command.',
+    cursor: 'Current cursor prefix used for sentence-boundary inference.',
+    buffer: 'Raw rolling UTF-8 text buffer used by head2phones inference.',
+    wav: 'WAV file path consumed by the command.',
+    refs: 'Glob or directory containing reference WAV files.',
+    'style-vectors': 'JSONL file containing encoded StyleTTS2 style vectors.',
+    model: 'Model bundle id or model selector value.',
+    '--all': 'Apply the clean operation to both prepared data and model artifacts.',
+    '--archive-dir': 'Root directory where cleaned artifacts are archived.',
+    '--backend': 'Speech backend: StyleTTS2 for neural synthesis, mock for tests, or Piper when configured.',
+    '--batch-size': 'Mini-batch size used during training.',
+    '--cache-dir': 'Directory used for downloaded or cached source data.',
+    '--config': 'TOML configuration file for this module.',
+    '--corpus': 'Emotion corpus to fetch; repeat it to fetch a selected subset.',
+    '--cpu': 'Use CPU execution instead of CUDA where the backend supports both.',
+    '--cuts-per-wav': 'Number of random emotion training cuts to sample from each WAV.',
+    '--data': 'Prepared dataset directory read by train, eval, infer, or clean commands.',
+    '--debug-pronunciation': 'Print pronunciation planning diagnostics while speaking.',
+    '--diffusion-steps': 'StyleTTS2 diffusion step count; more steps can improve quality but run slower.',
+    '--dropout': 'Dropout probability used while training.',
+    '--dump': 'Existing decompressed MediaWiki XML dump to parse instead of downloading one.',
+    '--embedding-scale': 'StyleTTS2 diffusion embedding scale.',
+    '--emotion': 'Name of the target emotion to apply from the emotion signatures file.',
+    '--emotion-signatures': 'JSON file containing emotion signature delta vectors.',
+    '--emotion-strength': 'Multiplier applied to the selected emotion delta vector.',
+    '--epochs': 'Maximum number of training epochs.',
+    '--fail-on-guessed-pronunciation': 'Treat guessed pronunciations as errors instead of allowing synthesis.',
+    '--force': 'Re-download model files even when they already appear to be present.',
+    '--g2p2g-model': 'G2P2G model directory used by the discrepancy report.',
+    '--head2phones-model': 'Head2phones model path used to parse text for StyleTTS2 discovery.',
+    '--input': 'Input file or directory. Commands that accept multiple inputs can repeat this control.',
+    '--labels': 'JSONL file mapping reference paths to emotion and speaker labels.',
+    '--lang': 'Wiktionary language code override; can be repeated or comma-separated.',
+    '--learning-rate': 'Optimizer learning rate.',
+    '--limit': 'Maximum number of sampled words included in the report.',
+    '--list': 'Print available choices and exit without downloading.',
+    '--mask-policy': 'Masking policy for training: single-mask or variable curriculum.',
+    '--max-chars': 'Maximum character count accepted by the command.',
+    '--max-mask-rate': 'Maximum fraction of phones masked when variable masking is active.',
+    '--max-rarity': 'Maximum OpenEPD rarity rank included in the default discrepancy sample.',
+    '--max-tts-symbols': 'Maximum symbols per TTS chunk before text is split.',
+    '--max-utterances': 'Limit utterances for smoke tests or smaller prepared datasets.',
+    '--max-whisper-wer': 'Maximum word error rate allowed between Whisper text and the original transcript.',
+    '--max-wiktionary-audio': 'Limit imported Wiktionary/Commons pronunciation audio rows.',
+    '--mel-bins': 'Log-mel bin count before mean/std pooling.',
+    '--method': 'Method used to compute emotion delta signatures.',
+    '--min-cut-ms': 'Minimum duration for sampled emotion audio cuts.',
+    '--max-cut-ms': 'Maximum duration for sampled emotion audio cuts.',
+    '--model': 'Model directory read or updated by the command.',
+    '--no-create': 'Do not recreate empty default directories after archiving cleaned artifacts.',
+    '--no-download-wiktionary-audio': 'Use existing Wiktionary audio only; do not fetch missing files.',
+    '--no-full-cut': 'Skip adding a full-length emotion cut for each source WAV.',
+    '--no-g2p2g': 'Exclude the G2P2G model from discrepancy comparison.',
+    '--no-tts-chunking': 'Disable automatic text chunking before StyleTTS2 synthesis.',
+    '--no-whisper-transcripts': 'Keep original LibriSpeech transcript text instead of Whisper recasing.',
+    '--no-wiktionary': 'Exclude the Wiktionary model from discrepancy comparison.',
+    '--no-wiktionary-audio': 'Do not import Wiktionary/Commons pronunciation audio rows.',
+    '--notation': 'Pronunciation representation: phones, phonemes, or both where supported.',
+    '--num-samples': 'Number of generated samples or variants to produce.',
+    '--ollama-max-chars': 'Maximum JSONL characters included in an Ollama verification prompt.',
+    '--ollama-model': 'Ollama model name used for passive data verification.',
+    '--ollama-rows': 'Maximum train rows sent to Ollama in one verification request.',
+    '--ollama-strict': 'Fail the command when Ollama reports the scanned data is not sane.',
+    '--ollama-url': 'Ollama server URL used for verification requests.',
+    '--out': 'Output directory or output file written by the command.',
+    '--out-dir': 'Output directory written by the command.',
+    '--output': 'WAV output path written by `tongues speak`.',
+    '--patience': 'Early-stopping patience measured in epochs without improvement.',
+    '--prepare': 'Prepare or rebuild data before starting the training step.',
+    '--previous': 'Previously parsed sentence shown to the sentence parser model.',
+    '--quality': 'StyleTTS2 preset that chooses default synthesis quality and speed tradeoffs.',
+    '--quiet': 'Silence status bars and diagnostic progress output.',
+    '--raw': 'Treat input as the exact model source string, including control tags.',
+    '--references-dir': 'Directory of WAV files used for empirical StyleTTS2 discovery randomness.',
+    '--repair-control': 'ANSI control sequence emitted before a repaired streamed sentence.',
+    '--run-id': 'Archive run id. If omitted, the CLI uses a unix-seconds id.',
+    '--sample-rate-hz': 'Output sample rate in Hz.',
+    '--seed': 'Random seed for reproducible shuffling, training, or sampling.',
+    '--sight-words': 'Enable or disable extra training copies of matching English Dolch sight-word rows.',
+    '--source': 'Refinement source: held-out discrepancies or the built-in sight-word list.',
+    '--source-manifest': 'Source JSONL manifest with emotion labels and audio paths.',
+    '--span-mask-prob': 'Probability weight for span masking during masked-phone training.',
+    '--speaker-reference-strength': 'Voice reference strength from 0 to 1; higher keeps more speaker timbre.',
+    '--speed': 'StyleTTS2 decoder speed multiplier.',
+    '--split': 'Prepared data split to evaluate, usually train, valid, or test.',
+    '--splits': 'Comma-separated prepared splits mined for refinement discrepancies.',
+    '--strict': 'Exit non-zero when verification reports scanned data is not sane.',
+    '--style-alpha': 'Raw StyleTTS2 alpha blend; higher uses more predicted speaker/timbre and less reference.',
+    '--style-beta': 'Raw StyleTTS2 beta blend; higher uses more predicted style/prosody and less reference.',
+    '--style-reference-strength': 'Style reference strength from 0 to 1; higher keeps more reference prosody.',
+    '--style-seed': 'Seed for StyleTTS2 style diffusion.',
+    '--style-wav': 'Reference WAV for style and prosody.',
+    '--task': 'Task or direction to run, such as g2p, p2g, pronunciation, normalization, or all.',
+    '--tier': 'StyleTTS2 discovery tier: diffusion, empirical reference styles, or broader random search.',
+    '--timings': 'Emit word and audio timing metadata.',
+    '--train-frac': 'Fraction of base words assigned to the training split during prepare.',
+    '--training-set': 'Prepared sentence-parser row source used for training.',
+    '--subset': 'Dataset subset to prepare, such as mini or train-clean-100.',
+    '--valid-frac': 'Fraction of base words assigned to validation during prepare.',
+    '--variety': 'Language or pronunciation variety tag, such as en-US.',
+    '--verbose': 'Show status bars and diagnostic progress output.',
+    '--verify-ollama': 'Ask Ollama to passively scan prepared training rows.',
+    '--voice-wav': 'Reference WAV for speaker timbre.',
+    '--wav': 'WAV file consumed by the command.',
+    '--wait-for-prepare': 'Wait for an in-progress prepare in the data directory before training.',
+    '--weight-decay': 'AdamW weight decay.',
+    '--whisper-model': 'Whisper ggml model path used for transcript recasing and punctuation.',
+    '--wiktionary-audio-data': 'Prepared Wiktionary dataset used to import single-word Commons audio.',
+    '--wiktionary-model': 'Wiktionary model directory used by the discrepancy report.',
+    '--word': 'Explicit word to include; repeat it to compare multiple words.',
+    '--words-file': 'Path to a file containing additional words, one per line.',
+    'display name': 'Human-readable model bundle name shown by the CLI.',
+    bundle: 'Model bundle selected by the model menu.',
+    'file presence': 'Whether expected model files exist locally.',
+    id: 'Stable model bundle id.',
+    kind: 'Model bundle category.',
+    presence: 'Whether the model bundle assets are present locally.',
+    'model category': 'Model category chosen in the interactive model menu.',
+    'selected model': 'Currently selected LLM model bundle.',
+    'selected Piper voice': 'Currently selected Piper voice bundle.',
+};
+
+const controlOptions = {
+    '--backend': ['styletts2', 'mock', 'piper'],
+    '--corpus': ['ravdess', 'crema-d', 'tess', 'savee', 'emodb', 'iemocap'],
+    '--mask-policy': ['variable', 'single'],
+    '--method': ['speaker-neutral-delta'],
+    '--notation': ['phones', 'phonemes', 'all'],
+    '--quality': ['balanced', 'fast'],
+    '--sight-words': ['true', 'false'],
+    '--source': ['discrepancies', 'sight-words'],
+    '--split': ['test', 'valid', 'train'],
+    '--subset': ['mini', 'train-clean-100'],
+    '--training-set': ['all', 'seams', 'naive-discrepancy'],
+    '--variety': ['en-US', 'en-GB'],
+    'model category': ['LLM', 'Piper voice'],
+};
+
+const pathDefaults = {
+    g2p2g: {
+        config: 'configs/g2p2g/default.toml',
+        data: 'datasets/g2p2g/openepd-v0',
+        model: 'models/g2p2g/openepd-v0',
+        outData: 'datasets/g2p2g/openepd-v0',
+        outModel: 'models/g2p2g/openepd-v0',
+    },
+    sentenceParser: {
+        config: 'configs/sentence-parser/default.toml',
+        data: 'datasets/sentence-parser/v0',
+        model: 'models/sentence-parser/v0',
+        outData: 'datasets/sentence-parser/v0',
+        outModel: 'models/sentence-parser/v0',
+    },
+    head2phones: {
+        config: 'configs/head2phones/default.toml',
+        data: 'datasets/head2phones/v0',
+        model: 'models/head2phones/v0',
+        outData: 'datasets/head2phones/v0',
+        outModel: 'models/head2phones/v0',
+    },
+    interpretation: {
+        data: 'datasets/interpretation/mini-v0',
+        model: 'models/interpretation/mini-v0',
+        outData: 'datasets/interpretation/mini-v0',
+        outModel: 'models/interpretation/mini-v0',
+    },
+    emotions: {
+        data: 'datasets/emotions/v0',
+        model: 'models/emotions/v0',
+        outData: 'datasets/emotions/v0',
+        outModel: 'models/emotions/v0',
+    },
+    wiktionary: {
+        config: 'configs/wiktionary/default.toml',
+        data: 'datasets/wiktionary/enwiktionary-2026-06-01-v0',
+        model: 'models/wiktionary/enwiktionary-2026-06-01-v0-phones',
+        outData: 'datasets/wiktionary/enwiktionary-2026-06-01-v0',
+        outModel: 'models/wiktionary/enwiktionary-2026-06-01-v0-phones',
+        cache: 'data/wiktionary',
+    },
+};
+
+const commonDefaults = {
+    '--archive-dir': 'archive',
+    '--batch-size': '64',
+    '--backend': 'styletts2',
+    '--corpus': 'ravdess',
+    '--cuts-per-wav': '8',
+    '--diffusion-steps': '5',
+    '--dropout': '0.1',
+    '--embedding-scale': '1.0',
+    '--emotion-signatures': 'emotion_signatures.json',
+    '--emotion-strength': '1.0',
+    '--epochs': '20',
+    '--labels': 'labels.jsonl',
+    '--learning-rate': '0.0003',
+    '--limit': '250',
+    '--mask-policy': 'variable',
+    '--max-cut-ms': '3500',
+    '--max-mask-rate': '0.4',
+    '--max-rarity': '50000',
+    '--max-tts-symbols': '180',
+    '--max-whisper-wer': '0.35',
+    '--mel-bins': '80',
+    '--method': 'speaker-neutral-delta',
+    '--min-cut-ms': '250',
+    '--notation': 'phones',
+    '--num-samples': '10',
+    '--ollama-model': 'gemma3:4b',
+    '--ollama-rows': '24',
+    '--ollama-max-chars': '12000',
+    '--ollama-url': 'http://localhost:11434',
+    '--out-dir': 'outputs/styletts2-discovery',
+    '--output': 'output.wav',
+    '--patience': '5',
+    '--quality': 'balanced',
+    '--repair-control': '\\u001b[1A\\u001b[2K',
+    '--sample-rate-hz': '24000',
+    '--seed': '42',
+    '--sight-words': 'true',
+    '--source': 'discrepancies',
+    '--source-manifest': 'style_vectors.jsonl',
+    '--span-mask-prob': '0.15',
+    '--speaker-reference-strength': '0.70',
+    '--speed': '1.0',
+    '--split': 'test',
+    '--splits': 'valid,test',
+    '--style-alpha': '0.30',
+    '--style-beta': '0.10',
+    '--style-reference-strength': '0.90',
+    '--style-seed': '0',
+    '--subset': 'mini',
+    '--task': 'auto',
+    '--tier': '1',
+    '--train-frac': '0.8',
+    '--training-set': 'all',
+    '--valid-frac': '0.1',
+    '--variety': 'en-US',
+    '--weight-decay': '0.0001',
+    model: 'gemma4',
+    refs: 'models/styletts2/en-us/reference_audio',
+    'style-vectors': 'style_vectors.jsonl',
+    text: 'hello world',
+};
+
+const numericControls = new Set([
+    '--batch-size',
+    '--cuts-per-wav',
+    '--diffusion-steps',
+    '--dropout',
+    '--embedding-scale',
+    '--emotion-strength',
+    '--epochs',
+    '--learning-rate',
+    '--limit',
+    '--max-cut-ms',
+    '--max-mask-rate',
+    '--max-rarity',
+    '--max-tts-symbols',
+    '--max-utterances',
+    '--max-whisper-wer',
+    '--max-wiktionary-audio',
+    '--mel-bins',
+    '--min-cut-ms',
+    '--num-samples',
+    '--ollama-rows',
+    '--ollama-max-chars',
+    '--patience',
+    '--sample-rate-hz',
+    '--seed',
+    '--span-mask-prob',
+    '--speaker-reference-strength',
+    '--speed',
+    '--style-alpha',
+    '--style-beta',
+    '--style-reference-strength',
+    '--style-seed',
+    '--tier',
+    '--train-frac',
+    '--valid-frac',
+    '--weight-decay',
+]);
+
+const flagControls = new Set([
+    '--cpu',
+    '--quiet',
+    '--verbose',
+]);
+
+const moduleGuides = {
+    Speech: {
+        intro: 'Start here when you want immediate output from text. The speech pages are good smoke tests before preparing or training larger datasets.',
+        firstRun: 'Try the defaults, generate a short WAV, then swap the voice or style sample once reference audio is available.',
+    },
+    G2P2G: {
+        intro: 'G2P2G teaches the project to translate between spellings and pronunciations using OpenEPD-style lexical data.',
+        firstRun: 'Prepare first, train second, then use infer or eval. The defaults keep data in datasets/g2p2g and models in models/g2p2g.',
+    },
+    'Sentence Parser': {
+        intro: 'The sentence parser turns streaming text into stable sentence boundaries for downstream pronunciation and speech planning.',
+        firstRun: 'Prepare a small text directory first. Training can run from the prepared dataset or prepare and train in one step.',
+    },
+    Head2Phones: {
+        intro: 'Head2Phones predicts pronunciation from rolling text buffers, which is useful when text is still arriving.',
+        firstRun: 'Use the default config, prepare a dataset, optionally scan rows with Ollama, then train the default model directory.',
+    },
+    Interpretation: {
+        intro: 'Interpretation prepares and trains audio supervision for speech recognition style workflows.',
+        firstRun: 'Use the mini subset first. It is the fastest way to verify downloads, features, transcripts, and training wiring.',
+    },
+    Emotions: {
+        intro: 'Emotion commands prepare labeled audio cuts, train an emotion classifier, and classify WAV files.',
+        firstRun: 'Fetch corpora or provide a style vector manifest, prepare cuts into datasets/emotions/v0, then train models/emotions/v0.',
+    },
+    Wiktionary: {
+        intro: 'Wiktionary commands download pronunciation data, expand it into tasks, and train pronunciation models.',
+        firstRun: 'Start with the default config and cache directory. Override languages only after the full default flow is clear.',
+    },
+    Utilities: {
+        intro: 'Utilities manage model files, fetch source data, and generate project reports.',
+        firstRun: 'Run models status or models fetch first so the runtime assets are present before synthesis or training.',
+    },
+    StyleTTS2: {
+        intro: 'StyleTTS2 tools inspect and build reference styles, emotion signatures, and discovery samples for speech synthesis.',
+        firstRun: 'Encode style references, compute emotion signatures, then use the speech page to apply those signatures.',
+    },
+    Legacy: {
+        intro: 'Legacy pages are compatibility aliases for the G2P2G workflow.',
+        firstRun: 'Prefer the G2P2G pages for new work; use these only when following older notes or scripts.',
+    },
+};
+
 const commandPages = [
     {
         title: 'StyleTTS2 Speak',
@@ -13,7 +349,13 @@ const commandPages = [
         command: 'tongues speak',
         group: 'Speech',
         summary: 'Synthesize text into WAV output using the selected speech backend.',
-        fields: ['text', '--variety', '--backend', '--output', '--voice-wav', '--style-wav'],
+        fields: [
+            { name: 'text', description: 'Text to synthesize; stdin is used in the CLI when omitted.' },
+            { name: '--output', description: 'WAV file path written by the CLI.' },
+            { name: '--backend', options: ['styletts2', 'mock', 'piper'], default: 'styletts2' },
+            { name: '--variety', default: 'en-US' },
+        ],
+        advanced: ['--sample-rate-hz', '--voice-wav', '--style-wav', '--quality', '--diffusion-steps', '--speaker-reference-strength', '--style-reference-strength', '--style-alpha', '--style-beta', '--emotion-signatures', '--emotion', '--emotion-strength', '--embedding-scale', '--style-seed', '--speed', { name: '--debug-pronunciation', type: 'flag' }, { name: '--timings', type: 'flag' }, '--max-tts-symbols', { name: '--no-tts-chunking', type: 'flag' }, { name: '--fail-on-guessed-pronunciation', type: 'flag' }],
     },
     {
         title: 'Phonemes',
@@ -37,7 +379,8 @@ const commandPages = [
         command: 'tongues g2p2g prepare',
         group: 'G2P2G',
         summary: 'Prepare OpenEPD train, validation, and test splits.',
-        fields: ['--config', '--input', '--out', '--train-frac', '--valid-frac', '--seed'],
+        fields: ['--config', '--out'],
+        advanced: ['--input', '--train-frac', '--valid-frac', '--seed'],
     },
     {
         title: 'G2P2G Clean',
@@ -45,7 +388,8 @@ const commandPages = [
         command: 'tongues g2p2g clean',
         group: 'G2P2G',
         summary: 'Archive selected G2P2G artifacts and recreate default directories.',
-        fields: ['--data', '--model', '--all', '--archive-dir', '--run-id', '--no-create'],
+        fields: [{ name: '--all', type: 'flag' }, { name: '--data', type: 'flag' }, { name: '--model', type: 'flag' }],
+        advanced: ['--archive-dir', '--run-id', { name: '--no-create', type: 'flag' }],
     },
     {
         title: 'G2P2G Train',
@@ -53,7 +397,8 @@ const commandPages = [
         command: 'tongues g2p2g train',
         group: 'G2P2G',
         summary: 'Train the G2P2G seq2seq model.',
-        fields: ['--config', '--data', '--out', '--task', '--epochs', '--batch-size'],
+        fields: ['--config', '--data', '--out', '--task'],
+        advanced: ['--mask-policy', '--max-mask-rate', '--span-mask-prob', '--learning-rate', '--weight-decay', '--dropout', '--epochs', '--patience', '--batch-size', '--seed', { name: '--wait-for-prepare', type: 'flag' }],
     },
     {
         title: 'G2P2G Infer',
@@ -61,7 +406,8 @@ const commandPages = [
         command: 'tongues g2p2g infer',
         group: 'G2P2G',
         summary: 'Run grapheme-to-phoneme or phoneme-to-grapheme inference.',
-        fields: ['input', '--task', '--model', '--data'],
+        fields: ['input', '--task', '--model'],
+        advanced: ['--data'],
     },
     {
         title: 'G2P2G Eval',
@@ -77,7 +423,8 @@ const commandPages = [
         command: 'tongues g2p2g refine',
         group: 'G2P2G',
         summary: 'Fine-tune a G2P2G model on held-out discrepancies or sight words.',
-        fields: ['--model', '--data', '--out', '--splits', '--source', '--task'],
+        fields: ['--model', '--data', '--out', '--task'],
+        advanced: ['--splits', '--source', '--learning-rate', '--weight-decay', '--epochs', '--patience', '--batch-size', '--seed'],
     },
     {
         title: 'G2P2G Repl',
@@ -85,7 +432,8 @@ const commandPages = [
         command: 'tongues g2p2g repl',
         group: 'G2P2G',
         summary: 'Run an interactive G2P2G translation session.',
-        fields: ['--task', '--model', '--data'],
+        fields: ['--task', '--model'],
+        advanced: ['--data'],
     },
     {
         title: 'Sentence Parser',
@@ -101,7 +449,8 @@ const commandPages = [
         command: 'tongues sentence-parser clean',
         group: 'Sentence Parser',
         summary: 'Archive selected sentence parser artifacts and recreate default directories.',
-        fields: ['--data', '--model', '--all', '--archive-dir', '--run-id', '--no-create'],
+        fields: [{ name: '--all', type: 'flag' }, { name: '--data', type: 'flag' }, { name: '--model', type: 'flag' }],
+        advanced: ['--archive-dir', '--run-id', { name: '--no-create', type: 'flag' }],
     },
     {
         title: 'Sentence Parser Train',
@@ -109,7 +458,8 @@ const commandPages = [
         command: 'tongues sentence-parser train',
         group: 'Sentence Parser',
         summary: 'Train or scaffold the sentence parser model.',
-        fields: ['--config', '--data', '--input', '--out', '--prepare', '--training-set'],
+        fields: ['--config', '--data', '--out', { name: '--prepare', type: 'flag' }, '--training-set'],
+        advanced: ['--input', { name: '--wait-for-prepare', type: 'flag' }, '--learning-rate', '--weight-decay', '--dropout', '--batch-size', '--epochs', '--patience', '--seed'],
     },
     {
         title: 'Sentence Parser Eval',
@@ -149,7 +499,8 @@ const commandPages = [
         command: 'tongues head2phones prepare',
         group: 'Head2Phones',
         summary: 'Prepare rolling head-chunk-to-phones training data.',
-        fields: ['--config', '--input', '--out', '--verify-ollama'],
+        fields: ['--config', '--input', '--out'],
+        advanced: [{ name: '--verify-ollama', type: 'flag' }, '--ollama-model', '--ollama-url', '--ollama-rows', '--ollama-max-chars', { name: '--ollama-strict', type: 'flag' }],
     },
     {
         title: 'Head2Phones Clean',
@@ -157,7 +508,8 @@ const commandPages = [
         command: 'tongues head2phones clean',
         group: 'Head2Phones',
         summary: 'Archive selected head2phones artifacts and recreate default directories.',
-        fields: ['--data', '--model', '--all', '--archive-dir', '--run-id', '--no-create'],
+        fields: [{ name: '--all', type: 'flag' }, { name: '--data', type: 'flag' }, { name: '--model', type: 'flag' }],
+        advanced: ['--archive-dir', '--run-id', { name: '--no-create', type: 'flag' }],
     },
     {
         title: 'Head2Phones Verify',
@@ -165,7 +517,8 @@ const commandPages = [
         command: 'tongues head2phones verify',
         group: 'Head2Phones',
         summary: 'Passively verify prepared head2phones training rows with Ollama.',
-        fields: ['--config', '--data', '--ollama-model', '--ollama-url', '--strict'],
+        fields: ['--config', '--data'],
+        advanced: ['--ollama-model', '--ollama-url', '--ollama-rows', '--ollama-max-chars', { name: '--strict', type: 'flag' }],
     },
     {
         title: 'Head2Phones Train',
@@ -173,7 +526,8 @@ const commandPages = [
         command: 'tongues head2phones train',
         group: 'Head2Phones',
         summary: 'Train the rolling head-chunk-to-phones seq2seq model.',
-        fields: ['--config', '--data', '--input', '--out', '--prepare', '--epochs'],
+        fields: ['--config', '--data', '--out', { name: '--prepare', type: 'flag' }],
+        advanced: ['--input', { name: '--verify-ollama', type: 'flag' }, '--ollama-model', '--ollama-url', '--ollama-rows', '--ollama-max-chars', { name: '--ollama-strict', type: 'flag' }, { name: '--wait-for-prepare', type: 'flag' }, '--learning-rate', '--weight-decay', '--dropout', '--batch-size', '--epochs', '--patience', '--seed'],
     },
     {
         title: 'Head2Phones Infer',
@@ -189,7 +543,8 @@ const commandPages = [
         command: 'tongues interpretation prepare',
         group: 'Interpretation',
         summary: 'Prepare LibriSpeech audio supervision data.',
-        fields: ['--subset', '--out', '--max-utterances', '--whisper-model'],
+        fields: ['--subset', '--out'],
+        advanced: ['--max-utterances', '--wiktionary-audio-data', { name: '--no-wiktionary-audio', type: 'flag' }, '--max-wiktionary-audio', { name: '--no-download-wiktionary-audio', type: 'flag' }, '--whisper-model', { name: '--no-whisper-transcripts', type: 'flag' }, '--max-whisper-wer'],
     },
     {
         title: 'Interpretation Clean',
@@ -197,7 +552,8 @@ const commandPages = [
         command: 'tongues interpretation clean',
         group: 'Interpretation',
         summary: 'Archive selected interpretation artifacts and recreate default directories.',
-        fields: ['--data', '--model', '--all', '--archive-dir', '--run-id', '--no-create'],
+        fields: [{ name: '--all', type: 'flag' }, { name: '--data', type: 'flag' }, { name: '--model', type: 'flag' }],
+        advanced: ['--archive-dir', '--run-id', { name: '--no-create', type: 'flag' }],
     },
     {
         title: 'Interpretation Train',
@@ -205,7 +561,8 @@ const commandPages = [
         command: 'tongues interpretation train',
         group: 'Interpretation',
         summary: 'Train the LibriSpeech ASR model.',
-        fields: ['--data', '--out', '--wait-for-prepare', '--epochs', '--batch-size', '--seed'],
+        fields: ['--data', '--out'],
+        advanced: [{ name: '--wait-for-prepare', type: 'flag' }, '--epochs', '--batch-size', '--seed'],
     },
     {
         title: 'Interpretation Eval',
@@ -224,12 +581,47 @@ const commandPages = [
         fields: ['--model', '--wav'],
     },
     {
+        title: 'Emotions Prepare',
+        path: '/emotions/prepare',
+        command: 'tongues emotions prepare',
+        group: 'Emotions',
+        summary: 'Prepare labeled emotion WAV cuts from a style-vector or source manifest.',
+        fields: ['--source-manifest', '--out'],
+        advanced: ['--cuts-per-wav', '--min-cut-ms', '--max-cut-ms', { name: '--no-full-cut', type: 'flag' }, '--mel-bins', '--seed'],
+    },
+    {
+        title: 'Emotions Train',
+        path: '/emotions/train',
+        command: 'tongues emotions train',
+        group: 'Emotions',
+        summary: 'Train the emotion classifier on prepared acoustic cuts.',
+        fields: ['--data', '--out'],
+        advanced: ['--epochs', '--batch-size', '--learning-rate', '--seed'],
+    },
+    {
+        title: 'Emotions Eval',
+        path: '/emotions/eval',
+        command: 'tongues emotions eval',
+        group: 'Emotions',
+        summary: 'Evaluate an emotion classifier on a prepared split.',
+        fields: ['--model', '--data', '--split'],
+    },
+    {
+        title: 'Emotions Infer',
+        path: '/emotions/infer',
+        command: 'tongues emotions infer',
+        group: 'Emotions',
+        summary: 'Predict emotion probabilities for one WAV file.',
+        fields: ['wav', '--model'],
+    },
+    {
         title: 'Wiktionary',
         path: '/wiktionary/prepare',
         command: 'tongues wiktionary prepare',
         group: 'Wiktionary',
         summary: 'Download and prepare Wiktionary pronunciation data.',
-        fields: ['--config', '--dump', '--out', '--cache-dir', '--lang'],
+        fields: ['--config', '--out', '--cache-dir'],
+        advanced: ['--dump', '--lang'],
     },
     {
         title: 'Wiktionary Clean',
@@ -237,7 +629,8 @@ const commandPages = [
         command: 'tongues wiktionary clean',
         group: 'Wiktionary',
         summary: 'Archive selected Wiktionary artifacts and recreate default directories.',
-        fields: ['--data', '--model', '--all', '--archive-dir', '--run-id', '--no-create'],
+        fields: [{ name: '--all', type: 'flag' }, { name: '--data', type: 'flag' }, { name: '--model', type: 'flag' }],
+        advanced: ['--archive-dir', '--run-id', { name: '--no-create', type: 'flag' }],
     },
     {
         title: 'Wiktionary Train',
@@ -245,7 +638,8 @@ const commandPages = [
         command: 'tongues wiktionary train',
         group: 'Wiktionary',
         summary: 'Train a Wiktionary pronunciation seq2seq model.',
-        fields: ['--config', '--data', '--out', '--lang', '--notation', '--task'],
+        fields: ['--config', '--data', '--out', '--task'],
+        advanced: ['--dump', '--lang', '--notation', '--cache-dir', { name: '--prepare', type: 'flag' }, '--sight-words', { name: '--wait-for-prepare', type: 'flag' }, '--learning-rate', '--weight-decay', '--dropout', '--batch-size', '--epochs', '--patience', '--seed'],
     },
     {
         title: 'Wiktionary Infer',
@@ -253,7 +647,8 @@ const commandPages = [
         command: 'tongues wiktionary infer',
         group: 'Wiktionary',
         summary: 'Run pronunciation and normalization tasks with a trained Wiktionary model.',
-        fields: ['input', '--model', '--task', '--lang', '--notation', '--variety'],
+        fields: ['input', '--model', '--task', '--lang', '--notation'],
+        advanced: ['--variety', { name: '--raw', type: 'flag' }],
     },
     {
         title: 'Models Menu',
@@ -261,7 +656,8 @@ const commandPages = [
         command: 'tongues models menu',
         group: 'Utilities',
         summary: 'Choose the active model through the CLI menu.',
-        fields: ['model category', 'bundle'],
+        docs: 'Opens the interactive model picker in the CLI. Use this when you want guided selection instead of passing a model id directly.',
+        fields: [],
     },
     {
         title: 'Models List',
@@ -269,7 +665,8 @@ const commandPages = [
         command: 'tongues models list',
         group: 'Utilities',
         summary: 'List known model bundles.',
-        fields: ['kind', 'id', 'display name', 'presence'],
+        docs: 'Lists every known model bundle, including its kind, id, display name, and whether the expected local files are present.',
+        fields: [],
     },
     {
         title: 'Models Path',
@@ -285,7 +682,8 @@ const commandPages = [
         command: 'tongues models status',
         group: 'Utilities',
         summary: 'Show selected models and local file presence.',
-        fields: ['selected model', 'selected Piper voice', 'file presence'],
+        docs: 'Shows the selected model bundles and whether their expected local files are present. This command has no command-specific input controls.',
+        fields: [],
     },
     {
         title: 'Models Use',
@@ -301,7 +699,8 @@ const commandPages = [
         command: 'tongues models fetch',
         group: 'Utilities',
         summary: 'Fetch default runtime models or a named model.',
-        fields: ['model', '--force'],
+        fields: ['model'],
+        advanced: [{ name: '--force', type: 'flag' }],
     },
     {
         title: 'Fetch Corpora',
@@ -309,7 +708,8 @@ const commandPages = [
         command: 'tongues fetch-corpora',
         group: 'Utilities',
         summary: 'Download public emotion corpora for StyleTTS2 signatures.',
-        fields: ['--out-dir', '--corpus', '--list'],
+        fields: ['--out-dir', '--corpus'],
+        advanced: [{ name: '--list', type: 'flag' }],
     },
     {
         title: 'Fetch CMUdict',
@@ -325,7 +725,8 @@ const commandPages = [
         command: 'tongues discrepancies',
         group: 'Utilities',
         summary: 'Compare pronunciations from lexicons, rules, and trained models.',
-        fields: ['--out', '--limit', '--max-rarity', '--word', '--words-file'],
+        fields: ['--out', '--word', '--words-file'],
+        advanced: ['--limit', '--max-rarity', { name: '--no-g2p2g', type: 'flag' }, { name: '--no-wiktionary', type: 'flag' }, '--g2p2g-model', '--wiktionary-model'],
     },
     {
         title: 'StyleTTS2 Discover',
@@ -333,7 +734,8 @@ const commandPages = [
         command: 'tongues styletts2 discover',
         group: 'StyleTTS2',
         summary: 'Sample diffusion parameters and synthesize StyleTTS2 variants.',
-        fields: ['text', '--out-dir', '--num-samples', '--head2phones-model', '--tier'],
+        fields: ['text', '--out-dir', '--num-samples'],
+        advanced: ['--head2phones-model', '--variety', '--seed', '--tier', '--references-dir'],
     },
     {
         title: 'StyleTTS2 Encode Style',
@@ -349,7 +751,8 @@ const commandPages = [
         command: 'tongues styletts2 emotion-signatures',
         group: 'StyleTTS2',
         summary: 'Compute emotion delta signatures from encoded style vectors.',
-        fields: ['style-vectors', '--method', '--out'],
+        fields: ['style-vectors', '--out'],
+        advanced: ['--method'],
     },
     {
         title: 'Legacy Prepare',
@@ -357,7 +760,8 @@ const commandPages = [
         command: 'tongues prepare',
         group: 'Legacy',
         summary: 'Compatibility alias for G2P2G prepare.',
-        fields: ['--input', '--out', '--train-frac', '--valid-frac', '--seed'],
+        fields: ['--out'],
+        advanced: ['--input', '--train-frac', '--valid-frac', '--seed'],
     },
     {
         title: 'Legacy Train',
@@ -365,7 +769,8 @@ const commandPages = [
         command: 'tongues train',
         group: 'Legacy',
         summary: 'Compatibility alias for G2P2G train.',
-        fields: ['--data', '--out', '--task', '--epochs', '--batch-size'],
+        fields: ['--data', '--out', '--task'],
+        advanced: ['--mask-policy', '--max-mask-rate', '--span-mask-prob', '--learning-rate', '--weight-decay', '--dropout', '--epochs', '--patience', '--batch-size', '--seed'],
     },
     {
         title: 'Legacy Eval',
@@ -381,7 +786,8 @@ const commandPages = [
         command: 'tongues refine',
         group: 'Legacy',
         summary: 'Compatibility alias for G2P2G refine.',
-        fields: ['--model', '--data', '--out', '--splits', '--source', '--task'],
+        fields: ['--model', '--data', '--out', '--task'],
+        advanced: ['--splits', '--source', '--learning-rate', '--weight-decay', '--epochs', '--patience', '--batch-size', '--seed'],
     },
     {
         title: 'Legacy Repl',
@@ -389,7 +795,8 @@ const commandPages = [
         command: 'tongues repl',
         group: 'Legacy',
         summary: 'Compatibility alias for G2P2G repl.',
-        fields: ['--task', '--model', '--data'],
+        fields: ['--task', '--model'],
+        advanced: ['--data'],
     },
     {
         title: 'Legacy Predict',
@@ -397,16 +804,22 @@ const commandPages = [
         command: 'tongues predict',
         group: 'Legacy',
         summary: 'Compatibility alias for G2P2G infer.',
-        fields: ['input', '--task', '--model', '--data'],
+        fields: ['input', '--task', '--model'],
+        advanced: ['--data'],
     },
 ];
 
 const byId = (id) => document.getElementById(id);
+let activePage = null;
+let activeJobId = null;
+let activeJobSource = null;
+let jobOutputLines = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
     renderNavigation();
     renderRoute();
     window.addEventListener('popstate', renderRoute);
+    initJobs();
     await initStyleTts2();
 });
 
@@ -444,10 +857,11 @@ function renderRoute() {
     });
 
     if (!page) {
+        activePage = null;
         renderDashboard();
         byId('page-kicker').textContent = 'Command surface';
         byId('page-title').textContent = 'Tongues Web';
-        byId('page-summary').textContent = 'Every CLI command has a web route reserved here.';
+        byId('page-summary').textContent = 'Pick a workflow. Each page starts with safe defaults and explains what the controls do.';
         byId('page-command').textContent = 'tongues';
         return;
     }
@@ -456,6 +870,7 @@ function renderRoute() {
     byId('page-title').textContent = page.title;
     byId('page-summary').textContent = page.summary;
     byId('page-command').textContent = page.command;
+    activePage = page;
 
     if (!page.implemented) {
         renderSkeleton(page);
@@ -469,6 +884,7 @@ function renderDashboard() {
             <span>${page.group}</span>
             <strong>${page.title}</strong>
             <small>${page.command}</small>
+            <p>${escapeHtml(page.summary)}</p>
         </a>
     `).join('');
 
@@ -482,14 +898,370 @@ function renderDashboard() {
 }
 
 function renderSkeleton(page) {
-    byId('command-preview').value = page.command;
-    byId('skeleton-fields').innerHTML = (page.fields || []).map((field) => `
-        <div class="form-group">
-            <label>${field}</label>
-            <input type="text" placeholder="${field}">
+    const starter = moduleGuides[page.group] || moduleGuides.Utilities;
+    byId('command-preview').value = commandExample(page);
+    byId('skeleton-doc').innerHTML = `
+        <p>${escapeHtml(page.docs || page.summary)}</p>
+        <p>${escapeHtml(starter.intro)}</p>
+        <p class="cli-equivalent">CLI equivalent: <code>${escapeHtml(page.command)}</code></p>
+    `;
+    byId('side-panel-title').textContent = 'First Run';
+    byId('side-panel-body').innerHTML = `
+        <p>${escapeHtml(starter.firstRun)}</p>
+        <div class="hint-list">
+            <span>1. Check the defaults.</span>
+            <span>2. Open Advanced only when tuning.</span>
+            <span>3. Copy the command preview into a terminal.</span>
         </div>
+    `;
+
+    const fields = page.fields || [];
+    const advancedFields = [...(page.advanced || []), ...globalAdvancedControls];
+    byId('skeleton-fields').innerHTML = fields.length
+        ? fields.map((field) => renderControl(field, page)).join('')
+        : '<p class="empty-controls">This command has no command-specific controls.</p>';
+    byId('skeleton-advanced-fields').innerHTML = advancedFields.map((field) => renderControl(field, page)).join('');
+    byId('skeleton-advanced').classList.toggle('hidden', advancedFields.length === 0);
+    byId('skeleton-notes').value = `${commandExample(page)}\n\n${page.summary}`;
+}
+
+function renderControl(field, page) {
+    const control = normalizeControl(field, page);
+    const helpText = control.description || controlDescriptions[control.name] || 'CLI control for this command.';
+    const description = `<small>${escapeHtml(helpText)}</small>`;
+    const type = control.type || 'text';
+
+    if (type === 'flag') {
+        return `
+            <label class="checkbox-row control-checkbox">
+                <input type="checkbox" data-control="${escapeHtml(control.name)}">
+                <span>${escapeHtml(control.name)}</span>
+                ${description}
+            </label>
+        `;
+    }
+
+    if (control.options) {
+        const options = control.options.map((option) => {
+            const value = typeof option === 'object' ? option.value : option;
+            const label = typeof option === 'object' ? option.label : optionLabel(option);
+            const selected = value === control.default ? ' selected' : '';
+            return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+        }).join('');
+        return `
+            <div class="form-group">
+                <label>${escapeHtml(control.name)}</label>
+                <select data-control="${escapeHtml(control.name)}">${options}</select>
+                ${description}
+            </div>
+        `;
+    }
+
+    const value = control.default !== undefined && control.default !== null
+        ? ` value="${escapeHtml(control.default)}"`
+        : '';
+    const placeholder = control.placeholder || control.default || control.name;
+
+    return `
+        <div class="form-group">
+            <label>${escapeHtml(control.name)}</label>
+            <input type="${type}" data-control="${escapeHtml(control.name)}" placeholder="${escapeHtml(placeholder)}"${value}>
+            ${description}
+        </div>
+    `;
+}
+
+function initJobs() {
+    byId('run-command')?.addEventListener('click', startCurrentPageJob);
+    byId('refresh-jobs')?.addEventListener('click', loadJobs);
+    byId('cancel-job')?.addEventListener('click', cancelActiveJob);
+    loadJobs();
+}
+
+async function startCurrentPageJob() {
+    if (!activePage) return;
+    const { command, args } = buildJobRequest(activePage);
+    const response = await fetch('/api/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            label: activePage.title,
+            command,
+            args,
+        }),
+    });
+    if (!response.ok) {
+        alert(await response.text());
+        return;
+    }
+    const data = await response.json();
+    await loadJobs();
+    selectJob(data.job_id);
+}
+
+function buildJobRequest(page) {
+    const args = ['run', '--bin', 'tongues', '--'];
+    const commandParts = page.command.split(/\s+/).slice(1);
+    const globalFlags = [];
+    const optionArgs = [];
+    const positional = [];
+
+    document.querySelectorAll('#skeleton-page [data-control]').forEach((node) => {
+        const name = node.dataset.control;
+        if (!name) return;
+        if (node.type === 'checkbox') {
+            if (!node.checked) return;
+            if (globalAdvancedControls.includes(name)) {
+                globalFlags.push(name);
+            } else {
+                optionArgs.push(name);
+            }
+            return;
+        }
+        const value = node.value.trim();
+        if (!value) return;
+        if (name.startsWith('--')) {
+            optionArgs.push(name, value);
+        } else {
+            positional.push(value);
+        }
+    });
+
+    args.push(...globalFlags, ...commandParts, ...optionArgs, ...positional);
+    return { command: 'cargo', args };
+}
+
+async function loadJobs() {
+    const response = await fetch('/api/jobs');
+    if (!response.ok) return;
+    const jobs = await response.json();
+    renderJobList(jobs);
+    if (!activeJobId && jobs.length > 0) {
+        selectJob(jobs[0].id);
+    }
+}
+
+function renderJobList(jobs) {
+    const list = byId('job-list');
+    if (!jobs.length) {
+        list.innerHTML = '<div class="empty-controls">No background jobs yet.</div>';
+        return;
+    }
+    list.innerHTML = jobs.map((job) => `
+        <button type="button" class="job-item ${job.id === activeJobId ? 'active' : ''}" data-job-id="${job.id}">
+            <span>${escapeHtml(job.label)}</span>
+            <small>${escapeHtml(job.status)} · ${escapeHtml(job.progress.phase)}</small>
+        </button>
     `).join('');
-    byId('skeleton-notes').value = `${page.command}\n\n${page.summary}`;
+    list.querySelectorAll('[data-job-id]').forEach((button) => {
+        button.addEventListener('click', () => selectJob(button.dataset.jobId));
+    });
+}
+
+async function selectJob(jobId) {
+    activeJobId = jobId;
+    if (activeJobSource) {
+        activeJobSource.close();
+        activeJobSource = null;
+    }
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+    if (response.ok) {
+        const detail = await response.json();
+        renderJobDetail(detail.summary, detail.output || []);
+    }
+    activeJobSource = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+    activeJobSource.onmessage = (message) => {
+        const event = JSON.parse(message.data);
+        applyJobEvent(event);
+    };
+    activeJobSource.onerror = () => {
+        // EventSource reconnects automatically while the server is available.
+    };
+    loadJobs();
+}
+
+function applyJobEvent(event) {
+    if (event.type === 'snapshot') {
+        renderJobDetail(event.summary, event.output || []);
+    } else if (event.type === 'output') {
+        jobOutputLines.push(event);
+        renderJobOutput();
+    } else if (event.type === 'progress') {
+        renderProgress(event.progress);
+    } else if (event.type === 'status') {
+        renderJobSummary(event.summary);
+        loadJobs();
+    }
+}
+
+function renderJobDetail(summary, output) {
+    jobOutputLines = output;
+    renderJobSummary(summary);
+    renderJobOutput();
+}
+
+function renderJobSummary(summary) {
+    byId('job-title').textContent = summary.label;
+    byId('job-command').textContent = `${summary.command} ${summary.args.join(' ')}`;
+    renderProgress(summary.progress, summary.status);
+    byId('cancel-job').classList.toggle('hidden', summary.status !== 'running');
+}
+
+function renderProgress(progress, status = 'running') {
+    const complete = ['succeeded', 'failed', 'canceled'].includes(status);
+    const percent = progress.total ? Math.min(100, Math.round((progress.current || 0) / progress.total * 100)) : (complete ? 100 : 35);
+    byId('job-progress-bar').style.width = `${percent}%`;
+    byId('job-progress-bar').classList.toggle('indeterminate', !progress.total && !complete);
+    byId('job-progress-label').textContent = progress.total
+        ? `${progress.phase}: ${progress.current || 0} / ${progress.total}`
+        : progress.phase;
+}
+
+function renderJobOutput() {
+    const output = byId('job-output');
+    output.textContent = jobOutputLines
+        .slice(-500)
+        .map((line) => `[${line.stream}] ${line.line}`)
+        .join('\n');
+    output.scrollTop = output.scrollHeight;
+}
+
+async function cancelActiveJob() {
+    if (!activeJobId) return;
+    const response = await fetch(`/api/jobs/${encodeURIComponent(activeJobId)}/cancel`, { method: 'POST' });
+    if (!response.ok) {
+        alert(await response.text());
+    }
+}
+
+function normalizeControl(field, page) {
+    const control = typeof field === 'string' ? { name: field } : { ...field };
+    if (!control.type && numericControls.has(control.name)) {
+        control.type = 'number';
+    }
+    if (!control.type && flagControls.has(control.name)) {
+        control.type = 'flag';
+    }
+    control.options = control.options || optionsForControl(control.name, page);
+    const fallbackDefault = defaultForControl(control.name, page);
+    if (control.default === undefined && fallbackDefault !== undefined) {
+        control.default = fallbackDefault;
+    }
+    return control;
+}
+
+function optionsForControl(name, page) {
+    if (name === '--task') return taskOptionsFor(page);
+    if (name === 'model' && page.command === 'tongues models use') return ['gemma4', 'styletts2', 'piper-en-us'];
+    if (name === 'model' && page.command === 'tongues models fetch') {
+        return [
+            { value: '', label: 'Default runtime models' },
+            { value: 'gemma4', label: 'Gemma 4' },
+            { value: 'styletts2', label: 'StyleTTS2' },
+            { value: 'piper-en-us', label: 'Piper en-US' },
+        ];
+    }
+    return controlOptions[name];
+}
+
+function taskOptionsFor(page) {
+    if (page.command.includes('g2p2g') || page.group === 'Legacy') return ['auto', 'g2p', 'p2g', 'both'];
+    if (page.command.includes('wiktionary train')) {
+        return ['all', 'orthography-to-phonemes', 'orthography-to-phones', 'phonetic-realization', 'find-etymology', 'normalize-phonology', 'lang'];
+    }
+    if (page.command.includes('wiktionary infer')) {
+        return ['orthography-to-phones', 'orthography-to-phonemes', 'phones-to-orthography', 'phonemes-to-orthography', 'phonetic-realization', 'find-etymology', 'normalize'];
+    }
+    return ['auto'];
+}
+
+function defaultForControl(name, page) {
+    const module = moduleDefaultsFor(page);
+    if (name === '--config') return module?.config;
+    if (name === '--data') return module?.data;
+    if (name === '--model') return module?.model;
+    if (name === '--cache-dir') return module?.cache;
+    if (name === '--out') return outDefaultFor(page, module);
+    if (name === '--g2p2g-model') return pathDefaults.g2p2g.model;
+    if (name === '--wiktionary-model') return pathDefaults.wiktionary.model;
+    if (name === '--wiktionary-audio-data') return pathDefaults.wiktionary.data;
+    if (name === '--head2phones-model') return pathDefaults.head2phones.model;
+    if (name === '--input' && page.command.includes('sentence-parser')) return 'data/texts';
+    if (name === '--input' && page.command.includes('head2phones')) return 'data/texts';
+    if (name === '--dump') return 'data/wiktionary/enwiktionary-latest-pages-articles.xml';
+    if (name === '--lang') return 'eng';
+    if (name === '--word') return 'example';
+    if (name === '--words-file') return 'data/words.txt';
+    if (name === '--wav') return 'samples/input.wav';
+    if (name === 'wav') return 'samples/input.wav';
+    if (name === 'cursor') return 'The first sentence starts here';
+    if (name === 'buffer') return 'hello world';
+    if (name === 'input') return inputDefaultFor(page);
+    if (name === 'bundle') return 'gemma4';
+    if (name === 'model' && page.command === 'tongues models fetch') return '';
+    if (name === 'model category') return 'LLM';
+    return commonDefaults[name];
+}
+
+function moduleDefaultsFor(page) {
+    if (page.command.includes('g2p2g') || page.group === 'Legacy') return pathDefaults.g2p2g;
+    if (page.command.includes('sentence-parser')) return pathDefaults.sentenceParser;
+    if (page.command.includes('head2phones')) return pathDefaults.head2phones;
+    if (page.command.includes('interpretation')) return pathDefaults.interpretation;
+    if (page.command.includes('emotions')) return pathDefaults.emotions;
+    if (page.command.includes('wiktionary')) return pathDefaults.wiktionary;
+    return undefined;
+}
+
+function outDefaultFor(page, module) {
+    if (page.command.includes(' prepare')) return module?.outData || commonDefaults['--out'];
+    if (page.command.includes(' train')) return module?.outModel || commonDefaults['--out'];
+    if (page.command.includes('refine')) return 'models/g2p2g/openepd-v0-refined';
+    if (page.command.includes('fetch-cmudict')) return 'data/cmudict.dict';
+    if (page.command.includes('discrepancies')) return 'docs/pronunciation-discrepancies.md';
+    if (page.command.includes('encode-style')) return 'style_vectors.jsonl';
+    if (page.command.includes('emotion-signatures')) return 'emotion_signatures.json';
+    return commonDefaults['--out'];
+}
+
+function inputDefaultFor(page) {
+    if (page.command.includes('phonemes') || page.command.includes('phones')) return 'hello world';
+    if (page.command.includes('wiktionary')) return 'example';
+    if (page.command.includes('g2p2g') || page.group === 'Legacy') return 'example';
+    return 'hello world';
+}
+
+function commandExample(page) {
+    const controls = [...(page.fields || []), ...(page.advanced || [])]
+        .map((field) => normalizeControl(field, page))
+        .filter((control) => control.default !== undefined && control.default !== '' && control.type !== 'flag')
+        .slice(0, 5);
+    const args = controls.map((control) => {
+        if (control.name.startsWith('--')) return `${control.name} ${quoteArg(control.default)}`;
+        return quoteArg(control.default);
+    });
+    return [page.command, ...args].join(' ');
+}
+
+function quoteArg(value) {
+    const text = String(value);
+    return /\s/.test(text) ? `"${text.replaceAll('"', '\\"')}"` : text;
+}
+
+function optionLabel(option) {
+    return String(option)
+        .split('-')
+        .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1) : part)
+        .join(' ');
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
 }
 
 function normalizePath(path) {
@@ -508,6 +1280,8 @@ async function initStyleTts2() {
     const voicePreview = byId('voice-preview');
     const stylePreview = byId('style-preview');
     const blendMode = byId('blend_mode');
+    const quietInput = byId('quiet');
+    const verboseInput = byId('verbose');
     const form = byId('synth-form');
     const btn = byId('submit-btn');
     const resultContainer = byId('result-container');
@@ -607,6 +1381,12 @@ async function initStyleTts2() {
     voiceSelect.addEventListener('change', () => updatePreview(voiceSelect, voicePreview));
     styleSelect.addEventListener('change', () => updatePreview(styleSelect, stylePreview));
     blendMode.addEventListener('change', syncBlendMode);
+    quietInput.addEventListener('change', () => {
+        if (quietInput.checked) verboseInput.checked = false;
+    });
+    verboseInput.addEventListener('change', () => {
+        if (verboseInput.checked) quietInput.checked = false;
+    });
     syncBlendMode();
 
     const loadEmotions = async () => {
@@ -689,6 +1469,11 @@ async function initStyleTts2() {
         try {
             const payload = {
                 text,
+                cpu: byId('cpu').checked,
+                quiet: quietInput.checked,
+                verbose: verboseInput.checked,
+                variety: byId('variety').value || 'en-US',
+                backend: byId('backend').value || 'styletts2',
                 voice_sample: voiceSelect.value || null,
                 style_sample: styleSelect.value || null,
                 emotion: emotion || null,
@@ -702,6 +1487,9 @@ async function initStyleTts2() {
                 sample_rate_hz: Number(byId('sample_rate_hz').value),
                 max_tts_symbols: Number(byId('max_tts_symbols').value),
                 no_tts_chunking: byId('no_tts_chunking').checked,
+                debug_pronunciation: byId('debug_pronunciation').checked,
+                timings: byId('timings').checked,
+                fail_on_guessed_pronunciation: byId('fail_on_guessed_pronunciation').checked,
             };
 
             if (blendMode.value === 'raw') {

@@ -2,26 +2,37 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{
+        Html, IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, Write};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
 use std::path::{Component, Path as FsPath, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
+const JOB_OUTPUT_LIMIT: usize = 1_000;
 
 #[derive(Clone)]
 struct AppState {
     workspace_root: PathBuf,
     static_dir: PathBuf,
+    jobs: JobRegistry,
 }
+
+type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
 
 #[tokio::main]
 async fn main() {
@@ -30,10 +41,15 @@ async fn main() {
     let state = AppState {
         workspace_root,
         static_dir: static_dir.clone(),
+        jobs: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
         .route("/api/emotions", get(get_emotions))
+        .route("/api/jobs", get(list_jobs).post(start_job))
+        .route("/api/jobs/{job_id}", get(get_job))
+        .route("/api/jobs/{job_id}/cancel", post(cancel_job))
+        .route("/api/jobs/{job_id}/events", get(job_events))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
         .route(
             "/api/styletts2-reference-audio/{*sample_id}",
@@ -47,6 +63,7 @@ async fn main() {
         .route("/sentence-parser/{*path}", get(serve_app_index))
         .route("/head2phones/{*path}", get(serve_app_index))
         .route("/interpretation/{*path}", get(serve_app_index))
+        .route("/emotions/{*path}", get(serve_app_index))
         .route("/wiktionary/{*path}", get(serve_app_index))
         .route("/models/{*path}", get(serve_app_index))
         .route("/cli/{*path}", get(serve_app_index))
@@ -141,6 +158,101 @@ impl Default for RecommendedStrength {
     }
 }
 
+#[derive(Clone)]
+struct JobRecord {
+    summary: JobSummary,
+    output: VecDeque<JobOutputLine>,
+    events: broadcast::Sender<JobEvent>,
+    child: Option<Arc<Mutex<Child>>>,
+    cancel_requested: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct JobSummary {
+    id: String,
+    label: String,
+    command: String,
+    args: Vec<String>,
+    status: JobStatus,
+    created_at_ms: u128,
+    updated_at_ms: u128,
+    exit_code: Option<i32>,
+    progress: JobProgress,
+}
+
+#[derive(Serialize, Clone)]
+struct JobProgress {
+    phase: String,
+    current: Option<u64>,
+    total: Option<u64>,
+}
+
+impl Default for JobProgress {
+    fn default() -> Self {
+        Self {
+            phase: "Queued".into(),
+            current: None,
+            total: None,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+enum JobStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+#[derive(Serialize, Clone)]
+struct JobOutputLine {
+    stream: String,
+    line: String,
+    at_ms: u128,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum JobEvent {
+    Snapshot {
+        summary: JobSummary,
+        output: Vec<JobOutputLine>,
+    },
+    Output {
+        stream: String,
+        line: String,
+        at_ms: u128,
+    },
+    Progress {
+        progress: JobProgress,
+        at_ms: u128,
+    },
+    Status {
+        summary: JobSummary,
+    },
+}
+
+#[derive(Serialize)]
+struct JobDetail {
+    summary: JobSummary,
+    output: Vec<JobOutputLine>,
+}
+
+#[derive(Deserialize)]
+struct StartJobRequest {
+    label: Option<String>,
+    command: String,
+    args: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct StartJobResponse {
+    job_id: String,
+    summary: JobSummary,
+}
+
 async fn get_emotions(State(state): State<AppState>) -> impl IntoResponse {
     match load_or_create_emotion_signatures(&state) {
         Ok(response) => Json(response).into_response(),
@@ -159,9 +271,366 @@ async fn get_emotions(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
+    let mut jobs = state
+        .jobs
+        .lock()
+        .expect("job registry lock")
+        .values()
+        .map(|job| job.summary.clone())
+        .collect::<Vec<_>>();
+    jobs.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+    Json(jobs)
+}
+
+async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> impl IntoResponse {
+    match job_detail(&state.jobs, &job_id) {
+        Some(detail) => Json(detail).into_response(),
+        None => (StatusCode::NOT_FOUND, "unknown job").into_response(),
+    }
+}
+
+async fn start_job(
+    State(state): State<AppState>,
+    Json(payload): Json<StartJobRequest>,
+) -> impl IntoResponse {
+    if let Err(error) = validate_job_request(&payload) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = now_ms();
+    let label = payload
+        .label
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or_else(|| format!("{} {}", payload.command, payload.args.join(" ")));
+    let (tx, _) = broadcast::channel(256);
+    let summary = JobSummary {
+        id: id.clone(),
+        label,
+        command: payload.command.clone(),
+        args: payload.args.clone(),
+        status: JobStatus::Running,
+        created_at_ms: now,
+        updated_at_ms: now,
+        exit_code: None,
+        progress: JobProgress {
+            phase: "Starting".into(),
+            current: None,
+            total: None,
+        },
+    };
+    {
+        let mut jobs = state.jobs.lock().expect("job registry lock");
+        jobs.insert(
+            id.clone(),
+            JobRecord {
+                summary: summary.clone(),
+                output: VecDeque::new(),
+                events: tx.clone(),
+                child: None,
+                cancel_requested: false,
+            },
+        );
+    }
+
+    let workspace_root = state.workspace_root.clone();
+    let jobs = state.jobs.clone();
+    let job_id = id.clone();
+    std::thread::spawn(move || run_job_process(jobs, job_id, workspace_root));
+
+    Json(StartJobResponse {
+        job_id: id,
+        summary,
+    })
+    .into_response()
+}
+
+async fn cancel_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    let child = {
+        let mut jobs = state.jobs.lock().expect("job registry lock");
+        let Some(job) = jobs.get_mut(&job_id) else {
+            return (StatusCode::NOT_FOUND, "unknown job").into_response();
+        };
+        if !matches!(job.summary.status, JobStatus::Running) {
+            return (StatusCode::CONFLICT, "job is already finished").into_response();
+        }
+        job.cancel_requested = true;
+        job.child.clone()
+    };
+    let Some(child) = child else {
+        return (StatusCode::NOT_FOUND, "unknown or finished job").into_response();
+    };
+    match child.lock().expect("child lock").kill() {
+        Ok(()) => {
+            append_job_output(&state.jobs, &job_id, "status", "Cancel requested");
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to cancel job: {error}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn job_events(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    let (summary, output, receiver) = {
+        let jobs = state.jobs.lock().expect("job registry lock");
+        let Some(job) = jobs.get(&job_id) else {
+            return (StatusCode::NOT_FOUND, "unknown job").into_response();
+        };
+        (
+            job.summary.clone(),
+            job.output.iter().cloned().collect::<Vec<_>>(),
+            job.events.subscribe(),
+        )
+    };
+
+    let stream = BroadcastStream::new(receiver).filter_map(|event| match event {
+        Ok(event) => Some(Ok::<_, std::convert::Infallible>(sse_event(&event))),
+        Err(_) => None,
+    });
+    let snapshot = JobEvent::Snapshot { summary, output };
+    let stream =
+        tokio_stream::once(Ok::<_, std::convert::Infallible>(sse_event(&snapshot))).chain(stream);
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+fn validate_job_request(payload: &StartJobRequest) -> Result<(), String> {
+    if payload.command != "cargo" {
+        return Err("only cargo jobs are supported".into());
+    }
+    if payload.args.len() < 4 || payload.args[0] != "run" || payload.args[1] != "--bin" {
+        return Err("job args must run a known cargo binary".into());
+    }
+    if payload.args.iter().any(|arg| arg.contains('\0')) {
+        return Err("job args contain invalid data".into());
+    }
+    Ok(())
+}
+
+fn job_detail(jobs: &JobRegistry, job_id: &str) -> Option<JobDetail> {
+    let jobs = jobs.lock().expect("job registry lock");
+    jobs.get(job_id).map(|job| JobDetail {
+        summary: job.summary.clone(),
+        output: job.output.iter().cloned().collect(),
+    })
+}
+
+fn run_job_process(jobs: JobRegistry, job_id: String, workspace_root: PathBuf) {
+    let (command, args) = {
+        let jobs_guard = jobs.lock().expect("job registry lock");
+        let Some(job) = jobs_guard.get(&job_id) else {
+            return;
+        };
+        (job.summary.command.clone(), job.summary.args.clone())
+    };
+
+    update_job_progress(
+        &jobs,
+        &job_id,
+        JobProgress {
+            phase: "Launching process".into(),
+            current: None,
+            total: None,
+        },
+    );
+
+    let mut child = match Command::new(&command)
+        .args(&args)
+        .current_dir(&workspace_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            append_job_output(
+                &jobs,
+                &job_id,
+                "stderr",
+                &format!("Failed to start: {error}"),
+            );
+            finish_job(&jobs, &job_id, JobStatus::Failed, None);
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+    {
+        let mut jobs_guard = jobs.lock().expect("job registry lock");
+        if let Some(job) = jobs_guard.get_mut(&job_id) {
+            job.child = Some(child.clone());
+        }
+    }
+
+    if let Some(stdout) = stdout {
+        spawn_output_reader(jobs.clone(), job_id.clone(), "stdout", stdout);
+    }
+    if let Some(stderr) = stderr {
+        spawn_output_reader(jobs.clone(), job_id.clone(), "stderr", stderr);
+    }
+
+    let status = loop {
+        match child.lock().expect("child lock").try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(250)),
+            Err(error) => {
+                append_job_output(
+                    &jobs,
+                    &job_id,
+                    "stderr",
+                    &format!("Failed to wait: {error}"),
+                );
+                finish_job(&jobs, &job_id, JobStatus::Failed, None);
+                return;
+            }
+        }
+    };
+
+    let exit_code = status.code();
+    let canceled = jobs
+        .lock()
+        .expect("job registry lock")
+        .get(&job_id)
+        .map(|job| job.cancel_requested)
+        .unwrap_or(false);
+    let status = if canceled {
+        JobStatus::Canceled
+    } else if status.success() {
+        JobStatus::Succeeded
+    } else {
+        JobStatus::Failed
+    };
+    finish_job(&jobs, &job_id, status, exit_code);
+}
+
+fn spawn_output_reader<R>(jobs: JobRegistry, job_id: String, stream: &'static str, reader: R)
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            append_job_output(&jobs, &job_id, stream, &line);
+            if let Some(progress) = infer_progress(&line) {
+                update_job_progress(&jobs, &job_id, progress);
+            }
+        }
+    });
+}
+
+fn append_job_output(jobs: &JobRegistry, job_id: &str, stream: &str, line: &str) {
+    let at_ms = now_ms();
+    let event = JobEvent::Output {
+        stream: stream.into(),
+        line: line.into(),
+        at_ms,
+    };
+    let mut jobs = jobs.lock().expect("job registry lock");
+    if let Some(job) = jobs.get_mut(job_id) {
+        job.summary.updated_at_ms = at_ms;
+        job.output.push_back(JobOutputLine {
+            stream: stream.into(),
+            line: line.into(),
+            at_ms,
+        });
+        while job.output.len() > JOB_OUTPUT_LIMIT {
+            job.output.pop_front();
+        }
+        let _ = job.events.send(event);
+    }
+}
+
+fn update_job_progress(jobs: &JobRegistry, job_id: &str, progress: JobProgress) {
+    let at_ms = now_ms();
+    let mut jobs = jobs.lock().expect("job registry lock");
+    if let Some(job) = jobs.get_mut(job_id) {
+        job.summary.updated_at_ms = at_ms;
+        job.summary.progress = progress.clone();
+        let _ = job.events.send(JobEvent::Progress { progress, at_ms });
+    }
+}
+
+fn finish_job(jobs: &JobRegistry, job_id: &str, status: JobStatus, exit_code: Option<i32>) {
+    let mut jobs = jobs.lock().expect("job registry lock");
+    if let Some(job) = jobs.get_mut(job_id) {
+        job.summary.updated_at_ms = now_ms();
+        job.summary.status = status;
+        job.summary.exit_code = exit_code;
+        job.summary.progress.phase = match job.summary.status {
+            JobStatus::Running => job.summary.progress.phase.clone(),
+            JobStatus::Succeeded => "Complete".into(),
+            JobStatus::Failed => "Failed".into(),
+            JobStatus::Canceled => "Canceled".into(),
+        };
+        job.summary.progress.current = Some(1);
+        job.summary.progress.total = Some(1);
+        job.child = None;
+        let _ = job.events.send(JobEvent::Status {
+            summary: job.summary.clone(),
+        });
+    }
+}
+
+fn infer_progress(line: &str) -> Option<JobProgress> {
+    let lower = line.to_ascii_lowercase();
+    let phase = if lower.contains("compiling") {
+        "Compiling"
+    } else if lower.contains("checking") {
+        "Checking"
+    } else if lower.contains("downloading") {
+        "Downloading"
+    } else if lower.contains("training") || lower.contains("epoch") {
+        "Training"
+    } else if lower.contains("prepar") {
+        "Preparing"
+    } else if lower.contains("finished") {
+        "Finishing"
+    } else {
+        return None;
+    };
+    Some(JobProgress {
+        phase: phase.into(),
+        current: None,
+        total: None,
+    })
+}
+
+fn sse_event(event: &JobEvent) -> Event {
+    Event::default().json_data(event).unwrap_or_else(|_| {
+        Event::default().data(
+            "{\"type\":\"output\",\"stream\":\"stderr\",\"line\":\"failed to serialize event\"}",
+        )
+    })
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
 #[derive(Deserialize)]
 struct SpeakRequest {
     text: String,
+    cpu: Option<bool>,
+    quiet: Option<bool>,
+    verbose: Option<bool>,
+    variety: Option<String>,
+    backend: Option<String>,
     emotion: Option<String>,
     emotion_vector: Option<Vec<f32>>,
     emotion_strength: Option<f32>,
@@ -179,6 +648,9 @@ struct SpeakRequest {
     sample_rate_hz: Option<u32>,
     max_tts_symbols: Option<usize>,
     no_tts_chunking: Option<bool>,
+    debug_pronunciation: Option<bool>,
+    timings: Option<bool>,
+    fail_on_guessed_pronunciation: Option<bool>,
 }
 
 async fn speak(
@@ -204,10 +676,35 @@ async fn speak(
         "--bin".to_string(),
         "tongues".to_string(),
         "--".to_string(),
+    ];
+
+    if payload.cpu.unwrap_or(false) {
+        args.push("--cpu".to_string());
+    }
+
+    if payload.quiet.unwrap_or(false) {
+        args.push("--quiet".to_string());
+    }
+
+    if payload.verbose.unwrap_or(false) {
+        args.push("--verbose".to_string());
+    }
+
+    args.extend([
         "speak".to_string(),
         "--output".to_string(),
         out_wav.to_string_lossy().to_string(),
-    ];
+    ]);
+
+    if let Some(variety) = payload.variety.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--variety".to_string());
+        args.push(variety.to_string());
+    }
+
+    if let Some(backend) = payload.backend.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--backend".to_string());
+        args.push(backend.to_string());
+    }
 
     if let Some(sample_rate_hz) = payload.sample_rate_hz {
         args.push("--sample-rate-hz".to_string());
@@ -294,6 +791,18 @@ async fn speak(
 
     if payload.no_tts_chunking.unwrap_or(false) {
         args.push("--no-tts-chunking".to_string());
+    }
+
+    if payload.debug_pronunciation.unwrap_or(false) {
+        args.push("--debug-pronunciation".to_string());
+    }
+
+    if payload.timings.unwrap_or(false) {
+        args.push("--timings".to_string());
+    }
+
+    if payload.fail_on_guessed_pronunciation.unwrap_or(false) {
+        args.push("--fail-on-guessed-pronunciation".to_string());
     }
 
     let emotion = payload.emotion.as_deref().unwrap_or_default();
@@ -421,6 +930,15 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     if let Some(quality) = payload.quality.as_deref() {
         if !quality.is_empty() && quality != "balanced" && quality != "fast" {
             return Err("quality must be `balanced` or `fast`".into());
+        }
+    }
+    if payload.quiet.unwrap_or(false) && payload.verbose.unwrap_or(false) {
+        return Err("quiet and verbose cannot both be enabled".into());
+    }
+    if let Some(backend) = payload.backend.as_deref() {
+        if !backend.is_empty() && backend != "mock" && backend != "styletts2" && backend != "piper"
+        {
+            return Err("backend must be `mock`, `styletts2`, or `piper`".into());
         }
     }
     if let Some(diffusion_steps) = payload.diffusion_steps {

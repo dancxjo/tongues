@@ -40,35 +40,74 @@
                 <section id="skeleton-page" class="page-view hidden">
                     <div class="skeleton-layout">
                         <form class="glass-panel command-form">
+                            <div id="skeleton-doc" class="page-doc"></div>
                             <div class="form-group">
                                 <label for="command-preview">CLI Command</label>
                                 <input id="command-preview" type="text" readonly>
                             </div>
                             <div id="skeleton-fields" class="controls-grid"></div>
+                            <details id="skeleton-advanced" class="advanced-section">
+                                <summary>Advanced Controls</summary>
+                                <div id="skeleton-advanced-fields" class="controls-grid"></div>
+                            </details>
                             <div class="form-group">
                                 <label for="skeleton-notes">Notes</label>
                                 <textarea id="skeleton-notes" placeholder="Run output and command status will appear here once this page is wired." readonly></textarea>
                             </div>
                             <div class="action-bar">
-                                <button type="button" disabled>Run Command</button>
+                                <button id="run-command" type="button">Start Job</button>
                             </div>
                         </form>
                         <aside class="side-panel">
-                            <div class="section-title">Implementation Status</div>
-                            <p>
-                                This page reserves the route, primary inputs, and command preview for
-                                the matching CLI command. Execution wiring can be added behind this form.
-                            </p>
+                            <div id="side-panel-title" class="section-title">First Run</div>
+                            <div id="side-panel-body">
+                                <p>Use the defaults first, then tune the advanced controls once the basic command is working.</p>
+                            </div>
                         </aside>
+                    </div>
+                </section>
+
+                <section id="jobs-page" class="page-view jobs-panel">
+                    <div class="jobs-header">
+                        <div>
+                            <p class="page-kicker">Background jobs</p>
+                            <h2>Progress and output</h2>
+                        </div>
+                        <button id="refresh-jobs" type="button" class="secondary-button">Refresh Jobs</button>
+                    </div>
+                    <div class="jobs-layout">
+                        <div id="job-list" class="job-list"></div>
+                        <div class="job-detail">
+                            <div class="job-detail-header">
+                                <div>
+                                    <strong id="job-title">No job selected</strong>
+                                    <small id="job-command">Start a command or select a previous job.</small>
+                                </div>
+                                <button id="cancel-job" type="button" class="danger-button hidden">Cancel Job</button>
+                            </div>
+                            <div class="progress-shell">
+                                <div id="job-progress-bar" class="progress-bar"></div>
+                            </div>
+                            <div id="job-progress-label" class="progress-label">Waiting for a job.</div>
+                            <pre id="job-output" class="job-output"></pre>
+                        </div>
                     </div>
                 </section>
 
                 <section id="styletts2-page" class="page-view hidden">
                     <main class="glass-panel">
                         <form id="synth-form">
+                            <div class="page-doc">
+                                <p>
+                                    Start here if this is your first time running Tongues. This page sends text through the
+                                    same `tongues speak` pipeline as the CLI and returns a WAV you can play immediately.
+                                </p>
+                                <p>Use the defaults for a smoke test, then try voice, style, and emotion references.</p>
+                            </div>
                             <div class="form-group">
                                 <label for="text">Prompt</label>
                                 <textarea id="text" placeholder="Type something for PETE to say..." required>Wow, the magic wand actually worked!</textarea>
+                                <small>Text passed to `tongues speak` for synthesis.</small>
                             </div>
 
                             <div class="controls-grid">
@@ -77,6 +116,7 @@
                                     <select id="voice_sample">
                                         <option value="">Default voice</option>
                                     </select>
+                                    <small>Reference WAV for speaker timbre, equivalent to `--voice-wav`.</small>
                                     <audio id="voice-preview" class="preview-audio" controls></audio>
                                 </div>
 
@@ -85,6 +125,7 @@
                                     <select id="style_sample">
                                         <option value="">Default style</option>
                                     </select>
+                                    <small>Reference WAV for style and prosody, equivalent to `--style-wav`.</small>
                                     <audio id="style-preview" class="preview-audio" controls></audio>
                                 </div>
 
@@ -93,22 +134,43 @@
                                     <select id="emotion">
                                         <option value="">None (Neutral)</option>
                                     </select>
+                                    <small>Emotion delta signature applied through `--emotion` and generated signature data.</small>
                                     <div id="emotion-detail" class="emotion-detail">No emotion signature selected</div>
                                 </div>
 
                                 <div class="form-group">
                                     <label for="emotion_strength">Emotion Strength (<span id="strength-val">0.75</span>)</label>
                                     <input type="range" id="emotion_strength" min="0.0" max="2.0" step="0.05" value="0.75">
+                                    <small>Multiplier for the selected emotion delta vector.</small>
                                     <div id="strength-presets" class="strength-presets">
                                         <button type="button" data-preset="subtle">Subtle</button>
                                         <button type="button" data-preset="normal">Normal</button>
                                         <button type="button" data-preset="strong">Strong</button>
                                     </div>
                                 </div>
+
+                                <div class="form-group">
+                                    <label for="variety">Variety</label>
+                                    <select id="variety">
+                                        <option value="en-US">English, US</option>
+                                        <option value="en-GB">English, UK</option>
+                                    </select>
+                                    <small>Language or pronunciation variety tag passed as `--variety`.</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="backend">Backend</label>
+                                    <select id="backend">
+                                        <option value="styletts2">StyleTTS2</option>
+                                        <option value="mock">Mock</option>
+                                        <option value="piper">Piper</option>
+                                    </select>
+                                    <small>Speech backend passed as `--backend`.</small>
+                                </div>
                             </div>
 
-                            <section class="settings-section">
-                                <div class="section-title">StyleTTS2 Settings</div>
+                            <details class="settings-section advanced-section">
+                                <summary>Advanced StyleTTS2 Controls</summary>
 
                                 <div class="controls-grid">
                                     <div class="form-group">
@@ -117,11 +179,13 @@
                                             <option value="balanced">Balanced</option>
                                             <option value="fast">Fast</option>
                                         </select>
+                                        <small>Preset that chooses default StyleTTS2 speed and quality behavior.</small>
                                     </div>
 
                                     <div class="form-group">
                                         <label for="diffusion_steps">Diffusion Steps (<span id="diffusion-steps-val">5</span>)</label>
                                         <input type="range" id="diffusion_steps" min="1" max="32" step="1" value="5">
+                                        <small>Overrides preset diffusion steps; higher values usually run slower.</small>
                                     </div>
 
                                     <div class="form-group">
@@ -130,41 +194,49 @@
                                             <option value="strength">Reference strength</option>
                                             <option value="raw">Raw alpha/beta</option>
                                         </select>
+                                        <small>Choose friendly reference-strength controls or raw StyleTTS2 blend values.</small>
                                     </div>
 
                                     <div class="form-group">
                                         <label for="speed">Speed (<span id="speed-val">1.00</span>)</label>
                                         <input type="range" id="speed" min="0.50" max="1.50" step="0.01" value="1.00">
+                                        <small>StyleTTS2 decoder speed multiplier.</small>
                                     </div>
 
                                     <div class="form-group blend-strength">
                                         <label for="speaker_reference_strength">Speaker Reference (<span id="speaker-strength-val">0.70</span>)</label>
                                         <input type="range" id="speaker_reference_strength" min="0.0" max="1.0" step="0.01" value="0.70">
+                                        <small>Higher values keep more speaker timbre from the voice sample.</small>
                                     </div>
 
                                     <div class="form-group blend-strength">
                                         <label for="style_reference_strength">Style Reference (<span id="style-strength-val">0.90</span>)</label>
                                         <input type="range" id="style_reference_strength" min="0.0" max="1.0" step="0.01" value="0.90">
+                                        <small>Higher values keep more style and prosody from the style sample.</small>
                                     </div>
 
                                     <div class="form-group blend-raw hidden">
                                         <label for="style_alpha">Alpha (<span id="alpha-val">0.30</span>)</label>
                                         <input type="range" id="style_alpha" min="0.0" max="1.0" step="0.01" value="0.30">
+                                        <small>Raw speaker/timbre blend; higher uses more predicted timbre and less reference.</small>
                                     </div>
 
                                     <div class="form-group blend-raw hidden">
                                         <label for="style_beta">Beta (<span id="beta-val">0.10</span>)</label>
                                         <input type="range" id="style_beta" min="0.0" max="1.0" step="0.01" value="0.10">
+                                        <small>Raw style/prosody blend; higher uses more predicted style and less reference.</small>
                                     </div>
 
                                     <div class="form-group">
                                         <label for="embedding_scale">Embedding Scale (<span id="embedding-scale-val">1.00</span>)</label>
                                         <input type="range" id="embedding_scale" min="0.0" max="3.0" step="0.05" value="1.00">
+                                        <small>StyleTTS2 diffusion embedding scale.</small>
                                     </div>
 
                                     <div class="form-group">
                                         <label for="style_seed">Style Seed</label>
                                         <input type="number" id="style_seed" min="0" step="1" value="0">
+                                        <small>Seed for reproducible StyleTTS2 style diffusion.</small>
                                     </div>
 
                                     <div class="form-group">
@@ -175,19 +247,51 @@
                                             <option value="16000">16000 Hz</option>
                                             <option value="48000">48000 Hz</option>
                                         </select>
+                                        <small>Output sample rate in Hz.</small>
                                     </div>
 
                                     <div class="form-group">
                                         <label for="max_tts_symbols">Max TTS Symbols</label>
-                                        <input type="number" id="max_tts_symbols" min="16" max="2048" step="1" value="200">
+                                        <input type="number" id="max_tts_symbols" min="16" max="2048" step="1" value="180">
+                                        <small>Maximum symbols per TTS chunk before text is split.</small>
                                     </div>
                                 </div>
 
                                 <label class="checkbox-row">
                                     <input type="checkbox" id="no_tts_chunking">
-                                    <span>Disable TTS chunking</span>
+                                    <span>Disable TTS chunking<small>Passes `--no-tts-chunking` and sends text as one chunk.</small></span>
                                 </label>
-                            </section>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="debug_pronunciation">
+                                    <span>Print pronunciation debug output<small>Passes `--debug-pronunciation` for planning diagnostics.</small></span>
+                                </label>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="timings">
+                                    <span>Emit timing metadata<small>Passes `--timings` to emit word and audio timing metadata.</small></span>
+                                </label>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="fail_on_guessed_pronunciation">
+                                    <span>Fail on guessed pronunciation<small>Passes `--fail-on-guessed-pronunciation` and errors on guessed pronunciations.</small></span>
+                                </label>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="cpu">
+                                    <span>Use CPU<small>Passes the global `--cpu` flag instead of CUDA where supported.</small></span>
+                                </label>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="quiet">
+                                    <span>Quiet output<small>Passes the global `--quiet` flag to silence progress output.</small></span>
+                                </label>
+
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="verbose">
+                                    <span>Verbose output<small>Passes the global `--verbose` flag to show progress output.</small></span>
+                                </label>
+                            </details>
 
                             <div class="action-bar">
                                 <button type="submit" id="submit-btn">
