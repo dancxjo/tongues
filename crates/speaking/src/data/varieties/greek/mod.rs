@@ -8,6 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -152,6 +153,84 @@ pub fn variety(id: &str) -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[
+            "ο", "η", "το", "οι", "τα", "του", "της", "των", "τον", "την", "τους", "τις",
+        ],
+        pronouns: &[
+            "εγώ",
+            "εγω",
+            "εσύ",
+            "εσυ",
+            "αυτός",
+            "αυτος",
+            "αυτή",
+            "αυτη",
+            "αυτό",
+            "αυτο",
+            "εμείς",
+            "εμεις",
+            "εσείς",
+            "εσεις",
+            "αυτοί",
+            "αυτοι",
+            "αυτές",
+            "αυτες",
+            "τις",
+            "τι",
+        ],
+        auxiliaries: &[
+            "είμαι",
+            "ειμαι",
+            "είσαι",
+            "εισαι",
+            "είναι",
+            "ειναι",
+            "είμαστε",
+            "ειμαστε",
+            "είστε",
+            "ειστε",
+            "ήμουν",
+            "ημουν",
+            "εἰμί",
+            "ἐστί",
+            "ἐστίν",
+            "εἰσί",
+        ],
+        prepositions: &[
+            "σε", "με", "από", "απο", "για", "προς", "κατά", "κατα", "υπέρ", "υπερ", "περί",
+            "περι", "ἐν", "εἰς", "ἐκ",
+        ],
+        conjunctions: &["και", "ή", "η", "αλλά", "αλλα", "δέ", "δε"],
+        adverbs: &["δεν", "μη", "πολύ", "πολυ", "καλά", "καλα"],
+        adverb_suffixes: &[],
+        adjectives: &[],
+        adjective_suffixes: &["ος", "η", "ο"],
+        verbs: &[
+            "λέγω",
+            "λεγω",
+            "λέγει",
+            "λεγει",
+            "βλέπω",
+            "βλεπω",
+            "βλέπει",
+            "βλεπει",
+            "έχω",
+            "εχω",
+            "έχει",
+            "εχει",
+            "είμαι",
+            "ειμαι",
+            "είναι",
+            "ειναι",
+        ],
+        verb_suffixes: &[],
+        subject_verb_suffixes: &["ω", "εις", "ει", "ουμε", "ετε", "ουν"],
+        non_verbs: &[],
     }
 }
 

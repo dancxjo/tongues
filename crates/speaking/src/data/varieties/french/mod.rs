@@ -7,6 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
@@ -88,6 +89,98 @@ pub fn variety() -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[
+            "le", "la", "les", "l'", "un", "une", "des", "du", "de", "mon", "ma", "mes", "ton",
+            "ta", "tes", "son", "sa", "ses", "notre", "nos", "votre", "vos", "leur", "leurs", "ce",
+            "cet", "cette", "ces",
+        ],
+        pronouns: &[
+            "je", "j'", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles", "me", "m'", "te",
+            "t'", "se", "s'", "moi", "toi", "lui", "eux", "leur", "y", "en", "qui", "que",
+        ],
+        auxiliaries: &[
+            "suis", "es", "est", "sommes", "êtes", "sont", "étais", "était", "étaient", "serai",
+            "seras", "sera", "serons", "serez", "seront", "ai", "as", "a", "avons", "avez", "ont",
+            "avais", "avait", "avaient", "aurai", "aura", "auront", "vais", "vas", "va", "allons",
+            "allez", "vont",
+        ],
+        prepositions: &[
+            "à", "a", "de", "d'", "dans", "en", "sur", "sous", "avec", "sans", "pour", "par",
+            "chez", "avant", "après", "entre", "vers", "contre",
+        ],
+        conjunctions: &["et", "ou", "mais", "donc", "car", "ni"],
+        adverbs: &["ne", "pas", "plus", "très", "tres", "bien", "mal"],
+        adverb_suffixes: &["ment"],
+        adjectives: &[
+            "grand",
+            "grande",
+            "petit",
+            "petite",
+            "bon",
+            "bonne",
+            "mauvais",
+            "mauvaise",
+            "intelligent",
+            "intelligente",
+            "important",
+            "importante",
+        ],
+        adjective_suffixes: &["able", "ible", "ique"],
+        verbs: &[
+            "être",
+            "etre",
+            "avoir",
+            "aller",
+            "faire",
+            "dire",
+            "pouvoir",
+            "vouloir",
+            "savoir",
+            "venir",
+            "voir",
+            "devoir",
+            "prendre",
+            "parler",
+            "aimer",
+            "donner",
+            "changer",
+            "manger",
+            "finir",
+            "choisir",
+            "recueillez",
+            "voulez",
+            "étaient",
+            "etaient",
+            "parlent",
+            "mangent",
+            "finissent",
+        ],
+        verb_suffixes: &[
+            "aient", "issent", "èrent", "erent", "er", "ir", "re", "ez", "ons", "ait", "ais",
+        ],
+        subject_verb_suffixes: &["ent"],
+        non_verbs: &[
+            "intelligent",
+            "président",
+            "president",
+            "moment",
+            "vent",
+            "argent",
+            "enfant",
+            "parent",
+            "client",
+            "document",
+            "comment",
+            "souvent",
+            "vraiment",
+            "lentement",
+            "seulement",
+        ],
     }
 }
 

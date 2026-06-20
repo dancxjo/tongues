@@ -7,6 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -72,6 +73,46 @@ pub fn variety() -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[],
+        pronouns: &[
+            "अहम्",
+            "त्वम्",
+            "सः",
+            "सा",
+            "तत्",
+            "वयम्",
+            "यूयम्",
+            "ते",
+            "असौ",
+            "कः",
+            "का",
+            "किम्",
+        ],
+        auxiliaries: &["अस्मि", "असि", "अस्ति", "स्मः", "स्थ", "सन्ति", "आसीत्"],
+        prepositions: &["प्रति", "अनु", "अधि", "उप", "परि", "वि"],
+        conjunctions: &["च", "वा", "तु", "अथ"],
+        adverbs: &["न", "मा", "सु", "एव"],
+        adverb_suffixes: &[],
+        adjectives: &[],
+        adjective_suffixes: &[],
+        verbs: &[
+            "गच्छति",
+            "गच्छन्ति",
+            "भवति",
+            "भवन्ति",
+            "वदति",
+            "वदन्ति",
+            "अस्ति",
+            "सन्ति",
+        ],
+        verb_suffixes: &[],
+        subject_verb_suffixes: &["ति", "न्ति", "मि", "सि", "तः", "थ"],
+        non_verbs: &[],
     }
 }
 

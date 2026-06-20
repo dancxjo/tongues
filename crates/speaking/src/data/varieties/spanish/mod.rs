@@ -8,6 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -278,6 +279,46 @@ pub fn variety(id: &str) -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[
+            "el", "la", "los", "las", "un", "una", "unos", "unas", "mi", "mis", "tu", "tus", "su",
+            "sus", "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "estos", "estas",
+            "ese", "esa", "esos", "esas",
+        ],
+        pronouns: &[
+            "yo", "tu", "tú", "el", "él", "ella", "usted", "nosotros", "nosotras", "vosotros",
+            "vosotras", "ellos", "ellas", "ustedes", "me", "te", "se", "nos", "os", "lo", "la",
+            "los", "las", "le", "les", "que", "quien", "quién",
+        ],
+        auxiliaries: &[
+            "soy", "eres", "es", "somos", "son", "estoy", "estas", "estás", "esta", "está",
+            "estamos", "estan", "están", "he", "has", "ha", "hemos", "han", "habia", "había",
+            "habian", "habían", "voy", "vas", "va", "vamos", "van",
+        ],
+        prepositions: &[
+            "a", "de", "en", "con", "sin", "por", "para", "sobre", "bajo", "entre", "hasta",
+            "desde", "contra", "hacia",
+        ],
+        conjunctions: &["y", "e", "o", "u", "pero", "sino", "ni"],
+        adverbs: &["no", "muy", "bien", "mal", "ya", "tambien", "también"],
+        adverb_suffixes: &["mente"],
+        adjectives: &[
+            "bueno", "buena", "malo", "mala", "grande", "pequeño", "pequeña",
+        ],
+        adjective_suffixes: &["able", "ible", "ico", "ica"],
+        verbs: &[
+            "ser", "estar", "haber", "tener", "hacer", "decir", "poder", "querer", "saber",
+            "venir", "ver", "dar", "hablar", "comer", "vivir",
+        ],
+        verb_suffixes: &[
+            "ar", "er", "ir", "amos", "emos", "imos", "ando", "iendo", "ado", "ido",
+        ],
+        subject_verb_suffixes: &["o", "as", "es", "a", "e", "an", "en"],
+        non_verbs: &[],
     }
 }
 

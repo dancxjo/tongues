@@ -8,6 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -138,6 +139,37 @@ pub fn variety(id: &str) -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[
+            "hic", "haec", "hoc", "ille", "illa", "illud", "iste", "ista", "istud", "is", "ea",
+            "id", "meus", "mea", "tuus", "tua", "suus", "sua",
+        ],
+        pronouns: &[
+            "ego", "tu", "nos", "vos", "me", "te", "se", "qui", "quae", "quod", "quis", "quid",
+        ],
+        auxiliaries: &[
+            "sum", "es", "est", "sumus", "estis", "sunt", "eram", "erat", "erant", "fui", "fuit",
+            "fuerunt",
+        ],
+        prepositions: &[
+            "ad", "in", "de", "cum", "sine", "per", "pro", "sub", "super", "ab", "ex",
+        ],
+        conjunctions: &["et", "aut", "sed", "atque", "nec", "neque", "vel"],
+        adverbs: &["non", "ne", "bene", "male", "iam", "nunc"],
+        adverb_suffixes: &[],
+        adjectives: &[],
+        adjective_suffixes: &["us", "a", "um", "is"],
+        verbs: &[
+            "amo", "amas", "amat", "amamus", "amatis", "amant", "video", "videt", "dico", "dicit",
+            "venio", "venit", "sum", "es", "est", "sunt",
+        ],
+        verb_suffixes: &["are", "ere", "ire"],
+        subject_verb_suffixes: &["o", "m", "s", "t", "mus", "tis", "nt"],
+        non_verbs: &[],
     }
 }
 

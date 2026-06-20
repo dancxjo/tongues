@@ -7,6 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -72,6 +73,41 @@ pub fn variety() -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &[
+            "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer",
+            "eines", "mein", "meine", "dein", "deine", "sein", "seine", "ihr", "ihre", "unser",
+            "unsere", "dieser", "diese", "dieses",
+        ],
+        pronouns: &[
+            "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich", "sich", "uns", "euch",
+            "mir", "dir", "ihm", "ihnen", "wer", "was", "die",
+        ],
+        auxiliaries: &[
+            "bin", "bist", "ist", "sind", "seid", "war", "waren", "habe", "hast", "hat", "haben",
+            "habt", "hatte", "hatten", "werde", "wirst", "wird", "werden", "wollen", "können",
+            "müssen", "sollen", "dürfen", "mögen",
+        ],
+        prepositions: &[
+            "an", "auf", "aus", "bei", "durch", "für", "gegen", "in", "mit", "nach", "ohne",
+            "seit", "über", "um", "unter", "von", "vor", "zu", "zwischen",
+        ],
+        conjunctions: &["und", "oder", "aber", "denn", "sondern"],
+        adverbs: &["nicht", "sehr", "auch", "gern", "gerne"],
+        adverb_suffixes: &[],
+        adjectives: &[],
+        adjective_suffixes: &["ig", "lich", "isch"],
+        verbs: &[
+            "sein", "haben", "werden", "machen", "sagen", "gehen", "kommen", "sehen", "wissen",
+            "geben", "nehmen", "sprechen", "lernen", "arbeiten",
+        ],
+        verb_suffixes: &["en"],
+        subject_verb_suffixes: &["e", "st", "t"],
+        non_verbs: &[],
     }
 }
 

@@ -8,6 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
 };
@@ -152,6 +153,30 @@ pub fn variety() -> LinguisticVariety {
         prosody_profile: None,
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
+    }
+}
+
+pub fn syntax_profile() -> HeuristicSyntaxProfile {
+    HeuristicSyntaxProfile {
+        determiners: &["la", "tiu", "tiuj", "ĉi", "ci"],
+        pronouns: &[
+            "mi", "vi", "li", "ŝi", "ĝi", "ni", "ili", "oni", "si", "min", "vin", "lin", "ŝin",
+            "ĝin", "nin", "ilin", "kiu", "kio",
+        ],
+        auxiliaries: &[],
+        prepositions: &[
+            "al", "de", "en", "kun", "sen", "por", "per", "pri", "sur", "sub", "inter", "antaŭ",
+            "post", "kontraŭ",
+        ],
+        conjunctions: &["kaj", "aŭ", "sed", "nek"],
+        adverbs: &["ne", "tre", "ankaŭ", "jam", "nun"],
+        adverb_suffixes: &["e"],
+        adjectives: &[],
+        adjective_suffixes: &["a", "aj", "an"],
+        verbs: &[],
+        verb_suffixes: &["i", "as", "is", "os", "us", "u"],
+        subject_verb_suffixes: &[],
+        non_verbs: &[],
     }
 }
 
