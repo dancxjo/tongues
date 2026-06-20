@@ -69,7 +69,7 @@ cargo run --release -- sentence-parser eval --model models/sentence-parser/v0
 cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
 ```
 
-The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. Its current parser backend delegates to the existing heuristic parser until a neural architecture is implemented.
+The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. English syntax analysis uses the upstream `link-parser` command when installed, then falls back to the built-in heuristic parser; the cursor-time boundary model is still separate from the syntax backend.
 
 ## Rule-Based Speech Helpers
 

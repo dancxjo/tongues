@@ -401,6 +401,11 @@ pub fn parse_english_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
+    if use_link_parser_command_backend() {
+        if let Some(analysis) = LinkParserCommandBackend::new().parse(words, terminal) {
+            return analysis;
+        }
+    }
     parse_english_heuristic_link_grammar(words, terminal)
 }
 
