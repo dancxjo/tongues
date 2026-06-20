@@ -34,9 +34,9 @@ pub struct LinguisticVariety {
     #[serde(default)]
     pub orthographic_unit_pronunciations: Vec<OrthographicUnitPronunciation>,
     #[serde(default)]
-    pub pronunciation_lexicons: Vec<PronunciationLexicon>,
+    pub pronunciation_lexicons: Vec<String>,
     #[serde(default)]
-    pub syntax_profile: Option<SyntaxProfile>,
+    pub syntax_profile: Option<String>,
     #[serde(default)]
     pub number_names: Option<NumberNameSet>,
     #[serde(default)]
@@ -69,26 +69,6 @@ pub enum VarietyImplementationStatus {
     PermissiveProfile,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PronunciationLexicon {
-    Cmudict,
-    Lexique383,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SyntaxProfile {
-    English,
-    Esperanto,
-    French,
-    German,
-    Greek,
-    Latin,
-    Sanskrit,
-    Spanish,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct NumberNameSet {
     #[serde(default)]
@@ -107,8 +87,10 @@ pub struct OrdinalSuffixName {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ConnectedSpeechRule {
-    FrenchSchwaDeletionBeforeConsonant,
-    FrenchLiaison {
+    DeleteFinalPhoneBeforeConsonant {
+        phone: String,
+    },
+    Liaison {
         #[serde(default)]
         entries: Vec<ConnectedSpeechEntry>,
     },

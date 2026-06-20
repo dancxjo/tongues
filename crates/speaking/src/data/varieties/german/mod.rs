@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::{OrthographicPronunciation, Orthography};
+use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+    LinguisticVariety, NumberNameSet, VarietyImplementationStatus, VarietyStatus,
 };
 
 const SEGMENTS: &[&str] = &[
@@ -31,7 +31,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some(SyntaxProfile::German),
+        syntax_profile: Some("german".into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "null",
@@ -65,7 +65,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "German Latin orthography".into(),
-            pronunciation: Some(OrthographicPronunciation::German),
+            pronunciation: Some("german".into()),
             ..Default::default()
         }),
         morphology: None,

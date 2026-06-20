@@ -2,14 +2,14 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::{OrthographicPronunciation, Orthography};
+use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+    LinguisticVariety, NumberNameSet, VarietyImplementationStatus, VarietyStatus,
 };
 
 const SEGMENTS: &[&str] = &[
@@ -31,7 +31,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some(SyntaxProfile::Sanskrit),
+        syntax_profile: Some("sanskrit".into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "śūnya",
@@ -65,7 +65,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "Sanskrit Devanagari and transliteration".into(),
-            pronunciation: Some(OrthographicPronunciation::Sanskrit),
+            pronunciation: Some("sanskrit".into()),
             ..Default::default()
         }),
         morphology: None,

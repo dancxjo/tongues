@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::{OrthographicPronunciation, Orthography};
+use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
@@ -11,7 +11,7 @@ use crate::syntax::HeuristicSyntaxProfile;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
-    PronunciationLexicon, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+    VarietyImplementationStatus, VarietyStatus,
 };
 
 const SEGMENTS: &[&str] = &[
@@ -31,8 +31,8 @@ pub fn variety() -> LinguisticVariety {
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
-        pronunciation_lexicons: vec![PronunciationLexicon::Lexique383],
-        syntax_profile: Some(SyntaxProfile::French),
+        pronunciation_lexicons: vec!["lexique383".into()],
+        syntax_profile: Some("french".into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
@@ -49,8 +49,8 @@ pub fn variety() -> LinguisticVariety {
             }],
         }),
         connected_speech: vec![
-            ConnectedSpeechRule::FrenchSchwaDeletionBeforeConsonant,
-            ConnectedSpeechRule::FrenchLiaison {
+            ConnectedSpeechRule::DeleteFinalPhoneBeforeConsonant { phone: "ə".into() },
+            ConnectedSpeechRule::Liaison {
                 entries: [
                     ("les", "z"),
                     ("des", "z"),
@@ -81,7 +81,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "French Latin orthography".into(),
-            pronunciation: Some(OrthographicPronunciation::French),
+            pronunciation: Some("french".into()),
             ..Default::default()
         }),
         morphology: None,

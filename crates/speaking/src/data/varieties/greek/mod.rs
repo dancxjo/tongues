@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::{OrthographicPronunciation, Orthography};
+use crate::orthography::Orthography;
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
@@ -10,7 +10,7 @@ use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+    LinguisticVariety, NumberNameSet, VarietyImplementationStatus, VarietyStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +83,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some(SyntaxProfile::Greek),
+        syntax_profile: Some("greek".into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "μηδέν",
@@ -145,7 +145,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         }),
         orthography: Some(Orthography {
             name: "Greek orthography".into(),
-            pronunciation: Some(OrthographicPronunciation::Greek),
+            pronunciation: Some("greek".into()),
             ..Default::default()
         }),
         morphology: None,

@@ -18,7 +18,6 @@ use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::GraphemeToken;
-use crate::orthography::OrthographicPronunciation;
 use crate::phonology::{PhoneToken, Phoneme, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
 use crate::realize::{
@@ -35,13 +34,15 @@ use crate::syntax::{
 };
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
-    ConnectedSpeechRule, LinguisticVariety, OrthographicUnitKind, PronunciationLexicon,
-    SyntaxProfile, WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
+    ConnectedSpeechRule, LinguisticVariety, OrthographicUnitKind, WeakFormFollowingContext,
+    WeakFormRule, WeakFormStyleContext,
 };
 
 const WORD_BOUNDARY_ID: &str = "boundary.word";
 const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
+const LEXICON_CMUDICT: &str = "cmudict";
+const LEXICON_LEXIQUE383: &str = "lexique383";
 
 pub trait Phonemicizer {
     fn phonemicize(
@@ -61,14 +62,18 @@ pub fn phonemicizer_for_variety(
         variety_by_code(&canonical.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical.clone(),
         })?;
-    if variety_data
-        .pronunciation_lexicons
-        .contains(&PronunciationLexicon::Cmudict)
-    {
+    if has_pronunciation_lexicon(&variety_data, LEXICON_CMUDICT) {
         Ok(Box::new(EnglishPhonemicizer))
     } else {
         Ok(Box::new(VarietyDataPhonemicizer))
     }
+}
+
+fn has_pronunciation_lexicon(variety: &LinguisticVariety, lexicon_id: &str) -> bool {
+    variety
+        .pronunciation_lexicons
+        .iter()
+        .any(|id| id == lexicon_id)
 }
 
 pub trait PronunciationPipeline {
@@ -445,10 +450,7 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 variety: canonical_variety.clone(),
             }
         })?;
-        if !variety
-            .pronunciation_lexicons
-            .contains(&PronunciationLexicon::Cmudict)
-        {
+        if !has_pronunciation_lexicon(&variety, LEXICON_CMUDICT) {
             return Err(PhonemicizeError::UnsupportedVariety {
                 variety: canonical_variety.clone(),
             });
@@ -625,15 +627,15 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
     }
 
     fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        match variety.syntax_profile {
-            Some(SyntaxProfile::English) => Some(&EnglishLinkGrammarParser),
-            Some(SyntaxProfile::Esperanto) => Some(&EsperantoLinkGrammarParser),
-            Some(SyntaxProfile::French) => Some(&FrenchLinkGrammarParser),
-            Some(SyntaxProfile::Spanish) => Some(&SpanishLinkGrammarParser),
-            Some(SyntaxProfile::German) => Some(&GermanLinkGrammarParser),
-            Some(SyntaxProfile::Greek) => Some(&GreekLinkGrammarParser),
-            Some(SyntaxProfile::Latin) => Some(&LatinLinkGrammarParser),
-            Some(SyntaxProfile::Sanskrit) => Some(&SanskritLinkGrammarParser),
+        match variety.syntax_profile.as_deref() {
+            Some("english") => Some(&EnglishLinkGrammarParser),
+            Some("esperanto") => Some(&EsperantoLinkGrammarParser),
+            Some("french") => Some(&FrenchLinkGrammarParser),
+            Some("spanish") => Some(&SpanishLinkGrammarParser),
+            Some("german") => Some(&GermanLinkGrammarParser),
+            Some("greek") => Some(&GreekLinkGrammarParser),
+            Some("latin") => Some(&LatinLinkGrammarParser),
+            Some("sanskrit") => Some(&SanskritLinkGrammarParser),
             _ => None,
         }
     }
@@ -1485,13 +1487,14 @@ fn variety_data_pronunciation_for_word(
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
     for lexicon in &variety.pronunciation_lexicons {
-        match lexicon {
-            PronunciationLexicon::Lexique383 => {
+        match lexicon.as_str() {
+            LEXICON_LEXIQUE383 => {
                 if let Some(pronunciation) = lexique_pronunciation(word, variety, context) {
                     return pronunciation;
                 }
             }
-            PronunciationLexicon::Cmudict => {}
+            LEXICON_CMUDICT => {}
+            _ => {}
         }
     }
 
@@ -1542,35 +1545,18 @@ fn planned_candidate_from_orthography_profile(
     match variety
         .orthography
         .as_ref()
-        .and_then(|orthography| orthography.pronunciation.as_ref())
+        .and_then(|orthography| orthography.pronunciation.as_deref())
     {
-        Some(OrthographicPronunciation::EnglishCmudict) => {
-            planned_candidate_from_variety_aliases(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Esperanto) => {
-            planned_candidate_from_esperanto_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::French) => {
-            planned_candidate_from_french_orthography(normalized, variety, context)
-        }
-        Some(OrthographicPronunciation::German) => {
-            planned_candidate_from_german_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Greek) => {
-            planned_candidate_from_greek_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Latin) => {
-            planned_candidate_from_latin_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Sanskrit) => {
-            planned_candidate_from_sanskrit_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Spanish) => {
-            planned_candidate_from_spanish_orthography(normalized, variety)
-        }
-        Some(OrthographicPronunciation::Alias) | None => {
-            planned_candidate_from_variety_aliases(normalized, variety)
-        }
+        Some("english_cmudict") => planned_candidate_from_variety_aliases(normalized, variety),
+        Some("esperanto") => planned_candidate_from_esperanto_orthography(normalized, variety),
+        Some("french") => planned_candidate_from_french_orthography(normalized, variety, context),
+        Some("german") => planned_candidate_from_german_orthography(normalized, variety),
+        Some("greek") => planned_candidate_from_greek_orthography(normalized, variety),
+        Some("latin") => planned_candidate_from_latin_orthography(normalized, variety),
+        Some("sanskrit") => planned_candidate_from_sanskrit_orthography(normalized, variety),
+        Some("spanish") => planned_candidate_from_spanish_orthography(normalized, variety),
+        Some("alias") | None => planned_candidate_from_variety_aliases(normalized, variety),
+        Some(_) => planned_candidate_from_variety_aliases(normalized, variety),
     }
 }
 
@@ -2682,12 +2668,15 @@ fn apply_french_connected_speech(
     let next_is_vowel = phoneme_token_is_syllabic(variety, next);
     for rule in &variety.connected_speech {
         match rule {
-            ConnectedSpeechRule::FrenchSchwaDeletionBeforeConsonant => {
-                if !careful_style && !next_is_vowel && final_phone_symbol(phones) == Some("ə") {
+            ConnectedSpeechRule::DeleteFinalPhoneBeforeConsonant { phone } => {
+                if !careful_style
+                    && !next_is_vowel
+                    && final_phone_symbol(phones) == Some(phone.as_str())
+                {
                     phones.pop();
                 }
             }
-            ConnectedSpeechRule::FrenchLiaison { entries } => {
+            ConnectedSpeechRule::Liaison { entries } => {
                 if !next_is_vowel {
                     continue;
                 }
