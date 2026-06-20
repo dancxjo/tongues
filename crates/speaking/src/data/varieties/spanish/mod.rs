@@ -283,6 +283,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "Spanish Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_SPANISH.into()),
+            initialism_joiners: vec!["y".into()],
             ..Default::default()
         }),
         morphology: None,

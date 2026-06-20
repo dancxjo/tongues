@@ -239,6 +239,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "English Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT.into()),
+            initialism_joiners: vec!["and".into()],
             ..Default::default()
         }),
         morphology: Some(morphology::english_morphology(row.id)),

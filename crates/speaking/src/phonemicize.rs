@@ -275,7 +275,8 @@ pub trait PronunciationPipeline {
         let canonical_variety = self.canonical_variety_id(&input.variety)?;
         let variety = self.variety(&canonical_variety)?;
         let normalized_text = self.text_normalizer(&input.text, &canonical_variety);
-        let words = self.orthographic_tokenizer(&normalized_text);
+        let mut words = self.orthographic_tokenizer(&normalized_text);
+        mark_conjoined_letter_name_runs_for_variety(&mut words, &variety);
         let mut boundaries = self.boundary_extractor(&normalized_text, &words, &variety);
         let normalized_words = words
             .iter()
@@ -706,7 +707,7 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
         variety: &LinguisticVariety,
         context: TokenPronunciationContext,
     ) -> WordPronunciation {
-        variety_data_pronunciation_for_word(word, variety, context)
+        pronunciation_for_word(self, word, variety, context)
     }
 }
 
@@ -753,7 +754,6 @@ fn tokenize_words(text: &str) -> Vec<WordToken> {
     }
 
     mark_spaced_letter_name_runs(&mut words);
-    mark_conjoined_letter_name_runs(&mut words);
     mark_contextual_initialisms(text, &mut words);
     words
 }
@@ -1277,13 +1277,13 @@ fn classify_surface_word(surface: &str) -> OrthographicTokenKind {
 fn mark_spaced_letter_name_runs(words: &mut [WordToken]) {
     let mut index = 0;
     while index < words.len() {
-        if !is_uppercase_single_letter_word(&words[index]) {
+        if !is_letter_name_candidate_word(&words[index]) {
             index += 1;
             continue;
         }
 
         let run_start = index;
-        while index < words.len() && is_uppercase_single_letter_word(&words[index]) {
+        while index < words.len() && is_letter_name_candidate_word(&words[index]) {
             index += 1;
         }
 
@@ -1297,16 +1297,26 @@ fn mark_spaced_letter_name_runs(words: &mut [WordToken]) {
     }
 }
 
-fn mark_conjoined_letter_name_runs(words: &mut [WordToken]) {
+fn mark_conjoined_letter_name_runs_for_variety(
+    words: &mut [WordToken],
+    variety: &LinguisticVariety,
+) {
     if words.len() < 3 {
         return;
     }
+    let Some(orthography) = variety.orthography.as_ref() else {
+        return;
+    };
     for index in 1..words.len() - 1 {
-        if words[index].normalized != "and" {
+        if !orthography
+            .initialism_joiners
+            .iter()
+            .any(|joiner| joiner == &words[index].normalized)
+        {
             continue;
         }
-        if is_uppercase_single_letter_word(&words[index - 1])
-            && is_uppercase_single_letter_word(&words[index + 1])
+        if is_letter_name_candidate_word(&words[index - 1])
+            && is_letter_name_candidate_word(&words[index + 1])
         {
             words[index - 1].kind = OrthographicTokenKind::LetterName;
             words[index + 1].kind = OrthographicTokenKind::LetterName;
@@ -1314,7 +1324,7 @@ fn mark_conjoined_letter_name_runs(words: &mut [WordToken]) {
     }
 }
 
-fn is_uppercase_single_letter_word(word: &WordToken) -> bool {
+fn is_letter_name_candidate_word(word: &WordToken) -> bool {
     if !matches!(
         word.kind,
         OrthographicTokenKind::Word | OrthographicTokenKind::LetterName
@@ -1325,7 +1335,9 @@ fn is_uppercase_single_letter_word(word: &WordToken) -> bool {
     let Some(character) = characters.next() else {
         return false;
     };
-    characters.next().is_none() && character.is_alphabetic() && character.is_uppercase()
+    characters.next().is_none()
+        && character.is_alphabetic()
+        && (character.is_uppercase() || !character.is_lowercase())
 }
 
 fn mark_contextual_initialisms(text: &str, words: &mut [WordToken]) {
@@ -1418,35 +1430,6 @@ fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhonem
                 == Some(&Spec::Known(FeatureValue::Category("vowel".into())))
         })
         || arpabet::is_vowel(phoneme_display_symbol(&planned.phoneme))
-}
-
-fn variety_data_pronunciation_for_word(
-    word: &WordToken,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> WordPronunciation {
-    if let Some(pronunciation) = pronunciation_from_declared_lexicons(word, variety, context) {
-        return pronunciation;
-    }
-
-    let candidate = planned_candidate_from_orthography_profile(&word.normalized, variety, context);
-    if candidate.is_empty() {
-        return missing_pronunciation(word, context, "missing variety-data pronunciation");
-    }
-
-    WordPronunciation {
-        candidates: vec![candidate],
-        status: PronunciationStatus::Exact,
-        provenance: EvidenceProvenance {
-            source: EvidenceSource::Rule,
-            method: format!("{} phoneme aliases from variety data", variety.id.0),
-            version: Some("0.1".into()),
-        },
-        warnings: Vec::new(),
-        letter_break_offsets: Vec::new(),
-        letter_indices: Vec::new(),
-        part_of_speech: context.part_of_speech,
-    }
 }
 
 fn pronunciation_from_lexicon_id(
@@ -2116,39 +2099,8 @@ fn mixed_alphanumeric_pronunciation(
     word: &WordToken,
     variety: &LinguisticVariety,
 ) -> WordPronunciation {
-    let mut candidate = Vec::new();
-    let alpha = word
-        .text
-        .chars()
-        .filter(|character| character.is_alphabetic())
-        .collect::<String>();
-    if alpha.len() > 1 && alpha.chars().all(|character| character.is_uppercase()) {
-        let (sequence, letter_break_offsets, letter_indices) =
-            mixed_alphanumeric_sequence(word.text.chars(), variety);
-        candidate.extend(sequence);
-        return WordPronunciation {
-            candidates: vec![candidate],
-            status: PronunciationStatus::Guessed,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::Rule,
-                method: "mixed-alphanumeric pronunciation fallback".into(),
-                version: Some("0.1".into()),
-            },
-            warnings: vec![PronunciationWarning {
-                token: word.text.clone(),
-                kind: PronunciationWarningKind::MixedAlphaNumeric,
-                message: format!("guessed mixed token: {}", word.text),
-            }],
-            letter_break_offsets,
-            letter_indices,
-            part_of_speech: None,
-        };
-    } else {
-        candidate.extend(planned_candidate_from_cmu(
-            variety,
-            guess_pronunciation(&word.normalized),
-        ));
-    }
+    let (candidate, letter_break_offsets, letter_indices) =
+        mixed_alphanumeric_sequence(word.text.chars(), variety);
     WordPronunciation {
         candidates: vec![candidate],
         status: PronunciationStatus::Guessed,
@@ -2162,8 +2114,8 @@ fn mixed_alphanumeric_pronunciation(
             kind: PronunciationWarningKind::MixedAlphaNumeric,
             message: format!("guessed mixed token: {}", word.text),
         }],
-        letter_break_offsets: Vec::new(),
-        letter_indices: Vec::new(),
+        letter_break_offsets,
+        letter_indices,
         part_of_speech: None,
     }
 }
@@ -2874,6 +2826,11 @@ fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> Strin
             index += 1;
         }
         let suffix = chars[suffix_start..index].iter().collect::<String>();
+        if start > 0 && chars[start - 1].is_alphabetic() {
+            out.push_str(&digits);
+            out.push_str(&suffix);
+            continue;
+        }
         let replacement = digits
             .parse::<u32>()
             .ok()
@@ -4859,6 +4816,10 @@ mod tests {
             normalize_small_numbers_for_variety("2 granthau", &VarietyId("san".into())),
             "dvi granthau"
         );
+        assert_eq!(
+            normalize_small_numbers_for_variety("A2 restas kodo.", &VarietyId("eo".into())),
+            "A2 restas kodo."
+        );
     }
 
     #[test]
@@ -5098,6 +5059,14 @@ mod tests {
         }
     }
 
+    fn sample_letter_for_variety(variety_id: &str, index: usize) -> &'static str {
+        match variety_id {
+            "el-GR-Standard" | "grc-Attic" | "grc-Koine" => ["Α", "Β"][index],
+            "sa-Deva-Standard" => ["ध", "म"][index],
+            _ => ["A", "B"][index],
+        }
+    }
+
     #[test]
     fn every_builtin_variety_phonemicizes_with_declared_data() {
         for variety in builtin_varieties() {
@@ -5119,6 +5088,67 @@ mod tests {
                     .iter()
                     .any(|token| !matches!(token.phoneme, Spec::Known(ref id) if id.0.starts_with("boundary."))),
                 "{} should produce non-boundary phonemes for {word}",
+                variety.id.0
+            );
+        }
+    }
+
+    #[test]
+    fn initialism_joiners_and_mixed_tokens_are_variety_data_for_every_builtin_variety() {
+        for variety in builtin_varieties() {
+            let orthography = variety
+                .orthography
+                .as_ref()
+                .expect("builtin variety should declare orthography data");
+            let joiner = orthography
+                .initialism_joiners
+                .first()
+                .unwrap_or_else(|| panic!("{} should declare initialism joiners", variety.id.0));
+            let left = sample_letter_for_variety(&variety.id.0, 0);
+            let right = sample_letter_for_variety(&variety.id.0, 1);
+            let initialism_text = format!("{left} {joiner} {right}");
+            let initialism = phonemicizer_for_variety(&variety.id)
+                .expect("phonemicizer")
+                .phonemicize(&request(&initialism_text, &variety.id.0))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} should phonemicize initialism `{initialism_text}`: {error}",
+                        variety.id.0
+                    )
+                });
+            assert!(
+                initialism.phonemes.iter().any(|token| {
+                    phoneme_usize_feature(token, "orthography.letter_index").is_some()
+                }),
+                "{} should mark letter-name phonemes for `{initialism_text}`: {:?}",
+                variety.id.0,
+                phoneme_symbols(&initialism)
+            );
+
+            let mixed_text = format!("{left}2");
+            let mixed = phonemicizer_for_variety(&variety.id)
+                .expect("phonemicizer")
+                .phonemicize(&request(&mixed_text, &variety.id.0))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} should phonemicize mixed token `{mixed_text}`: {error}",
+                        variety.id.0
+                    )
+                });
+            assert!(
+                mixed
+                    .warnings
+                    .iter()
+                    .all(|warning| warning.kind != PronunciationWarningKind::UnknownPronunciation),
+                "{} should expand mixed token `{mixed_text}` from variety data: {:?}",
+                variety.id.0,
+                mixed.warnings
+            );
+            assert!(
+                mixed.phonemes.iter().any(|token| {
+                    phoneme_usize_feature(token, "orthography.letter_index").is_some()
+                }),
+                "{} should mark letter-name phonemes for mixed token `{mixed_text}`",
                 variety.id.0
             );
         }

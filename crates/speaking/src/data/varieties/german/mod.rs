@@ -77,6 +77,7 @@ pub fn variety() -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "German Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_GERMAN.into()),
+            initialism_joiners: vec!["und".into()],
             ..Default::default()
         }),
         morphology: None,

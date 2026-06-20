@@ -143,6 +143,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_LATIN.into()),
+            initialism_joiners: vec!["et".into(), "ac".into(), "atque".into()],
             ..Default::default()
         }),
         morphology: None,

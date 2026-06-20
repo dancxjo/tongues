@@ -93,6 +93,7 @@ pub fn variety() -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "French Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_FRENCH.into()),
+            initialism_joiners: vec!["et".into()],
             ..Default::default()
         }),
         morphology: None,

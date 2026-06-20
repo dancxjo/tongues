@@ -157,6 +157,7 @@ pub fn variety() -> LinguisticVariety {
         orthography: Some(Orthography {
             name: "Esperanto Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ESPERANTO.into()),
+            initialism_joiners: vec!["kaj".into()],
             ..Default::default()
         }),
         morphology: None,
