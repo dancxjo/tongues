@@ -15,7 +15,6 @@ use crate::variety::{
 };
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
-pub const PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT: &str = "english_cmudict";
 pub const PRONUNCIATION_PIPELINE_VARIETY_DATA: &str = "variety_data";
 
 pub const SYNTAX_PROFILE_ENGLISH: &str = "english";
@@ -28,7 +27,6 @@ pub const SYNTAX_PROFILE_SANSKRIT: &str = "sanskrit";
 pub const SYNTAX_PROFILE_SPANISH: &str = "spanish";
 
 pub const ORTHOGRAPHY_PROFILE_ALIAS: &str = "alias";
-pub const ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT: &str = "english_cmudict";
 pub const ORTHOGRAPHY_PROFILE_ESPERANTO: &str = "esperanto";
 pub const ORTHOGRAPHY_PROFILE_FRENCH: &str = "french";
 pub const ORTHOGRAPHY_PROFILE_GERMAN: &str = "german";

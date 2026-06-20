@@ -197,7 +197,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
         pronunciation_lexicons: vec![CMUDICT_ID.into()],
         pronunciation_pipeline: Some(
-            crate::data::varieties::PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT.into(),
+            crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
         text_normalization: crate::data::varieties::english_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
@@ -239,7 +239,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         phonotactics: Some(phonotactics(row.singing)),
         orthography: Some(Orthography {
             name: "English Latin orthography".into(),
-            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT.into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ALIAS.into()),
             initialism_joiners: vec!["and".into()],
             sample_words: vec!["hello".into()],
             sample_letter_units: vec!["A".into(), "B".into()],

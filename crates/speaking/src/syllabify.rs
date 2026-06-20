@@ -384,11 +384,11 @@ mod tests {
     use crate::data::english::variety;
     use crate::ids::VarietyId;
     use crate::phonemicize::{
-        EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, phone_display_symbol,
+        VarietyDataPhonemicizer, PhonemicizeRequest, Phonemicizer, phone_display_symbol,
     };
 
     fn syllables_for(text: &str) -> Vec<Syllable> {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: text.into(),
                 variety: VarietyId("en-US".into()),

@@ -7,9 +7,7 @@ use crate::data::lexicons::lexique;
 use crate::data::lexicons::{CMUDICT_ID, LEXIQUE383_ID};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::english::normalization as english_normalization;
-use crate::data::varieties::{
-    PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT, PRONUNCIATION_PIPELINE_VARIETY_DATA,
-};
+use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -62,18 +60,10 @@ const LEXICON_REGISTRY: &[LexiconRegistration] = &[
 
 const PRONUNCIATION_PIPELINE_REGISTRY: &[PronunciationPipelineRegistration] = &[
     PronunciationPipelineRegistration {
-        id: PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT,
-        phonemicizer: english_phonemicizer,
-    },
-    PronunciationPipelineRegistration {
         id: PRONUNCIATION_PIPELINE_VARIETY_DATA,
         phonemicizer: variety_data_phonemicizer,
     },
 ];
-
-fn english_phonemicizer() -> Box<dyn Phonemicizer> {
-    Box::new(EnglishPhonemicizer)
-}
 
 fn variety_data_phonemicizer() -> Box<dyn Phonemicizer> {
     Box::new(VarietyDataPhonemicizer)
@@ -486,157 +476,6 @@ impl fmt::Display for PhonemicizeError {
 }
 
 impl std::error::Error for PhonemicizeError {}
-
-#[derive(Debug, Clone, Default)]
-pub struct EnglishPhonemicizer;
-
-impl Phonemicizer for EnglishPhonemicizer {
-    fn phonemicize(
-        &self,
-        input: &PhonemicizeRequest,
-    ) -> Result<PhonemicizeOutput, PhonemicizeError> {
-        self.run(input)
-    }
-}
-
-impl PronunciationPipeline for EnglishPhonemicizer {
-    fn canonical_variety_id(
-        &self,
-        requested_variety: &VarietyId,
-    ) -> Result<VarietyId, PhonemicizeError> {
-        canonical_variety_id(&requested_variety.0).ok_or_else(|| {
-            PhonemicizeError::UnsupportedVariety {
-                variety: requested_variety.clone(),
-            }
-        })
-    }
-
-    fn variety(
-        &self,
-        canonical_variety: &VarietyId,
-    ) -> Result<LinguisticVariety, PhonemicizeError> {
-        let variety = variety_by_code(&canonical_variety.0).ok_or_else(|| {
-            PhonemicizeError::UnsupportedVariety {
-                variety: canonical_variety.clone(),
-            }
-        })?;
-        if variety.pronunciation_pipeline.as_deref() != Some(PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT)
-        {
-            return Err(PhonemicizeError::UnsupportedVariety {
-                variety: canonical_variety.clone(),
-            });
-        }
-        Ok(variety)
-    }
-
-    fn text_normalizer(&self, text: &str, _variety: &VarietyId) -> String {
-        normalize_text_for_variety(text, _variety)
-    }
-
-    fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
-        tokenize_words(text)
-    }
-
-    fn boundary_extractor(
-        &self,
-        text: &str,
-        words: &[WordToken],
-        variety: &LinguisticVariety,
-    ) -> Vec<SpeechBoundaryToken> {
-        boundary_tokens(text, words, variety)
-    }
-
-    fn weak_form_resolver(
-        &self,
-        word: &WordToken,
-        variety: &LinguisticVariety,
-        context: TokenPronunciationContext,
-    ) -> Option<WordPronunciation> {
-        variety
-            .weak_forms
-            .iter()
-            .find(|rule| weak_form_rule_applies(rule, &word.normalized, context))
-            .map(|rule| weak_form_pronunciation(rule, variety))
-    }
-
-    fn token_classifier(
-        &self,
-        word: &WordToken,
-        variety: &LinguisticVariety,
-        context: TokenPronunciationContext,
-    ) -> WordPronunciation {
-        pronunciation_for_word(self, word, variety, context)
-    }
-
-    fn uses_generic_orthography_before_unknown(&self) -> bool {
-        false
-    }
-
-    fn unknown_word_pronunciation(
-        &self,
-        word: &WordToken,
-        variety: &LinguisticVariety,
-        context: TokenPronunciationContext,
-    ) -> WordPronunciation {
-        english_unknown_word_pronunciation(word, variety, context)
-    }
-
-    fn next_word_starts_with_vowelish(
-        &self,
-        word: &WordToken,
-        variety: &LinguisticVariety,
-    ) -> bool {
-        let candidate = match &word.kind {
-            OrthographicTokenKind::Acronym => word
-                .text
-                .chars()
-                .find(|character| character.is_alphabetic())
-                .map(|character| {
-                    orthographic_unit_planned_candidate(
-                        &character.to_ascii_uppercase().to_string(),
-                        variety,
-                        OrthographicUnitKind::LetterName,
-                    )
-                })
-                .unwrap_or_default(),
-            OrthographicTokenKind::MixedAlphaNumeric => {
-                mixed_alphanumeric_pronunciation(word, variety)
-                    .candidates
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-            }
-            OrthographicTokenKind::LetterName => orthographic_unit_planned_candidate(
-                &word.text,
-                variety,
-                OrthographicUnitKind::LetterName,
-            ),
-            OrthographicTokenKind::DigitName => orthographic_unit_planned_candidate(
-                &word.text,
-                variety,
-                OrthographicUnitKind::DigitName,
-            ),
-            OrthographicTokenKind::Word | OrthographicTokenKind::Hyphenated(_) => self
-                .token_classifier(
-                    word,
-                    variety,
-                    TokenPronunciationContext {
-                        next_starts_with_vowelish: false,
-                        careful_style: true,
-                        part_of_speech: None,
-                        next_part_of_speech: None,
-                    },
-                )
-                .candidates
-                .first()
-                .cloned()
-                .unwrap_or_default(),
-        };
-        candidate
-            .first()
-            .is_some_and(|phoneme| planned_phoneme_is_vowel(variety, phoneme))
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct VarietyDataPhonemicizer;
@@ -3811,16 +3650,16 @@ mod tests {
             "This is the twenty-first case."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("It was 70°F outside.", &VarietyId("en-US".into())),
+            VarietyDataPhonemicizer.text_normalizer("It was 70°F outside.", &VarietyId("en-US".into())),
             "It was seventy degrees Fahrenheit outside."
         );
         assert_eq!(
-            EnglishPhonemicizer
+            VarietyDataPhonemicizer
                 .text_normalizer("The CPU ran at 3.5GHz.", &VarietyId("en-US".into())),
             "The CPU ran at three point five gigahertz."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("No. 5", &VarietyId("en-US".into())),
+            VarietyDataPhonemicizer.text_normalizer("No. 5", &VarietyId("en-US".into())),
             "Number five"
         );
         assert_eq!(
@@ -3851,7 +3690,7 @@ mod tests {
 
     #[test]
     fn test_tts_pronunciation_pipeline_regression() {
-        let phonemicizer = EnglishPhonemicizer;
+        let phonemicizer = VarietyDataPhonemicizer;
 
         // Test "logorrhea" (override)
         let out_logo = phonemicizer
@@ -4016,7 +3855,7 @@ mod tests {
 
     #[test]
     fn interpreter_training_contract_has_word_indices_and_realized_phones() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request(
                 "Mr. Carter can't email Dr. Smith at 4:30 p.m.",
                 "en-US",
@@ -4060,7 +3899,7 @@ mod tests {
 
     #[test]
     fn digit_and_initialism_expansion_preserves_training_alignment_metadata() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("U.S. officials met Apollo 11.", "en-US"))
             .expect("initialism and number should phonemicize");
 
@@ -4089,7 +3928,7 @@ mod tests {
 
     #[test]
     fn all_caps_transcripts_use_dataset_pronunciations_before_acronym_fallback() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request(
                 "AND CLASSIFIED BY SCIENCE WHICH IS TO SUFFERING",
                 "en-US",
@@ -4131,7 +3970,7 @@ mod tests {
 
     #[test]
     fn all_caps_unknown_names_are_not_poisoned_as_acronyms() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("MARIUS HAD BUT A STEP MORE TO TAKE", "en-US"))
             .expect("all-caps transcript with unknown name should phonemicize");
 
@@ -4155,7 +3994,7 @@ mod tests {
 
     #[test]
     fn unknown_dataset_names_use_grapheme_clusters_not_raw_letters() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("CORINTHE PONTMERCY CHANVRERIE MONDETOUR", "en-US"))
             .expect("unknown dataset names should phonemicize");
 
@@ -4179,7 +4018,7 @@ mod tests {
 
     #[test]
     fn regular_inflections_try_cmudict_lemmas_before_grapheme_fallback() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("PARCELLED COMBATED ANNIHILATES", "en-US"))
             .expect("regular inflections should phonemicize from lemmas");
 
@@ -4199,7 +4038,7 @@ mod tests {
 
     #[test]
     fn possessive_names_should_not_fall_back_to_letter_pronunciation() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("Alice's email arrived.", "en-US"))
             .expect("possessive name should phonemicize");
 
@@ -4217,7 +4056,7 @@ mod tests {
 
     #[test]
     fn pronounceable_acronyms_should_not_always_be_initialisms() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("NASA launched Apollo 11.", "en-US"))
             .expect("acronym sentence should phonemicize");
 
@@ -4236,7 +4075,7 @@ mod tests {
     #[test]
     #[ignore = "known gap: productive hyphenated prefixes are split into separate words"]
     fn hyphenated_prefixed_words_should_compose_before_word_splitting() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("The co-op re-opened.", "en-US"))
             .expect("hyphenated prefixed words should phonemicize");
 
@@ -4256,7 +4095,7 @@ mod tests {
 
     #[test]
     fn link_grammar_pos_disambiguates_cmudict_heteronyms() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("I record the permit.", "en-US"))
             .expect("heteronyms should phonemicize");
 
@@ -4284,7 +4123,7 @@ mod tests {
 
     #[test]
     fn link_grammar_pos_can_select_noun_then_verb_for_same_spelling() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("The object will object.", "en-US"))
             .expect("heteronyms should phonemicize");
 
@@ -4302,7 +4141,7 @@ mod tests {
 
     #[test]
     fn hello_world_uses_cmudict_not_characters() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("hello world", "en-US"))
             .expect("en-US should phonemicize");
 
@@ -4334,7 +4173,7 @@ mod tests {
             ("xylophone", vec!["Z", "AY1", "L", "AH0", "F", "OW2", "N"]),
             ("okay", vec!["OW2", "K", "EY1"]),
         ] {
-            let output = EnglishPhonemicizer
+            let output = VarietyDataPhonemicizer
                 .phonemicize(&request(word, "en-US-GA"))
                 .expect("word should phonemicize");
             assert_eq!(cmudict_symbols(&output), expected, "{word}");
@@ -4343,7 +4182,7 @@ mod tests {
 
     #[test]
     fn curly_apostrophe_contractions_use_cmudict_entry() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("I’ll", "en-US"))
             .expect("contraction should phonemicize");
 
@@ -4367,7 +4206,7 @@ mod tests {
 
     #[test]
     fn hyphenated_mixed_tokens_split_before_fallback() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("speech-to-StyleTTS2", "en-US"))
             .expect("mixed token should phonemicize");
 
@@ -4396,7 +4235,7 @@ mod tests {
 
     #[test]
     fn weak_forms_and_unstressed_ah_realize_as_schwa() {
-        let the_cat = EnglishPhonemicizer
+        let the_cat = VarietyDataPhonemicizer
             .phonemicize(&request("the cat", "en-US"))
             .expect("the cat");
         assert_eq!(&phone_symbols(&the_cat)[..2], ["ð", "ə"]);
@@ -4409,14 +4248,14 @@ mod tests {
                 .contains("the before consonant")
         );
 
-        let the_apple = EnglishPhonemicizer
+        let the_apple = VarietyDataPhonemicizer
             .phonemicize(&request("the apple", "en-US"))
             .expect("the apple");
         assert_eq!(&phoneme_symbols(&the_apple)[..2], ["ð", "iː"]);
         assert_eq!(&cmudict_symbols(&the_apple)[..2], ["DH", "IY0"]);
         assert_eq!(&phone_symbols(&the_apple)[..2], ["ð", "iː"]);
 
-        let and_then = EnglishPhonemicizer
+        let and_then = VarietyDataPhonemicizer
             .phonemicize(&request("and then", "en-US"))
             .expect("and then");
         assert_eq!(&phone_symbols(&and_then)[..3], ["ə", "n", "d"]);
@@ -4424,12 +4263,12 @@ mod tests {
 
     #[test]
     fn cmudict_unstressed_vowels_reduce_without_changing_stressed_strut() {
-        let current = EnglishPhonemicizer
+        let current = VarietyDataPhonemicizer
             .phonemicize(&request("current", "en-US"))
             .expect("current");
         assert_eq!(phone_symbols(&current), ["kʰ", "ɝ", "ə", "n", "t"]);
 
-        let termination = EnglishPhonemicizer
+        let termination = VarietyDataPhonemicizer
             .phonemicize(&request("termination", "en-US"))
             .expect("termination");
         assert_eq!(
@@ -4437,12 +4276,12 @@ mod tests {
             ["t", "ɚ", "m", "ə", "n", "eɪ", "ʃ", "ə", "n"]
         );
 
-        let preserves = EnglishPhonemicizer
+        let preserves = VarietyDataPhonemicizer
             .phonemicize(&request("preserves", "en-US"))
             .expect("preserves");
         assert_eq!(&phone_symbols(&preserves)[..3], ["p", "ɹ", "ə"]);
 
-        let strut = EnglishPhonemicizer
+        let strut = VarietyDataPhonemicizer
             .phonemicize(&request("strut", "en-US"))
             .expect("strut");
         assert!(phone_symbols(&strut).contains(&"ʌ".into()));
@@ -4450,7 +4289,7 @@ mod tests {
 
     #[test]
     fn acronyms_expand_as_letter_names_and_mixed_tokens_warn() {
-        let ir = EnglishPhonemicizer
+        let ir = VarietyDataPhonemicizer
             .phonemicize(&request("Use IR", "en-US"))
             .expect("IR");
         assert_eq!(cmudict_symbols_for_word(&ir, 1), ["AY1", "AA1", "R"]);
@@ -4458,21 +4297,21 @@ mod tests {
             warning.kind == PronunciationWarningKind::AcronymExpanded && warning.token == "IR"
         }));
 
-        let spaced_ir = EnglishPhonemicizer
+        let spaced_ir = VarietyDataPhonemicizer
             .phonemicize(&request("I R", "en-US"))
             .expect("spaced IR");
         assert_eq!(phoneme_symbols(&spaced_ir), ["aɪ", "ɑ", "ɹ"]);
         assert_eq!(cmudict_symbols(&spaced_ir), ["AY1", "AA1", "R"]);
         assert_eq!(phone_symbols(&spaced_ir), ["aɪ", "|", "j", "ɑ", "ɹ"]);
 
-        let paused_ir = EnglishPhonemicizer
+        let paused_ir = VarietyDataPhonemicizer
             .phonemicize(&request("I, R", "en-US"))
             .expect("paused IR");
         assert_eq!(phoneme_symbols(&paused_ir), ["aɪ", "ɑ", "ɹ"]);
         assert_eq!(cmudict_symbols(&paused_ir), ["AY1", "AA1", "R"]);
         assert_eq!(phone_symbols(&paused_ir), ["aɪ", "|", "ɑ", "ɹ"]);
 
-        let styletts2 = EnglishPhonemicizer
+        let styletts2 = VarietyDataPhonemicizer
             .phonemicize(&request("StyleTTS2", "en-US"))
             .expect("StyleTTS2");
         assert_eq!(
@@ -4493,7 +4332,7 @@ mod tests {
 
     #[test]
     fn dotted_initials_are_letter_names_not_weak_articles() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("A. B. Carter signed the note.", "en-US"))
             .expect("initials should phonemicize");
         let symbols = cmudict_symbols(&output);
@@ -4502,7 +4341,7 @@ mod tests {
 
     #[test]
     fn requested_edge_cases_phonemicize_without_obvious_normalization_errors() {
-        let dr = EnglishPhonemicizer
+        let dr = VarietyDataPhonemicizer
             .phonemicize(&request("Dr. Smith", "en-US"))
             .expect("doctor abbreviation");
         assert_eq!(
@@ -4510,7 +4349,7 @@ mod tests {
             &["D", "AA1", "K", "T", "ER0", "S"]
         );
 
-        let saint = EnglishPhonemicizer
+        let saint = VarietyDataPhonemicizer
             .phonemicize(&request("St. John went home.", "en-US"))
             .expect("saint abbreviation");
         assert!(
@@ -4519,7 +4358,7 @@ mod tests {
                 .any(|window| window == ["S", "EY1", "N", "T"])
         );
 
-        let street = EnglishPhonemicizer
+        let street = VarietyDataPhonemicizer
             .phonemicize(&request("He lives on Sansome St.", "en-US"))
             .expect("street abbreviation");
         assert!(
@@ -4528,7 +4367,7 @@ mod tests {
                 .any(|window| window == ["S", "T", "R", "IY1", "T"])
         );
 
-        let lead_noun = EnglishPhonemicizer
+        let lead_noun = VarietyDataPhonemicizer
             .phonemicize(&request("The lead pipe broke.", "en-US"))
             .expect("lead noun");
         assert!(
@@ -4537,7 +4376,7 @@ mod tests {
                 .any(|window| window == ["L", "EH1", "D"])
         );
 
-        let lead_verb = EnglishPhonemicizer
+        let lead_verb = VarietyDataPhonemicizer
             .phonemicize(&request("They lead the team.", "en-US"))
             .expect("lead verb");
         assert!(
@@ -4546,10 +4385,10 @@ mod tests {
                 .any(|window| window == ["L", "IY1", "D"])
         );
 
-        let read_past = EnglishPhonemicizer
+        let read_past = VarietyDataPhonemicizer
             .phonemicize(&request("I read the book yesterday.", "en-US"))
             .expect("read ambiguous");
-        let read_present = EnglishPhonemicizer
+        let read_present = VarietyDataPhonemicizer
             .phonemicize(&request("I read the book today.", "en-US"))
             .expect("read ambiguous");
         assert!(
@@ -4565,15 +4404,15 @@ mod tests {
         );
 
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("AT&T called.", &VarietyId("en-US".into())),
+            VarietyDataPhonemicizer.text_normalizer("AT&T called.", &VarietyId("en-US".into())),
             "A T and T called."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("R&D approved it.", &VarietyId("en-US".into())),
+            VarietyDataPhonemicizer.text_normalizer("R&D approved it.", &VarietyId("en-US".into())),
             "R and D approved it."
         );
         assert_eq!(
-            EnglishPhonemicizer
+            VarietyDataPhonemicizer
                 .text_normalizer("C++ is different from C#.", &VarietyId("en-US".into())),
             "C plus plus is different from C sharp."
         );
@@ -4581,7 +4420,7 @@ mod tests {
 
     #[test]
     fn water_flaps_in_ga_and_careful_style_blocks_it() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("water", "en-US-GA"))
             .expect("water");
         assert!(phone_symbols(&output).contains(&"ɾ".into()));
@@ -4607,7 +4446,7 @@ mod tests {
             ["ɾ"]
         );
 
-        let careful = EnglishPhonemicizer
+        let careful = VarietyDataPhonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: "water".into(),
                 variety: VarietyId("en-US-GA".into()),
@@ -4623,7 +4462,7 @@ mod tests {
 
     #[test]
     fn flapping_can_apply_across_unpaused_word_boundaries() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("not a", "en-US-GA"))
             .expect("not a");
         assert_eq!(phone_symbols(&output), ["n", "ɑ", "ɾ", "|", "ə"]);
@@ -4650,7 +4489,7 @@ mod tests {
             ["ɾ"]
         );
 
-        let paused = EnglishPhonemicizer
+        let paused = VarietyDataPhonemicizer
             .phonemicize(&request("not, a", "en-US-GA"))
             .expect("not, a");
         assert_eq!(phone_symbols(&paused), ["n", "ɑ", "t", "|", "ə"]);
@@ -4658,12 +4497,12 @@ mod tests {
 
     #[test]
     fn nasal_assimilation_applies_only_before_velars() {
-        let before_k = EnglishPhonemicizer
+        let before_k = VarietyDataPhonemicizer
             .phonemicize(&request("nka", "en-US"))
             .expect("fallback");
         assert!(phone_symbols(&before_k).contains(&"ŋ".into()));
 
-        let before_d = EnglishPhonemicizer
+        let before_d = VarietyDataPhonemicizer
             .phonemicize(&request("nda", "en-US"))
             .expect("fallback");
         assert!(phone_symbols(&before_d).contains(&"n".into()));
@@ -4672,7 +4511,7 @@ mod tests {
 
     #[test]
     fn final_devoicing_marks_final_z_without_rewriting_phone() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("seas", "en-US"))
             .expect("seas should phonemicize");
         let final_phone = output
@@ -4702,7 +4541,7 @@ mod tests {
 
     #[test]
     fn final_devoicing_does_not_mark_nonfinal_initial_z() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("zoo", "en-US"))
             .expect("zoo should phonemicize");
         let initial_phone = output
@@ -4727,10 +4566,10 @@ mod tests {
 
     #[test]
     fn aliases_and_stub_status_are_data_driven() {
-        let en_us = EnglishPhonemicizer
+        let en_us = VarietyDataPhonemicizer
             .phonemicize(&request("okay", "en-US"))
             .expect("en-US alias");
-        let ga = EnglishPhonemicizer
+        let ga = VarietyDataPhonemicizer
             .phonemicize(&request("okay", "en-US-GA"))
             .expect("GA");
         assert_eq!(phoneme_symbols(&en_us), phoneme_symbols(&ga));
@@ -4916,8 +4755,8 @@ mod tests {
     }
 
     #[test]
-    fn english_unknown_word_guessing_is_pipeline_specific() {
-        let english = EnglishPhonemicizer
+    fn generic_pipeline_does_not_use_english_unknown_guessing() {
+        let english = VarietyDataPhonemicizer
             .phonemicize(&request("zzq", "en-US"))
             .expect("English fallback should phonemicize");
         assert!(
@@ -5317,8 +5156,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_word_fallback_is_explicitly_marked() {
-        let output = EnglishPhonemicizer
+    fn unknown_word_missing_is_explicitly_marked() {
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("zzq", "en-US"))
             .expect("fallback should phonemicize");
 
@@ -5331,7 +5170,7 @@ mod tests {
 
     #[test]
     fn punctuation_emits_typed_boundaries() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("hello, world?", "en-US"))
             .expect("punctuated text should phonemicize");
 
@@ -5355,7 +5194,7 @@ mod tests {
 
     #[test]
     fn test_abbreviation_periods_are_not_terminal_boundaries() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("About 17,000 cases will stay at 630 Sansome St. in San Francisco, another, smaller location with just two operating courtrooms.", "en-US"))
             .expect("should phonemicize");
 
@@ -5370,7 +5209,7 @@ mod tests {
             "St. followed by lowercase should not be a sentence boundary"
         );
 
-        let output2 = EnglishPhonemicizer
+        let output2 = VarietyDataPhonemicizer
             .phonemicize(&request(
                 "He lives on Sansome St. The house is blue.",
                 "en-US",
@@ -5387,7 +5226,7 @@ mod tests {
             "St. followed by sentence starter should be a sentence boundary"
         );
 
-        let output3 = EnglishPhonemicizer
+        let output3 = VarietyDataPhonemicizer
             .phonemicize(&request("We visited St. Charles.", "en-US"))
             .expect("should phonemicize");
         let st_boundary3 = output3.boundaries.iter().find(|b| {
@@ -5401,7 +5240,7 @@ mod tests {
             "St. Charles should not have a terminal period after St."
         );
 
-        let output4 = EnglishPhonemicizer
+        let output4 = VarietyDataPhonemicizer
             .phonemicize(&request("He lives on Sansome St.", "en-US"))
             .expect("should phonemicize");
         let st_boundary4 = output4.boundaries.iter().find(|b| {
@@ -5418,7 +5257,7 @@ mod tests {
 
     #[test]
     fn loadstone_is_pronounced_like_lodestone() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("The Loadstone Rock was drawing him.", "en-US"))
             .expect("should phonemicize");
         let symbols = phoneme_symbols(&output).join("");
@@ -5429,14 +5268,14 @@ mod tests {
 
     #[test]
     fn st_name_prefix_is_saint_but_street_abbreviation_stays_street() {
-        let saint_output = EnglishPhonemicizer
+        let saint_output = VarietyDataPhonemicizer
             .phonemicize(&request("We visited St. Charles.", "en-US"))
             .expect("should phonemicize");
         let saint_symbols = cmudict_symbols(&saint_output).join(" ");
         assert!(saint_symbols.contains("S EY1 N T"), "{saint_symbols}");
         assert!(!saint_symbols.contains("S T R IY1 T"), "{saint_symbols}");
 
-        let street_output = EnglishPhonemicizer
+        let street_output = VarietyDataPhonemicizer
             .phonemicize(&request(
                 "He lives on Sansome St. The house is blue.",
                 "en-US",
@@ -5448,7 +5287,7 @@ mod tests {
 
     #[test]
     fn yes_no_questions_get_rising_prosody() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("Are you coming?", "en-US"))
             .expect("yes/no question should phonemicize");
 
@@ -5466,7 +5305,7 @@ mod tests {
 
     #[test]
     fn wh_questions_do_not_get_yes_no_question_rise() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("What did you choose?", "en-US"))
             .expect("wh question should phonemicize");
 
@@ -5486,7 +5325,7 @@ mod tests {
 
     #[test]
     fn either_or_questions_get_alternative_question_fall() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("Do you want either tea or coffee?", "en-US"))
             .expect("alternative question should phonemicize");
 
@@ -5508,7 +5347,7 @@ mod tests {
 
     #[test]
     fn would_you_rather_questions_rise_on_first_linked_option_and_fall_at_end() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request(
                 "Would you rather marry or fly an airplane?",
                 "en-US",
@@ -5547,7 +5386,7 @@ mod tests {
 
     #[test]
     fn phonemicize_output_exposes_link_grammar_parse_for_rule_matching() {
-        let output = EnglishPhonemicizer
+        let output = VarietyDataPhonemicizer
             .phonemicize(&request("Do you want either tea or coffee?", "en-US"))
             .expect("sentence should phonemicize");
         let rule_context = output.syntax.rule_context();
