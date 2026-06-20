@@ -434,6 +434,10 @@ enum Commands {
     /// Demonstrate the speaking library across built-in language varieties
     #[command(name = "speaking-demo", alias = "speaking")]
     SpeakingDemo {
+        /// Demo mode
+        #[arg(value_enum, default_value = "samples")]
+        mode: SpeakingDemoMode,
+
         /// Restrict the demo to one variety; repeat to select multiple.
         #[arg(long = "variety")]
         varieties: Vec<String>,
@@ -1455,6 +1459,12 @@ enum SpeakingDemoFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SpeakingDemoMode {
+    Samples,
+    Sentences,
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum MaskPolicyArg {
     Single,
@@ -1690,7 +1700,11 @@ fn main() -> Result<()> {
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
         Commands::Speak(command) => speak::run_speak(command),
-        Commands::SpeakingDemo { varieties, format } => cmd_speaking_demo(&varieties, format),
+        Commands::SpeakingDemo {
+            mode,
+            varieties,
+            format,
+        } => cmd_speaking_demo(mode, &varieties, format),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
         Commands::Models { command } => models::run(command),
@@ -6592,7 +6606,11 @@ fn read_jsonl_lossy<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>>
     Ok(out)
 }
 
-fn cmd_speaking_demo(selected_varieties: &[String], format: SpeakingDemoFormat) -> Result<()> {
+fn cmd_speaking_demo(
+    mode: SpeakingDemoMode,
+    selected_varieties: &[String],
+    format: SpeakingDemoFormat,
+) -> Result<()> {
     use speaking::{PhonemicizeRequest, PhonemicizeStyle, VarietyId};
 
     let selected = selected_varieties
@@ -6617,7 +6635,7 @@ fn cmd_speaking_demo(selected_varieties: &[String], format: SpeakingDemoFormat) 
         let phonemicizer = speaking::phonemicizer_for_variety(&variety.id).map_err(|err| {
             anyhow::anyhow!("{}: failed to load phonemicizer: {err}", variety.id.0)
         })?;
-        let samples = speaking_demo_samples(&variety);
+        let samples = speaking_demo_samples(&variety, mode);
         let mut case_reports = Vec::new();
 
         for sample in samples {
@@ -6695,6 +6713,7 @@ fn cmd_speaking_demo(selected_varieties: &[String], format: SpeakingDemoFormat) 
             "name": variety.name,
             "implementation_status": format!("{:?}", variety.implementation_status),
             "status": format!("{:?}", variety.status),
+            "mode": format!("{:?}", mode),
             "inventories": {
                 "phonemes": variety.phonemes.phonemes.len(),
                 "phones": variety.phones.phones.len(),
@@ -6735,7 +6754,14 @@ struct SpeakingDemoSample {
     careful_style: bool,
 }
 
-fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingDemoSample> {
+fn speaking_demo_samples(
+    variety: &speaking::LinguisticVariety,
+    mode: SpeakingDemoMode,
+) -> Vec<SpeakingDemoSample> {
+    if mode == SpeakingDemoMode::Sentences {
+        return speaking_demo_sentence_samples(variety);
+    }
+
     let words = variety
         .orthography
         .as_ref()
@@ -6743,8 +6769,7 @@ fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingD
         .unwrap_or_default();
     let baseline = speaking_demo_join_words(&words, 5).unwrap_or_else(|| variety.name.clone());
     let short = speaking_demo_join_words(&words, 3).unwrap_or_else(|| baseline.clone());
-    let utterance =
-        speaking_demo_utterance(variety, &words).unwrap_or_else(|| format!("{short}?"));
+    let utterance = speaking_demo_utterance(variety, &words).unwrap_or_else(|| format!("{short}?"));
 
     vec![
         SpeakingDemoSample {
@@ -6768,6 +6793,44 @@ fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingD
             careful_style: true,
         },
     ]
+}
+
+fn speaking_demo_sentence_samples(
+    variety: &speaking::LinguisticVariety,
+) -> Vec<SpeakingDemoSample> {
+    let text = speaking_demo_famous_sentence(variety)
+        .map(str::to_string)
+        .or_else(|| {
+            variety
+                .orthography
+                .as_ref()
+                .and_then(|orthography| speaking_demo_utterance(variety, &orthography.sample_words))
+        })
+        .unwrap_or_else(|| variety.name.clone());
+    vec![SpeakingDemoSample {
+        name: "famous-line",
+        text,
+        careful_style: false,
+    }]
+}
+
+fn speaking_demo_famous_sentence(variety: &speaking::LinguisticVariety) -> Option<&'static str> {
+    match variety.id.0.as_str() {
+        "el-GR-Standard" => return Some("Σε γνωρίζω από την κόψη."),
+        "grc-Attic" | "grc-Koine" => return Some("Ἄνδρα μοι ἔννεπε, Μοῦσα."),
+        "la-Classical" | "la-Ecclesiastical" => return Some("Arma virumque cano."),
+        "es-ES-Castilian" | "es-419-Standard" => return Some("En un lugar de la Mancha."),
+        _ => {}
+    }
+    match variety.language.0.as_str() {
+        "en" => Some("To be, or not to be?"),
+        "eo" => Some("Ho, mia kor!"),
+        "fr" => Some("Je pense, donc je suis."),
+        "de" => Some("Am Brunnen vor dem Tore."),
+        "sa" => Some("धर्मक्षेत्रे कुरुक्षेत्रे."),
+        "es" => Some("En un lugar de la Mancha."),
+        _ => None,
+    }
 }
 
 fn speaking_demo_join_words(words: &[String], limit: usize) -> Option<String> {
@@ -6806,8 +6869,8 @@ fn speaking_demo_utterance(
 fn speaking_demo_builtin_utterance(variety: &str) -> Option<&'static str> {
     match variety {
         "en-US-GA" | "en-US" => Some("Hello, world?"),
-        "es-ES-Castilian" | "es-419-Standard" => Some("La casa, esta lista?"),
-        "fr-FR-Standard" => Some("La maison, est prete?"),
+        "es-ES-Castilian" | "es-419-Standard" => Some("La casa está lista?"),
+        "fr-FR-Standard" => Some("La maison est prête?"),
         "de-DE-Standard" => Some("Das Haus, ist bereit?"),
         "eo-001-Standard" => Some("La domo, estas preta?"),
         "el-GR-Standard" => Some("Το σπιτι, ειναι ετοιμο?"),
@@ -6845,9 +6908,7 @@ fn speaking_demo_phoneme_utterance(output: &speaking::PhonemicizeOutput) -> Stri
 }
 
 fn speaking_demo_phone_utterance(output: &speaking::PhonemicizeOutput) -> String {
-    speaking_demo_utterance_parts(output, |syllables, _| {
-        syllables_to_ipa_formatted(syllables)
-    })
+    speaking_demo_utterance_parts(output, |syllables, _| syllables_to_ipa_formatted(syllables))
 }
 
 fn speaking_demo_utterance_parts(
@@ -6973,7 +7034,10 @@ fn print_speaking_demo_text(reports: &[serde_json::Value]) {
             );
             println!("  /{}/", case["phonemes"].as_str().unwrap_or(""));
             println!("  [{}]", case["phones"].as_str().unwrap_or(""));
-            if case["name"].as_str() == Some("whole-utterance") {
+            if matches!(
+                case["name"].as_str(),
+                Some("whole-utterance" | "famous-line")
+            ) {
                 println!(
                     "  utterance /{}/",
                     case["utterance_phonemes"].as_str().unwrap_or("")
