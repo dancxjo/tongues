@@ -2,8 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::cmudict::{CmuStress, PronunciationStatus};
-use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID};
+use crate::data::lexicons::cmudict::CmuStress;
+use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID, PronunciationStatus};
 use crate::data::notation::{self, PronunciationNotation};
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
 use crate::data::{canonical_variety_id, variety_by_code};

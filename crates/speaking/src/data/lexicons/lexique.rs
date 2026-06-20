@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::LEXIQUE383_ID;
-use crate::data::lexicons::cmudict::PronunciationStatus;
+use crate::data::lexicons::{LEXIQUE383_ID, LexiconAdapter, LexiconLookup, PronunciationStatus};
+use crate::data::notation::PronunciationNotation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PronunciationEntry {
@@ -25,6 +25,26 @@ struct LexiconEntry {
 #[derive(Debug, Clone)]
 pub struct LexiqueLexicon {
     entries: HashMap<Box<str>, LexiconEntry>,
+}
+
+pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
+    id: LEXIQUE383_ID,
+    notation: PronunciationNotation::Ipa,
+    lookup,
+}];
+
+pub fn lookup(word: &str) -> LexiconLookup {
+    let entry = bundled().lookup_entry(word);
+    LexiconLookup {
+        lookup: entry.lookup,
+        source: entry.source,
+        status: entry.status,
+        candidates: entry
+            .candidates
+            .into_iter()
+            .map(|candidate| vec![candidate])
+            .collect(),
+    }
 }
 
 impl LexiqueLexicon {

@@ -6639,6 +6639,8 @@ fn cmd_speaking_demo(selected_varieties: &[String], format: SpeakingDemoFormat) 
                 "input": sample.text,
                 "phonemes": speaking_demo_phoneme_words(&output),
                 "phones": speaking_demo_phone_words(&output),
+                "utterance_phonemes": speaking_demo_phoneme_utterance(&output),
+                "utterance_phones": speaking_demo_phone_utterance(&output),
                 "counts": {
                     "graphemes": output.graphemes.len(),
                     "phonemes": output.phonemes.len(),
@@ -6741,6 +6743,7 @@ fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingD
         .unwrap_or_default();
     let baseline = speaking_demo_join_words(&words, 5).unwrap_or_else(|| variety.name.clone());
     let short = speaking_demo_join_words(&words, 3).unwrap_or_else(|| baseline.clone());
+    let utterance = speaking_demo_utterance(&words).unwrap_or_else(|| format!("{short}?"));
 
     vec![
         SpeakingDemoSample {
@@ -6751,6 +6754,11 @@ fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingD
         SpeakingDemoSample {
             name: "question",
             text: format!("{short}?"),
+            careful_style: false,
+        },
+        SpeakingDemoSample {
+            name: "whole-utterance",
+            text: utterance,
             careful_style: false,
         },
         SpeakingDemoSample {
@@ -6772,6 +6780,22 @@ fn speaking_demo_join_words(words: &[String], limit: usize) -> Option<String> {
     (!sample.is_empty()).then_some(sample)
 }
 
+fn speaking_demo_utterance(words: &[String]) -> Option<String> {
+    let words = words
+        .iter()
+        .filter(|word| !word.trim().is_empty())
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>();
+    match words.as_slice() {
+        [first, second, third, fourth, ..] => Some(format!("{first} {second}, {third} {fourth}?")),
+        [first, second, third] => Some(format!("{first} {second}, {third}?")),
+        [first, second] => Some(format!("{first}, {second}?")),
+        [first] => Some(format!("{first}?")),
+        [] => None,
+    }
+}
+
 fn speaking_demo_phoneme_words(output: &speaking::PhonemicizeOutput) -> String {
     speaking_demo_word_syllables(output)
         .into_iter()
@@ -6790,6 +6814,71 @@ fn speaking_demo_phone_words(output: &speaking::PhonemicizeOutput) -> String {
         .filter(|ipa| !ipa.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn speaking_demo_phoneme_utterance(output: &speaking::PhonemicizeOutput) -> String {
+    speaking_demo_utterance_parts(output, |syllables, output| {
+        syllables_to_phonemes_ipa(syllables, &output.phonemes, &output.variety)
+    })
+}
+
+fn speaking_demo_phone_utterance(output: &speaking::PhonemicizeOutput) -> String {
+    speaking_demo_utterance_parts(output, |syllables, _| {
+        syllables_to_ipa_formatted(syllables)
+    })
+}
+
+fn speaking_demo_utterance_parts(
+    output: &speaking::PhonemicizeOutput,
+    format_word: impl Fn(&[speaking::Syllable], &speaking::PhonemicizeOutput) -> String,
+) -> String {
+    let words = speaking_demo_word_syllables(output);
+    let last_index = words.len().saturating_sub(1);
+    let mut parts = Vec::new();
+    for (position, (word_index, syllables)) in words.into_iter().enumerate() {
+        let word = format_word(&syllables, output);
+        if word.is_empty() {
+            continue;
+        }
+        parts.push(word);
+        let boundary_symbols = speaking_demo_boundary_symbols_after_word(output, word_index);
+        if boundary_symbols.is_empty() {
+            if position != last_index {
+                parts.push("|".to_string());
+            }
+        } else {
+            parts.extend(boundary_symbols.into_iter().map(str::to_string));
+        }
+    }
+    parts.join(" ")
+}
+
+fn speaking_demo_boundary_symbols_after_word(
+    output: &speaking::PhonemicizeOutput,
+    word_index: usize,
+) -> Vec<&'static str> {
+    let Some(boundary) = output
+        .boundaries
+        .iter()
+        .filter(|boundary| boundary.terminal.is_some() || boundary.pause.is_some())
+        .find(|boundary| boundary.after_grapheme_index == word_index)
+    else {
+        return Vec::new();
+    };
+    if let Some(terminal) = boundary.terminal {
+        return match terminal {
+            speaking::TerminalPunctuation::Question => vec!["↗", "?"],
+            speaking::TerminalPunctuation::Period => vec!["↘", "."],
+            speaking::TerminalPunctuation::Exclamation => vec!["↘", "!"],
+        };
+    }
+    if let Some(pause) = boundary.pause {
+        return match pause {
+            speaking::PauseKind::Comma => vec!["→", ","],
+            speaking::PauseKind::AlternativeQuestionRise => vec!["↗", ","],
+        };
+    }
+    Vec::new()
 }
 
 fn speaking_demo_word_syllables(
@@ -6862,6 +6951,36 @@ fn print_speaking_demo_text(reports: &[serde_json::Value]) {
             );
             println!("  /{}/", case["phonemes"].as_str().unwrap_or(""));
             println!("  [{}]", case["phones"].as_str().unwrap_or(""));
+            if case["name"].as_str() == Some("whole-utterance") {
+                println!(
+                    "  utterance /{}/",
+                    case["utterance_phonemes"].as_str().unwrap_or("")
+                );
+                println!(
+                    "  utterance [{}]",
+                    case["utterance_phones"].as_str().unwrap_or("")
+                );
+                let boundaries = case["boundaries"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|boundary| {
+                        let terminal = boundary["terminal"].as_str().unwrap_or("none");
+                        let pause = boundary["pause"].as_str().unwrap_or("none");
+                        format!(
+                            "{}@{} terminal={} pause={}",
+                            boundary["kind"].as_str().unwrap_or("Boundary"),
+                            boundary["after_grapheme_index"].as_u64().unwrap_or(0),
+                            terminal,
+                            pause
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !boundaries.is_empty() {
+                    println!("  boundaries: {boundaries}");
+                }
+            }
             println!(
                 "  counts: graphemes={} phonemes={} phones={} syllables={} boundaries={} prosody_labels={} syntax_tokens={} warnings={}",
                 counts["graphemes"].as_u64().unwrap_or(0),

@@ -4,14 +4,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PronunciationStatus {
-    Exact,
-    Normalized,
-    Guessed,
-    Missing,
-}
+use crate::data::lexicons::{CMUDICT_ID, LexiconAdapter, LexiconLookup, PronunciationStatus};
+use crate::data::notation::PronunciationNotation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PronunciationEntry {
@@ -81,6 +75,31 @@ sansome S AE1 N S AH0 M
 talkativeness T AO1 K AH0 T IH0 V N AH0 S
 wordiness W ER1 D IY0 N AH0 S
 ";
+
+pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
+    id: CMUDICT_ID,
+    notation: PronunciationNotation::Arpabet,
+    lookup,
+}];
+
+pub fn lookup(word: &str) -> LexiconLookup {
+    let entry = bundled().lookup_entry(word);
+    LexiconLookup {
+        lookup: entry.lookup,
+        source: entry.source,
+        status: entry.status,
+        candidates: entry
+            .candidates
+            .into_iter()
+            .map(|candidate| {
+                candidate
+                    .into_iter()
+                    .map(|phoneme| phoneme.raw_symbol())
+                    .collect()
+            })
+            .collect(),
+    }
+}
 
 impl CmudictLexicon {
     pub fn bundled() -> Self {

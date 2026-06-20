@@ -10,7 +10,8 @@ pub fn parse_link_grammar(
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
     if use_link_parser_command_backend() {
-        if let Some(analysis) = LinkParserCommandBackend::new().parse(words, terminal) {
+        if let Some(mut analysis) = LinkParserCommandBackend::new().parse(words, terminal) {
+            annotate_tokens(&mut analysis);
             return analysis;
         }
     }
@@ -512,6 +513,28 @@ fn disambiguate_pos_from_links(
         PartOfSpeech::Noun if has_incoming(SyntacticLinkKind::Auxiliary) => PartOfSpeech::Verb,
         PartOfSpeech::Verb if has_incoming(SyntacticLinkKind::Determiner) => PartOfSpeech::Noun,
         _ => base,
+    }
+}
+
+fn annotate_tokens(analysis: &mut SentenceSyntaxAnalysis) {
+    let links = analysis
+        .primary_parse()
+        .map(|parse| parse.links.clone())
+        .unwrap_or_default();
+    for token in &mut analysis.tokens {
+        let normalized = normalize_syntax_word(&token.text);
+        let mut syntactic_links = links
+            .iter()
+            .filter_map(|link| {
+                (link.left == token.word_index || link.right == token.word_index)
+                    .then_some(link.kind)
+            })
+            .collect::<Vec<_>>();
+        syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+        syntactic_links.dedup();
+        token.pos = disambiguate_pos_from_links(token.word_index, base_pos(&normalized), &links);
+        token.prosodic_role = prosodic_role_for_word(&normalized, &syntactic_links);
+        token.syntactic_links = syntactic_links;
     }
 }
 
