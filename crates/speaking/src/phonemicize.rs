@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
 use crate::data::lexicons::lexique;
-use crate::data::lexicons::{CMUDICT_ID, LEXIQUE383_ID};
+use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID};
 use crate::data::notation::arpabet::{self, split_stress};
-use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
+use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -33,37 +33,18 @@ const WORD_BOUNDARY_ID: &str = "boundary.word";
 const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
 
-type LexiconPronouncer =
-    fn(&WordToken, &LinguisticVariety, TokenPronunciationContext) -> Option<WordPronunciation>;
 type PhonemicizerFactory = fn() -> Box<dyn Phonemicizer>;
-
-struct LexiconRegistration {
-    id: &'static str,
-    pronounce: LexiconPronouncer,
-}
 
 struct PronunciationPipelineRegistration {
     id: &'static str,
     phonemicizer: PhonemicizerFactory,
 }
 
-const LEXICON_REGISTRY: &[LexiconRegistration] = &[
-    LexiconRegistration {
-        id: CMUDICT_ID,
-        pronounce: cmudict_pronunciation,
-    },
-    LexiconRegistration {
-        id: LEXIQUE383_ID,
-        pronounce: lexique_pronunciation,
-    },
-];
-
-const PRONUNCIATION_PIPELINE_REGISTRY: &[PronunciationPipelineRegistration] = &[
-    PronunciationPipelineRegistration {
+const PRONUNCIATION_PIPELINE_REGISTRY: &[PronunciationPipelineRegistration] =
+    &[PronunciationPipelineRegistration {
         id: PRONUNCIATION_PIPELINE_VARIETY_DATA,
         phonemicizer: variety_data_phonemicizer,
-    },
-];
+    }];
 
 fn variety_data_phonemicizer() -> Box<dyn Phonemicizer> {
     Box::new(VarietyDataPhonemicizer)
@@ -1270,10 +1251,8 @@ fn pronunciation_from_lexicon_id(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> Option<WordPronunciation> {
-    LEXICON_REGISTRY
-        .iter()
-        .find(|registration| registration.id == lexicon_id)
-        .and_then(|registration| (registration.pronounce)(word, variety, context))
+    let adapter = lexicons::adapter_for_id(lexicon_id)?;
+    pronunciation_from_lexicon_adapter(adapter, word, variety, context)
 }
 
 fn pronunciation_from_declared_lexicons(
@@ -1303,7 +1282,23 @@ fn planned_candidate_from_orthography_profile(
     planned_candidate_from_variety_aliases(normalized, variety)
 }
 
-fn lexique_pronunciation(
+fn pronunciation_from_lexicon_adapter(
+    adapter: lexicons::LexiconAdapter,
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    match adapter {
+        lexicons::LexiconAdapter::ArpabetDictionary => {
+            arpabet_dictionary_pronunciation(word, variety, context)
+        }
+        lexicons::LexiconAdapter::IpaDictionary => {
+            ipa_dictionary_pronunciation(word, variety, context)
+        }
+    }
+}
+
+fn ipa_dictionary_pronunciation(
     word: &WordToken,
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
@@ -1331,7 +1326,7 @@ fn lexique_pronunciation(
     })
 }
 
-fn cmudict_pronunciation(
+fn arpabet_dictionary_pronunciation(
     word: &WordToken,
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
@@ -1341,7 +1336,8 @@ fn cmudict_pronunciation(
         return None;
     }
 
-    let selection = choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
+    let selection =
+        choose_context_sensitive_candidates(variety, &entry.lookup, entry.candidates, context);
     Some(WordPronunciation {
         candidates: planned_candidates_from_cmu(variety, selection.candidates),
         status: entry.status,
@@ -1558,47 +1554,28 @@ struct CandidateSelection {
 }
 
 fn choose_context_sensitive_candidates(
+    variety: &LinguisticVariety,
     lookup: &str,
     candidates: Vec<Vec<CmuPhoneme>>,
     context: TokenPronunciationContext,
 ) -> CandidateSelection {
-    if lookup == "st" && context.next_part_of_speech == Some(PartOfSpeech::ProperName) {
-        if let Some(selection) =
-            choose_matching_candidate(&candidates, &["S", "EY1", "N", "T"], true)
-        {
-            return selection;
-        }
-    }
-
-    choose_pos_sensitive_candidates(lookup, candidates, context.part_of_speech)
-}
-
-fn choose_pos_sensitive_candidates(
-    lookup: &str,
-    candidates: Vec<Vec<CmuPhoneme>>,
-    part_of_speech: Option<PartOfSpeech>,
-) -> CandidateSelection {
-    let Some(part_of_speech) = part_of_speech else {
+    let Some(rule) = pronunciation_selection_rule(variety, lookup, context) else {
         return CandidateSelection {
             candidates,
             applied_pos: false,
         };
     };
-    let Some(preferred) = pos_sensitive_pronunciation(lookup, part_of_speech) else {
-        return CandidateSelection {
+    choose_matching_candidate(&candidates, &rule.source_pronunciation, true).unwrap_or(
+        CandidateSelection {
             candidates,
             applied_pos: false,
-        };
-    };
-    choose_matching_candidate(&candidates, preferred.symbols, true).unwrap_or(CandidateSelection {
-        candidates,
-        applied_pos: false,
-    })
+        },
+    )
 }
 
 fn choose_matching_candidate(
     candidates: &[Vec<CmuPhoneme>],
-    symbols: &[&str],
+    symbols: &[String],
     applied_pos: bool,
 ) -> Option<CandidateSelection> {
     let Some(position) = candidates
@@ -1619,14 +1596,23 @@ fn choose_matching_candidate(
     })
 }
 
-fn pos_sensitive_pronunciation(
+fn pronunciation_selection_rule<'a>(
+    variety: &'a LinguisticVariety,
     lookup: &str,
-    part_of_speech: PartOfSpeech,
-) -> Option<&'static english_normalization::PosSensitivePronunciationSpec> {
-    let part_of_speech = canonical_pronunciation_pos(part_of_speech);
-    english_normalization::POS_SENSITIVE_PRONUNCIATIONS
-        .iter()
-        .find(|entry| entry.word == lookup && entry.part_of_speech == part_of_speech)
+    context: TokenPronunciationContext,
+) -> Option<&'a crate::variety::PronunciationSelectionRule> {
+    let part_of_speech = context.part_of_speech.map(canonical_pronunciation_pos);
+    variety.pronunciation_selection_rules.iter().find(|rule| {
+        rule.lexical_item == lookup
+            && rule
+                .part_of_speech
+                .map(canonical_pronunciation_pos)
+                .is_none_or(|expected| Some(expected) == part_of_speech)
+            && rule
+                .next_part_of_speech
+                .is_none_or(|expected| Some(expected) == context.next_part_of_speech)
+            && !rule.source_pronunciation.is_empty()
+    })
 }
 
 fn canonical_pronunciation_pos(part_of_speech: PartOfSpeech) -> PartOfSpeech {
@@ -1636,7 +1622,7 @@ fn canonical_pronunciation_pos(part_of_speech: PartOfSpeech) -> PartOfSpeech {
     }
 }
 
-fn candidate_matches_symbols(candidate: &[CmuPhoneme], symbols: &[&str]) -> bool {
+fn candidate_matches_symbols(candidate: &[CmuPhoneme], symbols: &[String]) -> bool {
     candidate.len() == symbols.len()
         && candidate
             .iter()
@@ -1993,7 +1979,7 @@ fn realize_connected_allophone_before_word(
         return;
     };
     if phonemes.len() < 2 {
-        apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
+        apply_declared_connected_speech(variety, previous_word, phones, next, careful_style);
         return;
     }
 
@@ -2021,10 +2007,10 @@ fn realize_connected_allophone_before_word(
 
     phones[phone_index] = realized.clone();
     phonemes[target_index].realized_as = vec![realized];
-    apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
+    apply_declared_connected_speech(variety, previous_word, phones, next, careful_style);
 }
 
-fn apply_french_connected_speech(
+fn apply_declared_connected_speech(
     variety: &LinguisticVariety,
     previous_word: Option<&str>,
     phones: &mut Vec<PhoneToken>,
@@ -3322,7 +3308,8 @@ mod tests {
             "This is the twenty-first case."
         );
         assert_eq!(
-            VarietyDataPhonemicizer.text_normalizer("It was 70°F outside.", &VarietyId("en-US".into())),
+            VarietyDataPhonemicizer
+                .text_normalizer("It was 70°F outside.", &VarietyId("en-US".into())),
             "It was seventy degrees Fahrenheit outside."
         );
         assert_eq!(
@@ -4568,9 +4555,7 @@ mod tests {
 
             for lexicon_id in &variety.pronunciation_lexicons {
                 assert!(
-                    LEXICON_REGISTRY
-                        .iter()
-                        .any(|registration| registration.id == lexicon_id),
+                    lexicons::adapter_for_id(lexicon_id).is_some(),
                     "{} declares unknown pronunciation lexicon `{}`",
                     variety.id.0,
                     lexicon_id

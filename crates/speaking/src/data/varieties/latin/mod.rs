@@ -67,6 +67,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
+        pronunciation_selection_rules: Vec::new(),
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),

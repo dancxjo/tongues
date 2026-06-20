@@ -33,6 +33,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: vec![LEXIQUE383_ID.into()],
+        pronunciation_selection_rules: Vec::new(),
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
