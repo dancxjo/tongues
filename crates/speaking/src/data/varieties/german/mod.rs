@@ -154,6 +154,9 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         verb_suffixes: &["en"],
         subject_verb_suffixes: &["e", "st", "t"],
         non_verbs: &[],
+        object_suffixes: &["en", "em"],
+        infinitival_markers: &["zu"],
+        allow_noun_compounds: true,
         ..LinkGrammarRuleSet::empty()
     }
 }

@@ -306,6 +306,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
             "lentement",
             "seulement",
         ],
+        infinitival_markers: &["à", "a", "de", "d'"],
         ..LinkGrammarRuleSet::empty()
     }
 }

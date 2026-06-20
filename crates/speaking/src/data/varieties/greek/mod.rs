@@ -323,6 +323,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         verb_suffixes: &[],
         subject_verb_suffixes: &["ω", "εις", "ει", "ουμε", "ετε", "ουν"],
         non_verbs: &[],
+        object_suffixes: &["ν"],
         ..LinkGrammarRuleSet::empty()
     }
 }

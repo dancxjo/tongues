@@ -225,6 +225,8 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         verb_suffixes: &["are", "ere", "ire"],
         subject_verb_suffixes: &["o", "m", "s", "t", "mus", "tis", "nt"],
         non_verbs: &[],
+        subject_suffixes: &["us", "a", "um", "is", "es"],
+        object_suffixes: &["um", "am", "em", "os", "as"],
         ..LinkGrammarRuleSet::empty()
     }
 }

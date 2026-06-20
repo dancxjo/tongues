@@ -384,6 +384,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         ],
         subject_verb_suffixes: &["o", "as", "es", "a", "e", "an", "en"],
         non_verbs: &[],
+        infinitival_markers: &["a", "de", "para"],
         ..LinkGrammarRuleSet::empty()
     }
 }

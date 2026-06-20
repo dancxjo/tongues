@@ -218,6 +218,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         verb_suffixes: &["i", "as", "is", "os", "us", "u"],
         subject_verb_suffixes: &[],
         non_verbs: &[],
+        object_suffixes: &["n"],
         ..LinkGrammarRuleSet::empty()
     }
 }

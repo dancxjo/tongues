@@ -1,9 +1,46 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost, RawLinkGrammarLink,
-    RawLinkGrammarParse, SentenceSyntaxAnalysis, SyntacticLink, SyntacticLinkKind,
-    SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
+    LinkGrammarRuleSet, PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost,
+    RawLinkGrammarLink, RawLinkGrammarParse, SentenceSyntaxAnalysis, SyntacticLink,
+    SyntacticLinkKind, SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
 };
+
+pub fn syntax_profile() -> LinkGrammarRuleSet {
+    LinkGrammarRuleSet {
+        determiners: DETERMINERS,
+        pronouns: PRONOUNS,
+        object_pronouns: OBJECT_PRONOUNS,
+        auxiliaries: AUXILIARIES,
+        copulas: COPULAS,
+        prepositions: PREPOSITIONS,
+        postpositions: &[],
+        conjunctions: CONJUNCTIONS,
+        particles: VOCATIVE_OPENERS,
+        enclitic_suffixes: &[],
+        complementizers: CLAUSE_MARKERS,
+        adverbs: ADVERBS,
+        adverb_suffixes: ADVERB_SUFFIXES,
+        adjectives: ADJECTIVES,
+        adjective_suffixes: ADJECTIVE_SUFFIXES,
+        verbs: LIKELY_VERBS,
+        verb_suffixes: VERB_SUFFIXES,
+        subject_verb_suffixes: &[],
+        non_verbs: &[],
+        subject_suffixes: &[],
+        object_suffixes: &[],
+        possessive_suffixes: &["'s"],
+        infinitival_markers: &["to"],
+        proper_names: PROPER_NAMES,
+        common_appositive_heads: COMMON_APPOSITIVE_HEADS,
+        vocative_openers: VOCATIVE_OPENERS,
+        parenthetical_markers: PARENTHETICAL_MARKERS,
+        contrast_negators: CONTRAST_NEGATORS,
+        phrasal_particles: PHRASAL_PARTICLES,
+        past_participles: PAST_PARTICIPLES,
+        allow_noun_compounds: true,
+        ..LinkGrammarRuleSet::empty()
+    }
+}
 
 pub fn parse_link_grammar(
     words: &[String],
@@ -781,12 +818,24 @@ pub const SUBORDINATING_CONJUNCTIONS: &[&str] = &[
     "when", "where", "whether", "while",
 ];
 
+pub const CONJUNCTIONS: &[&str] = &[
+    "and", "or", "but", "nor", "after", "although", "as", "because", "before", "if", "since",
+    "though", "unless", "until", "when", "where", "whether", "while",
+];
+
 pub const COMPLEMENTIZERS: &[&str] = &["that", "whether", "if", "who", "what", "which", "how"];
+
+pub const CLAUSE_MARKERS: &[&str] = &[
+    "that", "whether", "if", "who", "what", "which", "how", "after", "although", "as", "because",
+    "before", "since", "though", "unless", "until", "when", "where", "while",
+];
 
 pub const PRONOUNS: &[&str] = &[
     "i", "me", "you", "he", "him", "she", "her", "it", "we", "us", "they", "them", "who", "whom",
-    "what", "which",
+    "what", "which", "this", "that", "these", "those",
 ];
+
+pub const OBJECT_PRONOUNS: &[&str] = &["me", "him", "her", "us", "them", "whom"];
 
 pub const NOMINAL_FUNCTION_WORDS: &[&str] = &[
     "i", "me", "you", "he", "him", "she", "her", "it", "we", "us", "they", "them", "who", "what",
@@ -810,6 +859,7 @@ pub const LIKELY_VERBS: &[&str] = &[
     "chased",
     "choose",
     "close",
+    "comes",
     "coming",
     "come",
     "comply",
@@ -1028,6 +1078,15 @@ pub const PARENTHETICAL_MARKERS: &[&str] = &[
 ];
 
 pub const CONTRAST_NEGATORS: &[&str] = &["not", "n't"];
+
+pub const PHRASAL_PARTICLES: &[&str] = &[
+    "about", "away", "back", "down", "in", "off", "on", "out", "over", "through", "up",
+];
+
+pub const PAST_PARTICIPLES: &[&str] = &[
+    "*", "bought", "chosen", "done", "given", "gone", "known", "left", "made", "read", "seen",
+    "taken", "thought", "thrown", "told", "written",
+];
 
 pub fn base_pos(word: &str) -> PartOfSpeech {
     if is_auxiliary(word) {

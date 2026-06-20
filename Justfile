@@ -19,6 +19,47 @@ continue *args:
 parse *args:
     @cargo run -q --bin tongues -- sentence-parser stream "$@"
 
+# Quick split demos
+split target='sentences':
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    case "{{target}}" in
+        sentences) just split-sentences ;;
+        *)
+            echo "Unknown split demo: {{target}}" >&2
+            echo "Available: sentences" >&2
+            exit 2
+            ;;
+    esac
+
+# Demonstrate the current head2phones model pronouncing whole sentences on CPU
+split-sentences:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    model="${HEAD2PHONES_MODEL:-models/head2phones/v0}"
+    examples=(
+        "en-US|To be, or not to be?"
+        "fr-FR-Standard|Je pense, donc je suis."
+        "de-DE-Standard|Am Brunnen vor dem Tore."
+        "es-ES-Castilian|En un lugar de la Mancha."
+        "eo|Ho, mia kor!"
+        "la-Classical|Arma virumque cano."
+    )
+
+    echo "head2phones CPU sentence demo"
+    echo "model: $model"
+    echo
+
+    for example in "${examples[@]}"; do
+        variety="${example%%|*}"
+        sentence="${example#*|}"
+        echo "[$variety] $sentence"
+        cargo run -q --bin tongues -- --cpu head2phones infer --model "$model" --variety "$variety" "$sentence"
+        echo
+    done
+
 # Forward directly to the tongues CLI
 run *args:
     cargo run --bin tongues -- "$@"

@@ -220,6 +220,8 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         verb_suffixes: &[],
         subject_verb_suffixes: &["ति", "न्ति", "मि", "सि", "तः", "थ"],
         non_verbs: &[],
+        subject_suffixes: &["ः", "ā", "aḥ"],
+        object_suffixes: &["म्", "ं", "m", "am", "ām"],
         ..LinkGrammarRuleSet::empty()
     }
 }

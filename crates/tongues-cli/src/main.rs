@@ -8061,33 +8061,97 @@ fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
 
 fn cmd_fetch_lexique(out: &Path) -> Result<()> {
     const URL: &str = "https://www.lexique.org/databases/Lexique383/Lexique383.tsv";
-    fetch_url(URL, out, "Lexique383", "Lexique383.tsv")
+    const BUNDLED: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../speaking/src/data/lexicons/Lexique383.tsv"
+    );
+    fetch_url_with_fallback(URL, out, "Lexique383", "Lexique383.tsv", Some(BUNDLED))
 }
 
 fn fetch_url(url: &str, out: &Path, label: &str, fallback_filename: &str) -> Result<()> {
+    fetch_url_with_fallback(url, out, label, fallback_filename, None)
+}
+
+fn fetch_url_with_fallback(
+    url: &str,
+    out: &Path,
+    label: &str,
+    fallback_filename: &str,
+    bundled_fallback: Option<&str>,
+) -> Result<()> {
     println!("Fetching {label} from {url}");
 
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).context("creating output directory")?;
     }
 
-    let out_arg = out.to_str().unwrap_or(fallback_filename);
+    let part = out.with_extension(format!(
+        "{}part",
+        out.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}."))
+            .unwrap_or_default()
+    ));
+    let _ = fs::remove_file(&part);
+
+    let out_arg = part.to_str().unwrap_or(fallback_filename);
     let status = std::process::Command::new("curl")
-        .args(["-fsSL", "-o", out_arg, url])
+        .args([
+            "-fsSL",
+            "--connect-timeout",
+            "20",
+            "--max-time",
+            "120",
+            "-o",
+            out_arg,
+            url,
+        ])
         .status();
 
     if matches!(status, Ok(status) if status.success()) {
+        fs::rename(&part, out)
+            .with_context(|| format!("renaming {} to {}", part.display(), out.display()))?;
         println!("Saved to {}", out.display());
         return Ok(());
     }
+    let _ = fs::remove_file(&part);
 
     let status = std::process::Command::new("wget")
-        .args(["-qO", out_arg, url])
+        .args([
+            "--connect-timeout=20",
+            "--read-timeout=120",
+            "-qO",
+            out_arg,
+            url,
+        ])
         .status()
         .context("neither curl nor wget succeeded")?;
     if status.success() {
+        fs::rename(&part, out)
+            .with_context(|| format!("renaming {} to {}", part.display(), out.display()))?;
         println!("Saved to {}", out.display());
         return Ok(());
+    }
+    let _ = fs::remove_file(&part);
+
+    if let Some(fallback) = bundled_fallback {
+        let fallback = Path::new(fallback);
+        if fallback.exists() {
+            fs::copy(fallback, &part).with_context(|| {
+                format!(
+                    "copying bundled fallback {} to {}",
+                    fallback.display(),
+                    part.display()
+                )
+            })?;
+            fs::rename(&part, out)
+                .with_context(|| format!("renaming {} to {}", part.display(), out.display()))?;
+            println!(
+                "Could not download {label}; copied bundled fallback to {}",
+                out.display()
+            );
+            return Ok(());
+        }
     }
 
     anyhow::bail!(
