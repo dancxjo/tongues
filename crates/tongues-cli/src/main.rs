@@ -8541,7 +8541,7 @@ fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
 // ── fetch-lexique ──────────────────────────────────────────────────────────
 
 fn cmd_fetch_lexique(out: &Path) -> Result<()> {
-    const URL: &str = "https://www.lexique.org/databases/Lexique383/Lexique383.tsv";
+    const URL: &str = "http://www.lexique.org/databases/Lexique383/Lexique383.tsv";
     const BUNDLED: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../speaking/src/data/lexicons/Lexique383.tsv"

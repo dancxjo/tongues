@@ -5,7 +5,7 @@ use std::process::Command;
 
 const CMUDICT_URL: &str = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict";
 const CMUDICT_SOURCE: &str = "src/data/lexicons/cmudict.dict";
-const LEXIQUE383_URL: &str = "https://www.lexique.org/databases/Lexique383/Lexique383.tsv";
+const LEXIQUE383_URL: &str = "http://www.lexique.org/databases/Lexique383/Lexique383.tsv";
 const LEXIQUE383_SOURCE: &str = "src/data/lexicons/Lexique383.tsv";
 const LEXIQUE383_SEED: &str = "\
 ortho\tphon

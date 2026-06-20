@@ -203,5 +203,5 @@ https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
 Lexique383 is fetched from:
 
 ```text
-https://www.lexique.org/databases/Lexique383/Lexique383.tsv
+http://www.lexique.org/databases/Lexique383/Lexique383.tsv
 ```
