@@ -15,7 +15,7 @@ use crate::data::lexicons::cmudict::CmuPhoneme;
 use crate::data::notation::arpabet::{self, ARPABET};
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{AcousticCueId, FeatureId, LanguageId, PhoneId, VarietyId};
-use crate::orthography::Orthography;
+use crate::orthography::{OrthographicPronunciation, Orthography};
 use crate::phonetics::PhoneInventory;
 use crate::phonology::{PhonemeAllophone, PhonemeInventory};
 use crate::prosody::{ProsodicContext, Stress};
@@ -26,9 +26,9 @@ use crate::rules::{
 use crate::segment::{Environment, SegmentMatcher, SyllablePosition, WordPosition};
 use crate::spec::Spec;
 use crate::variety::{
-    LinguisticVariety, OrthographicUnitKind, OrthographicUnitPronunciation,
-    VarietyImplementationStatus, VarietyStatus, WeakFormFollowingContext, WeakFormRule,
-    WeakFormStyleContext,
+    LinguisticVariety, NumberNameSet, OrthographicUnitKind, OrthographicUnitPronunciation,
+    PronunciationLexicon, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+    WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
 const P: PhoneId = PhoneId::borrowed("ipa.phone.p");
@@ -194,9 +194,42 @@ pub fn variety(id: &str) -> LinguisticVariety {
         epenthesis_rules: epenthesis_rules(),
         weak_forms: weak_forms(row.id),
         orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
+        pronunciation_lexicons: vec![PronunciationLexicon::Cmudict],
+        syntax_profile: Some(SyntaxProfile::English),
+        number_names: Some(NumberNameSet {
+            cardinal_0_to_20: [
+                "zero",
+                "one",
+                "two",
+                "three",
+                "four",
+                "five",
+                "six",
+                "seven",
+                "eight",
+                "nine",
+                "ten",
+                "eleven",
+                "twelve",
+                "thirteen",
+                "fourteen",
+                "fifteen",
+                "sixteen",
+                "seventeen",
+                "eighteen",
+                "nineteen",
+                "twenty",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            ordinal_suffixes: Vec::new(),
+        }),
+        connected_speech: Vec::new(),
         phonotactics: Some(phonotactics(row.singing)),
         orthography: Some(Orthography {
             name: "English Latin orthography".into(),
+            pronunciation: Some(OrthographicPronunciation::EnglishCmudict),
             ..Default::default()
         }),
         morphology: Some(morphology::english_morphology(row.id)),

@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::Orthography;
+use crate::orthography::{OrthographicPronunciation, Orthography};
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStatus};
+use crate::variety::{
+    LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+};
 
 const SEGMENTS: &[&str] = &[
     "a", "aː", "i", "iː", "u", "uː", "r̩", "eː", "ai̯", "oː", "au̯", "k", "kʰ", "ɡ", "ɡʱ", "ŋ", "t͡ɕ",
@@ -27,9 +29,42 @@ pub fn variety() -> LinguisticVariety {
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
+        pronunciation_lexicons: Vec::new(),
+        syntax_profile: Some(SyntaxProfile::Sanskrit),
+        number_names: Some(NumberNameSet {
+            cardinal_0_to_20: [
+                "śūnya",
+                "eka",
+                "dvi",
+                "tri",
+                "catur",
+                "pañca",
+                "ṣaṣ",
+                "sapta",
+                "aṣṭa",
+                "nava",
+                "daśa",
+                "ekādaśa",
+                "dvādaśa",
+                "trayodaśa",
+                "caturdaśa",
+                "pañcadaśa",
+                "ṣoḍaśa",
+                "saptadaśa",
+                "aṣṭādaśa",
+                "navadaśa",
+                "viṃśati",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            ordinal_suffixes: Vec::new(),
+        }),
+        connected_speech: Vec::new(),
         phonotactics: None,
         orthography: Some(Orthography {
             name: "Sanskrit Devanagari and transliteration".into(),
+            pronunciation: Some(OrthographicPronunciation::Sanskrit),
             ..Default::default()
         }),
         morphology: None,

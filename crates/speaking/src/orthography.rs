@@ -27,8 +27,24 @@ pub struct GraphemeToken {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Orthography {
     pub name: String,
+    #[serde(default)]
+    pub pronunciation: Option<OrthographicPronunciation>,
     pub graphemes: HashMap<GraphemeId, Grapheme>,
     pub g2p_rules: Vec<GraphemeToPhonemeRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrthographicPronunciation {
+    Alias,
+    EnglishCmudict,
+    Esperanto,
+    French,
+    German,
+    Greek,
+    Latin,
+    Sanskrit,
+    Spanish,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

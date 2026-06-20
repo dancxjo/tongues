@@ -45,4 +45,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn builtin_varieties_advertise_pipeline_capabilities_as_data() {
+        for variety in builtin_varieties() {
+            assert!(
+                variety
+                    .orthography
+                    .as_ref()
+                    .and_then(|orthography| orthography.pronunciation.as_ref())
+                    .is_some(),
+                "{} should declare an orthographic pronunciation profile",
+                variety.id.0
+            );
+            assert!(
+                variety.syntax_profile.is_some(),
+                "{} should declare its syntax profile",
+                variety.id.0
+            );
+            assert!(
+                variety
+                    .number_names
+                    .as_ref()
+                    .is_some_and(|names| names.cardinal_0_to_20.len() == 21),
+                "{} should declare small-number names",
+                variety.id.0
+            );
+        }
+    }
 }

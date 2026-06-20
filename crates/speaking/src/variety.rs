@@ -33,6 +33,14 @@ pub struct LinguisticVariety {
     pub weak_forms: Vec<WeakFormRule>,
     #[serde(default)]
     pub orthographic_unit_pronunciations: Vec<OrthographicUnitPronunciation>,
+    #[serde(default)]
+    pub pronunciation_lexicons: Vec<PronunciationLexicon>,
+    #[serde(default)]
+    pub syntax_profile: Option<SyntaxProfile>,
+    #[serde(default)]
+    pub number_names: Option<NumberNameSet>,
+    #[serde(default)]
+    pub connected_speech: Vec<ConnectedSpeechRule>,
     pub phonotactics: Option<Phonotactics>,
     pub orthography: Option<Orthography>,
     pub morphology: Option<Morphology>,
@@ -59,6 +67,57 @@ pub enum VarietyImplementationStatus {
     Complete,
     StubDerivedFrom(VarietyId),
     PermissiveProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PronunciationLexicon {
+    Cmudict,
+    Lexique383,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyntaxProfile {
+    English,
+    Esperanto,
+    French,
+    German,
+    Greek,
+    Latin,
+    Sanskrit,
+    Spanish,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NumberNameSet {
+    #[serde(default)]
+    pub cardinal_0_to_20: Vec<String>,
+    #[serde(default)]
+    pub ordinal_suffixes: Vec<OrdinalSuffixName>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrdinalSuffixName {
+    pub value: u32,
+    pub suffixes: Vec<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ConnectedSpeechRule {
+    FrenchSchwaDeletionBeforeConsonant,
+    FrenchLiaison {
+        #[serde(default)]
+        entries: Vec<ConnectedSpeechEntry>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectedSpeechEntry {
+    pub after_word: String,
+    pub before_vowel_phone: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

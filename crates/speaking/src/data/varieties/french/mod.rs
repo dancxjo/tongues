@@ -2,13 +2,16 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::Orthography;
+use crate::orthography::{OrthographicPronunciation, Orthography};
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::PartOfSpeech;
-use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStatus};
+use crate::variety::{
+    ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
+    PronunciationLexicon, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+};
 
 const SEGMENTS: &[&str] = &[
     "a", "ɑ̃", "e", "ɛ", "ɛ̃", "i", "o", "ɔ", "ɔ̃", "u", "y", "ø", "œ", "œ̃", "ə", "b", "d", "f", "ɡ",
@@ -27,9 +30,57 @@ pub fn variety() -> LinguisticVariety {
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
+        pronunciation_lexicons: vec![PronunciationLexicon::Lexique383],
+        syntax_profile: Some(SyntaxProfile::French),
+        number_names: Some(NumberNameSet {
+            cardinal_0_to_20: [
+                "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
+                "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept",
+                "dix-huit", "dix-neuf", "vingt",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            ordinal_suffixes: vec![OrdinalSuffixName {
+                value: 1,
+                suffixes: vec!["er".into(), "re".into()],
+                name: "premier".into(),
+            }],
+        }),
+        connected_speech: vec![
+            ConnectedSpeechRule::FrenchSchwaDeletionBeforeConsonant,
+            ConnectedSpeechRule::FrenchLiaison {
+                entries: [
+                    ("les", "z"),
+                    ("des", "z"),
+                    ("mes", "z"),
+                    ("tes", "z"),
+                    ("ses", "z"),
+                    ("nos", "z"),
+                    ("vos", "z"),
+                    ("nous", "z"),
+                    ("vous", "z"),
+                    ("deux", "z"),
+                    ("trois", "z"),
+                    ("un", "n"),
+                    ("mon", "n"),
+                    ("ton", "n"),
+                    ("son", "n"),
+                    ("en", "n"),
+                    ("on", "n"),
+                ]
+                .into_iter()
+                .map(|(after_word, before_vowel_phone)| ConnectedSpeechEntry {
+                    after_word: after_word.into(),
+                    before_vowel_phone: before_vowel_phone.into(),
+                })
+                .collect(),
+            },
+        ],
         phonotactics: None,
         orthography: Some(Orthography {
             name: "French Latin orthography".into(),
+            pronunciation: Some(OrthographicPronunciation::French),
             ..Default::default()
         }),
         morphology: None,

@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
-use crate::orthography::Orthography;
+use crate::orthography::{OrthographicPronunciation, Orthography};
 use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStatus};
+use crate::variety::{
+    LinguisticVariety, NumberNameSet, SyntaxProfile, VarietyImplementationStatus, VarietyStatus,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatinVariety {
@@ -62,6 +64,38 @@ pub fn variety(id: &str) -> LinguisticVariety {
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
+        pronunciation_lexicons: Vec::new(),
+        syntax_profile: Some(SyntaxProfile::Latin),
+        number_names: Some(NumberNameSet {
+            cardinal_0_to_20: [
+                "nihil",
+                "unus",
+                "duo",
+                "tres",
+                "quattuor",
+                "quinque",
+                "sex",
+                "septem",
+                "octo",
+                "novem",
+                "decem",
+                "undecim",
+                "duodecim",
+                "tredecim",
+                "quattuordecim",
+                "quindecim",
+                "sedecim",
+                "septendecim",
+                "duodeviginti",
+                "undeviginti",
+                "viginti",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            ordinal_suffixes: Vec::new(),
+        }),
+        connected_speech: Vec::new(),
         phonotactics: Some(Phonotactics {
             allowed_syllable_shapes: vec![
                 SyllableShape {
@@ -96,6 +130,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         }),
         orthography: Some(Orthography {
             name: "Latin orthography".into(),
+            pronunciation: Some(OrthographicPronunciation::Latin),
             ..Default::default()
         }),
         morphology: None,

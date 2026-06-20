@@ -18,6 +18,7 @@ use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::GraphemeToken;
+use crate::orthography::OrthographicPronunciation;
 use crate::phonology::{PhoneToken, Phoneme, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
 use crate::realize::{
@@ -34,8 +35,8 @@ use crate::syntax::{
 };
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
-    LinguisticVariety, OrthographicUnitKind, WeakFormFollowingContext, WeakFormRule,
-    WeakFormStyleContext,
+    ConnectedSpeechRule, LinguisticVariety, OrthographicUnitKind, PronunciationLexicon,
+    SyntaxProfile, WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
 const WORD_BOUNDARY_ID: &str = "boundary.word";
@@ -60,9 +61,13 @@ pub fn phonemicizer_for_variety(
         variety_by_code(&canonical.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical.clone(),
         })?;
-    match variety_data.language.0.as_str() {
-        "en" => Ok(Box::new(EnglishPhonemicizer)),
-        _ => Ok(Box::new(VarietyDataPhonemicizer)),
+    if variety_data
+        .pronunciation_lexicons
+        .contains(&PronunciationLexicon::Cmudict)
+    {
+        Ok(Box::new(EnglishPhonemicizer))
+    } else {
+        Ok(Box::new(VarietyDataPhonemicizer))
     }
 }
 
@@ -440,7 +445,10 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 variety: canonical_variety.clone(),
             }
         })?;
-        if variety.language.0 != "en" {
+        if !variety
+            .pronunciation_lexicons
+            .contains(&PronunciationLexicon::Cmudict)
+        {
             return Err(PhonemicizeError::UnsupportedVariety {
                 variety: canonical_variety.clone(),
             });
@@ -525,13 +533,10 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 .chars()
                 .find(|character| character.is_alphabetic())
                 .map(|character| {
-                    planned_candidate_from_cmu(
+                    orthographic_unit_planned_candidate(
+                        &character.to_ascii_uppercase().to_string(),
                         variety,
-                        orthographic_unit_candidate(
-                            &character.to_ascii_uppercase().to_string(),
-                            variety,
-                            OrthographicUnitKind::LetterName,
-                        ),
+                        OrthographicUnitKind::LetterName,
                     )
                 })
                 .unwrap_or_default(),
@@ -542,13 +547,15 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                     .cloned()
                     .unwrap_or_default()
             }
-            OrthographicTokenKind::LetterName => planned_candidate_from_cmu(
+            OrthographicTokenKind::LetterName => orthographic_unit_planned_candidate(
+                &word.text,
                 variety,
-                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::LetterName),
+                OrthographicUnitKind::LetterName,
             ),
-            OrthographicTokenKind::DigitName => planned_candidate_from_cmu(
+            OrthographicTokenKind::DigitName => orthographic_unit_planned_candidate(
+                &word.text,
                 variety,
-                orthographic_unit_candidate(&word.text, variety, OrthographicUnitKind::DigitName),
+                OrthographicUnitKind::DigitName,
             ),
             OrthographicTokenKind::Word | OrthographicTokenKind::Hyphenated(_) => self
                 .token_classifier(
@@ -618,14 +625,15 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
     }
 
     fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        match variety.language.0.as_str() {
-            "eo" => Some(&EsperantoLinkGrammarParser),
-            "fr" => Some(&FrenchLinkGrammarParser),
-            "es" => Some(&SpanishLinkGrammarParser),
-            "de" => Some(&GermanLinkGrammarParser),
-            "el" | "grc" => Some(&GreekLinkGrammarParser),
-            "la" => Some(&LatinLinkGrammarParser),
-            "sa" => Some(&SanskritLinkGrammarParser),
+        match variety.syntax_profile {
+            Some(SyntaxProfile::English) => Some(&EnglishLinkGrammarParser),
+            Some(SyntaxProfile::Esperanto) => Some(&EsperantoLinkGrammarParser),
+            Some(SyntaxProfile::French) => Some(&FrenchLinkGrammarParser),
+            Some(SyntaxProfile::Spanish) => Some(&SpanishLinkGrammarParser),
+            Some(SyntaxProfile::German) => Some(&GermanLinkGrammarParser),
+            Some(SyntaxProfile::Greek) => Some(&GreekLinkGrammarParser),
+            Some(SyntaxProfile::Latin) => Some(&LatinLinkGrammarParser),
+            Some(SyntaxProfile::Sanskrit) => Some(&SanskritLinkGrammarParser),
             _ => None,
         }
     }
@@ -1476,22 +1484,18 @@ fn variety_data_pronunciation_for_word(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
-    if variety.language.0 == "fr"
-        && let Some(pronunciation) = lexique_pronunciation(word, variety, context)
-    {
-        return pronunciation;
+    for lexicon in &variety.pronunciation_lexicons {
+        match lexicon {
+            PronunciationLexicon::Lexique383 => {
+                if let Some(pronunciation) = lexique_pronunciation(word, variety, context) {
+                    return pronunciation;
+                }
+            }
+            PronunciationLexicon::Cmudict => {}
+        }
     }
 
-    let candidate = match variety.language.0.as_str() {
-        "eo" => planned_candidate_from_esperanto_orthography(&word.normalized, variety),
-        "fr" => planned_candidate_from_french_orthography(&word.normalized, variety, context),
-        "de" => planned_candidate_from_german_orthography(&word.normalized, variety),
-        "el" | "grc" => planned_candidate_from_greek_orthography(&word.normalized, variety),
-        "la" => planned_candidate_from_latin_orthography(&word.normalized, variety),
-        "sa" => planned_candidate_from_sanskrit_orthography(&word.normalized, variety),
-        "es" => planned_candidate_from_spanish_orthography(&word.normalized, variety),
-        _ => planned_candidate_from_variety_aliases(&word.normalized, variety),
-    };
+    let candidate = planned_candidate_from_orthography_profile(&word.normalized, variety, context);
     if candidate.is_empty() {
         return WordPronunciation {
             candidates: Vec::new(),
@@ -1527,6 +1531,46 @@ fn variety_data_pronunciation_for_word(
         letter_break_offsets: Vec::new(),
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
+    }
+}
+
+fn planned_candidate_from_orthography_profile(
+    normalized: &str,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Vec<PlannedPhoneme> {
+    match variety
+        .orthography
+        .as_ref()
+        .and_then(|orthography| orthography.pronunciation.as_ref())
+    {
+        Some(OrthographicPronunciation::EnglishCmudict) => {
+            planned_candidate_from_variety_aliases(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Esperanto) => {
+            planned_candidate_from_esperanto_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::French) => {
+            planned_candidate_from_french_orthography(normalized, variety, context)
+        }
+        Some(OrthographicPronunciation::German) => {
+            planned_candidate_from_german_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Greek) => {
+            planned_candidate_from_greek_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Latin) => {
+            planned_candidate_from_latin_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Sanskrit) => {
+            planned_candidate_from_sanskrit_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Spanish) => {
+            planned_candidate_from_spanish_orthography(normalized, variety)
+        }
+        Some(OrthographicPronunciation::Alias) | None => {
+            planned_candidate_from_variety_aliases(normalized, variety)
+        }
     }
 }
 
@@ -2147,8 +2191,13 @@ fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> 
 fn acronym_pronunciation(surface: &str, variety: &LinguisticVariety) -> WordPronunciation {
     let (candidate, letter_break_offsets, letter_indices) =
         letter_name_sequence(surface.chars(), variety);
+    let expanded = candidate
+        .iter()
+        .map(|phoneme| phoneme_display_symbol(&phoneme.phoneme))
+        .collect::<Vec<_>>()
+        .join(" ");
     WordPronunciation {
-        candidates: vec![planned_candidate_from_cmu(variety, candidate.clone())],
+        candidates: vec![candidate],
         status: PronunciationStatus::Exact,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -2158,14 +2207,7 @@ fn acronym_pronunciation(surface: &str, variety: &LinguisticVariety) -> WordPron
         warnings: vec![PronunciationWarning {
             token: surface.into(),
             kind: PronunciationWarningKind::AcronymExpanded,
-            message: format!(
-                "acronym expanded: {surface} -> {}",
-                candidate
-                    .iter()
-                    .map(CmuPhoneme::raw_symbol)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
+            message: format!("acronym expanded: {surface} -> {expanded}"),
         }],
         letter_break_offsets,
         letter_indices,
@@ -2188,7 +2230,7 @@ fn mixed_alphanumeric_pronunciation(
             mixed_alphanumeric_sequence(word.text.chars(), variety);
         candidate.extend(sequence);
         return WordPronunciation {
-            candidates: vec![planned_candidate_from_cmu(variety, candidate)],
+            candidates: vec![candidate],
             status: PronunciationStatus::Guessed,
             provenance: EvidenceProvenance {
                 source: EvidenceSource::Rule,
@@ -2205,10 +2247,13 @@ fn mixed_alphanumeric_pronunciation(
             part_of_speech: None,
         };
     } else {
-        candidate.extend(guess_pronunciation(&word.normalized));
+        candidate.extend(planned_candidate_from_cmu(
+            variety,
+            guess_pronunciation(&word.normalized),
+        ));
     }
     WordPronunciation {
-        candidates: vec![planned_candidate_from_cmu(variety, candidate)],
+        candidates: vec![candidate],
         status: PronunciationStatus::Guessed,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -2229,7 +2274,7 @@ fn mixed_alphanumeric_pronunciation(
 fn mixed_alphanumeric_sequence(
     characters: impl IntoIterator<Item = char>,
     variety: &LinguisticVariety,
-) -> (Vec<CmuPhoneme>, Vec<usize>, Vec<usize>) {
+) -> (Vec<PlannedPhoneme>, Vec<usize>, Vec<usize>) {
     let mut candidate = Vec::new();
     let mut break_offsets = Vec::new();
     let mut letter_indices = Vec::new();
@@ -2241,13 +2286,13 @@ fn mixed_alphanumeric_sequence(
 
     for (index, character) in units.iter().enumerate() {
         let pronunciation = if character.is_ascii_digit() {
-            orthographic_unit_candidate(
+            orthographic_unit_planned_candidate(
                 &character.to_string(),
                 variety,
                 OrthographicUnitKind::DigitName,
             )
         } else if character.is_alphabetic() {
-            orthographic_unit_candidate(
+            orthographic_unit_planned_candidate(
                 &character.to_ascii_uppercase().to_string(),
                 variety,
                 OrthographicUnitKind::LetterName,
@@ -2275,7 +2320,7 @@ fn mixed_alphanumeric_sequence(
 fn letter_name_sequence(
     characters: impl IntoIterator<Item = char>,
     variety: &LinguisticVariety,
-) -> (Vec<CmuPhoneme>, Vec<usize>, Vec<usize>) {
+) -> (Vec<PlannedPhoneme>, Vec<usize>, Vec<usize>) {
     let mut candidate = Vec::new();
     let mut break_offsets = Vec::new();
     let mut letter_indices = Vec::new();
@@ -2284,7 +2329,7 @@ fn letter_name_sequence(
         .filter(|character| character.is_alphabetic())
         .collect::<Vec<_>>();
     for (index, character) in letters.iter().enumerate() {
-        let letter_name = orthographic_unit_candidate(
+        let letter_name = orthographic_unit_planned_candidate(
             &character.to_ascii_uppercase().to_string(),
             variety,
             OrthographicUnitKind::LetterName,
@@ -2304,12 +2349,12 @@ fn orthographic_unit_pronunciation(
     kind: OrthographicUnitKind,
     letter_index: Option<usize>,
 ) -> WordPronunciation {
-    let candidate = orthographic_unit_candidate(&word.text, variety, kind);
+    let planned = orthographic_unit_planned_candidate(&word.text, variety, kind);
     let letter_indices = letter_index
-        .map(|index| std::iter::repeat_n(index, candidate.len()).collect())
+        .map(|index| std::iter::repeat_n(index, planned.len()).collect())
         .unwrap_or_default();
     WordPronunciation {
-        candidates: vec![planned_candidate_from_cmu(variety, candidate.clone())],
+        candidates: vec![planned],
         status: PronunciationStatus::Exact,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
@@ -2323,37 +2368,78 @@ fn orthographic_unit_pronunciation(
     }
 }
 
-fn orthographic_unit_candidate(
+fn orthographic_unit_planned_candidate(
     unit: &str,
     variety: &LinguisticVariety,
     kind: OrthographicUnitKind,
-) -> Vec<CmuPhoneme> {
+) -> Vec<PlannedPhoneme> {
     let normalized = if kind == OrthographicUnitKind::LetterName {
         unit.to_uppercase()
     } else {
         unit.to_string()
     };
-    variety
+    let Some(entry) = variety
         .orthographic_unit_pronunciations
         .iter()
         .find(|entry| entry.kind == kind && entry.unit == normalized)
-        .map(|entry| {
-            if entry.source_pronunciation.is_empty() {
-                entry
-                    .pronunciation
-                    .iter()
-                    .map(phoneme_display_symbol)
-                    .map(CmuPhoneme::parse)
-                    .collect()
-            } else {
-                entry
-                    .source_pronunciation
-                    .iter()
-                    .map(|symbol| CmuPhoneme::parse(symbol))
-                    .collect()
-            }
+    else {
+        return fallback_orthographic_unit_planned_candidate(&normalized, variety, kind);
+    };
+    if !entry.source_pronunciation.is_empty() {
+        return planned_candidate_from_cmu(
+            variety,
+            entry
+                .source_pronunciation
+                .iter()
+                .map(|symbol| CmuPhoneme::parse(symbol))
+                .collect(),
+        );
+    }
+    entry
+        .pronunciation
+        .iter()
+        .filter_map(|id| {
+            variety
+                .phonemes
+                .phonemes
+                .get(id)
+                .map(planned_phoneme_from_inventory)
         })
-        .unwrap_or_default()
+        .collect()
+}
+
+fn fallback_orthographic_unit_planned_candidate(
+    unit: &str,
+    variety: &LinguisticVariety,
+    kind: OrthographicUnitKind,
+) -> Vec<PlannedPhoneme> {
+    let context = TokenPronunciationContext {
+        next_starts_with_vowelish: false,
+        careful_style: true,
+        part_of_speech: None,
+        next_part_of_speech: None,
+    };
+    match kind {
+        OrthographicUnitKind::DigitName => unit
+            .parse::<u32>()
+            .ok()
+            .and_then(|value| localized_number_word(variety, value, ""))
+            .map(|name| planned_candidate_from_orthographic_words(&name, variety, context))
+            .unwrap_or_default(),
+        OrthographicUnitKind::LetterName => {
+            planned_candidate_from_orthography_profile(&unit.to_lowercase(), variety, context)
+        }
+    }
+}
+
+fn planned_candidate_from_orthographic_words(
+    text: &str,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Vec<PlannedPhoneme> {
+    text.split_whitespace()
+        .flat_map(|part| planned_candidate_from_orthography_profile(part, variety, context))
+        .collect()
 }
 
 fn guess_pronunciation(word: &str) -> Vec<CmuPhoneme> {
@@ -2593,21 +2679,34 @@ fn apply_french_connected_speech(
     next: &PhonemeToken,
     careful_style: bool,
 ) {
-    if variety.language.0 != "fr" {
-        return;
-    }
     let next_is_vowel = phoneme_token_is_syllabic(variety, next);
-    if !careful_style && !next_is_vowel && final_phone_symbol(phones) == Some("ə") {
-        phones.pop();
-    }
-    if next_is_vowel && let Some(symbol) = previous_word.and_then(french_liaison_symbol_after_word)
-    {
-        phones.push(connected_speech_phone_token(
-            variety,
-            symbol,
-            "french liaison",
-            0.85,
-        ));
+    for rule in &variety.connected_speech {
+        match rule {
+            ConnectedSpeechRule::FrenchSchwaDeletionBeforeConsonant => {
+                if !careful_style && !next_is_vowel && final_phone_symbol(phones) == Some("ə") {
+                    phones.pop();
+                }
+            }
+            ConnectedSpeechRule::FrenchLiaison { entries } => {
+                if !next_is_vowel {
+                    continue;
+                }
+                let Some(previous_word) = previous_word else {
+                    continue;
+                };
+                if let Some(entry) = entries
+                    .iter()
+                    .find(|entry| entry.after_word == previous_word)
+                {
+                    phones.push(connected_speech_phone_token(
+                        variety,
+                        &entry.before_vowel_phone,
+                        "connected-speech liaison",
+                        0.85,
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -2641,15 +2740,6 @@ fn final_phone_symbol(phones: &[PhoneToken]) -> Option<&str> {
         };
         Some(phone_display_symbol(id))
     })
-}
-
-fn french_liaison_symbol_after_word(word: &str) -> Option<&'static str> {
-    match word {
-        "les" | "des" | "mes" | "tes" | "ses" | "nos" | "vos" | "nous" | "vous" | "deux"
-        | "trois" => Some("z"),
-        "un" | "mon" | "ton" | "son" | "en" | "on" => Some("n"),
-        _ => None,
-    }
 }
 
 fn connected_speech_phone_token(
@@ -2861,7 +2951,9 @@ pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
 }
 
 fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> String {
-    let language = variety_language_code(&variety.0);
+    let Some(variety) = variety_by_code(&variety.0) else {
+        return text.to_string();
+    };
     let chars = text.chars().collect::<Vec<_>>();
     let mut out = String::new();
     let mut index = 0usize;
@@ -2885,9 +2977,9 @@ fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> Strin
         let replacement = digits
             .parse::<u32>()
             .ok()
-            .and_then(|value| localized_number_word(language, value, &suffix));
+            .and_then(|value| localized_number_word(&variety, value, &suffix));
         if let Some(word) = replacement {
-            out.push_str(word);
+            out.push_str(&word);
         } else {
             out.push_str(&digits);
             out.push_str(&suffix);
@@ -2896,112 +2988,17 @@ fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> Strin
     out
 }
 
-fn variety_language_code(variety: &str) -> &str {
-    variety
-        .split_once('-')
-        .map_or(variety, |(language, _)| language)
-}
-
-fn localized_number_word(language: &str, value: u32, suffix: &str) -> Option<&'static str> {
-    match language {
-        "fr" => french_number_word(value, suffix),
-        "de" => german_number_word(value, suffix),
-        "es" => spanish_number_word(value, suffix),
-        _ => None,
-    }
-}
-
-fn french_number_word(value: u32, suffix: &str) -> Option<&'static str> {
-    if matches!(suffix, "er" | "re") {
-        return (value == 1).then_some("premier");
-    }
+fn localized_number_word(variety: &LinguisticVariety, value: u32, suffix: &str) -> Option<String> {
+    let names = variety.number_names.as_ref()?;
     if !suffix.is_empty() {
+        if let Some(ordinal) = names.ordinal_suffixes.iter().find(|ordinal| {
+            ordinal.value == value && ordinal.suffixes.iter().any(|candidate| candidate == suffix)
+        }) {
+            return Some(ordinal.name.clone());
+        }
         return None;
     }
-    Some(match value {
-        0 => "zéro",
-        1 => "un",
-        2 => "deux",
-        3 => "trois",
-        4 => "quatre",
-        5 => "cinq",
-        6 => "six",
-        7 => "sept",
-        8 => "huit",
-        9 => "neuf",
-        10 => "dix",
-        11 => "onze",
-        12 => "douze",
-        13 => "treize",
-        14 => "quatorze",
-        15 => "quinze",
-        16 => "seize",
-        17 => "dix-sept",
-        18 => "dix-huit",
-        19 => "dix-neuf",
-        20 => "vingt",
-        _ => return None,
-    })
-}
-
-fn german_number_word(value: u32, suffix: &str) -> Option<&'static str> {
-    if !suffix.is_empty() {
-        return None;
-    }
-    Some(match value {
-        0 => "null",
-        1 => "eins",
-        2 => "zwei",
-        3 => "drei",
-        4 => "vier",
-        5 => "fünf",
-        6 => "sechs",
-        7 => "sieben",
-        8 => "acht",
-        9 => "neun",
-        10 => "zehn",
-        11 => "elf",
-        12 => "zwölf",
-        13 => "dreizehn",
-        14 => "vierzehn",
-        15 => "fünfzehn",
-        16 => "sechzehn",
-        17 => "siebzehn",
-        18 => "achtzehn",
-        19 => "neunzehn",
-        20 => "zwanzig",
-        _ => return None,
-    })
-}
-
-fn spanish_number_word(value: u32, suffix: &str) -> Option<&'static str> {
-    if !suffix.is_empty() {
-        return None;
-    }
-    Some(match value {
-        0 => "cero",
-        1 => "uno",
-        2 => "dos",
-        3 => "tres",
-        4 => "cuatro",
-        5 => "cinco",
-        6 => "seis",
-        7 => "siete",
-        8 => "ocho",
-        9 => "nueve",
-        10 => "diez",
-        11 => "once",
-        12 => "doce",
-        13 => "trece",
-        14 => "catorce",
-        15 => "quince",
-        16 => "dieciséis",
-        17 => "diecisiete",
-        18 => "dieciocho",
-        19 => "diecinueve",
-        20 => "veinte",
-        _ => return None,
-    })
+    names.cardinal_0_to_20.get(value as usize).cloned()
 }
 
 fn spell_out(i: u128) -> String {
@@ -3817,6 +3814,7 @@ fn replace_number_abbreviation(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::builtin_varieties;
     use crate::rules::RuleCondition;
     use crate::syntax::SyntacticLinkKind;
     use crate::variety::VarietyImplementationStatus;
@@ -4939,6 +4937,51 @@ mod tests {
             ),
             "Ich habe fünf Katzen."
         );
+        assert_eq!(
+            normalize_small_numbers_for_variety("Mi havas 2 katojn.", &VarietyId("eo".into())),
+            "Mi havas du katojn."
+        );
+        assert_eq!(
+            normalize_small_numbers_for_variety(
+                "Habeo 2 feles.",
+                &VarietyId("la-Classical".into())
+            ),
+            "Habeo duo feles."
+        );
+        assert_eq!(
+            normalize_small_numbers_for_variety(
+                "Έχω 2 γάτες.",
+                &VarietyId("el-GR-Standard".into())
+            ),
+            "Έχω δύο γάτες."
+        );
+        assert_eq!(
+            normalize_small_numbers_for_variety("2 granthau", &VarietyId("san".into())),
+            "dvi granthau"
+        );
+    }
+
+    #[test]
+    fn digit_expansion_phonemicizes_for_every_builtin_variety() {
+        for variety in builtin_varieties() {
+            let output = phonemicizer_for_variety(&variety.id)
+                .expect("phonemicizer")
+                .phonemicize(&request("2", &variety.id.0))
+                .unwrap_or_else(|err| panic!("{} should phonemicize digit: {err}", variety.id.0));
+            assert!(
+                !output.phonemes.is_empty(),
+                "{} should produce phonemes for digit expansion",
+                variety.id.0
+            );
+            assert!(
+                output.warnings.iter().all(|warning| {
+                    warning.kind != PronunciationWarningKind::UnknownPronunciation
+                }),
+                "{} should not report unknown digit pronunciation: {:?}",
+                variety.id.0,
+                output.warnings
+            );
+        }
     }
 
     #[test]
