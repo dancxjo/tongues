@@ -8,9 +8,13 @@ pub mod sanskrit;
 pub mod spanish;
 
 use crate::ids::VarietyId;
+use crate::prosody::ProsodyProfile;
 use crate::variety::LinguisticVariety;
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
+pub const PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT: &str = "english_cmudict";
+pub const PRONUNCIATION_PIPELINE_VARIETY_DATA: &str = "variety_data";
+
 pub const SYNTAX_PROFILE_ENGLISH: &str = "english";
 pub const SYNTAX_PROFILE_ESPERANTO: &str = "esperanto";
 pub const SYNTAX_PROFILE_FRENCH: &str = "french";
@@ -29,6 +33,21 @@ pub const ORTHOGRAPHY_PROFILE_GREEK: &str = "greek";
 pub const ORTHOGRAPHY_PROFILE_LATIN: &str = "latin";
 pub const ORTHOGRAPHY_PROFILE_SANSKRIT: &str = "sanskrit";
 pub const ORTHOGRAPHY_PROFILE_SPANISH: &str = "spanish";
+
+pub const PROSODY_RHYTHM_MORA_TIMED: &str = "mora_timed";
+pub const PROSODY_RHYTHM_STRESS_TIMED: &str = "stress_timed";
+pub const PROSODY_RHYTHM_SYLLABLE_TIMED: &str = "syllable_timed";
+
+pub fn prosody_profile(
+    rhythm_class: &str,
+    default_rate_syllables_per_second: f32,
+) -> ProsodyProfile {
+    ProsodyProfile {
+        default_pitch_hz: None,
+        default_rate_syllables_per_second: Some(default_rate_syllables_per_second),
+        rhythm_class: Some(rhythm_class.into()),
+    }
+}
 
 struct VarietyRegistration {
     canonical_id: &'static str,

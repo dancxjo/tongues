@@ -33,6 +33,9 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: vec![LEXIQUE383_ID.into()],
+        pronunciation_pipeline: Some(
+            crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
+        ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_FRENCH.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
@@ -87,7 +90,10 @@ pub fn variety() -> LinguisticVariety {
         }),
         morphology: None,
         acoustic_profile: None,
-        prosody_profile: None,
+        prosody_profile: Some(crate::data::varieties::prosody_profile(
+            crate::data::varieties::PROSODY_RHYTHM_SYLLABLE_TIMED,
+            5.0,
+        )),
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
     }

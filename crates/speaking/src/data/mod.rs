@@ -64,11 +64,24 @@ mod tests {
                 variety.id.0
             );
             assert!(
+                variety.pronunciation_pipeline.is_some(),
+                "{} should declare its pronunciation pipeline",
+                variety.id.0
+            );
+            assert!(
                 variety
                     .number_names
                     .as_ref()
                     .is_some_and(|names| names.cardinal_0_to_20.len() == 21),
                 "{} should declare small-number names",
+                variety.id.0
+            );
+            assert!(
+                variety.prosody_profile.as_ref().is_some_and(|profile| {
+                    profile.rhythm_class.is_some()
+                        && profile.default_rate_syllables_per_second.is_some()
+                }),
+                "{} should declare a prosody profile",
                 variety.id.0
             );
         }

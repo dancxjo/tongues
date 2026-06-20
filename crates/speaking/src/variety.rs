@@ -36,6 +36,8 @@ pub struct LinguisticVariety {
     #[serde(default)]
     pub pronunciation_lexicons: Vec<String>,
     #[serde(default)]
+    pub pronunciation_pipeline: Option<String>,
+    #[serde(default)]
     pub syntax_profile: Option<String>,
     #[serde(default)]
     pub number_names: Option<NumberNameSet>,

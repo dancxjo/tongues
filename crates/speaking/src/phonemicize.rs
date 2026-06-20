@@ -18,6 +18,7 @@ use crate::data::varieties::{
     ORTHOGRAPHY_PROFILE_ALIAS, ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT, ORTHOGRAPHY_PROFILE_ESPERANTO,
     ORTHOGRAPHY_PROFILE_FRENCH, ORTHOGRAPHY_PROFILE_GERMAN, ORTHOGRAPHY_PROFILE_GREEK,
     ORTHOGRAPHY_PROFILE_LATIN, ORTHOGRAPHY_PROFILE_SANSKRIT, ORTHOGRAPHY_PROFILE_SPANISH,
+    PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT, PRONUNCIATION_PIPELINE_VARIETY_DATA,
     SYNTAX_PROFILE_ENGLISH, SYNTAX_PROFILE_ESPERANTO, SYNTAX_PROFILE_FRENCH, SYNTAX_PROFILE_GERMAN,
     SYNTAX_PROFILE_GREEK, SYNTAX_PROFILE_LATIN, SYNTAX_PROFILE_SANSKRIT, SYNTAX_PROFILE_SPANISH,
 };
@@ -55,6 +56,7 @@ type LexiconPronouncer =
     fn(&WordToken, &LinguisticVariety, TokenPronunciationContext) -> Option<WordPronunciation>;
 type OrthographyPronouncer =
     fn(&str, &LinguisticVariety, TokenPronunciationContext) -> Vec<PlannedPhoneme>;
+type PhonemicizerFactory = fn() -> Box<dyn Phonemicizer>;
 
 struct SyntaxProfileRegistration {
     id: &'static str,
@@ -69,6 +71,11 @@ struct LexiconRegistration {
 struct OrthographyPronunciationRegistration {
     id: &'static str,
     pronounce: OrthographyPronouncer,
+}
+
+struct PronunciationPipelineRegistration {
+    id: &'static str,
+    phonemicizer: PhonemicizerFactory,
 }
 
 static ENGLISH_SYNTAX_PARSER: EnglishLinkGrammarParser = EnglishLinkGrammarParser;
@@ -126,6 +133,17 @@ const LEXICON_REGISTRY: &[LexiconRegistration] = &[
     },
 ];
 
+const PRONUNCIATION_PIPELINE_REGISTRY: &[PronunciationPipelineRegistration] = &[
+    PronunciationPipelineRegistration {
+        id: PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT,
+        phonemicizer: english_phonemicizer,
+    },
+    PronunciationPipelineRegistration {
+        id: PRONUNCIATION_PIPELINE_VARIETY_DATA,
+        phonemicizer: variety_data_phonemicizer,
+    },
+];
+
 const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration] = &[
     OrthographyPronunciationRegistration {
         id: ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT,
@@ -165,6 +183,14 @@ const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration
     },
 ];
 
+fn english_phonemicizer() -> Box<dyn Phonemicizer> {
+    Box::new(EnglishPhonemicizer)
+}
+
+fn variety_data_phonemicizer() -> Box<dyn Phonemicizer> {
+    Box::new(VarietyDataPhonemicizer)
+}
+
 pub trait Phonemicizer {
     fn phonemicize(
         &self,
@@ -183,18 +209,15 @@ pub fn phonemicizer_for_variety(
         variety_by_code(&canonical.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical.clone(),
         })?;
-    if has_pronunciation_lexicon(&variety_data, CMUDICT_ID) {
-        Ok(Box::new(EnglishPhonemicizer))
-    } else {
-        Ok(Box::new(VarietyDataPhonemicizer))
-    }
-}
-
-fn has_pronunciation_lexicon(variety: &LinguisticVariety, lexicon_id: &str) -> bool {
-    variety
-        .pronunciation_lexicons
+    let pipeline_id = variety_data
+        .pronunciation_pipeline
+        .as_deref()
+        .unwrap_or(PRONUNCIATION_PIPELINE_VARIETY_DATA);
+    PRONUNCIATION_PIPELINE_REGISTRY
         .iter()
-        .any(|id| id == lexicon_id)
+        .find(|registration| registration.id == pipeline_id)
+        .map(|registration| (registration.phonemicizer)())
+        .ok_or(PhonemicizeError::UnsupportedVariety { variety: canonical })
 }
 
 fn syntax_parser_for_profile(profile_id: &str) -> Option<&'static dyn LinkGrammarParser> {
@@ -578,7 +601,8 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 variety: canonical_variety.clone(),
             }
         })?;
-        if !has_pronunciation_lexicon(&variety, CMUDICT_ID) {
+        if variety.pronunciation_pipeline.as_deref() != Some(PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT)
+        {
             return Err(PhonemicizeError::UnsupportedVariety {
                 variety: canonical_variety.clone(),
             });
@@ -5157,6 +5181,17 @@ mod tests {
                     "{} declares unknown pronunciation lexicon `{}`",
                     variety.id.0,
                     lexicon_id
+                );
+            }
+
+            if let Some(pipeline_id) = variety.pronunciation_pipeline.as_deref() {
+                assert!(
+                    PRONUNCIATION_PIPELINE_REGISTRY
+                        .iter()
+                        .any(|registration| registration.id == pipeline_id),
+                    "{} declares unknown pronunciation pipeline `{}`",
+                    variety.id.0,
+                    pipeline_id
                 );
             }
         }

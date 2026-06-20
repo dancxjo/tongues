@@ -196,6 +196,9 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: weak_forms(row.id),
         orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
         pronunciation_lexicons: vec![CMUDICT_ID.into()],
+        pronunciation_pipeline: Some(
+            crate::data::varieties::PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT.into(),
+        ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
@@ -235,7 +238,10 @@ pub fn variety(id: &str) -> LinguisticVariety {
         }),
         morphology: Some(morphology::english_morphology(row.id)),
         acoustic_profile: Some(acoustic_profile),
-        prosody_profile: None,
+        prosody_profile: Some(crate::data::varieties::prosody_profile(
+            crate::data::varieties::PROSODY_RHYTHM_STRESS_TIMED,
+            4.6,
+        )),
         status: VarietyStatus::Attested,
         implementation_status: match row.implementation_status {
             catalog::ImplementationStatusSpec::Complete => VarietyImplementationStatus::Complete,
