@@ -28,7 +28,7 @@ use crate::segment::{Environment, SegmentMatcher, SyllablePosition, WordPosition
 use crate::spec::Spec;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, OrthographicUnitKind, OrthographicUnitPronunciation,
+    LinguisticVariety, NumberName, OrthographicUnitKind, OrthographicUnitPronunciation,
     PronunciationSelectionRule, VarietyImplementationStatus, VarietyStatus,
     WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
@@ -206,35 +206,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         syntax_analyzer: Some(crate::syntax::parse_english_link_grammar),
         syntax_heuristics: None,
         orthography_pronunciation: None,
-        number_names: Some(NumberNameSet {
-            cardinal_0_to_20: [
-                "zero",
-                "one",
-                "two",
-                "three",
-                "four",
-                "five",
-                "six",
-                "seven",
-                "eight",
-                "nine",
-                "ten",
-                "eleven",
-                "twelve",
-                "thirteen",
-                "fourteen",
-                "fifteen",
-                "sixteen",
-                "seventeen",
-                "eighteen",
-                "nineteen",
-                "twenty",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-            ordinal_suffixes: Vec::new(),
-        }),
+        number_names: Some(english_number_names()),
         punctuation: Some(crate::data::varieties::english_punctuation_profile()),
         question_contours: Some(crate::data::varieties::english_question_contour_profile()),
         connected_speech: Vec::new(),
@@ -264,6 +236,114 @@ pub fn variety(id: &str) -> LinguisticVariety {
             }
         },
     }
+}
+
+fn english_number_names() -> crate::variety::NumberNameSet {
+    let mut names = crate::data::varieties::number_names(
+        &[
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        ],
+        &[
+            (30, "thirty"),
+            (40, "forty"),
+            (50, "fifty"),
+            (60, "sixty"),
+            (70, "seventy"),
+            (80, "eighty"),
+            (90, "ninety"),
+        ],
+        &[
+            (3, "thousand"),
+            (6, "million"),
+            (9, "billion"),
+            (12, "trillion"),
+            (15, "quadrillion"),
+            (18, "quintillion"),
+            (21, "sextillion"),
+            (24, "septillion"),
+            (27, "octillion"),
+            (30, "nonillion"),
+            (33, "decillion"),
+        ],
+        normalization::UNITS
+            .iter()
+            .map(|unit| (unit.aliases, unit.singular, unit.plural))
+            .collect::<Vec<_>>()
+            .as_slice(),
+    );
+    names.hundred_name = Some("hundred".into());
+    names.special_number_names = vec![NumberName {
+        value: 911,
+        name: "nine one one".into(),
+    }];
+    names.ordinal_names = [
+        (0, "zeroth"),
+        (1, "first"),
+        (2, "second"),
+        (3, "third"),
+        (4, "fourth"),
+        (5, "fifth"),
+        (6, "sixth"),
+        (7, "seventh"),
+        (8, "eighth"),
+        (9, "ninth"),
+        (10, "tenth"),
+        (11, "eleventh"),
+        (12, "twelfth"),
+        (13, "thirteenth"),
+        (14, "fourteenth"),
+        (15, "fifteenth"),
+        (16, "sixteenth"),
+        (17, "seventeenth"),
+        (18, "eighteenth"),
+        (19, "nineteenth"),
+        (20, "twentieth"),
+        (30, "thirtieth"),
+        (40, "fortieth"),
+        (50, "fiftieth"),
+        (60, "sixtieth"),
+        (70, "seventieth"),
+        (80, "eightieth"),
+        (90, "ninetieth"),
+    ]
+    .into_iter()
+    .map(|(value, name)| NumberName {
+        value,
+        name: name.into(),
+    })
+    .collect();
+    names.decimal_separator_name = Some("point".into());
+    names.clock_zero_minute_name = Some("o'clock".into());
+    names.clock_leading_zero_name = Some("oh".into());
+    names.range_separator_name = Some("to".into());
+    names.product_separator_name = Some("by".into());
+    names.slash_separator_name = Some("slash".into());
+    names.date_separator_name = Some("dash".into());
+    names.currency_major_singular = Some("dollar".into());
+    names.currency_major_plural = Some("dollars".into());
+    names.currency_minor_singular = Some("cent".into());
+    names.currency_minor_plural = Some("cents".into());
+    names
 }
 
 fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {

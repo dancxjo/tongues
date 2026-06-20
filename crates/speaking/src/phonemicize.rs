@@ -7,7 +7,6 @@ use crate::data::lexicons::lexique;
 use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
-use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -2302,7 +2301,7 @@ fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {
         NumberNormalizationProfile::SmallNumbers => {
             normalize_small_numbers_with_variety(&normalized, &variety)
         }
-        NumberNormalizationProfile::EnglishGeneral => english_normalize_numbers(&normalized),
+        NumberNormalizationProfile::General => normalize_general_numbers(&normalized, &variety),
     }
 }
 
@@ -2393,20 +2392,207 @@ fn localized_number_word(variety: &LinguisticVariety, value: u32, suffix: &str) 
     names.cardinal_0_to_20.get(value as usize).cloned()
 }
 
-fn spell_out(i: u128) -> String {
-    english_normalization::spell_cardinal(i)
+fn spell_out(value: u128, variety: &LinguisticVariety) -> String {
+    spell_cardinal_from_variety(value, variety).unwrap_or_else(|| value.to_string())
 }
 
-fn spell_digit_sequence(digits: &str) -> String {
+fn spell_cardinal_from_variety(value: u128, variety: &LinguisticVariety) -> Option<String> {
+    let names = variety.number_names.as_ref()?;
+    if let Some(name) = names.cardinal_0_to_20.get(value as usize) {
+        return Some(name.clone());
+    }
+    if let Some(name) = names
+        .cardinal_tens
+        .iter()
+        .find(|name| u128::from(name.value) == value)
+        .map(|name| name.name.clone())
+    {
+        return Some(name);
+    }
+    if let Some(name) = names
+        .special_number_names
+        .iter()
+        .find(|name| u128::from(name.value) == value)
+        .map(|name| name.name.clone())
+    {
+        return Some(name);
+    }
+    match value {
+        21..=99 => {
+            let head = value - (value % 10);
+            let tail = value % 10;
+            Some(format!(
+                "{}-{}",
+                spell_cardinal_from_variety(head, variety)?,
+                spell_cardinal_from_variety(tail, variety)?
+            ))
+        }
+        100..=999 => {
+            let head = value / 100;
+            let tail = value % 100;
+            let hundred = format!(
+                "{} {}",
+                spell_cardinal_from_variety(head, variety)?,
+                names.hundred_name.as_deref()?
+            );
+            if tail > 0 {
+                Some(format!(
+                    "{} {}",
+                    hundred,
+                    spell_cardinal_from_variety(tail, variety)?
+                ))
+            } else {
+                Some(hundred)
+            }
+        }
+        _ => {
+            let scale = names
+                .scale_names
+                .iter()
+                .filter(|scale| u128::from(scale.power) < digit_count_power(value))
+                .max_by_key(|scale| scale.power)?;
+            let divisor = 10u128.pow(scale.power);
+            let head = value / divisor;
+            let tail = value % divisor;
+            let head = spell_cardinal_from_variety(head, variety)?;
+            if tail > 0 {
+                Some(format!(
+                    "{} {} {}",
+                    head,
+                    scale.name,
+                    spell_cardinal_from_variety(tail, variety)?
+                ))
+            } else {
+                Some(format!("{} {}", head, scale.name))
+            }
+        }
+    }
+}
+
+fn spell_ordinal_from_variety(value: u128, variety: &LinguisticVariety) -> Option<String> {
+    let names = variety.number_names.as_ref()?;
+    if let Some(name) = names
+        .ordinal_names
+        .iter()
+        .find(|name| u128::from(name.value) == value)
+        .map(|name| name.name.clone())
+    {
+        return Some(name);
+    }
+    if value < 100 && value % 10 != 0 {
+        return Some(format!(
+            "{}-{}",
+            spell_cardinal_from_variety(value - (value % 10), variety)?,
+            spell_ordinal_from_variety(value % 10, variety)?
+        ));
+    }
+    Some(format!(
+        "{}th",
+        spell_cardinal_from_variety(value, variety)?
+    ))
+}
+
+fn digit_count_power(mut value: u128) -> u128 {
+    let mut power = 0;
+    while value >= 10 {
+        value /= 10;
+        power += 1;
+    }
+    power
+}
+
+fn decimal_separator_name(variety: &LinguisticVariety) -> &str {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.decimal_separator_name.as_deref())
+        .unwrap_or("point")
+}
+
+fn range_separator_name(variety: &LinguisticVariety) -> &str {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.range_separator_name.as_deref())
+        .unwrap_or("to")
+}
+
+fn product_separator_name(variety: &LinguisticVariety) -> &str {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.product_separator_name.as_deref())
+        .unwrap_or("by")
+}
+
+fn slash_separator_name(variety: &LinguisticVariety) -> &str {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.slash_separator_name.as_deref())
+        .unwrap_or("slash")
+}
+
+fn date_separator_name(variety: &LinguisticVariety) -> &str {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.date_separator_name.as_deref())
+        .unwrap_or("-")
+}
+
+fn currency_major_singular(variety: &LinguisticVariety) -> Option<&str> {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.currency_major_singular.as_deref())
+}
+
+fn currency_major_plural(variety: &LinguisticVariety) -> Option<&str> {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.currency_major_plural.as_deref())
+}
+
+fn currency_minor_singular(variety: &LinguisticVariety) -> Option<&str> {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.currency_minor_singular.as_deref())
+}
+
+fn currency_minor_plural(variety: &LinguisticVariety) -> Option<&str> {
+    variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.currency_minor_plural.as_deref())
+}
+
+fn special_number_name(variety: &LinguisticVariety, value: u128) -> Option<String> {
+    variety
+        .number_names
+        .as_ref()?
+        .special_number_names
+        .iter()
+        .find(|name| u128::from(name.value) == value)
+        .map(|name| name.name.clone())
+}
+
+fn spell_digit_sequence(digits: &str, variety: &LinguisticVariety) -> String {
     digits
         .chars()
         .filter_map(|digit| digit.to_digit(10))
-        .map(|digit| spell_out(digit as u128))
+        .map(|digit| spell_out(digit as u128, variety))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn spell_clock_time(hour: u128, minute_digits: &str) -> Option<String> {
+fn spell_clock_time(
+    hour: u128,
+    minute_digits: &str,
+    variety: &LinguisticVariety,
+) -> Option<String> {
     if minute_digits.len() != 2 || !minute_digits.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
     }
@@ -2414,34 +2600,62 @@ fn spell_clock_time(hour: u128, minute_digits: &str) -> Option<String> {
     if minutes > 59 {
         return None;
     }
+    let names = variety.number_names.as_ref()?;
     let minute_text = if minutes == 0 {
-        "o'clock".to_string()
+        names.clock_zero_minute_name.clone()?
     } else if minutes < 10 {
-        format!("oh {}", spell_out(minutes))
+        format!(
+            "{} {}",
+            names.clock_leading_zero_name.as_deref().unwrap_or("0"),
+            spell_out(minutes, variety)
+        )
     } else {
-        spell_out(minutes)
+        spell_out(minutes, variety)
     };
-    Some(format!("{} {}", spell_out(hour), minute_text))
+    Some(format!("{} {}", spell_out(hour, variety), minute_text))
 }
 
-fn spell_dotted_number(first: u128, segments: &[String]) -> String {
-    let mut parts = vec![spell_out(first)];
+fn spell_dotted_number(first: u128, segments: &[String], variety: &LinguisticVariety) -> String {
+    let point = variety
+        .number_names
+        .as_ref()
+        .and_then(|names| names.decimal_separator_name.as_deref())
+        .unwrap_or("point");
+    let mut parts = vec![spell_out(first, variety)];
     for segment in segments {
-        parts.push("point".to_string());
-        parts.push(spell_digit_sequence(segment));
+        parts.push(point.to_string());
+        parts.push(spell_digit_sequence(segment, variety));
     }
     parts.join(" ")
 }
 
-fn spell_year(year: u128) -> String {
-    english_normalization::spell_year(year)
+fn spell_year(year: u128, variety: &LinguisticVariety) -> String {
+    if (2000..=2009).contains(&year) {
+        format!(
+            "{} {}",
+            spell_out(2000, variety),
+            spell_out(year - 2000, variety)
+        )
+    } else if (2010..=2099).contains(&year) {
+        format!(
+            "{} {}",
+            spell_out(20, variety),
+            spell_out(year - 2000, variety)
+        )
+    } else {
+        spell_out(year, variety)
+    }
 }
 
-fn spell_ordinal(value: u128) -> String {
-    english_normalization::spell_ordinal(value)
+fn spell_ordinal(value: u128, variety: &LinguisticVariety) -> String {
+    spell_ordinal_from_variety(value, variety).unwrap_or_else(|| format!("{}th", value))
 }
 
-fn ordinal_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn ordinal_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     let mut index = start;
     let mut digits = String::new();
     while index < characters.len() && characters[index].is_ascii_digit() {
@@ -2462,10 +2676,14 @@ fn ordinal_at(characters: &[char], start: usize) -> Option<(String, usize)> {
     if end < characters.len() && characters[end].is_alphanumeric() {
         return None;
     }
-    Some((spell_ordinal(digits.parse::<u128>().ok()?), end))
+    Some((spell_ordinal(digits.parse::<u128>().ok()?, variety), end))
 }
 
-fn leading_decimal_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn leading_decimal_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     if characters.get(start).copied() != Some('.') {
         return None;
     }
@@ -2489,23 +2707,35 @@ fn leading_decimal_at(characters: &[char], start: usize) -> Option<(String, usiz
         suffix_temp += 1;
     }
     if !suffix_word.is_empty()
-        && is_known_unit(&suffix_word.to_lowercase())
+        && is_known_unit(variety, &suffix_word.to_lowercase())
         && (suffix_temp >= characters.len() || !characters[suffix_temp].is_alphanumeric())
     {
         return Some((
             format!(
-                "point {} {}",
-                spell_digit_sequence(&digits),
-                spell_unit(2, &suffix_word.to_lowercase())
+                "{} {} {}",
+                decimal_separator_name(variety),
+                spell_digit_sequence(&digits, variety),
+                spell_unit(variety, 2, &suffix_word.to_lowercase()).unwrap_or_default()
             ),
             suffix_temp,
         ));
     }
 
-    Some((format!("point {}", spell_digit_sequence(&digits)), index))
+    Some((
+        format!(
+            "{} {}",
+            decimal_separator_name(variety),
+            spell_digit_sequence(&digits, variety)
+        ),
+        index,
+    ))
 }
 
-fn numeric_product_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn numeric_product_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     let mut left = String::new();
     let mut index = start;
     while index < characters.len() && characters[index].is_ascii_digit() {
@@ -2530,12 +2760,21 @@ fn numeric_product_at(characters: &[char], start: usize) -> Option<(String, usiz
     let left = left.parse::<u128>().ok()?;
     let right = right.parse::<u128>().ok()?;
     Some((
-        format!("{} by {}", spell_out(left), spell_out(right)),
+        format!(
+            "{} {} {}",
+            spell_out(left, variety),
+            product_separator_name(variety),
+            spell_out(right, variety)
+        ),
         index,
     ))
 }
 
-fn quoted_height_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn quoted_height_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     let mut feet = String::new();
     let mut index = start;
     while index < characters.len() && characters[index].is_ascii_digit() {
@@ -2560,12 +2799,21 @@ fn quoted_height_at(characters: &[char], start: usize) -> Option<(String, usize)
     let feet = feet.parse::<u128>().ok()?;
     let inches = inches.parse::<u128>().ok()?;
     Some((
-        format!("{} foot {}", spell_out(feet), spell_out(inches)),
+        format!(
+            "{} {} {}",
+            spell_out(feet, variety),
+            spell_unit(variety, 1, "foot").unwrap_or_else(|| "foot".into()),
+            spell_out(inches, variety)
+        ),
         index,
     ))
 }
 
-fn dashed_number_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn dashed_number_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     let mut groups = Vec::new();
     let mut index = start;
     loop {
@@ -2595,10 +2843,10 @@ fn dashed_number_at(characters: &[char], start: usize) -> Option<(String, usize)
         suffix_temp += 1;
     }
     let suffix = if !suffix_word.is_empty()
-        && is_known_unit(&suffix_word.to_lowercase())
+        && is_known_unit(variety, &suffix_word.to_lowercase())
         && (suffix_temp >= characters.len() || !characters[suffix_temp].is_alphanumeric())
     {
-        Some((spell_unit(2, &suffix_word.to_lowercase()), suffix_temp))
+        spell_unit(variety, 2, &suffix_word.to_lowercase()).map(|unit| (unit, suffix_temp))
     } else {
         None
     };
@@ -2613,25 +2861,28 @@ fn dashed_number_at(characters: &[char], start: usize) -> Option<(String, usize)
         let year = groups[0].parse::<u128>().ok()?;
         let day = groups[2].parse::<u128>().ok()?;
         let day_spelled = if groups[2].starts_with('0') {
-            spell_digit_sequence(&groups[2])
+            spell_digit_sequence(&groups[2], variety)
         } else {
-            spell_out(day)
+            spell_out(day, variety)
         };
         let parts = [
-            spell_year(year),
-            spell_digit_sequence(&groups[1]),
+            spell_year(year, variety),
+            spell_digit_sequence(&groups[1], variety),
             day_spelled,
         ];
-        return Some((parts.join(" dash "), index));
+        return Some((
+            parts.join(&format!(" {} ", date_separator_name(variety))),
+            index,
+        ));
     }
     let parts = groups
         .iter()
-        .map(|group| Some(spell_out(group.parse::<u128>().ok()?)))
+        .map(|group| Some(spell_out(group.parse::<u128>().ok()?, variety)))
         .collect::<Option<Vec<_>>>()?;
-    let mut text = parts.join(" to ");
+    let mut text = parts.join(&format!(" {} ", range_separator_name(variety)));
     let end = if let Some((unit, suffix_end)) = suffix {
         text.push(' ');
-        text.push_str(unit);
+        text.push_str(&unit);
         suffix_end
     } else {
         index
@@ -2639,7 +2890,11 @@ fn dashed_number_at(characters: &[char], start: usize) -> Option<(String, usize)
     Some((text, end))
 }
 
-fn slash_number_at(characters: &[char], start: usize) -> Option<(String, usize)> {
+fn slash_number_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
     let mut groups = Vec::new();
     let mut index = start;
     loop {
@@ -2667,13 +2922,16 @@ fn slash_number_at(characters: &[char], start: usize) -> Option<(String, usize)>
         .map(|(group_index, group)| {
             let value = group.parse::<u128>().ok()?;
             if group_index + 1 == groups.len() && group.len() == 4 {
-                Some(spell_year(value))
+                Some(spell_year(value, variety))
             } else {
-                Some(spell_out(value))
+                Some(spell_out(value, variety))
             }
         })
         .collect::<Option<Vec<_>>>()?;
-    Some((parts.join(" slash "), index))
+    Some((
+        parts.join(&format!(" {} ", slash_separator_name(variety))),
+        index,
+    ))
 }
 
 fn phone_number_digits_at(characters: &[char], start: usize) -> Option<(String, usize)> {
@@ -2712,20 +2970,38 @@ fn phone_number_digits_at(characters: &[char], start: usize) -> Option<(String, 
     Some((groups.concat(), index))
 }
 
-fn is_scale_word(word: &str) -> bool {
-    english_normalization::is_scale_word(word)
+fn is_scale_word(variety: &LinguisticVariety, word: &str) -> bool {
+    variety
+        .number_names
+        .as_ref()
+        .is_some_and(|names| names.scale_names.iter().any(|scale| scale.name == word))
 }
 
-fn is_known_unit(word: &str) -> bool {
-    english_normalization::is_known_unit(word)
+fn is_known_unit(variety: &LinguisticVariety, word: &str) -> bool {
+    variety.number_names.as_ref().is_some_and(|names| {
+        names
+            .unit_names
+            .iter()
+            .any(|unit| unit.aliases.iter().any(|alias| alias == word))
+    })
 }
 
-fn spell_unit(val: u128, unit: &str) -> &'static str {
-    english_normalization::unit_spoken_form(val, unit).unwrap_or("")
+fn spell_unit(variety: &LinguisticVariety, val: u128, unit_alias: &str) -> Option<String> {
+    let unit = variety
+        .number_names
+        .as_ref()?
+        .unit_names
+        .iter()
+        .find(|unit| unit.aliases.iter().any(|alias| alias == unit_alias))?;
+    Some(if val == 1 {
+        unit.singular.clone()
+    } else {
+        unit.plural.clone()
+    })
 }
 
-fn is_number_or_scale_word(word: &str) -> bool {
-    if is_scale_word(word) {
+fn is_number_or_scale_word(variety: &LinguisticVariety, word: &str) -> bool {
+    if is_scale_word(variety, word) {
         return true;
     }
     word.chars()
@@ -2736,6 +3012,7 @@ fn is_linked_as_modifier(
     word_idx: usize,
     syntax: &crate::syntax::SentenceSyntaxAnalysis,
     words: &[WordToken],
+    variety: &LinguisticVariety,
 ) -> bool {
     let parse = match syntax.primary_parse() {
         Some(p) => p,
@@ -2757,7 +3034,7 @@ fn is_linked_as_modifier(
 
         if let Some(target_word) = words.get(current_idx) {
             let text_lower = target_word.normalized.to_lowercase();
-            if !is_number_or_scale_word(&text_lower) {
+            if !is_number_or_scale_word(variety, &text_lower) {
                 return true;
             }
         }
@@ -2772,10 +3049,20 @@ fn find_word_index_at(c_idx: usize, words: &[WordToken]) -> Option<usize> {
         .position(|w| w.span.start_char <= c_idx && c_idx < w.span.end_char)
 }
 
-pub fn english_normalize_numbers(text: &str) -> String {
+pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> String {
     let words = tokenize_words(text);
     let words_str: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
-    let syntax = crate::syntax::parse_english_link_grammar(&words_str, None);
+    let syntax = if let Some(analyzer) = variety.syntax_analyzer {
+        analyzer(&words_str, None)
+    } else {
+        crate::syntax::parse_heuristic_link_grammar(
+            &words_str,
+            None,
+            variety
+                .syntax_heuristics
+                .unwrap_or_else(crate::syntax::HeuristicSyntaxProfile::empty),
+        )
+    };
 
     let char_vec: Vec<char> = text.chars().collect();
     let mut result = String::new();
@@ -2825,7 +3112,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
             }
 
             let scale_valid = !scale_word.is_empty()
-                && is_scale_word(&scale_word.to_lowercase())
+                && is_scale_word(variety, &scale_word.to_lowercase())
                 && (scale_temp >= char_vec.len() || !char_vec[scale_temp].is_alphanumeric());
 
             let actual_scale = if scale_valid {
@@ -2857,10 +3144,15 @@ pub fn english_normalize_numbers(text: &str) -> String {
                         word_idx
                     };
 
-                    let modifier = is_linked_as_modifier(query_idx, &syntax, &words);
+                    let modifier = is_linked_as_modifier(query_idx, &syntax, &words, variety);
 
                     let spelled = if modifier {
-                        let dollars_spelled = spell_out(dollars_val);
+                        let Some(dollar_unit) = currency_major_singular(variety) else {
+                            result.push_str(&text[idx..temp_idx]);
+                            idx = temp_idx;
+                            continue;
+                        };
+                        let dollars_spelled = spell_out(dollars_val, variety);
                         let base = if let Some(ref scale) = actual_scale {
                             format!("{}-{}", dollars_spelled, scale)
                         } else {
@@ -2868,34 +3160,55 @@ pub fn english_normalize_numbers(text: &str) -> String {
                         };
                         if let Some(ref cents_str) = cents_part {
                             if let Ok(cents_val) = cents_str.parse::<u128>() {
-                                let cents_spelled = spell_out(cents_val);
+                                let Some(cent_unit) = currency_minor_singular(variety) else {
+                                    result.push_str(&text[idx..temp_idx]);
+                                    idx = temp_idx;
+                                    continue;
+                                };
+                                let cents_spelled = spell_out(cents_val, variety);
                                 format!(
-                                    "{}-dollar-and-{}-cent",
+                                    "{}-{}-and-{}-{}",
                                     base.replace(' ', "-"),
-                                    cents_spelled.replace(' ', "-")
+                                    dollar_unit,
+                                    cents_spelled.replace(' ', "-"),
+                                    cent_unit
                                 )
                             } else {
-                                format!("{}-dollar", base.replace(' ', "-"))
+                                format!("{}-{}", base.replace(' ', "-"), dollar_unit)
                             }
                         } else {
-                            format!("{}-dollar", base.replace(' ', "-"))
+                            format!("{}-{}", base.replace(' ', "-"), dollar_unit)
                         }
                     } else {
-                        let dollars_spelled = spell_out(dollars_val);
+                        let dollars_spelled = spell_out(dollars_val, variety);
                         let base = if let Some(ref scale) = actual_scale {
                             format!("{} {}", dollars_spelled, scale)
                         } else {
                             dollars_spelled
                         };
                         let dollars_unit = if dollars_val == 1 && actual_scale.is_none() {
-                            "dollar"
+                            currency_major_singular(variety)
                         } else {
-                            "dollars"
+                            currency_major_plural(variety)
+                        };
+                        let Some(dollars_unit) = dollars_unit else {
+                            result.push_str(&text[idx..temp_idx]);
+                            idx = temp_idx;
+                            continue;
                         };
                         if let Some(ref cents_str) = cents_part {
                             if let Ok(cents_val) = cents_str.parse::<u128>() {
-                                let cents_spelled = spell_out(cents_val);
-                                let cents_unit = if cents_val == 1 { "cent" } else { "cents" };
+                                let cents_spelled = spell_out(cents_val, variety);
+                                let cents_unit = if cents_val == 1 {
+                                    currency_minor_singular(variety)
+                                } else {
+                                    currency_minor_plural(variety)
+                                };
+                                let Some(cents_unit) = cents_unit else {
+                                    result.push_str(&text[idx..temp_idx]);
+                                    idx = temp_idx;
+                                    continue;
+                                };
                                 if dollars_val == 0 {
                                     format!("{} {}", cents_spelled, cents_unit)
                                 } else if cents_val == 0 {
@@ -2921,7 +3234,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
             }
         }
 
-        if let Some((decimal, decimal_end)) = leading_decimal_at(&char_vec, idx) {
+        if let Some((decimal, decimal_end)) = leading_decimal_at(&char_vec, idx, variety) {
             result.push_str(&decimal);
             idx = decimal_end;
             continue;
@@ -2929,22 +3242,22 @@ pub fn english_normalize_numbers(text: &str) -> String {
 
         // Check cardinal number or measurement at `idx`
         if char_vec[idx].is_ascii_digit() {
-            if let Some((ordinal, ordinal_end)) = ordinal_at(&char_vec, idx) {
+            if let Some((ordinal, ordinal_end)) = ordinal_at(&char_vec, idx, variety) {
                 result.push_str(&ordinal);
                 idx = ordinal_end;
                 continue;
             }
-            if let Some((height, height_end)) = quoted_height_at(&char_vec, idx) {
+            if let Some((height, height_end)) = quoted_height_at(&char_vec, idx, variety) {
                 result.push_str(&height);
                 idx = height_end;
                 continue;
             }
-            if let Some((product, product_end)) = numeric_product_at(&char_vec, idx) {
+            if let Some((product, product_end)) = numeric_product_at(&char_vec, idx, variety) {
                 result.push_str(&product);
                 idx = product_end;
                 continue;
             }
-            if let Some((slash_number, slash_end)) = slash_number_at(&char_vec, idx) {
+            if let Some((slash_number, slash_end)) = slash_number_at(&char_vec, idx, variety) {
                 result.push_str(&slash_number);
                 idx = slash_end;
                 continue;
@@ -2972,7 +3285,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
                     suffix_temp += 1;
                 }
                 let suffix_valid = !suffix_word.is_empty()
-                    && is_known_unit(&suffix_word.to_lowercase())
+                    && is_known_unit(variety, &suffix_word.to_lowercase())
                     && (suffix_temp >= char_vec.len() || !char_vec[suffix_temp].is_alphanumeric());
                 if !suffix_valid {
                     is_part_of_word = true;
@@ -2986,20 +3299,23 @@ pub fn english_normalize_numbers(text: &str) -> String {
             }
 
             if let Some((phone_digits, phone_end)) = phone_number_digits_at(&char_vec, idx) {
-                result.push_str(&spell_digit_sequence(&phone_digits));
+                result.push_str(&spell_digit_sequence(&phone_digits, variety));
                 idx = phone_end;
                 continue;
             }
 
             let clean_int: String = int_part.chars().filter(|&c| c != ',').collect();
-            if clean_int == "911"
+            if let Some(special) = clean_int
+                .parse::<u128>()
+                .ok()
+                .and_then(|value| special_number_name(variety, value))
                 && (temp_idx >= char_vec.len() || !char_vec[temp_idx].is_alphanumeric())
             {
-                result.push_str("nine one one");
+                result.push_str(&special);
                 idx = temp_idx;
                 continue;
             }
-            if let Some((dashed_number, dashed_end)) = dashed_number_at(&char_vec, idx) {
+            if let Some((dashed_number, dashed_end)) = dashed_number_at(&char_vec, idx, variety) {
                 result.push_str(&dashed_number);
                 idx = dashed_end;
                 continue;
@@ -3031,7 +3347,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
                             let minute_digits = char_vec[minute_start..minute_end]
                                 .iter()
                                 .collect::<String>();
-                            if let Some(spelled) = spell_clock_time(val, &minute_digits) {
+                            if let Some(spelled) = spell_clock_time(val, &minute_digits, variety) {
                                 result.push_str(&spelled);
                                 idx = minute_end;
                                 continue;
@@ -3057,7 +3373,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
                     }
 
                     let suffix_valid = !suffix_word.is_empty()
-                        && is_known_unit(&suffix_word.to_lowercase())
+                        && is_known_unit(variety, &suffix_word.to_lowercase())
                         && (suffix_temp >= char_vec.len()
                             || !char_vec[suffix_temp].is_alphanumeric());
 
@@ -3090,11 +3406,17 @@ pub fn english_normalize_numbers(text: &str) -> String {
 
                         let spelled = if let Some(inches) = height_inches_val {
                             temp_idx = height_temp;
-                            format!("{} foot {}", spell_out(val), spell_out(inches))
+                            format!(
+                                "{} {} {}",
+                                spell_out(val, variety),
+                                spell_unit(variety, 1, "foot").unwrap_or_else(|| "foot".into()),
+                                spell_out(inches, variety)
+                            )
                         } else {
                             temp_idx = suffix_temp;
-                            let unit_spelled = spell_unit(val, &unit_str);
-                            format!("{} {}", spell_out(val), unit_spelled)
+                            let unit_spelled =
+                                spell_unit(variety, val, &unit_str).unwrap_or_default();
+                            format!("{} {}", spell_out(val, variety), unit_spelled)
                         };
 
                         result.push_str(&spelled);
@@ -3136,7 +3458,7 @@ pub fn english_normalize_numbers(text: &str) -> String {
                                     decimal_suffix_temp += 1;
                                 }
                                 let decimal_suffix_valid = !decimal_suffix_word.is_empty()
-                                    && is_known_unit(&decimal_suffix_word.to_lowercase())
+                                    && is_known_unit(variety, &decimal_suffix_word.to_lowercase())
                                     && (decimal_suffix_temp >= char_vec.len()
                                         || !char_vec[decimal_suffix_temp].is_alphanumeric());
 
@@ -3144,20 +3466,20 @@ pub fn english_normalize_numbers(text: &str) -> String {
                                     let unit_str = decimal_suffix_word.to_lowercase();
                                     result.push_str(&format!(
                                         "{} {}",
-                                        spell_dotted_number(val, &segments),
-                                        spell_unit(val, &unit_str)
+                                        spell_dotted_number(val, &segments, variety),
+                                        spell_unit(variety, val, &unit_str).unwrap_or_default()
                                     ));
                                     idx = decimal_suffix_temp;
                                     continue;
                                 }
 
-                                result.push_str(&spell_dotted_number(val, &segments));
+                                result.push_str(&spell_dotted_number(val, &segments, variety));
                                 idx = decimal_temp;
                                 continue;
                             }
                         }
 
-                        let spelled = spell_out(val);
+                        let spelled = spell_out(val, variety);
                         result.push_str(&spelled);
                         idx = temp_idx;
                         continue;
@@ -3177,6 +3499,12 @@ pub fn english_spoken_form(text: &str) -> String {
     let variety = variety_by_code("en-US").expect("built-in English variety");
     let out = apply_spoken_form_rewrites(text, &variety);
     replace_number_abbreviation_from_variety_data(&out, &variety)
+}
+
+#[cfg(test)]
+fn english_normalize_numbers(text: &str) -> String {
+    let variety = variety_by_code("en-US").expect("built-in English variety");
+    normalize_general_numbers(text, &variety)
 }
 
 fn replace_number_abbreviation(text: &str) -> String {

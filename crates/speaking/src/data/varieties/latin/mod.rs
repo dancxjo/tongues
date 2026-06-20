@@ -106,6 +106,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
             .map(str::to_string)
             .collect(),
             ordinal_suffixes: Vec::new(),
+            ..Default::default()
         }),
         punctuation: Some(crate::data::varieties::latin_punctuation_profile()),
         question_contours: Some(crate::data::varieties::latin_question_contour_profile()),

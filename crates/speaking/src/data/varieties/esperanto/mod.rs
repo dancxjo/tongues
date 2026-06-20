@@ -119,6 +119,7 @@ pub fn variety() -> LinguisticVariety {
             .map(str::to_string)
             .collect(),
             ordinal_suffixes: Vec::new(),
+            ..Default::default()
         }),
         punctuation: Some(crate::data::varieties::esperanto_punctuation_profile()),
         question_contours: Some(crate::data::varieties::esperanto_question_contour_profile()),

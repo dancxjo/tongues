@@ -10,8 +10,8 @@ pub mod spanish;
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNormalizationProfile, PunctuationProfile, QuestionContourProfile,
-    TextNormalizationProfile, TextRewrite,
+    LinguisticVariety, NumberName, NumberNormalizationProfile, PunctuationProfile,
+    QuestionContourProfile, ScaleName, TextNormalizationProfile, TextRewrite, UnitName,
 };
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
@@ -71,7 +71,41 @@ pub fn english_text_normalization_profile() -> TextNormalizationProfile {
     });
     TextNormalizationProfile {
         spoken_form_rewrites,
-        number_normalization: NumberNormalizationProfile::EnglishGeneral,
+        number_normalization: NumberNormalizationProfile::General,
+    }
+}
+
+pub fn number_names(
+    cardinal_0_to_20: &[&str],
+    tens: &[(u32, &str)],
+    scales: &[(u32, &str)],
+    units: &[(&[&str], &str, &str)],
+) -> crate::variety::NumberNameSet {
+    crate::variety::NumberNameSet {
+        cardinal_0_to_20: strings(cardinal_0_to_20),
+        cardinal_tens: tens
+            .iter()
+            .map(|(value, name)| NumberName {
+                value: *value,
+                name: (*name).into(),
+            })
+            .collect(),
+        scale_names: scales
+            .iter()
+            .map(|(power, name)| ScaleName {
+                power: *power,
+                name: (*name).into(),
+            })
+            .collect(),
+        unit_names: units
+            .iter()
+            .map(|(aliases, singular, plural)| UnitName {
+                aliases: strings(aliases),
+                singular: (*singular).into(),
+                plural: (*plural).into(),
+            })
+            .collect(),
+        ..Default::default()
     }
 }
 

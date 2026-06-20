@@ -101,7 +101,60 @@ pub struct NumberNameSet {
     #[serde(default)]
     pub cardinal_0_to_20: Vec<String>,
     #[serde(default)]
+    pub cardinal_tens: Vec<NumberName>,
+    #[serde(default)]
+    pub hundred_name: Option<String>,
+    #[serde(default)]
+    pub scale_names: Vec<ScaleName>,
+    #[serde(default)]
+    pub special_number_names: Vec<NumberName>,
+    #[serde(default)]
+    pub unit_names: Vec<UnitName>,
+    #[serde(default)]
     pub ordinal_suffixes: Vec<OrdinalSuffixName>,
+    #[serde(default)]
+    pub ordinal_names: Vec<NumberName>,
+    #[serde(default)]
+    pub decimal_separator_name: Option<String>,
+    #[serde(default)]
+    pub clock_zero_minute_name: Option<String>,
+    #[serde(default)]
+    pub clock_leading_zero_name: Option<String>,
+    #[serde(default)]
+    pub range_separator_name: Option<String>,
+    #[serde(default)]
+    pub product_separator_name: Option<String>,
+    #[serde(default)]
+    pub slash_separator_name: Option<String>,
+    #[serde(default)]
+    pub date_separator_name: Option<String>,
+    #[serde(default)]
+    pub currency_major_singular: Option<String>,
+    #[serde(default)]
+    pub currency_major_plural: Option<String>,
+    #[serde(default)]
+    pub currency_minor_singular: Option<String>,
+    #[serde(default)]
+    pub currency_minor_plural: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NumberName {
+    pub value: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScaleName {
+    pub power: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitName {
+    pub aliases: Vec<String>,
+    pub singular: String,
+    pub plural: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +184,7 @@ pub enum NumberNormalizationProfile {
     #[default]
     None,
     SmallNumbers,
-    EnglishGeneral,
+    General,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
