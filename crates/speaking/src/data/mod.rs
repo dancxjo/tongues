@@ -59,6 +59,14 @@ mod tests {
                 variety.id.0
             );
             assert!(
+                variety.orthography.as_ref().is_some_and(|orthography| {
+                    !orthography.sample_words.is_empty()
+                        && orthography.sample_letter_units.len() >= 2
+                }),
+                "{} should declare orthography sample words and letters",
+                variety.id.0
+            );
+            assert!(
                 variety.syntax_profile.is_some(),
                 "{} should declare its syntax profile",
                 variety.id.0

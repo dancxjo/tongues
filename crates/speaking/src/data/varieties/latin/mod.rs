@@ -144,6 +144,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
             name: "Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_LATIN.into()),
             initialism_joiners: vec!["et".into(), "ac".into(), "atque".into()],
+            sample_words: vec!["caelum".into()],
+            sample_letter_units: vec!["A".into(), "B".into()],
             ..Default::default()
         }),
         morphology: None,

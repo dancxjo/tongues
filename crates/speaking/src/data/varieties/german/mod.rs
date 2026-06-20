@@ -78,6 +78,8 @@ pub fn variety() -> LinguisticVariety {
             name: "German Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_GERMAN.into()),
             initialism_joiners: vec!["und".into()],
+            sample_words: vec!["Sprache".into()],
+            sample_letter_units: vec!["A".into(), "B".into()],
             ..Default::default()
         }),
         morphology: None,

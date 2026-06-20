@@ -78,6 +78,8 @@ pub fn variety() -> LinguisticVariety {
             name: "Sanskrit Devanagari and transliteration".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_SANSKRIT.into()),
             initialism_joiners: vec!["च".into(), "ca".into()],
+            sample_words: vec!["धर्म".into()],
+            sample_letter_units: vec!["ध".into(), "म".into()],
             ..Default::default()
         }),
         morphology: None,

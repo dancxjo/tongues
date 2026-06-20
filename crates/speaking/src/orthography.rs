@@ -31,6 +31,10 @@ pub struct Orthography {
     pub pronunciation: Option<String>,
     #[serde(default)]
     pub initialism_joiners: Vec<String>,
+    #[serde(default)]
+    pub sample_words: Vec<String>,
+    #[serde(default)]
+    pub sample_letter_units: Vec<String>,
     pub graphemes: HashMap<GraphemeId, Grapheme>,
     pub g2p_rules: Vec<GraphemeToPhonemeRule>,
 }

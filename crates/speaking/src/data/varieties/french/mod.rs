@@ -94,6 +94,8 @@ pub fn variety() -> LinguisticVariety {
             name: "French Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_FRENCH.into()),
             initialism_joiners: vec!["et".into()],
+            sample_words: vec!["bonjour".into()],
+            sample_letter_units: vec!["A".into(), "B".into()],
             ..Default::default()
         }),
         morphology: None,

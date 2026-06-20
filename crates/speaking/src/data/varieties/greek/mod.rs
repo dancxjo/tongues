@@ -158,6 +158,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
             name: "Greek orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_GREEK.into()),
             initialism_joiners: vec!["και".into(), "καί".into()],
+            sample_words: vec!["και".into()],
+            sample_letter_units: vec!["Α".into(), "Β".into()],
             ..Default::default()
         }),
         morphology: None,

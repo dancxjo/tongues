@@ -4848,7 +4848,7 @@ mod tests {
     #[test]
     fn orthographic_pronunciation_phonemicizes_every_builtin_variety() {
         for variety in builtin_varieties() {
-            let sample = sample_word_for_variety(&variety.id.0);
+            let sample = sample_word_for_variety(&variety);
             let output = phonemicizer_for_variety(&variety.id)
                 .expect("phonemicizer")
                 .phonemicize(&request(sample, &variety.id.0))
@@ -5044,33 +5044,34 @@ mod tests {
         }
     }
 
-    fn sample_word_for_variety(variety_id: &str) -> &'static str {
-        match variety_id {
-            "en-US-GA" | "en-US-singing" | "en-GB-RP" | "en-GB-ScotE" | "en-US-AAE" => "hello",
-            "eo" => "ŝipo",
-            "fr-FR-Standard" => "bonjour",
-            "de-DE-Standard" => "Sprache",
-            "el-GR-Standard" => "και",
-            "grc-Attic" | "grc-Koine" => "και",
-            "la-Classical" | "la-Ecclesiastical" => "caelum",
-            "sa-Deva-Standard" => "धर्म",
-            "es-ES-Castilian" | "es-419-Standard" => "zapato",
-            _ => "hello",
-        }
+    fn sample_word_for_variety(variety: &LinguisticVariety) -> &str {
+        variety
+            .orthography
+            .as_ref()
+            .and_then(|orthography| orthography.sample_words.first())
+            .map(String::as_str)
+            .unwrap_or_else(|| panic!("{} should declare orthography sample words", variety.id.0))
     }
 
-    fn sample_letter_for_variety(variety_id: &str, index: usize) -> &'static str {
-        match variety_id {
-            "el-GR-Standard" | "grc-Attic" | "grc-Koine" => ["Α", "Β"][index],
-            "sa-Deva-Standard" => ["ध", "म"][index],
-            _ => ["A", "B"][index],
-        }
+    fn sample_letter_for_variety(variety: &LinguisticVariety, index: usize) -> &str {
+        variety
+            .orthography
+            .as_ref()
+            .and_then(|orthography| orthography.sample_letter_units.get(index))
+            .map(String::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} should declare at least {} orthography sample letters",
+                    variety.id.0,
+                    index + 1
+                )
+            })
     }
 
     #[test]
     fn every_builtin_variety_phonemicizes_with_declared_data() {
         for variety in builtin_varieties() {
-            let word = sample_word_for_variety(&variety.id.0);
+            let word = sample_word_for_variety(&variety);
             let phonemicizer =
                 phonemicizer_for_variety(&variety.id).expect("builtin variety has phonemicizer");
             let output = phonemicizer
@@ -5104,8 +5105,8 @@ mod tests {
                 .initialism_joiners
                 .first()
                 .unwrap_or_else(|| panic!("{} should declare initialism joiners", variety.id.0));
-            let left = sample_letter_for_variety(&variety.id.0, 0);
-            let right = sample_letter_for_variety(&variety.id.0, 1);
+            let left = sample_letter_for_variety(&variety, 0);
+            let right = sample_letter_for_variety(&variety, 1);
             let initialism_text = format!("{left} {joiner} {right}");
             let initialism = phonemicizer_for_variety(&variety.id)
                 .expect("phonemicizer")

@@ -480,17 +480,14 @@ mod tests {
     #[test]
     fn pronunciations_attach_for_every_builtin_variety() {
         for variety in builtin_varieties() {
-            let text = match variety.id.0.as_str() {
-                "en-US-GA" | "en-US-singing" | "en-GB-RP" | "en-GB-ScotE" | "en-US-AAE" => "hello",
-                "eo" => "ŝipo",
-                "fr-FR-Standard" => "bonjour",
-                "de-DE-Standard" => "Sprache",
-                "el-GR-Standard" | "grc-Attic" | "grc-Koine" => "και",
-                "la-Classical" | "la-Ecclesiastical" => "caelum",
-                "sa-Deva-Standard" => "धर्म",
-                "es-ES-Castilian" | "es-419-Standard" => "zapato",
-                _ => continue,
-            };
+            let text = variety
+                .orthography
+                .as_ref()
+                .and_then(|orthography| orthography.sample_words.first())
+                .map(String::as_str)
+                .unwrap_or_else(|| {
+                    panic!("{} should declare orthography sample words", variety.id.0)
+                });
             let stream = transcript_to_word_stream_for_variety(
                 WordStreamId(10),
                 &[TranscriptWord {
