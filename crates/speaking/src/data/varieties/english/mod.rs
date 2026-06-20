@@ -26,10 +26,11 @@ use crate::rules::{
 };
 use crate::segment::{Environment, SegmentMatcher, SyllablePosition, WordPosition};
 use crate::spec::Spec;
+use crate::syntax::PartOfSpeech;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographicUnitKind, OrthographicUnitPronunciation,
-    VarietyImplementationStatus, VarietyStatus, WeakFormFollowingContext, WeakFormRule,
-    WeakFormStyleContext,
+    PronunciationSelectionRule, VarietyImplementationStatus, VarietyStatus,
+    WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
 const P: PhoneId = PhoneId::borrowed("ipa.phone.p");
@@ -196,6 +197,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: weak_forms(row.id),
         orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
         pronunciation_lexicons: vec![CMUDICT_ID.into()],
+        pronunciation_selection_rules: pronunciation_selection_rules(),
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
@@ -262,6 +264,27 @@ pub fn variety(id: &str) -> LinguisticVariety {
             }
         },
     }
+}
+
+fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
+    normalization::POS_SENSITIVE_PRONUNCIATIONS
+        .iter()
+        .map(|spec| PronunciationSelectionRule {
+            lexical_item: spec.word.into(),
+            part_of_speech: Some(spec.part_of_speech),
+            next_part_of_speech: None,
+            source_pronunciation: spec.symbols.iter().map(|symbol| (*symbol).into()).collect(),
+        })
+        .chain(std::iter::once(PronunciationSelectionRule {
+            lexical_item: "st".into(),
+            part_of_speech: None,
+            next_part_of_speech: Some(PartOfSpeech::ProperName),
+            source_pronunciation: ["S", "EY1", "N", "T"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        }))
+        .collect()
 }
 
 fn orthographic_unit_pronunciations(variety_id: &str) -> Vec<OrthographicUnitPronunciation> {

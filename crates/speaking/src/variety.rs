@@ -42,6 +42,8 @@ pub struct LinguisticVariety {
     #[serde(default)]
     pub pronunciation_lexicons: Vec<String>,
     #[serde(default)]
+    pub pronunciation_selection_rules: Vec<PronunciationSelectionRule>,
+    #[serde(default)]
     pub pronunciation_pipeline: Option<String>,
     #[serde(default)]
     pub text_normalization: TextNormalizationProfile,
@@ -192,6 +194,17 @@ pub struct OrthographicUnitPronunciation {
     pub kind: OrthographicUnitKind,
     pub unit: String,
     pub pronunciation: Vec<PhonemeId>,
+    #[serde(default)]
+    pub source_pronunciation: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PronunciationSelectionRule {
+    pub lexical_item: String,
+    #[serde(default)]
+    pub part_of_speech: Option<PartOfSpeech>,
+    #[serde(default)]
+    pub next_part_of_speech: Option<PartOfSpeech>,
     #[serde(default)]
     pub source_pronunciation: Vec<String>,
 }
