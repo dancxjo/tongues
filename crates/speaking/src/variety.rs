@@ -10,7 +10,7 @@ use crate::phonology::PhonemeInventory;
 use crate::prosody::ProsodyProfile;
 use crate::rules::{AllophoneRule, EpenthesisRule, Phonotactics};
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{HeuristicSyntaxProfile, PartOfSpeech, SentenceSyntaxAnalysis};
+use crate::syntax::{LinkGrammarRuleSet, PartOfSpeech, SentenceSyntaxAnalysis};
 
 pub type SyntaxAnalyzer = fn(&[String], Option<TerminalPunctuation>) -> SentenceSyntaxAnalysis;
 pub type OrthographyIpaSynthesizer =
@@ -52,7 +52,7 @@ pub struct LinguisticVariety {
     #[serde(skip)]
     pub syntax_analyzer: Option<SyntaxAnalyzer>,
     #[serde(skip)]
-    pub syntax_heuristics: Option<HeuristicSyntaxProfile>,
+    pub syntax_rules: Option<LinkGrammarRuleSet>,
     #[serde(skip)]
     pub orthography_pronunciation: Option<OrthographyPronunciationRules>,
     #[serde(default)]

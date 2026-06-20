@@ -140,8 +140,8 @@ pub trait PronunciationPipeline {
             return Some(analyzer(words, terminal));
         }
         variety
-            .syntax_heuristics
-            .map(|profile| crate::syntax::parse_heuristic_link_grammar(words, terminal, profile))
+            .syntax_rules
+            .map(|rules| crate::syntax::parse_link_grammar_with_rules(words, terminal, rules))
     }
 
     fn annotate_boundaries(
@@ -3078,12 +3078,12 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
     let syntax = if let Some(analyzer) = variety.syntax_analyzer {
         analyzer(&words_str, None)
     } else {
-        crate::syntax::parse_heuristic_link_grammar(
+        crate::syntax::parse_link_grammar_with_rules(
             &words_str,
             None,
             variety
-                .syntax_heuristics
-                .unwrap_or_else(crate::syntax::HeuristicSyntaxProfile::empty),
+                .syntax_rules
+                .unwrap_or_else(crate::syntax::LinkGrammarRuleSet::empty),
         )
     };
 
@@ -5054,7 +5054,7 @@ mod tests {
                 );
             }
             assert!(
-                variety.syntax_analyzer.is_some() || variety.syntax_heuristics.is_some(),
+                variety.syntax_analyzer.is_some() || variety.syntax_rules.is_some(),
                 "{} should carry syntax analysis data",
                 variety.id.0
             );

@@ -232,7 +232,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         text_normalization: crate::data::varieties::english_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
         syntax_analyzer: Some(syntax::parse_link_grammar),
-        syntax_heuristics: None,
+        syntax_rules: None,
         orthography_pronunciation: None,
         number_names: Some(english_number_names()),
         punctuation: Some(crate::data::varieties::english_punctuation_profile()),

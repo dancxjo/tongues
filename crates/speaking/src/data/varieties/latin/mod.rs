@@ -8,7 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::HeuristicSyntaxProfile;
+use crate::syntax::LinkGrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -87,7 +87,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         text_normalization: crate::data::varieties::small_number_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_LATIN.into()),
         syntax_analyzer: None,
-        syntax_heuristics: Some(syntax_profile()),
+        syntax_rules: Some(syntax_profile()),
         orthography_pronunciation: Some(OrthographyPronunciationRules {
             synthesize_ipa: Some(synthesize_ipa_for_orthography),
         }),
@@ -185,8 +185,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_for_variety(word, &variety.id.0)
 }
 
-pub fn syntax_profile() -> HeuristicSyntaxProfile {
-    HeuristicSyntaxProfile {
+pub fn syntax_profile() -> LinkGrammarRuleSet {
+    LinkGrammarRuleSet {
         determiners: &[
             "hic", "haec", "hoc", "ille", "illa", "illud", "iste", "ista", "istud", "is", "ea",
             "id", "meus", "mea", "tuus", "tua", "suus", "sua",
@@ -225,7 +225,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         verb_suffixes: &["are", "ere", "ire"],
         subject_verb_suffixes: &["o", "m", "s", "t", "mus", "tis", "nt"],
         non_verbs: &[],
-        ..HeuristicSyntaxProfile::empty()
+        ..LinkGrammarRuleSet::empty()
     }
 }
 
@@ -326,6 +326,10 @@ fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
                 index += 1;
             }
             'q' => ipa.push('k'),
+            'r' if matches!(next, Some('h')) => {
+                ipa.push('r');
+                index += 1;
+            }
             'r' => ipa.push('r'),
             's' if matches!(variety, LatinVariety::Ecclesiastical)
                 && matches!(next, Some('c'))
@@ -654,6 +658,14 @@ mod tests {
         assert_eq!(
             synthesize_ipa("theologia", LatinVariety::Ecclesiastical).as_deref(),
             Some("/teoˈlod͡ʒia/")
+        );
+        assert_eq!(
+            synthesize_ipa("Rhodano", LatinVariety::Classical).as_deref(),
+            Some("/ˈrodano/")
+        );
+        assert_eq!(
+            synthesize_ipa("Rhenum", LatinVariety::Ecclesiastical).as_deref(),
+            Some("/ˈrenum/")
         );
     }
 }

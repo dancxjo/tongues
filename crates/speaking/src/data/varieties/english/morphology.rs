@@ -351,7 +351,7 @@ mod tests {
             text_normalization: Default::default(),
             syntax_profile: None,
             syntax_analyzer: None,
-            syntax_heuristics: None,
+            syntax_rules: None,
             orthography_pronunciation: None,
             number_names: None,
             punctuation: None,

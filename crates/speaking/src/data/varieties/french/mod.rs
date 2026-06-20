@@ -8,7 +8,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::HeuristicSyntaxProfile;
+use crate::syntax::LinkGrammarRuleSet;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
@@ -51,7 +51,7 @@ pub fn variety() -> LinguisticVariety {
         },
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_FRENCH.into()),
         syntax_analyzer: None,
-        syntax_heuristics: Some(syntax_profile()),
+        syntax_rules: Some(syntax_profile()),
         orthography_pronunciation: Some(OrthographyPronunciationRules {
             synthesize_ipa: Some(synthesize_ipa_for_orthography),
         }),
@@ -195,8 +195,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_with_pos(word, part_of_speech)
 }
 
-pub fn syntax_profile() -> HeuristicSyntaxProfile {
-    HeuristicSyntaxProfile {
+pub fn syntax_profile() -> LinkGrammarRuleSet {
+    LinkGrammarRuleSet {
         determiners: &[
             "le", "la", "les", "l'", "un", "une", "des", "du", "de", "mon", "ma", "mes", "ton",
             "ta", "tes", "son", "sa", "ses", "notre", "nos", "votre", "vos", "leur", "leurs", "ce",
@@ -306,7 +306,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "lentement",
             "seulement",
         ],
-        ..HeuristicSyntaxProfile::empty()
+        ..LinkGrammarRuleSet::empty()
     }
 }
 

@@ -120,12 +120,10 @@ weight auxiliary heads for POS, link label, head offset, parse acceptability,
 and phrase boundary labels; failed parses leave syntax labels padded so syntax
 loss is skipped for that sentence.
 
-For English, syntax analysis uses the upstream `link-parser` command when it is
-available on `PATH`, preserving raw Link Grammar connector labels under
-`raw_link_grammar_parses` and projecting known connector families into the
-existing simplified labels. Set `LINK_GRAMMAR_PARSER` or
-`LINK_GRAMMAR_EN_DICTIONARY` to override the executable or dictionary path. Set
-`TONGUES_LINK_GRAMMAR_BACKEND=heuristic` to force the legacy heuristic fallback.
+Syntax analysis uses the in-tree link grammar engine. Each linguistic variety
+owns its lexeme classes and connector rules, while the shared engine normalizes
+words, pairs compatible connectors, emits typed links, and preserves raw
+connector-style labels under `raw_link_grammar_parses`.
 
 Vocabulary files are built from the recovered split rows. `vocab.json` is the
 character/CTC vocabulary. `phoneme_vocab.json` is built from phonemicizer token

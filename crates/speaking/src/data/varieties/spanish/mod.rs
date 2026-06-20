@@ -8,7 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::HeuristicSyntaxProfile;
+use crate::syntax::LinkGrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -251,7 +251,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         text_normalization: crate::data::varieties::small_number_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_SPANISH.into()),
         syntax_analyzer: None,
-        syntax_heuristics: Some(syntax_profile()),
+        syntax_rules: Some(syntax_profile()),
         orthography_pronunciation: Some(OrthographyPronunciationRules {
             synthesize_ipa: Some(synthesize_ipa_for_orthography),
         }),
@@ -335,8 +335,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_for_variety(word, &variety.id.0)
 }
 
-pub fn syntax_profile() -> HeuristicSyntaxProfile {
-    HeuristicSyntaxProfile {
+pub fn syntax_profile() -> LinkGrammarRuleSet {
+    LinkGrammarRuleSet {
         determiners: &[
             "el", "la", "los", "las", "un", "una", "unos", "unas", "mi", "mis", "tu", "tus", "su",
             "sus", "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "estos", "estas",
@@ -384,7 +384,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         ],
         subject_verb_suffixes: &["o", "as", "es", "a", "e", "an", "en"],
         non_verbs: &[],
-        ..HeuristicSyntaxProfile::empty()
+        ..LinkGrammarRuleSet::empty()
     }
 }
 

@@ -1,24 +1,18 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    LinkParserCommandBackend, PartOfSpeech, ProsodicRole, SentenceSyntaxAnalysis, SyntacticLink,
-    SyntacticLinkKind, SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
-    use_link_parser_command_backend,
+    PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost, RawLinkGrammarLink,
+    RawLinkGrammarParse, SentenceSyntaxAnalysis, SyntacticLink, SyntacticLinkKind,
+    SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
 };
 
 pub fn parse_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
-    if use_link_parser_command_backend() {
-        if let Some(mut analysis) = LinkParserCommandBackend::new().parse(words, terminal) {
-            annotate_tokens(&mut analysis);
-            return analysis;
-        }
-    }
-    parse_heuristic_link_grammar(words, terminal)
+    parse_english_link_grammar(words, terminal)
 }
 
-pub fn parse_heuristic_link_grammar(
+pub fn parse_english_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
@@ -34,6 +28,19 @@ pub fn parse_heuristic_link_grammar(
         .map(|(_, normalized)| normalized.clone())
         .collect::<Vec<_>>();
     let links = build_links(&normalized);
+    let unlinked = unlinked_word_count(normalized.len(), &links) as f32;
+    let length = links
+        .iter()
+        .map(|link| link.right.abs_diff(link.left) as f32)
+        .sum();
+    let raw_links = links
+        .iter()
+        .map(|link| RawLinkGrammarLink {
+            left: link.left,
+            right: link.right,
+            label: link_label(link.kind).to_string(),
+        })
+        .collect::<Vec<_>>();
     let parse = SyntacticLinkParse { links, rank: 1.0 };
     let tokens = normalized
         .iter()
@@ -61,7 +68,16 @@ pub fn parse_heuristic_link_grammar(
     SentenceSyntaxAnalysis {
         tokens,
         link_parses: vec![parse],
-        raw_link_grammar_parses: Vec::new(),
+        raw_link_grammar_parses: vec![RawLinkGrammarParse {
+            links: raw_links,
+            cost: Some(RawLinkGrammarCost {
+                unused: Some(unlinked),
+                disjunct: Some(0.0),
+                length: Some(length),
+            }),
+            accepted: true,
+            backend: RawLinkGrammarBackend::TonguesLinkGrammar,
+        }],
         terminal,
     }
 }
@@ -140,6 +156,34 @@ fn build_links(words: &[String]) -> Vec<SyntacticLink> {
     push_coordination_links(words, &mut links);
     push_contrast_links(words, &mut links);
     links
+}
+
+fn link_label(kind: SyntacticLinkKind) -> &'static str {
+    match kind {
+        SyntacticLinkKind::Subject => "S",
+        SyntacticLinkKind::Object => "O",
+        SyntacticLinkKind::Complement => "C",
+        SyntacticLinkKind::InfinitivalMarker => "TO",
+        SyntacticLinkKind::Modifier => "M",
+        SyntacticLinkKind::Determiner => "D",
+        SyntacticLinkKind::Auxiliary => "AUX",
+        SyntacticLinkKind::Preposition => "J",
+        SyntacticLinkKind::Coordination => "CO",
+        SyntacticLinkKind::ContrastPair => "NEG",
+        SyntacticLinkKind::NounCompound => "NN",
+        SyntacticLinkKind::Vocative => "VOC",
+        SyntacticLinkKind::Apposition => "APP",
+        SyntacticLinkKind::Parenthetical => "PAR",
+    }
+}
+
+fn unlinked_word_count(word_count: usize, links: &[SyntacticLink]) -> usize {
+    let mut linked = std::collections::HashSet::new();
+    for link in links {
+        linked.insert(link.left);
+        linked.insert(link.right);
+    }
+    word_count.saturating_sub(linked.len())
 }
 
 fn push_prepositional_phrase_links(words: &[String], links: &mut Vec<SyntacticLink>) {

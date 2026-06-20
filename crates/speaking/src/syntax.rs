@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::collections::HashSet;
 
 use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::data::variety_by_code;
@@ -59,7 +57,7 @@ pub struct RawLinkGrammarCost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RawLinkGrammarBackend {
-    LinkParserCommand,
+    TonguesLinkGrammar,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,7 +91,7 @@ pub enum SyntacticLinkKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyntacticLinkSource {
-    HeuristicGrammarIsland,
+    LinkGrammarRule,
     LinkGrammarProjection,
     AmbiguityVariant,
 }
@@ -191,8 +189,8 @@ impl LinkGrammarParser for VarietyLinkGrammarParser {
         if let Some(analyzer) = variety.syntax_analyzer {
             return analyzer(words, terminal);
         }
-        if let Some(profile) = variety.syntax_heuristics {
-            return parse_heuristic_link_grammar(words, terminal, profile);
+        if let Some(profile) = variety.syntax_rules {
+            return parse_link_grammar_with_rules(words, terminal, profile);
         }
         SentenceSyntaxAnalysis {
             terminal,
@@ -202,7 +200,7 @@ impl LinkGrammarParser for VarietyLinkGrammarParser {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HeuristicSyntaxProfile {
+pub struct LinkGrammarRuleSet {
     pub determiners: &'static [&'static str],
     pub pronouns: &'static [&'static str],
     pub object_pronouns: &'static [&'static str],
@@ -222,9 +220,10 @@ pub struct HeuristicSyntaxProfile {
     pub verb_suffixes: &'static [&'static str],
     pub subject_verb_suffixes: &'static [&'static str],
     pub non_verbs: &'static [&'static str],
+    pub rules: &'static [LinkGrammarRule],
 }
 
-impl HeuristicSyntaxProfile {
+impl LinkGrammarRuleSet {
     pub const fn empty() -> Self {
         Self {
             determiners: &[],
@@ -246,51 +245,226 @@ impl HeuristicSyntaxProfile {
             verb_suffixes: &[],
             subject_verb_suffixes: &[],
             non_verbs: &[],
+            rules: DEFAULT_LINK_GRAMMAR_RULES,
         }
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct LinkParserCommandBackend {
-    command: Option<String>,
-    dictionary: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkGrammarRule {
+    pub left: LinkGrammarConnector,
+    pub right: LinkGrammarConnector,
+    pub kind: SyntacticLinkKind,
+    pub label: &'static str,
+    pub confidence: u8,
+    pub max_distance: usize,
 }
 
-impl LinkParserCommandBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkGrammarConnector {
+    Determiner,
+    Nominal,
+    NominalHead,
+    Subject,
+    ObjectPronoun,
+    Verb,
+    Auxiliary,
+    Copula,
+    Preposition,
+    Postposition,
+    Conjunction,
+    Particle,
+    Complementizer,
+    RelativeMarker,
+    Adjective,
+    Adverb,
+}
 
-    pub fn with_command(command: impl Into<String>) -> Self {
-        Self {
-            command: Some(command.into()),
-            dictionary: None,
-        }
-    }
+pub const DEFAULT_LINK_GRAMMAR_RULES: &[LinkGrammarRule] = &[
+    rule(
+        LinkGrammarConnector::Determiner,
+        LinkGrammarConnector::NominalHead,
+        SyntacticLinkKind::Determiner,
+        "D",
+        78,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Subject,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Subject,
+        "S",
+        77,
+        6,
+    ),
+    rule(
+        LinkGrammarConnector::Auxiliary,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Auxiliary,
+        "AUX",
+        76,
+        5,
+    ),
+    rule(
+        LinkGrammarConnector::Preposition,
+        LinkGrammarConnector::NominalHead,
+        SyntacticLinkKind::Preposition,
+        "J",
+        76,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::NominalHead,
+        LinkGrammarConnector::Postposition,
+        SyntacticLinkKind::Preposition,
+        "JP",
+        73,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Verb,
+        LinkGrammarConnector::NominalHead,
+        SyntacticLinkKind::Object,
+        "O",
+        66,
+        5,
+    ),
+    rule(
+        LinkGrammarConnector::ObjectPronoun,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Object,
+        "O",
+        67,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Adjective,
+        LinkGrammarConnector::NominalHead,
+        SyntacticLinkKind::Modifier,
+        "AN",
+        65,
+        3,
+    ),
+    rule(
+        LinkGrammarConnector::Verb,
+        LinkGrammarConnector::Adverb,
+        SyntacticLinkKind::Modifier,
+        "MV",
+        64,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Adverb,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Modifier,
+        "MV",
+        66,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Adverb,
+        LinkGrammarConnector::Adjective,
+        SyntacticLinkKind::Modifier,
+        "EA",
+        66,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::Copula,
+        LinkGrammarConnector::NominalHead,
+        SyntacticLinkKind::Complement,
+        "Pa",
+        72,
+        5,
+    ),
+    rule(
+        LinkGrammarConnector::Copula,
+        LinkGrammarConnector::Adjective,
+        SyntacticLinkKind::Complement,
+        "Pa",
+        72,
+        5,
+    ),
+    rule(
+        LinkGrammarConnector::Verb,
+        LinkGrammarConnector::Complementizer,
+        SyntacticLinkKind::Complement,
+        "C",
+        66,
+        6,
+    ),
+    rule(
+        LinkGrammarConnector::Complementizer,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Complement,
+        "C",
+        62,
+        5,
+    ),
+    rule(
+        LinkGrammarConnector::NominalHead,
+        LinkGrammarConnector::RelativeMarker,
+        SyntacticLinkKind::Apposition,
+        "R",
+        58,
+        4,
+    ),
+    rule(
+        LinkGrammarConnector::RelativeMarker,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Complement,
+        "C",
+        61,
+        6,
+    ),
+    rule(
+        LinkGrammarConnector::Conjunction,
+        LinkGrammarConnector::Nominal,
+        SyntacticLinkKind::Coordination,
+        "CO",
+        68,
+        1,
+    ),
+    rule(
+        LinkGrammarConnector::Nominal,
+        LinkGrammarConnector::Conjunction,
+        SyntacticLinkKind::Coordination,
+        "CO",
+        62,
+        1,
+    ),
+    rule(
+        LinkGrammarConnector::Particle,
+        LinkGrammarConnector::Verb,
+        SyntacticLinkKind::Modifier,
+        "M",
+        56,
+        1,
+    ),
+];
 
-    pub fn with_dictionary(mut self, dictionary: impl Into<String>) -> Self {
-        self.dictionary = Some(dictionary.into());
-        self
-    }
-
-    pub fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> Option<SentenceSyntaxAnalysis> {
-        parse_with_link_parser_command(
-            words,
-            terminal,
-            self.command.as_deref(),
-            self.dictionary.as_deref(),
-        )
+const fn rule(
+    left: LinkGrammarConnector,
+    right: LinkGrammarConnector,
+    kind: SyntacticLinkKind,
+    label: &'static str,
+    confidence: u8,
+    max_distance: usize,
+) -> LinkGrammarRule {
+    LinkGrammarRule {
+        left,
+        right,
+        kind,
+        label,
+        confidence,
+        max_distance,
     }
 }
 
-fn parse_multilingual_link_grammar(
+fn parse_rule_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
 ) -> SentenceSyntaxAnalysis {
     let pairs = words
         .iter()
@@ -303,8 +477,9 @@ fn parse_multilingual_link_grammar(
         .iter()
         .map(|(_, normalized)| normalized.clone())
         .collect::<Vec<_>>();
-    let links = build_multilingual_links(&normalized, profile);
-    let parse = SyntacticLinkParse { links, rank: 0.72 };
+    let (links, raw_links) = build_rule_links(&normalized, profile);
+    let rank = parse_rank(&links, normalized.len());
+    let parse = SyntacticLinkParse { links, rank };
     let tokens = normalized
         .iter()
         .enumerate()
@@ -332,28 +507,46 @@ fn parse_multilingual_link_grammar(
             }
         })
         .collect();
+    let unlinked = unlinked_word_count(normalized.len(), &parse.links) as f32;
+    let length = parse
+        .links
+        .iter()
+        .map(|link| link.right.abs_diff(link.left) as f32)
+        .sum();
+    let accepted = !parse.links.is_empty() || normalized.is_empty();
 
     SentenceSyntaxAnalysis {
         tokens,
         link_parses: vec![parse],
-        raw_link_grammar_parses: Vec::new(),
+        raw_link_grammar_parses: vec![RawLinkGrammarParse {
+            links: raw_links,
+            cost: Some(RawLinkGrammarCost {
+                unused: Some(unlinked),
+                disjunct: Some(0.0),
+                length: Some(length),
+            }),
+            accepted,
+            backend: RawLinkGrammarBackend::TonguesLinkGrammar,
+        }],
         terminal,
     }
 }
 
-pub fn parse_heuristic_link_grammar(
+pub fn parse_link_grammar_with_rules(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
 ) -> SentenceSyntaxAnalysis {
-    parse_multilingual_link_grammar(words, terminal, profile)
+    parse_rule_link_grammar(words, terminal, profile)
 }
 
-fn build_multilingual_links(
+fn build_rule_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
-) -> Vec<SyntacticLink> {
+    profile: LinkGrammarRuleSet,
+) -> (Vec<SyntacticLink>, Vec<RawLinkGrammarLink>) {
     let mut links = Vec::new();
+    let mut raw_links = Vec::new();
+    apply_connector_rules(words, profile, &mut links, &mut raw_links);
     for (index, window) in words.windows(2).enumerate() {
         let left = window[0].as_str();
         let right = window[1].as_str();
@@ -506,12 +699,137 @@ fn build_multilingual_links(
             }
         }
     }
-    links
+    raw_links.extend(links.iter().map(raw_link_from_typed_link));
+    raw_links.sort_by(|left, right| {
+        left.left
+            .cmp(&right.left)
+            .then(left.right.cmp(&right.right))
+            .then(left.label.cmp(&right.label))
+    });
+    raw_links.dedup_by(|left, right| {
+        left.left == right.left && left.right == right.right && left.label == right.label
+    });
+    (links, raw_links)
+}
+
+fn apply_connector_rules(
+    words: &[String],
+    profile: LinkGrammarRuleSet,
+    links: &mut Vec<SyntacticLink>,
+    raw_links: &mut Vec<RawLinkGrammarLink>,
+) {
+    for rule in profile.rules {
+        for left in 0..words.len() {
+            if !connector_matches(profile, rule.left, words, left) {
+                continue;
+            }
+            let right_start = left + 1;
+            let right_end = words.len().min(left + rule.max_distance + 1);
+            for right in right_start..right_end {
+                if !connector_matches(profile, rule.right, words, right) {
+                    continue;
+                }
+                push_link(
+                    links,
+                    SyntacticLink {
+                        left,
+                        right,
+                        kind: rule.kind,
+                        confidence: f32::from(rule.confidence) / 100.0,
+                        source: SyntacticLinkSource::LinkGrammarRule,
+                    },
+                );
+                raw_links.push(RawLinkGrammarLink {
+                    left,
+                    right,
+                    label: rule.label.to_string(),
+                });
+                break;
+            }
+        }
+    }
+}
+
+fn connector_matches(
+    profile: LinkGrammarRuleSet,
+    connector: LinkGrammarConnector,
+    words: &[String],
+    index: usize,
+) -> bool {
+    let word = &words[index];
+    let previous = index
+        .checked_sub(1)
+        .and_then(|previous| words.get(previous))
+        .map(String::as_str);
+    match connector {
+        LinkGrammarConnector::Determiner => multilingual_is_determiner(profile, word),
+        LinkGrammarConnector::Nominal => multilingual_is_nominal(profile, word),
+        LinkGrammarConnector::NominalHead => multilingual_is_nominal_head(profile, word),
+        LinkGrammarConnector::Subject => multilingual_is_subject(profile, word),
+        LinkGrammarConnector::ObjectPronoun => multilingual_is_object_pronoun(profile, word),
+        LinkGrammarConnector::Verb => multilingual_is_likely_verb(profile, word, previous),
+        LinkGrammarConnector::Auxiliary => multilingual_is_auxiliary(profile, word),
+        LinkGrammarConnector::Copula => multilingual_is_copula(profile, word),
+        LinkGrammarConnector::Preposition => multilingual_is_preposition(profile, word),
+        LinkGrammarConnector::Postposition => multilingual_is_postposition(profile, word),
+        LinkGrammarConnector::Conjunction => multilingual_is_conjunction(profile, word),
+        LinkGrammarConnector::Particle => multilingual_is_particle(profile, word),
+        LinkGrammarConnector::Complementizer => multilingual_is_complementizer(profile, word),
+        LinkGrammarConnector::RelativeMarker => multilingual_is_relative_marker(profile, word),
+        LinkGrammarConnector::Adjective => multilingual_is_adjective(profile, word),
+        LinkGrammarConnector::Adverb => multilingual_is_adverb(profile, word),
+    }
+}
+
+fn raw_link_from_typed_link(link: &SyntacticLink) -> RawLinkGrammarLink {
+    RawLinkGrammarLink {
+        left: link.left,
+        right: link.right,
+        label: link_grammar_label(link.kind).to_string(),
+    }
+}
+
+fn link_grammar_label(kind: SyntacticLinkKind) -> &'static str {
+    match kind {
+        SyntacticLinkKind::Subject => "S",
+        SyntacticLinkKind::Object => "O",
+        SyntacticLinkKind::Complement => "C",
+        SyntacticLinkKind::InfinitivalMarker => "TO",
+        SyntacticLinkKind::Modifier => "M",
+        SyntacticLinkKind::Determiner => "D",
+        SyntacticLinkKind::Auxiliary => "AUX",
+        SyntacticLinkKind::Preposition => "J",
+        SyntacticLinkKind::Coordination => "CO",
+        SyntacticLinkKind::ContrastPair => "NEG",
+        SyntacticLinkKind::NounCompound => "NN",
+        SyntacticLinkKind::Vocative => "VOC",
+        SyntacticLinkKind::Apposition => "APP",
+        SyntacticLinkKind::Parenthetical => "PAR",
+    }
+}
+
+fn parse_rank(links: &[SyntacticLink], word_count: usize) -> f32 {
+    if word_count == 0 {
+        return 1.0;
+    }
+    let average_confidence =
+        links.iter().map(|link| link.confidence).sum::<f32>() / links.len().max(1) as f32;
+    let coverage = 1.0 - (unlinked_word_count(word_count, links) as f32 / word_count as f32);
+    (average_confidence * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
+}
+
+fn unlinked_word_count(word_count: usize, links: &[SyntacticLink]) -> usize {
+    let mut linked = HashSet::new();
+    for link in links {
+        linked.insert(link.left);
+        linked.insert(link.right);
+    }
+    word_count.saturating_sub(linked.len())
 }
 
 fn multilingual_subject_before(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     predicate_index: usize,
 ) -> Option<usize> {
     let start = predicate_index.saturating_sub(6);
@@ -525,7 +843,7 @@ fn multilingual_subject_before(
 
 fn push_multilingual_determiner_phrase_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for determiner_index in 0..words.len() {
@@ -554,7 +872,7 @@ fn push_multilingual_determiner_phrase_links(
 
 fn push_multilingual_modifier_phrase_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for modifier_index in 0..words.len() {
@@ -656,7 +974,7 @@ fn push_multilingual_modifier_phrase_links(
 
 fn push_multilingual_adposition_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for adposition_index in 0..words.len() {
@@ -703,7 +1021,7 @@ fn push_multilingual_adposition_links(
 
 fn push_multilingual_auxiliary_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for auxiliary_index in 0..words.len() {
@@ -735,7 +1053,7 @@ fn push_multilingual_auxiliary_links(
 
 fn push_multilingual_complement_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for predicate_index in 0..words.len() {
@@ -794,7 +1112,7 @@ fn push_multilingual_complement_links(
 
 fn push_multilingual_relative_clause_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for marker_index in 1..words.len() {
@@ -843,7 +1161,7 @@ fn push_multilingual_relative_clause_links(
 
 fn push_multilingual_coordination_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for conjunction_index in 1..words.len().saturating_sub(1) {
@@ -888,7 +1206,7 @@ fn push_multilingual_coordination_links(
 
 fn push_multilingual_object_pronoun_links(
     words: &[String],
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
 ) {
     for pronoun_index in 0..words.len() {
@@ -926,7 +1244,7 @@ fn push_multilingual_object_pronoun_links(
 }
 
 fn multilingual_pos(
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     word: &str,
     previous: Option<&str>,
 ) -> PartOfSpeech {
@@ -1037,405 +1355,6 @@ impl SyntaxRuleContext {
     }
 }
 
-pub(crate) fn use_link_parser_command_backend() -> bool {
-    match std::env::var("TONGUES_LINK_GRAMMAR_BACKEND") {
-        Ok(value)
-            if matches!(
-                value.to_ascii_lowercase().as_str(),
-                "heuristic" | "off" | "false" | "0"
-            ) =>
-        {
-            false
-        }
-        Ok(value)
-            if matches!(
-                value.to_ascii_lowercase().as_str(),
-                "command" | "link-parser"
-            ) =>
-        {
-            true
-        }
-        _ => link_parser_command_available(),
-    }
-}
-
-fn link_parser_command_available() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let command = std::env::var("LINK_GRAMMAR_PARSER")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "link-parser".to_string());
-        Command::new(command)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    })
-}
-
-fn parse_with_link_parser_command(
-    words: &[String],
-    terminal: Option<TerminalPunctuation>,
-    command: Option<&str>,
-    dictionary: Option<&str>,
-) -> Option<SentenceSyntaxAnalysis> {
-    let normalized_words = words
-        .iter()
-        .filter_map(|word| {
-            let normalized = normalize_syntax_word(word);
-            (!normalized.is_empty()).then(|| (word.clone(), normalized))
-        })
-        .collect::<Vec<_>>();
-    if normalized_words.is_empty() {
-        return Some(SentenceSyntaxAnalysis {
-            terminal,
-            ..Default::default()
-        });
-    }
-
-    let sentence = link_parser_sentence(words, terminal);
-    let command = command
-        .map(str::to_string)
-        .or_else(|| std::env::var("LINK_GRAMMAR_PARSER").ok())
-        .unwrap_or_else(|| "link-parser".to_string());
-    let dictionary = dictionary
-        .map(str::to_string)
-        .or_else(|| std::env::var("LINK_GRAMMAR_EN_DICTIONARY").ok());
-
-    let mut process = Command::new(command);
-    if let Some(dictionary) = dictionary.filter(|value| !value.trim().is_empty()) {
-        process.arg(dictionary);
-    }
-    process
-        .arg("--quiet")
-        .arg("-verbosity=0")
-        .arg("-graphics=1")
-        .arg("-links=1")
-        .arg("-limit=1")
-        .arg("-timeout=5")
-        .arg("-width=16381")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = process.spawn().ok()?;
-    {
-        let stdin = child.stdin.as_mut()?;
-        writeln!(stdin, "{sentence}").ok()?;
-        writeln!(stdin, "!exit").ok()?;
-    }
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    analysis_from_link_parser_output(&stdout, &normalized_words, terminal)
-}
-
-fn link_parser_sentence(words: &[String], terminal: Option<TerminalPunctuation>) -> String {
-    let mut sentence = words.join(" ");
-    let punctuation = match terminal {
-        Some(TerminalPunctuation::Question) => Some('?'),
-        Some(TerminalPunctuation::Exclamation) => Some('!'),
-        Some(TerminalPunctuation::Period) => Some('.'),
-        None => None,
-    };
-    if let Some(punctuation) = punctuation {
-        if !sentence.ends_with(['.', '?', '!']) {
-            sentence.push(punctuation);
-        }
-    }
-    sentence
-}
-
-fn analysis_from_link_parser_output(
-    output: &str,
-    original_normalized_words: &[(String, String)],
-    terminal: Option<TerminalPunctuation>,
-) -> Option<SentenceSyntaxAnalysis> {
-    let lines = output.lines().collect::<Vec<_>>();
-    let word_line_index = link_parser_word_line_index(&lines, original_normalized_words)?;
-    let word_positions =
-        link_parser_word_positions(lines[word_line_index], original_normalized_words)?;
-    let mut raw_links = Vec::new();
-    for line in lines[..word_line_index].iter().rev() {
-        if line.trim_start().starts_with("Linkage ") {
-            break;
-        }
-        raw_links.extend(parse_link_parser_arc_line(line, &word_positions));
-    }
-    raw_links.sort_by(|left, right| {
-        left.left
-            .cmp(&right.left)
-            .then(left.right.cmp(&right.right))
-            .then(left.label.cmp(&right.label))
-    });
-    raw_links.dedup_by(|left, right| {
-        left.left == right.left && left.right == right.right && left.label == right.label
-    });
-    if raw_links.is_empty() {
-        return None;
-    }
-
-    let cost = lines
-        .iter()
-        .find_map(|line| parse_link_parser_cost_vector(line));
-    let raw_parse = RawLinkGrammarParse {
-        links: raw_links,
-        cost,
-        accepted: true,
-        backend: RawLinkGrammarBackend::LinkParserCommand,
-    };
-    Some(project_raw_link_grammar_parse(
-        original_normalized_words,
-        terminal,
-        raw_parse,
-    ))
-}
-
-fn link_parser_word_line_index(
-    lines: &[&str],
-    original_normalized_words: &[(String, String)],
-) -> Option<usize> {
-    lines.iter().position(|line| {
-        let normalized_line_words = line
-            .split_whitespace()
-            .filter_map(normalize_link_parser_output_word)
-            .collect::<Vec<_>>();
-        original_normalized_words.iter().all(|(_, word)| {
-            normalized_line_words
-                .iter()
-                .any(|candidate| candidate == word)
-        })
-    })
-}
-
-fn normalize_link_parser_output_word(token: &str) -> Option<String> {
-    let token = token
-        .trim_matches(|character: char| matches!(character, '[' | ']'))
-        .split_once('[')
-        .map_or(token, |(word, _)| word)
-        .split_once('.')
-        .map_or(token, |(word, _)| word);
-    let normalized = normalize_syntax_word(token);
-    (!normalized.is_empty() && normalized != "leftwall" && normalized != "rightwall")
-        .then_some(normalized)
-}
-
-fn link_parser_word_positions(
-    line: &str,
-    original_normalized_words: &[(String, String)],
-) -> Option<Vec<(usize, usize)>> {
-    let mut positions = Vec::new();
-    let mut search_start = 0;
-    for (word_index, (_, expected)) in original_normalized_words.iter().enumerate() {
-        let Some((start, end)) = line[search_start..]
-            .split_whitespace()
-            .scan(search_start, |offset, token| {
-                let start = line[*offset..]
-                    .find(token)
-                    .map(|relative| *offset + relative)?;
-                let end = start + token.len();
-                *offset = end;
-                Some((token, start, end))
-            })
-            .find_map(|(token, start, end)| {
-                (normalize_link_parser_output_word(token).as_deref() == Some(expected.as_str()))
-                    .then_some((start, end))
-            })
-        else {
-            return None;
-        };
-        positions.push((word_index, (start + end) / 2));
-        search_start = end;
-    }
-    Some(positions)
-}
-
-fn parse_link_parser_arc_line(
-    line: &str,
-    word_positions: &[(usize, usize)],
-) -> Vec<RawLinkGrammarLink> {
-    let pluses = line
-        .char_indices()
-        .filter_map(|(index, character)| (character == '+').then_some(index))
-        .collect::<Vec<_>>();
-    let mut links = Vec::new();
-    for window in pluses.windows(2) {
-        let left_column = window[0];
-        let right_column = window[1];
-        let label = line[left_column + 1..right_column]
-            .chars()
-            .filter(|character| {
-                !matches!(character, '-' | '=' | '<' | '>' | '+' | '|' | ' ' | '\t')
-            })
-            .collect::<String>();
-        if label.is_empty() {
-            continue;
-        }
-        let Some(left) = nearest_link_parser_word_index(left_column, word_positions) else {
-            continue;
-        };
-        let Some(right) = nearest_link_parser_word_index(right_column, word_positions) else {
-            continue;
-        };
-        if left == right {
-            continue;
-        }
-        links.push(RawLinkGrammarLink {
-            left: left.min(right),
-            right: left.max(right),
-            label,
-        });
-    }
-    links
-}
-
-fn nearest_link_parser_word_index(
-    column: usize,
-    word_positions: &[(usize, usize)],
-) -> Option<usize> {
-    word_positions
-        .iter()
-        .min_by_key(|(_, word_column)| word_column.abs_diff(column))
-        .map(|(word_index, _)| *word_index)
-}
-
-fn parse_link_parser_cost_vector(line: &str) -> Option<RawLinkGrammarCost> {
-    let (_, rest) = line.split_once("cost vector =")?;
-    let vector = rest
-        .trim()
-        .trim_start_matches('(')
-        .trim_end_matches(')')
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    Some(RawLinkGrammarCost {
-        unused: parse_cost_component(&vector, "UNUSED"),
-        disjunct: parse_cost_component(&vector, "DIS"),
-        length: parse_cost_component(&vector, "LEN"),
-    })
-}
-
-fn parse_cost_component(parts: &[&str], key: &str) -> Option<f32> {
-    parts.iter().enumerate().find_map(|(index, part)| {
-        if let Some((left, right)) = part.split_once('=') {
-            if left == key {
-                return right
-                    .parse()
-                    .ok()
-                    .or_else(|| parts.get(index + 1).and_then(|value| value.parse().ok()));
-            }
-        }
-        (part.trim_end_matches('=') == key)
-            .then(|| parts.get(index + 1).and_then(|value| value.parse().ok()))
-            .flatten()
-    })
-}
-
-fn project_raw_link_grammar_parse(
-    original_normalized_words: &[(String, String)],
-    terminal: Option<TerminalPunctuation>,
-    raw_parse: RawLinkGrammarParse,
-) -> SentenceSyntaxAnalysis {
-    let links = raw_parse
-        .links
-        .iter()
-        .filter_map(project_raw_link_grammar_link)
-        .collect::<Vec<_>>();
-    let rank = raw_parse
-        .cost
-        .as_ref()
-        .map(|cost| {
-            1.0 / (1.0
-                + cost.unused.unwrap_or_default()
-                + cost.disjunct.unwrap_or_default()
-                + cost.length.unwrap_or_default())
-        })
-        .unwrap_or(1.0);
-    let parse = SyntacticLinkParse { links, rank };
-    let tokens = original_normalized_words
-        .iter()
-        .enumerate()
-        .map(|(word_index, (surface, word))| {
-            let mut syntactic_links = parse
-                .links
-                .iter()
-                .filter_map(|link| {
-                    (link.left == word_index || link.right == word_index).then_some(link.kind)
-                })
-                .collect::<Vec<_>>();
-            syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
-            syntactic_links.dedup();
-            SyntaxToken {
-                word_index,
-                text: surface.clone(),
-                pos: PartOfSpeech::Unknown,
-                prosodic_role: ProsodicRole::Content,
-                syntactic_links,
-            }
-        })
-        .collect();
-
-    SentenceSyntaxAnalysis {
-        tokens,
-        link_parses: vec![parse],
-        raw_link_grammar_parses: vec![raw_parse],
-        terminal,
-    }
-}
-
-fn project_raw_link_grammar_link(raw: &RawLinkGrammarLink) -> Option<SyntacticLink> {
-    let kind = project_link_grammar_label(&raw.label)?;
-    Some(SyntacticLink {
-        left: raw.left,
-        right: raw.right,
-        kind,
-        confidence: 0.95,
-        source: SyntacticLinkSource::LinkGrammarProjection,
-    })
-}
-
-fn project_link_grammar_label(label: &str) -> Option<SyntacticLinkKind> {
-    let uppercase = label.to_ascii_uppercase();
-    if uppercase.starts_with("TO") || uppercase.starts_with('I') {
-        Some(SyntacticLinkKind::InfinitivalMarker)
-    } else if uppercase.starts_with('S') || uppercase.starts_with("AF") {
-        Some(SyntacticLinkKind::Subject)
-    } else if uppercase.starts_with('O') {
-        Some(SyntacticLinkKind::Object)
-    } else if uppercase.starts_with('D') || uppercase.starts_with("YS") {
-        Some(SyntacticLinkKind::Determiner)
-    } else if uppercase.starts_with("CO")
-        || uppercase.starts_with("CP")
-        || uppercase.starts_with("CC")
-    {
-        Some(SyntacticLinkKind::Coordination)
-    } else if uppercase.starts_with('J')
-        || uppercase.starts_with('P')
-        || uppercase.starts_with("MVp")
-    {
-        Some(SyntacticLinkKind::Preposition)
-    } else if uppercase.starts_with('A')
-        || uppercase.starts_with('M')
-        || uppercase.starts_with("EA")
-        || uppercase.starts_with("PH")
-    {
-        Some(SyntacticLinkKind::Modifier)
-    } else if uppercase.starts_with('C')
-        || uppercase.starts_with("TH")
-        || uppercase.starts_with('R')
-        || uppercase.starts_with('B')
-    {
-        Some(SyntacticLinkKind::Complement)
-    } else if uppercase.starts_with('V') {
-        Some(SyntacticLinkKind::Vocative)
-    } else {
-        None
-    }
-}
-
 pub(crate) fn normalize_syntax_word(word: &str) -> String {
     let mut normalized = String::new();
     for character in word
@@ -1470,7 +1389,7 @@ pub(crate) fn link(
         right,
         kind,
         confidence,
-        source: SyntacticLinkSource::HeuristicGrammarIsland,
+        source: SyntacticLinkSource::LinkGrammarRule,
     }
 }
 
@@ -1482,60 +1401,60 @@ pub(crate) fn push_link(links: &mut Vec<SyntacticLink>, link: SyntacticLink) {
     }
 }
 
-fn multilingual_is_determiner(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_determiner(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.determiners)
 }
 
-fn multilingual_is_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_pronoun(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.pronouns)
 }
 
-fn multilingual_is_auxiliary(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_auxiliary(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.auxiliaries)
 }
 
-fn multilingual_is_copula(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_copula(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.copulas)
 }
 
-fn multilingual_is_preposition(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_preposition(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.prepositions)
 }
 
-fn multilingual_is_postposition(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_postposition(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.postpositions)
 }
 
-fn multilingual_is_conjunction(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_conjunction(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.conjunctions) || has_enclitic_suffix(word, profile.enclitic_suffixes)
 }
 
-fn multilingual_is_particle(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_particle(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.particles) || has_enclitic_suffix(word, profile.enclitic_suffixes)
 }
 
-fn multilingual_is_complementizer(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_complementizer(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.complementizers)
 }
 
-fn multilingual_is_relative_marker(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_relative_marker(profile: LinkGrammarRuleSet, word: &str) -> bool {
     multilingual_is_complementizer(profile, word) || multilingual_is_pronoun(profile, word)
 }
 
-fn multilingual_is_object_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_object_pronoun(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.object_pronouns)
 }
 
-fn multilingual_is_adverb(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_adverb(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.adverbs) || has_suffix(word, profile.adverb_suffixes)
 }
 
-fn multilingual_is_adjective(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_adjective(profile: LinkGrammarRuleSet, word: &str) -> bool {
     contains(word, profile.adjectives) || has_suffix(word, profile.adjective_suffixes)
 }
 
 fn multilingual_is_likely_verb(
-    profile: HeuristicSyntaxProfile,
+    profile: LinkGrammarRuleSet,
     word: &str,
     previous: Option<&str>,
 ) -> bool {
@@ -1551,7 +1470,7 @@ fn multilingual_is_likely_verb(
             && has_suffix(word, profile.subject_verb_suffixes))
 }
 
-fn multilingual_is_nominal(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_nominal(profile: LinkGrammarRuleSet, word: &str) -> bool {
     !word.is_empty()
         && !multilingual_is_determiner(profile, word)
         && !multilingual_is_preposition(profile, word)
@@ -1563,23 +1482,23 @@ fn multilingual_is_nominal(profile: HeuristicSyntaxProfile, word: &str) -> bool 
         && !multilingual_is_likely_verb(profile, word, None)
 }
 
-fn multilingual_is_nominal_head(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_nominal_head(profile: LinkGrammarRuleSet, word: &str) -> bool {
     multilingual_is_nominal(profile, word)
         && !multilingual_is_determiner(profile, word)
         && !multilingual_is_adjective(profile, word)
 }
 
-fn multilingual_is_object_candidate(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_object_candidate(profile: LinkGrammarRuleSet, word: &str) -> bool {
     multilingual_is_object_pronoun(profile, word) || multilingual_is_nominal_head(profile, word)
 }
 
-fn multilingual_is_subject(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_subject(profile: LinkGrammarRuleSet, word: &str) -> bool {
     multilingual_is_subject_pronoun(profile, word)
         || (multilingual_is_nominal_head(profile, word)
             && !multilingual_is_object_pronoun(profile, word))
 }
 
-fn multilingual_is_subject_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+fn multilingual_is_subject_pronoun(profile: LinkGrammarRuleSet, word: &str) -> bool {
     multilingual_is_pronoun(profile, word)
         && !multilingual_is_determiner(profile, word)
         && !multilingual_is_object_pronoun(profile, word)
@@ -1603,8 +1522,6 @@ fn contains(word: &str, words: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
     fn words(sentence: &str) -> Vec<String> {
         sentence
@@ -1661,81 +1578,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_link_parser_ascii_output_into_raw_and_projected_links() {
-        let original_words = ["the", "dog", "chased", "cat"]
-            .into_iter()
-            .map(|word| (word.to_string(), word.to_string()))
-            .collect::<Vec<_>>();
-        let output = r#"
-Found 1 linkage (1 had no P.P. violations)
-        Linkage 1, cost vector = (UNUSED=0 DIS= 0.00 LEN=8)
-    +----Ds---+----Ss----+----Os----+
-    |         |          |          |
-    the       dog        chased     cat .
-"#;
-
-        let analysis = analysis_from_link_parser_output(
-            output,
-            &original_words,
-            Some(TerminalPunctuation::Period),
-        )
-        .expect("fixture should parse");
-
-        assert_eq!(analysis.raw_link_grammar_parses.len(), 1);
-        assert_eq!(
-            analysis.raw_link_grammar_parses[0].backend,
-            RawLinkGrammarBackend::LinkParserCommand
-        );
-        assert_eq!(
-            analysis.raw_link_grammar_parses[0].cost,
-            Some(RawLinkGrammarCost {
-                unused: Some(0.0),
-                disjunct: Some(0.0),
-                length: Some(8.0),
-            })
-        );
-        assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Determiner);
-        assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Subject);
-        assert_link_between(&analysis, 2, 3, SyntacticLinkKind::Object);
-        assert!(analysis.primary_parse().is_some_and(|parse| {
-            parse
-                .links
-                .iter()
-                .all(|link| link.source == SyntacticLinkSource::LinkGrammarProjection)
-        }));
-    }
-
-    #[test]
-    fn link_grammar_projection_keeps_unknown_connector_families_raw_only() {
-        let original_words = ["left", "right"]
-            .into_iter()
-            .map(|word| (word.to_string(), word.to_string()))
-            .collect::<Vec<_>>();
-        let raw_parse = RawLinkGrammarParse {
-            links: vec![RawLinkGrammarLink {
-                left: 0,
-                right: 1,
-                label: "ZZcustom".to_string(),
-            }],
-            cost: None,
-            accepted: true,
-            backend: RawLinkGrammarBackend::LinkParserCommand,
-        };
-
-        let analysis = project_raw_link_grammar_parse(&original_words, None, raw_parse);
-
-        assert_eq!(
-            analysis.raw_link_grammar_parses[0].links[0].label,
-            "ZZcustom"
-        );
-        assert!(
-            analysis
-                .primary_parse()
-                .is_some_and(|parse| parse.links.is_empty())
-        );
-    }
-
-    #[test]
     fn parses_auxiliary_and_coordination_links() {
         let words = ["do", "you", "want", "either", "tea", "or", "coffee"]
             .into_iter()
@@ -1754,9 +1596,9 @@ Found 1 linkage (1 had no P.P. violations)
     }
 
     #[test]
-    fn upstream_tiny_dict_connector_families_emit_typed_links() {
-        // Derived from upstream link-grammar data/en/tiny.dict connector families:
-        // D, A/AN, J/Mp/MV, S/O, TO/I, P/AF/C, CO/C.
+    fn english_connector_families_emit_typed_links() {
+        // Connector families used by the in-tree English rules:
+        // D, A/AN, J/MV, S/O, TO, C, and CO.
         let samples = [
             (
                 "the small dog chased the cat",
@@ -1811,9 +1653,9 @@ Found 1 linkage (1 had no P.P. violations)
     }
 
     #[test]
-    fn upstream_corpus_basic_samples_cover_nominal_and_clause_rules() {
-        // Accepted examples from upstream data/en/corpus-basic.batch. These are
-        // fixture-style parity samples, not claims of full Link Grammar parsing.
+    fn english_corpus_basic_samples_cover_nominal_and_clause_rules() {
+        // Fixture-style coverage for nominal and clause patterns; this is not
+        // delegated to an external Link Grammar installation.
         let samples = [
             (
                 "An income tax increase may be necessary",
@@ -1862,10 +1704,9 @@ Found 1 linkage (1 had no P.P. violations)
     }
 
     #[test]
-    fn upstream_ambiguous_verb_lexemes_emit_clause_links() {
-        // Classic Link Grammar ambiguous noun/verb examples from data/en/words.
-        // The heuristic parser only needs enough of this surface ambiguity to
-        // preserve clause structure for downstream prosody rules.
+    fn ambiguous_verb_lexemes_emit_clause_links() {
+        // Ambiguous noun/verb examples exercise local POS disambiguation enough
+        // to preserve clause structure for downstream prosody rules.
         let samples = [
             (
                 "we close the account",
@@ -2149,57 +1990,9 @@ Found 1 linkage (1 had no P.P. violations)
     }
 
     #[test]
-    fn emits_vocative_from_upstream_oh_voc_pattern() {
+    fn emits_vocative_from_oh_voc_pattern() {
         let analysis = parse_variety("en-US-GA", "Oh Joe listen");
 
         assert_link(&analysis, SyntacticLinkKind::Vocative);
-    }
-
-    #[test]
-    #[ignore = "requires the upstream link-parser binary and English dictionary"]
-    fn upstream_link_parser_accepts_benchmark_samples() {
-        let Ok(dictionary) = std::env::var("LINK_GRAMMAR_EN_DICTIONARY") else {
-            eprintln!("set LINK_GRAMMAR_EN_DICTIONARY to upstream data/en to run this comparator");
-            return;
-        };
-        let samples = [
-            "The small dog chased the cat",
-            "Mary walked out of the room quickly",
-            "An income tax increase may be necessary",
-            "This is my friend Bob",
-            "I hope that he comes to the party tomorrow",
-            "Oh Joe listen",
-        ];
-        let mut child = match Command::new("link-parser")
-            .arg("-batch")
-            .arg("-verbosity=0")
-            .arg(dictionary)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                eprintln!("link-parser is not available: {error}");
-                return;
-            }
-        };
-        {
-            let stdin = child.stdin.as_mut().expect("link-parser stdin");
-            for sample in samples {
-                writeln!(stdin, "{sample}").expect("write sample to link-parser");
-            }
-        }
-
-        let output = child
-            .wait_with_output()
-            .expect("wait for link-parser comparator");
-        assert!(
-            output.status.success(),
-            "link-parser rejected benchmark samples\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }
