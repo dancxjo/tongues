@@ -330,9 +330,20 @@ pub fn parse_english_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
-    let links = build_links(words);
+    let pairs = words
+        .iter()
+        .filter_map(|word| {
+            let normalized = normalize_syntax_word(word);
+            (!normalized.is_empty()).then(|| (word.clone(), normalized))
+        })
+        .collect::<Vec<_>>();
+    let normalized = pairs
+        .iter()
+        .map(|(_, normalized)| normalized.clone())
+        .collect::<Vec<_>>();
+    let links = build_links(&normalized);
     let parse = SyntacticLinkParse { links, rank: 1.0 };
-    let tokens = words
+    let tokens = normalized
         .iter()
         .enumerate()
         .map(|(word_index, word)| {
@@ -347,7 +358,7 @@ pub fn parse_english_link_grammar(
             syntactic_links.dedup();
             SyntaxToken {
                 word_index,
-                text: word.clone(),
+                text: pairs[word_index].0.clone(),
                 pos: disambiguate_pos_from_links(word_index, base_pos(word), &parse.links),
                 prosodic_role: prosodic_role_for_word(word, &syntactic_links),
                 syntactic_links,
@@ -1112,10 +1123,6 @@ impl SyntaxRuleContext {
 }
 
 fn build_links(words: &[String]) -> Vec<SyntacticLink> {
-    let words = words
-        .iter()
-        .map(|word| normalize_syntax_word(word))
-        .collect::<Vec<_>>();
     let mut links = Vec::new();
     for (index, window) in words.windows(2).enumerate() {
         let left = window[0].as_str();
@@ -1177,20 +1184,35 @@ fn build_links(words: &[String]) -> Vec<SyntacticLink> {
     }
 
     push_prepositional_phrase_links(&words, &mut links);
+    push_possessive_links(words, &mut links);
     push_modifier_phrase_links(&words, &mut links);
     push_auxiliary_phrase_links(&words, &mut links);
     push_core_clause_links(&words, &mut links);
     push_complement_links(&words, &mut links);
+    push_fronted_clause_marker_links(words, &mut links);
+    push_relative_clause_links(words, &mut links);
+    push_particle_links(words, &mut links);
+    push_passive_participle_links(words, &mut links);
     push_coordination_links(&words, &mut links);
     push_contrast_links(&words, &mut links);
     links
 }
 
 fn normalize_syntax_word(word: &str) -> String {
-    word.trim_matches(|character: char| !is_syntax_word_character(character))
+    let mut normalized = String::new();
+    for character in word
+        .trim_matches(|character: char| !is_syntax_word_character(character))
         .chars()
-        .flat_map(char::to_lowercase)
-        .collect()
+    {
+        let character = match character {
+            '\u{2019}' => '\'',
+            other => other,
+        };
+        if is_syntax_word_character(character) {
+            normalized.extend(character.to_lowercase());
+        }
+    }
+    normalized
 }
 
 fn is_syntax_word_character(character: char) -> bool {
@@ -1220,6 +1242,33 @@ fn push_prepositional_phrase_links(words: &[String], links: &mut Vec<SyntacticLi
                     object_index,
                     SyntacticLinkKind::Preposition,
                     0.8,
+                ),
+            );
+        }
+    }
+}
+
+fn push_possessive_links(words: &[String], links: &mut Vec<SyntacticLink>) {
+    for possessive_index in 0..words.len().saturating_sub(1) {
+        if !is_possessive_nominal(&words[possessive_index]) {
+            continue;
+        }
+        if let Some(head_index) = words
+            .iter()
+            .enumerate()
+            .skip(possessive_index + 1)
+            .take(4)
+            .find_map(|(index, word)| {
+                (is_likely_nominal(word) && !is_modifier_only(word)).then_some(index)
+            })
+        {
+            push_link(
+                links,
+                link(
+                    possessive_index,
+                    head_index,
+                    SyntacticLinkKind::Determiner,
+                    0.81,
                 ),
             );
         }
@@ -1301,6 +1350,7 @@ fn push_core_clause_links(words: &[String], links: &mut Vec<SyntacticLink>) {
             .enumerate()
             .skip(predicate_index + 1)
             .take(5)
+            .take_while(|(_, word)| !is_clause_marker(word) && !is_coordination_conjunction(word))
             .find_map(|(index, word)| {
                 (is_likely_nominal(word) && !is_modifier_only(word)).then_some(index)
             })
@@ -1351,7 +1401,7 @@ fn push_complement_links(words: &[String], links: &mut Vec<SyntacticLink>) {
             .enumerate()
             .skip(predicate_index + 1)
             .take(6)
-            .find_map(|(index, word)| is_complementizer(word).then_some(index))
+            .find_map(|(index, word)| is_clause_marker(word).then_some(index))
         {
             push_link(
                 links,
@@ -1360,6 +1410,123 @@ fn push_complement_links(words: &[String], links: &mut Vec<SyntacticLink>) {
                     complement_index,
                     SyntacticLinkKind::Complement,
                     0.69,
+                ),
+            );
+        }
+    }
+}
+
+fn push_fronted_clause_marker_links(words: &[String], links: &mut Vec<SyntacticLink>) {
+    for marker_index in 0..words.len() {
+        if !is_clause_marker(&words[marker_index]) {
+            continue;
+        }
+        if let Some(predicate_index) = words
+            .iter()
+            .enumerate()
+            .skip(marker_index + 1)
+            .take(6)
+            .find_map(|(index, word)| (is_likely_verb(word) || is_auxiliary(word)).then_some(index))
+        {
+            push_link(
+                links,
+                link(
+                    marker_index,
+                    predicate_index,
+                    SyntacticLinkKind::Complement,
+                    0.66,
+                ),
+            );
+        }
+    }
+}
+
+fn push_relative_clause_links(words: &[String], links: &mut Vec<SyntacticLink>) {
+    for marker_index in 1..words.len() {
+        if !is_relative_marker(&words[marker_index]) {
+            continue;
+        }
+        let Some(head_index) = (0..marker_index)
+            .rev()
+            .take(4)
+            .find(|index| is_likely_nominal(&words[*index]) && !is_modifier_only(&words[*index]))
+        else {
+            continue;
+        };
+        if let Some(predicate_index) = words
+            .iter()
+            .enumerate()
+            .skip(marker_index + 1)
+            .take(6)
+            .find_map(|(index, word)| (is_likely_verb(word) || is_auxiliary(word)).then_some(index))
+        {
+            push_link(
+                links,
+                link(
+                    head_index,
+                    marker_index,
+                    SyntacticLinkKind::Apposition,
+                    0.62,
+                ),
+            );
+            push_link(
+                links,
+                link(
+                    marker_index,
+                    predicate_index,
+                    SyntacticLinkKind::Complement,
+                    0.65,
+                ),
+            );
+        }
+    }
+}
+
+fn push_particle_links(words: &[String], links: &mut Vec<SyntacticLink>) {
+    for particle_index in 1..words.len() {
+        if !is_phrasal_particle(&words[particle_index]) {
+            continue;
+        }
+        if let Some(verb_index) = (0..particle_index)
+            .rev()
+            .take(2)
+            .find(|index| is_likely_verb(&words[*index]))
+        {
+            push_link(
+                links,
+                link(
+                    verb_index,
+                    particle_index,
+                    SyntacticLinkKind::Modifier,
+                    0.66,
+                ),
+            );
+        }
+    }
+}
+
+fn push_passive_participle_links(words: &[String], links: &mut Vec<SyntacticLink>) {
+    for participle_index in 1..words.len() {
+        if !is_past_participle(&words[participle_index]) {
+            continue;
+        }
+        let Some(auxiliary_index) = (0..participle_index).rev().take(3).find(|index| {
+            is_copula(&words[*index]) || words[*index] == "get" || words[*index] == "got"
+        }) else {
+            continue;
+        };
+        if let Some(subject_index) = (0..auxiliary_index)
+            .rev()
+            .take(5)
+            .find(|index| is_subject_candidate(&words[*index]))
+        {
+            push_link(
+                links,
+                link(
+                    subject_index,
+                    participle_index,
+                    SyntacticLinkKind::Subject,
+                    0.64,
                 ),
             );
         }
@@ -1496,6 +1663,14 @@ fn is_complementizer(word: &str) -> bool {
     english_syntax::is_complementizer(word)
 }
 
+fn is_clause_marker(word: &str) -> bool {
+    is_complementizer(word) || is_subordinating_conjunction(word)
+}
+
+fn is_relative_marker(word: &str) -> bool {
+    matches!(word, "that" | "which" | "who" | "whom" | "whose")
+}
+
 fn is_likely_nominal(word: &str) -> bool {
     english_syntax::is_likely_nominal(word)
 }
@@ -1558,6 +1733,50 @@ fn is_pronoun(word: &str) -> bool {
 
 fn is_demonstrative_pronoun(word: &str) -> bool {
     english_syntax::is_demonstrative_pronoun(word)
+}
+
+fn is_possessive_nominal(word: &str) -> bool {
+    word.strip_suffix("'s")
+        .is_some_and(|stem| !stem.is_empty() && is_likely_nominal(stem))
+}
+
+fn is_phrasal_particle(word: &str) -> bool {
+    matches!(
+        word,
+        "about"
+            | "away"
+            | "back"
+            | "down"
+            | "in"
+            | "off"
+            | "on"
+            | "out"
+            | "over"
+            | "through"
+            | "up"
+    )
+}
+
+fn is_past_participle(word: &str) -> bool {
+    word.ends_with("ed")
+        || matches!(
+            word,
+            "bought"
+                | "chosen"
+                | "done"
+                | "given"
+                | "gone"
+                | "known"
+                | "left"
+                | "made"
+                | "read"
+                | "seen"
+                | "taken"
+                | "thought"
+                | "thrown"
+                | "told"
+                | "written"
+        )
 }
 
 fn is_vocative_opener(word: &str) -> bool {
@@ -1938,6 +2157,62 @@ mod tests {
                 assert_link(&analysis, expected_link);
             }
         }
+    }
+
+    #[test]
+    fn english_parser_handles_relative_and_subordinate_clauses() {
+        let relative = parse_english_link_grammar(&words("the man who saw mary left"), None);
+        assert_link_between(&relative, 1, 2, SyntacticLinkKind::Apposition);
+        assert_link_between(&relative, 2, 3, SyntacticLinkKind::Complement);
+        assert_link_between(&relative, 2, 3, SyntacticLinkKind::Subject);
+        assert_link_between(&relative, 3, 4, SyntacticLinkKind::Object);
+
+        let subordinate = parse_english_link_grammar(&words("because she left john waited"), None);
+        assert_link_between(&subordinate, 0, 2, SyntacticLinkKind::Complement);
+        assert_link_between(&subordinate, 1, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&subordinate, 3, 4, SyntacticLinkKind::Subject);
+    }
+
+    #[test]
+    fn english_parser_does_not_promote_clause_subjects_to_matrix_objects() {
+        let analysis = parse_english_link_grammar(&words("i know that she left"), None);
+
+        assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Complement);
+        assert_link_between(&analysis, 2, 4, SyntacticLinkKind::Complement);
+        assert_link_between(&analysis, 3, 4, SyntacticLinkKind::Subject);
+        assert_no_link_between(&analysis, 1, 3, SyntacticLinkKind::Object);
+    }
+
+    #[test]
+    fn english_parser_handles_possessives_particles_and_passives() {
+        let possessive = parse_english_link_grammar(&words("mary's old friend arrived"), None);
+        assert_link_between(&possessive, 0, 2, SyntacticLinkKind::Determiner);
+        assert_link_between(&possessive, 1, 2, SyntacticLinkKind::Modifier);
+        assert_link_between(&possessive, 2, 3, SyntacticLinkKind::Subject);
+
+        let particle = parse_english_link_grammar(&words("they turn off the light"), None);
+        assert_link_between(&particle, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&particle, 1, 2, SyntacticLinkKind::Modifier);
+        assert_link_between(&particle, 1, 4, SyntacticLinkKind::Object);
+
+        let passive = parse_english_link_grammar(&words("the ball was thrown by mary"), None);
+        assert_link_between(&passive, 1, 3, SyntacticLinkKind::Subject);
+        assert_link_between(&passive, 2, 3, SyntacticLinkKind::Auxiliary);
+        assert_link_between(&passive, 4, 5, SyntacticLinkKind::Preposition);
+    }
+
+    #[test]
+    fn english_parser_normalizes_internal_punctuation_and_skips_empty_tokens() {
+        let analysis = parse_english_link_grammar(
+            &["(".into(), "JOHN'S".into(), "old,".into(), "clock!".into()],
+            None,
+        );
+
+        assert_eq!(analysis.tokens.len(), 3);
+        assert_eq!(analysis.tokens[0].text, "JOHN'S");
+        assert_link_between(&analysis, 0, 2, SyntacticLinkKind::Determiner);
+        assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Modifier);
     }
 
     #[test]

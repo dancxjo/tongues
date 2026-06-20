@@ -5045,6 +5045,14 @@ mod tests {
     fn builtin_varieties_expose_runtime_data_hooks() {
         for variety in builtin_varieties() {
             assert!(
+                !matches!(
+                    variety.text_normalization.number_normalization,
+                    NumberNormalizationProfile::None
+                ),
+                "{} should declare text normalization data",
+                variety.id.0
+            );
+            assert!(
                 variety.syntax_analyzer.is_some() || variety.syntax_heuristics.is_some(),
                 "{} should carry syntax analysis data",
                 variety.id.0
@@ -5082,6 +5090,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn generic_pipeline_uses_variety_declared_text_normalization() {
+        let english =
+            phonemicizer_for_variety(&VarietyId("en-US".into())).expect("English phonemicizer");
+        let output = english
+            .phonemicize(&request("Dr. Smith saw No. 5 at 3:05 p.m.", "en-US"))
+            .expect("English variety-data normalizer should phonemicize");
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Doctor", "Smith", "saw", "Number", "five", "at", "three", "oh", "five", "p", "m"
+            ]
+        );
+
+        let french =
+            phonemicizer_for_variety(&VarietyId("fr".into())).expect("French phonemicizer");
+        let output = french
+            .phonemicize(&request("J'ai 5 amis.", "fr"))
+            .expect("French small-number normalizer should phonemicize");
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["J'ai", "cinq", "amis"]
+        );
     }
 
     fn sample_word_for_variety(variety: &LinguisticVariety) -> &str {

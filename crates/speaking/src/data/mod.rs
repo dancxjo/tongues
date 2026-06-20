@@ -77,6 +77,14 @@ mod tests {
                 variety.id.0
             );
             assert!(
+                !matches!(
+                    variety.text_normalization.number_normalization,
+                    crate::variety::NumberNormalizationProfile::None
+                ),
+                "{} should declare its text normalization profile",
+                variety.id.0
+            );
+            assert!(
                 variety
                     .number_names
                     .as_ref()

@@ -201,6 +201,12 @@ pub const LIKELY_VERBS: &[&str] = &[
     "think",
     "thinks",
     "thought",
+    "throw",
+    "thrown",
+    "told",
+    "took",
+    "turn",
+    "turned",
     "use",
     "walk",
     "walked",
@@ -212,6 +218,8 @@ pub const LIKELY_VERBS: &[&str] = &[
     "wind",
     "work",
     "works",
+    "write",
+    "wrote",
 ];
 
 pub const VERB_SUFFIXES: &[&str] = &["ed", "ing"];
