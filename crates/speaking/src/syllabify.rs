@@ -194,6 +194,16 @@ fn is_legal_onset(cluster: &[PhoneToken], variety: &LinguisticVariety) -> bool {
         return !is_illegal_single_onset(&cluster[0], variety);
     }
 
+    let has_explicit_legal_onsets = variety.phonotactics.as_ref().is_some_and(|phonotactics| {
+        phonotactics.constraints.iter().any(|constraint| {
+            constraint.environment.syllable_position == Spec::Known(SyllablePosition::Onset)
+                && constraint.id.contains(".legal_onset.")
+        })
+    });
+    if !has_explicit_legal_onsets {
+        return is_generic_legal_onset(cluster);
+    }
+
     variety.phonotactics.as_ref().is_some_and(|phonotactics| {
         phonotactics.constraints.iter().any(|constraint| {
             constraint.environment.syllable_position == Spec::Known(SyllablePosition::Onset)
@@ -201,6 +211,54 @@ fn is_legal_onset(cluster: &[PhoneToken], variety: &LinguisticVariety) -> bool {
                 && phone_cluster_matches(cluster, &constraint.environment.before)
         })
     })
+}
+
+fn is_generic_legal_onset(cluster: &[PhoneToken]) -> bool {
+    let sonority = cluster
+        .iter()
+        .map(generic_onset_sonority)
+        .collect::<Option<Vec<_>>>();
+    let Some(sonority) = sonority else {
+        return false;
+    };
+    if sonority.len() == 2 && is_s_like_fricative(&cluster[0]) && sonority[1] <= 1 {
+        return true;
+    }
+    if sonority.len() == 3 && is_s_like_fricative(&cluster[0]) {
+        return sonority[1] <= 1 && sonority[2] > sonority[1];
+    }
+    sonority.windows(2).all(|pair| pair[1] > pair[0])
+}
+
+fn generic_onset_sonority(phone: &PhoneToken) -> Option<u8> {
+    match phone_ipa(phone) {
+        "p" | "b" | "t" | "d" | "k" | "ɡ" | "g" | "q" | "ʔ" | "c" | "ɟ" | "ʈ" | "ɖ" => {
+            return Some(0);
+        }
+        "f" | "v" | "θ" | "ð" | "s" | "z" | "ʃ" | "ʒ" | "x" | "ɣ" | "h" | "ç" | "ʂ" | "ʐ" =>
+        {
+            return Some(1);
+        }
+        "m" | "n" | "ŋ" | "ɲ" | "ɳ" => return Some(2),
+        "l" | "ɫ" | "r" | "R" | "ɹ" | "ɾ" | "r̥" | "ʁ" => return Some(3),
+        "j" | "w" | "ɥ" => return Some(4),
+        _ => {}
+    }
+    match feature_category(&phone.features, "manner")? {
+        "stop" | "affricate" => Some(0),
+        "fricative" => Some(1),
+        "nasal" => Some(2),
+        "liquid" | "rhotic" | "lateral" => Some(3),
+        "glide" | "approximant" => Some(4),
+        _ => None,
+    }
+}
+
+fn is_s_like_fricative(phone: &PhoneToken) -> bool {
+    matches!(
+        feature_category(&phone.features, "base_symbol"),
+        Some("s" | "S" | "ʃ")
+    ) && feature_category(&phone.features, "manner") == Some("fricative")
 }
 
 fn is_illegal_single_onset(phone: &PhoneToken, variety: &LinguisticVariety) -> bool {
@@ -438,10 +496,58 @@ mod tests {
     }
 
     #[test]
-    fn koine_greek_assigns_realized_delta_rho_to_next_onset() {
+    fn greek_assigns_delta_rho_to_next_onset() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety("Ἄνδρα", "grc-Attic", "grc-Attic")),
+            "ˈan.dra"
+        );
         assert_eq!(
             syllables_to_ipa(&syllables_for_variety("Ἄνδρα", "grc-Koine", "grc-Koine")),
             "ˈan.ðra"
+        );
+    }
+
+    #[test]
+    fn french_without_explicit_onset_table_still_uses_maximum_onset() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "patrie",
+                "fr-FR-Standard",
+                "fr-FR-Standard"
+            )),
+            "paˈtʁi"
+        );
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "semblables",
+                "fr-FR-Standard",
+                "fr-FR-Standard"
+            )),
+            "sɑ̃ˈbla.blə"
+        );
+    }
+
+    #[test]
+    fn generic_onset_fallback_rejects_flat_and_falling_clusters() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "occupait",
+                "fr-FR-Standard",
+                "fr-FR-Standard"
+            )),
+            "ɔk.kyˈpɛ"
+        );
+    }
+
+    #[test]
+    fn spanish_rising_ie_diphthong_stays_in_one_syllable() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "tiene fee",
+                "es-ES-Castilian",
+                "es-ES-Castilian"
+            )),
+            "ˈtje.neˈfe"
         );
     }
 

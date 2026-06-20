@@ -1463,6 +1463,7 @@ enum SpeakingDemoFormat {
 enum SpeakingDemoMode {
     Samples,
     Sentences,
+    Paragraphs,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -6655,6 +6656,8 @@ fn cmd_speaking_demo(
                 "name": sample.name,
                 "careful_style": sample.careful_style,
                 "input": sample.text,
+                "source_url": sample.source_url,
+                "source_path": sample.source_path.as_ref().map(|path| path.display().to_string()),
                 "phonemes": speaking_demo_phoneme_words(&output),
                 "phones": speaking_demo_phone_words(&output),
                 "utterance_phonemes": speaking_demo_phoneme_utterance(&output),
@@ -6749,15 +6752,22 @@ fn cmd_speaking_demo(
 }
 
 struct SpeakingDemoSample {
-    name: &'static str,
+    name: String,
     text: String,
     careful_style: bool,
+    source_url: Option<String>,
+    source_path: Option<PathBuf>,
 }
 
 fn speaking_demo_samples(
     variety: &speaking::LinguisticVariety,
     mode: SpeakingDemoMode,
 ) -> Vec<SpeakingDemoSample> {
+    if mode == SpeakingDemoMode::Paragraphs {
+        return speaking_demo_paragraph_samples(variety)
+            .unwrap_or_else(|_| speaking_demo_sentence_samples(variety));
+    }
+
     if mode == SpeakingDemoMode::Sentences {
         return speaking_demo_sentence_samples(variety);
     }
@@ -6773,24 +6783,32 @@ fn speaking_demo_samples(
 
     vec![
         SpeakingDemoSample {
-            name: "baseline",
+            name: "baseline".to_string(),
             text: baseline,
             careful_style: false,
+            source_url: None,
+            source_path: None,
         },
         SpeakingDemoSample {
-            name: "question",
+            name: "question".to_string(),
             text: format!("{short}?"),
             careful_style: false,
+            source_url: None,
+            source_path: None,
         },
         SpeakingDemoSample {
-            name: "whole-utterance",
+            name: "whole-utterance".to_string(),
             text: utterance,
             careful_style: false,
+            source_url: None,
+            source_path: None,
         },
         SpeakingDemoSample {
-            name: "careful-style",
+            name: "careful-style".to_string(),
             text: short,
             careful_style: true,
+            source_url: None,
+            source_path: None,
         },
     ]
 }
@@ -6808,10 +6826,269 @@ fn speaking_demo_sentence_samples(
         })
         .unwrap_or_else(|| variety.name.clone());
     vec![SpeakingDemoSample {
-        name: "famous-line",
+        name: "famous-line".to_string(),
         text,
         careful_style: false,
+        source_url: None,
+        source_path: None,
     }]
+}
+
+fn speaking_demo_paragraph_samples(
+    variety: &speaking::LinguisticVariety,
+) -> Result<Vec<SpeakingDemoSample>> {
+    let source = speaking_demo_gutenberg_source_for_variety(&variety.id.0)?
+        .with_context(|| format!("no Gutenberg source configured for {}", variety.id.0))?;
+    let path = speaking_demo_cached_gutenberg_source(&source.url)?;
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let paragraph = speaking_demo_pick_paragraph(&text, &variety.id.0)
+        .with_context(|| format!("no readable paragraph found in {}", path.display()))?;
+
+    Ok(vec![SpeakingDemoSample {
+        name: "gutenberg-paragraph".to_string(),
+        text: paragraph,
+        careful_style: false,
+        source_url: Some(source.url),
+        source_path: Some(path),
+    }])
+}
+
+fn speaking_demo_gutenberg_source_for_variety(
+    variety: &str,
+) -> Result<Option<tongues_head2phones::GutenbergSourceConfig>> {
+    let config = read_head2phones_config(Path::new("configs/head2phones/default.toml"))?;
+    let canonical = speaking::canonical_variety_id(variety).map(|id| id.0);
+    let requested_language = speaking_demo_language_prefix(variety);
+    let sources = config.gutenberg_sources;
+    if let Some(source) = sources
+        .iter()
+        .find(|source| {
+            source.varieties.iter().any(|source_variety| {
+                source_variety == variety
+                    || speaking::canonical_variety_id(source_variety)
+                        .map(|source_id| Some(source_id.0) == canonical)
+                        .unwrap_or(false)
+            })
+        })
+        .cloned()
+    {
+        return Ok(Some(source));
+    }
+    Ok(sources.into_iter().find(|source| {
+        source.varieties.iter().any(|source_variety| {
+            speaking_demo_language_prefix(source_variety) == requested_language
+        })
+    }))
+}
+
+fn speaking_demo_language_prefix(variety: &str) -> &str {
+    variety.split('-').next().unwrap_or(variety)
+}
+
+fn speaking_demo_cached_gutenberg_source(url: &str) -> Result<PathBuf> {
+    const USER_AGENT: &str = "tongues-speaking-paragraphs/0.1";
+
+    let dir = PathBuf::from("data/speaking-paragraphs/gutenberg");
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(speaking_demo_gutenberg_filename(url));
+    if path.exists() && path.metadata()?.len() > 0 {
+        return Ok(path);
+    }
+
+    eprintln!("Downloading Gutenberg source {url}");
+    let response = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("GET {url}"))?;
+    let raw = response
+        .into_body()
+        .read_to_string()
+        .with_context(|| format!("reading {url}"))?;
+    let stripped = speaking_demo_strip_gutenberg_boilerplate(&raw);
+    let part_path = path.with_extension("txt.part");
+    fs::write(&part_path, stripped).with_context(|| format!("writing {}", part_path.display()))?;
+    fs::rename(&part_path, &path)
+        .with_context(|| format!("moving {} to {}", part_path.display(), path.display()))?;
+    Ok(path)
+}
+
+fn speaking_demo_gutenberg_filename(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("gutenberg.txt")
+        .replace(['/', '\\', ':', '?', '&', '='], "_")
+}
+
+fn speaking_demo_strip_gutenberg_boilerplate(raw: &str) -> String {
+    let start = raw
+        .find("*** START OF")
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .and_then(|index| raw[index..].find("***").map(|offset| index + offset + 3))
+        .unwrap_or(0);
+    let after_start = &raw[start..];
+    let end = after_start.find("*** END OF").unwrap_or(after_start.len());
+    after_start[..end].trim().to_string()
+}
+
+fn speaking_demo_pick_paragraph(text: &str, variety: &str) -> Option<String> {
+    const MIN_DEEP_PARAGRAPH_INDEX: usize = 12;
+
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let readable = normalized
+        .split("\n\n")
+        .enumerate()
+        .filter_map(|(index, raw)| {
+            let paragraph = speaking_demo_clean_paragraph(raw);
+            speaking_demo_paragraph_is_readable(&paragraph, variety).then_some((index, paragraph))
+        })
+        .collect::<Vec<_>>();
+    let paragraph = readable
+        .iter()
+        .find(|(index, _)| *index >= MIN_DEEP_PARAGRAPH_INDEX)
+        .or_else(|| readable.first())?
+        .1
+        .clone();
+    Some(speaking_demo_limit_words(&paragraph, 80))
+}
+
+fn speaking_demo_clean_paragraph(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn speaking_demo_paragraph_is_readable(paragraph: &str, variety: &str) -> bool {
+    let char_count = paragraph.chars().count();
+    if !(80..=700).contains(&char_count) {
+        return false;
+    }
+    if paragraph.contains("Gutenberg") || paragraph.contains("www.") || paragraph.contains("http") {
+        return false;
+    }
+    if paragraph.contains("[Illustration") || speaking_demo_looks_like_chapter_listing(paragraph) {
+        return false;
+    }
+    let lower = paragraph.to_lowercase();
+    if lower.contains("illustration")
+        || lower.contains("inscribed")
+        || lower.contains("publisher")
+        || lower.contains("press:")
+        || lower.starts_with("note:")
+        || lower.starts_with("σημείωση:")
+        || lower.starts_with("σημειωση:")
+        || lower.starts_with("produced by")
+        || lower.contains("translation has been")
+        || lower.contains("translator has")
+        || lower.contains("μετάφραση")
+        || lower.contains("μεταφραστ")
+    {
+        return false;
+    }
+    if paragraph.contains('_') {
+        return false;
+    }
+    if paragraph.contains("--") {
+        return false;
+    }
+    if !paragraph.ends_with(['.', '?', '!', '।', '॥']) {
+        return false;
+    }
+    if paragraph.chars().filter(|c| c.is_alphabetic()).count() < 40 {
+        return false;
+    }
+    let letters = paragraph.chars().filter(|c| c.is_alphabetic()).count();
+    let uppercase = paragraph.chars().filter(|c| c.is_uppercase()).count();
+    if letters > 0 && uppercase as f32 / letters as f32 > 0.6 {
+        return false;
+    }
+    if matches!(variety, "sa-Deva-Standard") {
+        return speaking_demo_script_ratio(paragraph, |c| ('\u{0900}'..='\u{097F}').contains(&c))
+            >= 0.65;
+    }
+    if matches!(variety, "el-GR-Standard") {
+        return speaking_demo_script_ratio(paragraph, |c| {
+            ('\u{0370}'..='\u{03FF}').contains(&c) || ('\u{1F00}'..='\u{1FFF}').contains(&c)
+        }) >= 0.65;
+    }
+    if matches!(variety, "grc-Attic" | "grc-Koine") {
+        return speaking_demo_script_ratio(paragraph, |c| ('\u{1F00}'..='\u{1FFF}').contains(&c))
+            >= 0.20;
+    }
+    true
+}
+
+fn speaking_demo_looks_like_chapter_listing(paragraph: &str) -> bool {
+    let lower = paragraph.to_lowercase();
+    if lower.contains("chapter ") {
+        return true;
+    }
+    if speaking_demo_chapter_heading_count(&lower) >= 2 {
+        return true;
+    }
+    let trimmed = lower.trim_start();
+    ROMAN_NUMERAL_CONTEXT_WORDS
+        .iter()
+        .any(|word| trimmed.starts_with(&format!("{word} ")))
+}
+
+const ROMAN_NUMERAL_CONTEXT_WORDS: &[&str] = &[
+    "act",
+    "acte",
+    "akt",
+    "book",
+    "buch",
+    "canto",
+    "capitulo",
+    "capítulo",
+    "chapter",
+    "chapitre",
+    "escena",
+    "kapitulo",
+    "liber",
+    "libro",
+    "livre",
+    "part",
+    "parte",
+    "partie",
+    "scene",
+    "scène",
+    "section",
+    "tome",
+    "volume",
+];
+
+fn speaking_demo_chapter_heading_count(lower: &str) -> usize {
+    ROMAN_NUMERAL_CONTEXT_WORDS
+        .iter()
+        .map(|word| lower.match_indices(&format!("{word} ")).count())
+        .sum()
+}
+
+fn speaking_demo_script_ratio(paragraph: &str, script: impl Fn(char) -> bool) -> f32 {
+    let letters = paragraph.chars().filter(|c| c.is_alphabetic()).count();
+    if letters == 0 {
+        return 0.0;
+    }
+    let script_letters = paragraph
+        .chars()
+        .filter(|c| c.is_alphabetic() && script(*c))
+        .count();
+    script_letters as f32 / letters as f32
+}
+
+fn speaking_demo_limit_words(paragraph: &str, limit: usize) -> String {
+    let mut words = paragraph.split_whitespace();
+    let mut clipped = words.by_ref().take(limit).collect::<Vec<_>>().join(" ");
+    if words.next().is_some() {
+        clipped.push('…');
+    }
+    clipped
 }
 
 fn speaking_demo_famous_sentence(variety: &speaking::LinguisticVariety) -> Option<&'static str> {
@@ -7032,6 +7309,12 @@ fn print_speaking_demo_text(reports: &[serde_json::Value]) {
                 case["name"].as_str().unwrap_or("case"),
                 case["input"].as_str().unwrap_or("")
             );
+            if let Some(url) = case["source_url"].as_str() {
+                println!("  source: {url}");
+            }
+            if let Some(path) = case["source_path"].as_str() {
+                println!("  cache: {path}");
+            }
             println!("  /{}/", case["phonemes"].as_str().unwrap_or(""));
             println!("  [{}]", case["phones"].as_str().unwrap_or(""));
             if matches!(
@@ -10037,6 +10320,22 @@ mod tests {
         assert_eq!(format_count(999), "999");
         assert_eq!(format_count(1_000), "1,000");
         assert_eq!(format_count(12_345_678), "12,345,678");
+    }
+
+    #[test]
+    fn speaking_demo_paragraph_picker_skips_toc_and_prefers_deeper_text() {
+        let toc = "Chapitre I Monsieur Myriel Chapitre II Monsieur Myriel devient monseigneur Bienvenu Chapitre III À bon évêque dur évêché.";
+        let early = "Cette phrase lisible arrive tôt dans le fichier, mais elle ne doit pas être le premier choix du mode paragraphe.";
+        let deep = "Le passage choisi vient plus loin dans le livre, avec une phrase complète qui ressemble davantage au corps du texte.";
+        let mut paragraphs = vec![toc.to_string(), early.to_string()];
+        paragraphs.extend((0..10).map(|_| "Trop court.".to_string()));
+        paragraphs.push(deep.to_string());
+
+        let picked = speaking_demo_pick_paragraph(&paragraphs.join("\n\n"), "fr-FR-Standard")
+            .expect("readable paragraph");
+
+        assert_eq!(picked, deep);
+        assert!(!speaking_demo_paragraph_is_readable(toc, "fr-FR-Standard"));
     }
 
     #[test]

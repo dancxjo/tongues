@@ -2186,9 +2186,13 @@ fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {
     match variety.text_normalization.number_normalization {
         NumberNormalizationProfile::None => normalized,
         NumberNormalizationProfile::SmallNumbers => {
+            normalized = normalize_roman_numerals_with_variety(&normalized, &variety);
             normalize_small_numbers_with_variety(&normalized, &variety)
         }
-        NumberNormalizationProfile::General => normalize_general_numbers(&normalized, &variety),
+        NumberNormalizationProfile::General => {
+            normalized = normalize_roman_numerals_with_variety(&normalized, &variety);
+            normalize_general_numbers(&normalized, &variety)
+        }
     }
 }
 
@@ -2224,6 +2228,138 @@ fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> Strin
         return text.to_string();
     };
     normalize_small_numbers_with_variety(text, &variety)
+}
+
+fn normalize_roman_numerals_with_variety(text: &str, variety: &LinguisticVariety) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut index = 0usize;
+    let mut previous_word = None::<String>;
+    while index < chars.len() {
+        if !chars[index].is_alphabetic() {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        while index < chars.len() && chars[index].is_alphabetic() {
+            index += 1;
+        }
+        let token = chars[start..index].iter().collect::<String>();
+        let replacement = roman_numeral_value(&token)
+            .filter(|value| should_expand_roman_numeral(&token, *value, previous_word.as_deref()))
+            .and_then(|value| spell_cardinal_from_variety(u128::from(value), variety));
+        if let Some(word) = replacement {
+            out.push_str(&word);
+        } else {
+            out.push_str(&token);
+        }
+        previous_word = Some(token.to_lowercase());
+    }
+    out
+}
+
+fn should_expand_roman_numeral(token: &str, value: u32, previous_word: Option<&str>) -> bool {
+    if previous_word.is_some_and(is_roman_numeral_context_word) {
+        return true;
+    }
+    token.chars().count() > 1 && value <= 39
+}
+
+fn is_roman_numeral_context_word(word: &str) -> bool {
+    matches!(
+        word,
+        "act"
+            | "acte"
+            | "akt"
+            | "book"
+            | "buch"
+            | "canto"
+            | "capitulo"
+            | "capítulo"
+            | "chapter"
+            | "chapitre"
+            | "escena"
+            | "kapitulo"
+            | "liber"
+            | "libro"
+            | "livre"
+            | "part"
+            | "parte"
+            | "partie"
+            | "scene"
+            | "scène"
+            | "section"
+            | "tome"
+            | "volume"
+    )
+}
+
+fn roman_numeral_value(token: &str) -> Option<u32> {
+    if token.is_empty()
+        || token.chars().count() > 15
+        || !token
+            .chars()
+            .all(|ch| matches!(ch, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'))
+    {
+        return None;
+    }
+
+    let mut total = 0u32;
+    let mut previous = 0u32;
+    for ch in token.chars().rev() {
+        let value = roman_digit_value(ch)?;
+        if value < previous {
+            total = total.checked_sub(value)?;
+        } else {
+            total = total.checked_add(value)?;
+            previous = value;
+        }
+    }
+
+    if total == 0 || total > 3999 {
+        return None;
+    }
+    (canonical_roman_numeral(total) == token).then_some(total)
+}
+
+fn roman_digit_value(ch: char) -> Option<u32> {
+    Some(match ch {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        'L' => 50,
+        'C' => 100,
+        'D' => 500,
+        'M' => 1000,
+        _ => return None,
+    })
+}
+
+fn canonical_roman_numeral(mut value: u32) -> String {
+    let mut out = String::new();
+    for (arabic, roman) in [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ] {
+        while value >= arabic {
+            out.push_str(roman);
+            value -= arabic;
+        }
+    }
+    out
 }
 
 fn normalize_small_numbers_with_variety(text: &str, variety: &LinguisticVariety) -> String {
@@ -2336,7 +2472,7 @@ fn spell_cardinal_from_variety(value: u128, variety: &LinguisticVariety) -> Opti
             let scale = names
                 .scale_names
                 .iter()
-                .filter(|scale| u128::from(scale.power) < digit_count_power(value))
+                .filter(|scale| u128::from(scale.power) <= digit_count_power(value))
                 .max_by_key(|scale| scale.power)?;
             let divisor = 10u128.pow(scale.power);
             let head = value / divisor;
@@ -2961,7 +3097,11 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
             let mut int_part = String::new();
             let mut temp_idx = idx + 1;
             while temp_idx < char_vec.len()
-                && (char_vec[temp_idx].is_ascii_digit() || char_vec[temp_idx] == ',')
+                && (char_vec[temp_idx].is_ascii_digit()
+                    || (char_vec[temp_idx] == ','
+                        && char_vec
+                            .get(temp_idx + 1)
+                            .is_some_and(|ch| ch.is_ascii_digit())))
             {
                 int_part.push(char_vec[temp_idx]);
                 temp_idx += 1;
@@ -3153,7 +3293,11 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
             let mut int_part = String::new();
             let mut temp_idx = idx;
             while temp_idx < char_vec.len()
-                && (char_vec[temp_idx].is_ascii_digit() || char_vec[temp_idx] == ',')
+                && (char_vec[temp_idx].is_ascii_digit()
+                    || (char_vec[temp_idx] == ','
+                        && char_vec
+                            .get(temp_idx + 1)
+                            .is_some_and(|ch| ch.is_ascii_digit())))
             {
                 int_part.push(char_vec[temp_idx]);
                 temp_idx += 1;
@@ -4474,6 +4618,52 @@ mod tests {
     }
 
     #[test]
+    fn french_pronounces_monsieur_as_contracted_title() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let monsieur = phonemicizer
+            .phonemicize(&request("Monsieur", "fr-FR-Standard"))
+            .expect("French title should phonemicize");
+        let monsieur_symbols = phoneme_symbols(&monsieur);
+
+        assert_eq!(monsieur_symbols, ["m", "ə", "s", "j", "ø"]);
+        assert_eq!(
+            monsieur.phonemes[0].provenance.source,
+            EvidenceSource::Lexicon
+        );
+        assert!(!monsieur_symbols.contains(&"ɔ̃".to_string()));
+        assert!(!monsieur_symbols.contains(&"ʁ".to_string()));
+
+        let monseigneur = phonemicizer
+            .phonemicize(&request("monseigneur", "fr-FR-Standard"))
+            .expect("French title should phonemicize");
+        let monseigneur_symbols = phoneme_symbols(&monseigneur);
+
+        assert!(monseigneur_symbols.contains(&"ɔ̃".to_string()));
+        assert!(monseigneur_symbols.contains(&"ɲ".to_string()));
+    }
+
+    #[test]
+    fn french_pronounces_myriel_with_yod() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let output = phonemicizer
+            .phonemicize(&request("Monsieur Myriel", "fr-FR-Standard"))
+            .expect("French proper name should phonemicize");
+
+        assert_eq!(
+            phoneme_symbols(&output),
+            ["m", "ə", "s", "j", "ø", "m", "i", "ʁ", "j", "ɛ", "l"]
+        );
+        assert!(
+            output
+                .phonemes
+                .iter()
+                .all(|token| token.provenance.source == EvidenceSource::Lexicon)
+        );
+    }
+
+    #[test]
     fn french_rule_fallback_handles_regular_final_ez() {
         let phonemicizer =
             phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
@@ -4589,6 +4779,68 @@ mod tests {
         assert_eq!(
             normalize_small_numbers_for_variety("A2 restas kodo.", &VarietyId("eo".into())),
             "A2 restas kodo."
+        );
+    }
+
+    #[test]
+    fn roman_numerals_normalize_with_variety_number_names() {
+        assert_eq!(
+            normalize_text_for_variety(
+                "Chapitre I Monsieur Myriel. Chapitre XII Solitude.",
+                &VarietyId("fr-FR-Standard".into())
+            ),
+            "Chapitre un Monsieur Myriel. Chapitre douze Solitude."
+        );
+        assert_eq!(
+            normalize_text_for_variety("Louis XIV arrive.", &VarietyId("fr-FR-Standard".into())),
+            "Louis quatorze arrive."
+        );
+        assert_eq!(
+            normalize_text_for_variety("I read Chapter I.", &VarietyId("en-US".into())),
+            "I read Chapter one."
+        );
+        assert_eq!(
+            normalize_text_for_variety("I saw V shapes.", &VarietyId("en-US".into())),
+            "I saw V shapes."
+        );
+        assert_eq!(
+            normalize_text_for_variety("The CD player works.", &VarietyId("en-US".into())),
+            "The CD player works."
+        );
+        assert_eq!(
+            normalize_text_for_variety("Volume CD closes.", &VarietyId("en-US".into())),
+            "Volume four hundred closes."
+        );
+    }
+
+    #[test]
+    fn french_general_number_normalization_handles_years_and_dates() {
+        assert_eq!(
+            normalize_text_for_variety(
+                "En 1815, il avait 75 ans depuis 1806.",
+                &VarietyId("fr-FR-Standard".into())
+            ),
+            "En un mille huit cent quinze, il avait soixante-dix-cinq ans depuis un mille huit cent six."
+        );
+        assert_eq!(
+            normalize_text_for_variety("2024-06-20", &VarietyId("fr-FR-Standard".into())),
+            "vingt vingt-quatre tiret zéro six tiret vingt"
+        );
+    }
+
+    #[test]
+    fn french_initialisms_use_french_letter_names() {
+        let output = phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into()))
+            .expect("French phonemicizer")
+            .phonemicize(&request("A et B", "fr-FR-Standard"))
+            .expect("French letters should phonemicize");
+        assert_eq!(phoneme_symbols(&output), ["a", "e", "b", "e"]);
+        assert!(
+            output.phonemes.iter().any(|token| {
+                phoneme_usize_feature(token, "orthography.letter_index").is_some()
+            }),
+            "{:?}",
+            output.phonemes
         );
     }
 

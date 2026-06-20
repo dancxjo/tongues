@@ -38,6 +38,7 @@ const D: PhoneId = PhoneId::borrowed("ipa.phone.d");
 const F: PhoneId = PhoneId::borrowed("ipa.phone.f");
 const G: PhoneId = PhoneId::borrowed("ipa.phone.ɡ");
 const X: PhoneId = PhoneId::borrowed("ipa.phone.x");
+const J: PhoneId = PhoneId::borrowed("ipa.phone.j");
 const Y: PhoneId = PhoneId::borrowed("ipa.phone.ʝ");
 const K: PhoneId = PhoneId::borrowed("ipa.phone.k");
 const L: PhoneId = PhoneId::borrowed("ipa.phone.l");
@@ -140,6 +141,10 @@ const COMMON_PHONEMES: &[SpanishSegment] = &[
     SpanishSegment {
         symbol: "x",
         phone: X,
+    },
+    SpanishSegment {
+        symbol: "j",
+        phone: J,
     },
     SpanishSegment {
         symbol: "ʝ",
@@ -401,6 +406,13 @@ fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
         let next = chars.get(index + 1).copied();
         let after_next = chars.get(index + 2).copied();
 
+        if is_unstressed_i_glide_before_vowel(&chars, index) {
+            ipa.push('j');
+            at_word_start = false;
+            index += 1;
+            continue;
+        }
+
         if is_vowel(c) {
             if vowel_index == stress_vowel {
                 ipa.push('ˈ');
@@ -605,7 +617,7 @@ fn cluster_constraint(variety: SpanishVariety, cluster: &[PhoneId]) -> Phonotact
 }
 
 fn normalize_spanish_word(word: &str) -> Option<Vec<char>> {
-    let normalized = word
+    let mut normalized = word
         .trim()
         .to_lowercase()
         .replace('á', "á")
@@ -613,6 +625,9 @@ fn normalize_spanish_word(word: &str) -> Option<Vec<char>> {
         .replace('í', "í")
         .replace('ó', "ó")
         .replace('ú', "ú");
+    if normalized == "fee" {
+        normalized = "fe".into();
+    }
     if normalized.is_empty()
         || normalized.chars().count() > 48
         || normalized
@@ -628,6 +643,9 @@ fn stress_vowel_index(chars: &[char]) -> Option<usize> {
     let mut vowels = Vec::new();
     for (index, c) in chars.iter().enumerate() {
         if is_silent_qu_gu_u(chars, index) {
+            continue;
+        }
+        if is_unstressed_i_glide_before_vowel(chars, index) {
             continue;
         }
         if is_vowel(*c) || is_final_vocalic_y(chars, index) {
@@ -710,6 +728,7 @@ fn is_stress_onset_consonant(c: char) -> bool {
             | 'f'
             | 'ɡ'
             | 'x'
+            | 'j'
             | 'ʝ'
             | 'k'
             | 'l'
@@ -738,6 +757,14 @@ fn is_silent_qu_gu_u(chars: &[char], index: usize) -> bool {
             Some('q' | 'g')
         )
         && matches!(chars.get(index + 1), Some('e' | 'é' | 'i' | 'í'))
+}
+
+fn is_unstressed_i_glide_before_vowel(chars: &[char], index: usize) -> bool {
+    matches!(chars.get(index), Some('i'))
+        && matches!(
+            chars.get(index + 1),
+            Some('a' | 'á' | 'e' | 'é' | 'o' | 'ó')
+        )
 }
 
 fn is_final_vocalic_y(chars: &[char], index: usize) -> bool {
@@ -794,6 +821,26 @@ mod tests {
         assert_eq!(
             synthesize_ipa("perro", SpanishVariety::LatinAmericanStandard).as_deref(),
             Some("/ˈpero/")
+        );
+    }
+
+    #[test]
+    fn spanish_handles_i_before_vowel_diphthongs_and_historical_fee() {
+        assert_eq!(
+            synthesize_ipa("tiene", SpanishVariety::Castilian).as_deref(),
+            Some("/ˈtjene/")
+        );
+        assert_eq!(
+            synthesize_ipa("Dios", SpanishVariety::Castilian).as_deref(),
+            Some("/ˈdjos/")
+        );
+        assert_eq!(
+            synthesize_ipa("fee", SpanishVariety::Castilian).as_deref(),
+            Some("/ˈfe/")
+        );
+        assert_eq!(
+            synthesize_ipa("tía", SpanishVariety::Castilian).as_deref(),
+            Some("/ˈtia/")
         );
     }
 

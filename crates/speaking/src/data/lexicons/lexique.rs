@@ -249,6 +249,8 @@ est\tɛ
 huit\tɥit
 les\tle
 mes\tme
+monsieur\tməsjø
+myriel\tmiʁjɛl
 premier\tpʁəmje
 recueillez\tʁəkœje
 ses\tse

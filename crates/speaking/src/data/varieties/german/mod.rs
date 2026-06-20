@@ -21,9 +21,9 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
     }];
 
 const SEGMENTS: &[&str] = &[
-    "a", "aː", "e", "ɛ", "i", "iː", "o", "oː", "u", "uː", "y", "ø", "œ", "ə", "ɐ", "aɪ̯", "aʊ̯",
-    "ɔʏ̯", "b", "ç", "d", "f", "ɡ", "h", "j", "k", "l", "m", "n", "ŋ", "p", "r", "s", "ʃ", "t",
-    "t͡s", "t͡ʃ", "v", "x", "z",
+    "a", "aː", "e", "eː", "ɛ", "ɛː", "i", "iː", "o", "oː", "u", "uː", "y", "yː", "ø", "øː", "œ",
+    "ə", "ɐ", "aɪ̯", "aʊ̯", "ɔʏ̯", "b", "ç", "d", "f", "ɡ", "h", "j", "k", "l", "m", "n", "ŋ", "p",
+    "r", "s", "ʃ", "t", "t͡s", "t͡ʃ", "v", "x", "z",
 ];
 
 pub fn variety() -> LinguisticVariety {
@@ -199,13 +199,16 @@ pub fn synthesize_ipa(word: &str) -> Option<String> {
             ("ŋ", 2)
         } else if rest.starts_with("ig") && index + 2 == chars.len() {
             ("iç", 2)
+        } else if chars[index] == 'h' && previous_is_vowel(&chars, index) {
+            lengthen_previous_vowel(&mut ipa);
+            ("", 1)
         } else {
             (single(chars[index])?, 1)
         };
         ipa.push_str(symbol);
         index += consumed;
     }
-    let ipa = add_initial_stress(&ipa);
+    let ipa = add_initial_stress(&ipa, &chars);
     (!ipa.is_empty()).then_some(format!("/{ipa}/"))
 }
 
@@ -263,6 +266,34 @@ fn previous_is_back_vowel(chars: &[char], index: usize) -> bool {
     index > 0 && matches!(chars[index - 1], 'a' | 'o' | 'u')
 }
 
+fn previous_is_vowel(chars: &[char], index: usize) -> bool {
+    index > 0
+        && matches!(
+            chars[index - 1],
+            'a' | 'e' | 'i' | 'o' | 'u' | 'ä' | 'ö' | 'ü'
+        )
+}
+
+fn lengthen_previous_vowel(ipa: &mut String) {
+    for (short, long) in [
+        ("a", "aː"),
+        ("e", "eː"),
+        ("ɛ", "ɛː"),
+        ("i", "iː"),
+        ("o", "oː"),
+        ("u", "uː"),
+        ("y", "yː"),
+        ("ø", "øː"),
+    ] {
+        if ipa.ends_with(short) {
+            let new_len = ipa.len() - short.len();
+            ipa.truncate(new_len);
+            ipa.push_str(long);
+            return;
+        }
+    }
+}
+
 fn is_word_initial(chars: &[char], index: usize) -> bool {
     index == 0
         || chars
@@ -270,9 +301,15 @@ fn is_word_initial(chars: &[char], index: usize) -> bool {
             .is_some_and(|ch| matches!(ch, '-' | '\'' | '’'))
 }
 
-fn add_initial_stress(ipa: &str) -> String {
+fn add_initial_stress(ipa: &str, word: &[char]) -> String {
     let mut chars = ipa.chars().collect::<Vec<_>>();
-    let Some(mut insert) = chars.iter().position(|ch| is_ipa_vowel(*ch)) else {
+    let search_start = stress_search_start(ipa, word);
+    let Some(mut insert) = chars
+        .iter()
+        .enumerate()
+        .skip(search_start)
+        .find_map(|(index, ch)| is_ipa_vowel(*ch).then_some(index))
+    else {
         return ipa.to_string();
     };
     while insert > 0 && !is_ipa_vowel(chars[insert - 1]) {
@@ -280,6 +317,38 @@ fn add_initial_stress(ipa: &str) -> String {
     }
     chars.insert(insert, 'ˈ');
     chars.into_iter().collect()
+}
+
+fn stress_search_start(ipa: &str, word: &[char]) -> usize {
+    if starts_with_unstressed_ge_prefix(word) && ipa.starts_with("ɡə") {
+        return 2;
+    }
+    0
+}
+
+fn starts_with_unstressed_ge_prefix(word: &[char]) -> bool {
+    let word = word.iter().collect::<String>();
+    word.starts_with("ge")
+        && !matches!(
+            word.as_str(),
+            "geben"
+                | "gebe"
+                | "gebt"
+                | "gegen"
+                | "geh"
+                | "gehe"
+                | "gehen"
+                | "gehst"
+                | "geht"
+                | "gelb"
+                | "gelbe"
+                | "gelben"
+                | "gelber"
+                | "geld"
+                | "gern"
+                | "gerne"
+                | "gestern"
+        )
 }
 
 fn is_ipa_vowel(ch: char) -> bool {
@@ -343,7 +412,9 @@ fn segment_features(symbol: &str) -> FeatureBundle {
         symbol,
         "a" | "aː"
             | "e"
+            | "eː"
             | "ɛ"
+            | "ɛː"
             | "i"
             | "iː"
             | "o"
@@ -351,7 +422,9 @@ fn segment_features(symbol: &str) -> FeatureBundle {
             | "u"
             | "uː"
             | "y"
+            | "yː"
             | "ø"
+            | "øː"
             | "œ"
             | "ə"
             | "ɐ"
@@ -387,5 +460,29 @@ mod tests {
         assert_eq!(synthesize_ipa("Ding").as_deref(), Some("/ˈdiŋ/"));
         assert_eq!(synthesize_ipa("backen").as_deref(), Some("/ˈbakən/"));
         assert_eq!(synthesize_ipa("Wespe").as_deref(), Some("/ˈvəspə/"));
+    }
+
+    #[test]
+    fn german_unstressed_ge_prefix_does_not_take_primary_stress() {
+        assert_eq!(synthesize_ipa("geneigt").as_deref(), Some("/ɡəˈnaɪ̯ɡt/"));
+        assert_eq!(synthesize_ipa("gezeigt").as_deref(), Some("/ɡəˈt͡saɪ̯ɡt/"));
+        assert_eq!(synthesize_ipa("Gestalten").as_deref(), Some("/ɡəˈstaltən/"));
+        assert_eq!(synthesize_ipa("geben").as_deref(), Some("/ˈɡəbən/"));
+        assert_eq!(synthesize_ipa("gestern").as_deref(), Some("/ˈɡəstərn/"));
+    }
+
+    #[test]
+    fn german_silences_dehnungs_h_after_vowels() {
+        assert_eq!(synthesize_ipa("Ihr").as_deref(), Some("/ˈiːr/"));
+        assert_eq!(synthesize_ipa("naht").as_deref(), Some("/ˈnaːt/"));
+        assert_eq!(synthesize_ipa("wohl").as_deref(), Some("/ˈvoːl/"));
+        assert_eq!(synthesize_ipa("früh").as_deref(), Some("/ˈfryː/"));
+        assert_eq!(synthesize_ipa("Fühl").as_deref(), Some("/ˈfyːl/"));
+        assert_eq!(synthesize_ipa("Wahn").as_deref(), Some("/ˈvaːn/"));
+        assert_eq!(synthesize_ipa("Hauch").as_deref(), Some("/ˈhaʊ̯x/"));
+        assert_eq!(
+            synthesize_ipa("Zauberhauch").as_deref(),
+            Some("/ˈt͡saʊ̯bərhaʊ̯x/")
+        );
     }
 }

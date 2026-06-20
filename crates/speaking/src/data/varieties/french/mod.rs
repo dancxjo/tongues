@@ -12,7 +12,8 @@ use crate::syntax::HeuristicSyntaxProfile;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
-    OrthographyPronunciationRules, VarietyImplementationStatus, VarietyStatus,
+    OrthographicUnitKind, OrthographicUnitPronunciation, OrthographyPronunciationRules,
+    VarietyImplementationStatus, VarietyStatus,
 };
 
 pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
@@ -38,35 +39,23 @@ pub fn variety() -> LinguisticVariety {
         allophone_rules: Vec::new(),
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
-        orthographic_unit_pronunciations: Vec::new(),
+        orthographic_unit_pronunciations: orthographic_unit_pronunciations(),
         pronunciation_lexicons: vec![LEXIQUE383_ID.into()],
         pronunciation_selection_rules: Vec::new(),
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
-        text_normalization: crate::data::varieties::small_number_text_normalization_profile(),
+        text_normalization: crate::variety::TextNormalizationProfile {
+            spoken_form_rewrites: Vec::new(),
+            number_normalization: crate::variety::NumberNormalizationProfile::General,
+        },
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_FRENCH.into()),
         syntax_analyzer: None,
         syntax_heuristics: Some(syntax_profile()),
         orthography_pronunciation: Some(OrthographyPronunciationRules {
             synthesize_ipa: Some(synthesize_ipa_for_orthography),
         }),
-        number_names: Some(NumberNameSet {
-            cardinal_0_to_20: [
-                "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
-                "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept",
-                "dix-huit", "dix-neuf", "vingt",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-            ordinal_suffixes: vec![OrdinalSuffixName {
-                value: 1,
-                suffixes: vec!["er".into(), "re".into()],
-                name: "premier".into(),
-            }],
-            ..Default::default()
-        }),
+        number_names: Some(french_number_names()),
         punctuation: Some(crate::data::varieties::french_punctuation_profile()),
         question_contours: Some(crate::data::varieties::french_question_contour_profile()),
         connected_speech: vec![
@@ -117,6 +106,85 @@ pub fn variety() -> LinguisticVariety {
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
     }
+}
+
+fn french_number_names() -> NumberNameSet {
+    let mut names = crate::data::varieties::number_names(
+        &[
+            "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+            "onze", "douze", "treize", "quatorze", "quinze", "seize", "dix-sept", "dix-huit",
+            "dix-neuf", "vingt",
+        ],
+        &[
+            (30, "trente"),
+            (40, "quarante"),
+            (50, "cinquante"),
+            (60, "soixante"),
+            (70, "soixante-dix"),
+            (80, "quatre-vingt"),
+            (90, "quatre-vingt-dix"),
+        ],
+        &[(3, "mille"), (6, "million"), (9, "milliard")],
+        &[],
+    );
+    names.hundred_name = Some("cent".into());
+    names.ordinal_suffixes = vec![OrdinalSuffixName {
+        value: 1,
+        suffixes: vec!["er".into(), "re".into()],
+        name: "premier".into(),
+    }];
+    names.decimal_separator_name = Some("virgule".into());
+    names.clock_zero_minute_name = Some("heures".into());
+    names.clock_leading_zero_name = Some("zéro".into());
+    names.range_separator_name = Some("à".into());
+    names.product_separator_name = Some("par".into());
+    names.slash_separator_name = Some("barre oblique".into());
+    names.date_separator_name = Some("tiret".into());
+    names.currency_major_singular = Some("euro".into());
+    names.currency_major_plural = Some("euros".into());
+    names.currency_minor_singular = Some("centime".into());
+    names.currency_minor_plural = Some("centimes".into());
+    names
+}
+
+fn orthographic_unit_pronunciations() -> Vec<OrthographicUnitPronunciation> {
+    [
+        ('A', "/ˈa/"),
+        ('B', "/bˈe/"),
+        ('C', "/sˈe/"),
+        ('D', "/dˈe/"),
+        ('E', "/ˈø/"),
+        ('F', "/ˈɛf/"),
+        ('G', "/ʒˈe/"),
+        ('H', "/ˈaʃ/"),
+        ('I', "/ˈi/"),
+        ('J', "/ʒˈi/"),
+        ('K', "/kˈa/"),
+        ('L', "/ˈɛl/"),
+        ('M', "/ˈɛm/"),
+        ('N', "/ˈɛn/"),
+        ('O', "/ˈo/"),
+        ('P', "/pˈe/"),
+        ('Q', "/kˈy/"),
+        ('R', "/ˈɛʁ/"),
+        ('S', "/ˈɛs/"),
+        ('T', "/tˈe/"),
+        ('U', "/ˈy/"),
+        ('V', "/vˈe/"),
+        ('W', "/dubləvˈe/"),
+        ('X', "/ˈiks/"),
+        ('Y', "/iɡʁˈɛk/"),
+        ('Z', "/zˈɛd/"),
+    ]
+    .into_iter()
+    .map(|(letter, ipa)| OrthographicUnitPronunciation {
+        kind: OrthographicUnitKind::LetterName,
+        unit: letter.to_string(),
+        pronunciation: Vec::new(),
+        source_pronunciation: vec![ipa.into()],
+        source_pronunciation_notation: Some("ipa".into()),
+    })
+    .collect()
 }
 
 fn synthesize_ipa_for_orthography(
@@ -402,7 +470,7 @@ fn trim_silent_finals(ipa: &str) -> String {
 
 fn add_final_stress(ipa: &str) -> String {
     let mut chars = ipa.chars().collect::<Vec<_>>();
-    let Some(mut insert) = chars.iter().rposition(|ch| is_ipa_vowel(*ch)) else {
+    let Some(mut insert) = chars.iter().rposition(|ch| is_stressable_ipa_vowel(*ch)) else {
         return ipa.to_string();
     };
     while insert > 0 && !is_ipa_vowel(chars[insert - 1]) {
@@ -413,6 +481,10 @@ fn add_final_stress(ipa: &str) -> String {
     }
     chars.insert(insert, 'ˈ');
     chars.into_iter().collect()
+}
+
+fn is_stressable_ipa_vowel(ch: char) -> bool {
+    is_ipa_vowel(ch) && ch != 'ə'
 }
 
 fn is_combining_mark(ch: char) -> bool {
@@ -524,6 +596,7 @@ mod tests {
     fn french_synthesizes_common_words() {
         assert_eq!(synthesize_ipa("bonjour").as_deref(), Some("/bɔ̃ˈʒuʁ/"));
         assert_eq!(synthesize_ipa("pense").as_deref(), Some("/ˈpɑ̃s/"));
+        assert_eq!(synthesize_ipa("semblables").as_deref(), Some("/sɑ̃ˈblablə/"));
     }
 
     #[test]
