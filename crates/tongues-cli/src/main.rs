@@ -1690,7 +1690,7 @@ fn main() -> Result<()> {
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
         Commands::Speak(command) => speak::run_speak(command),
-        Commands::SpeakingDemo { varieties, format } => cmd_speaking_demo(varieties, *format),
+        Commands::SpeakingDemo { varieties, format } => cmd_speaking_demo(&varieties, format),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
         Commands::Models { command } => models::run(command),
@@ -6590,6 +6590,291 @@ fn read_jsonl_lossy<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>>
         }
     }
     Ok(out)
+}
+
+fn cmd_speaking_demo(selected_varieties: &[String], format: SpeakingDemoFormat) -> Result<()> {
+    use speaking::{PhonemicizeRequest, PhonemicizeStyle, VarietyId};
+
+    let selected = selected_varieties
+        .iter()
+        .map(|code| {
+            speaking::canonical_variety_id(code)
+                .map(|id| id.0)
+                .with_context(|| format!("Unknown speaking variety `{code}`"))
+        })
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+
+    let varieties = speaking::builtin_varieties()
+        .into_iter()
+        .filter(|variety| selected.is_empty() || selected.contains(&variety.id.0))
+        .collect::<Vec<_>>();
+    if varieties.is_empty() {
+        anyhow::bail!("No speaking varieties matched the requested filters");
+    }
+
+    let mut reports = Vec::new();
+    for variety in varieties {
+        let phonemicizer = speaking::phonemicizer_for_variety(&variety.id).map_err(|err| {
+            anyhow::anyhow!("{}: failed to load phonemicizer: {err}", variety.id.0)
+        })?;
+        let samples = speaking_demo_samples(&variety);
+        let mut case_reports = Vec::new();
+
+        for sample in samples {
+            let output = phonemicizer
+                .phonemicize(&PhonemicizeRequest {
+                    text: sample.text.clone(),
+                    variety: VarietyId(variety.id.0.clone()),
+                    style: sample.careful_style.then_some(PhonemicizeStyle {
+                        careful_style: true,
+                    }),
+                })
+                .map_err(|err| {
+                    anyhow::anyhow!("{} {} sample failed: {err:?}", variety.id.0, sample.name)
+                })?;
+
+            case_reports.push(serde_json::json!({
+                "name": sample.name,
+                "careful_style": sample.careful_style,
+                "input": sample.text,
+                "phonemes": speaking_demo_phoneme_words(&output),
+                "phones": speaking_demo_phone_words(&output),
+                "counts": {
+                    "graphemes": output.graphemes.len(),
+                    "phonemes": output.phonemes.len(),
+                    "phones": output.phones.len(),
+                    "syllables": output.syllables.len(),
+                    "boundaries": output.boundaries.len(),
+                    "prosody_labels": output.prosody.labels.len(),
+                    "syntax_tokens": output.syntax.tokens.len(),
+                    "warnings": output.warnings.len(),
+                },
+                "boundaries": output.boundaries.iter().map(|boundary| {
+                    serde_json::json!({
+                        "kind": format!("{:?}", boundary.kind),
+                        "after_grapheme_index": boundary.after_grapheme_index,
+                        "terminal": boundary.terminal.map(|terminal| format!("{terminal:?}")),
+                        "pause": boundary.pause.map(|pause| format!("{pause:?}")),
+                    })
+                }).collect::<Vec<_>>(),
+                "prosody_labels": output.prosody.labels.iter().map(|label| {
+                    serde_json::json!({
+                        "kind": format!("{:?}", label.kind),
+                        "confidence": label.confidence,
+                    })
+                }).collect::<Vec<_>>(),
+                "syntax": output.syntax.tokens.iter().map(|token| {
+                    serde_json::json!({
+                        "word_index": token.word_index,
+                        "text": token.text,
+                        "pos": format!("{:?}", token.pos),
+                        "prosodic_role": format!("{:?}", token.prosodic_role),
+                        "links": token.syntactic_links.iter().map(|link| format!("{link:?}")).collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>(),
+                "warnings": output.warnings.iter().map(|warning| {
+                    serde_json::json!({
+                        "token": warning.token,
+                        "kind": format!("{:?}", warning.kind),
+                        "message": warning.message,
+                    })
+                }).collect::<Vec<_>>(),
+                "provenance": {
+                    "source": format!("{:?}", output.provenance.source),
+                    "method": output.provenance.method,
+                    "version": output.provenance.version,
+                },
+            }));
+        }
+
+        reports.push(serde_json::json!({
+            "variety": variety.id.0,
+            "language": variety.language.0,
+            "name": variety.name,
+            "implementation_status": format!("{:?}", variety.implementation_status),
+            "status": format!("{:?}", variety.status),
+            "inventories": {
+                "phonemes": variety.phonemes.phonemes.len(),
+                "phones": variety.phones.phones.len(),
+                "allophone_rules": variety.allophone_rules.len(),
+                "epenthesis_rules": variety.epenthesis_rules.len(),
+                "weak_forms": variety.weak_forms.len(),
+                "orthographic_unit_pronunciations": variety.orthographic_unit_pronunciations.len(),
+                "pronunciation_lexicons": variety.pronunciation_lexicons.len(),
+            },
+            "profiles": {
+                "pronunciation_pipeline": variety.pronunciation_pipeline,
+                "syntax_profile": variety.syntax_profile,
+                "orthography": variety.orthography.as_ref().map(|orthography| orthography.name.clone()),
+                "sample_words": variety.orthography.as_ref().map(|orthography| orthography.sample_words.clone()).unwrap_or_default(),
+                "number_names": variety.number_names.is_some(),
+                "punctuation": variety.punctuation.is_some(),
+                "question_contours": variety.question_contours.is_some(),
+                "prosody": variety.prosody_profile,
+                "morphology": variety.morphology.is_some(),
+                "acoustics": variety.acoustic_profile.is_some(),
+            },
+            "cases": case_reports,
+        }));
+    }
+
+    match format {
+        SpeakingDemoFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&reports)?);
+        }
+        SpeakingDemoFormat::Text => print_speaking_demo_text(&reports),
+    }
+    Ok(())
+}
+
+struct SpeakingDemoSample {
+    name: &'static str,
+    text: String,
+    careful_style: bool,
+}
+
+fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingDemoSample> {
+    let words = variety
+        .orthography
+        .as_ref()
+        .map(|orthography| orthography.sample_words.clone())
+        .unwrap_or_default();
+    let baseline = speaking_demo_join_words(&words, 5).unwrap_or_else(|| variety.name.clone());
+    let short = speaking_demo_join_words(&words, 3).unwrap_or_else(|| baseline.clone());
+
+    vec![
+        SpeakingDemoSample {
+            name: "baseline",
+            text: baseline,
+            careful_style: false,
+        },
+        SpeakingDemoSample {
+            name: "question",
+            text: format!("{short}?"),
+            careful_style: false,
+        },
+        SpeakingDemoSample {
+            name: "careful-style",
+            text: short,
+            careful_style: true,
+        },
+    ]
+}
+
+fn speaking_demo_join_words(words: &[String], limit: usize) -> Option<String> {
+    let sample = words
+        .iter()
+        .filter(|word| !word.trim().is_empty())
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!sample.is_empty()).then_some(sample)
+}
+
+fn speaking_demo_phoneme_words(output: &speaking::PhonemicizeOutput) -> String {
+    speaking_demo_word_syllables(output)
+        .into_iter()
+        .map(|(_, syllables)| {
+            syllables_to_phonemes_ipa(&syllables, &output.phonemes, &output.variety)
+        })
+        .filter(|ipa| !ipa.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn speaking_demo_phone_words(output: &speaking::PhonemicizeOutput) -> String {
+    speaking_demo_word_syllables(output)
+        .into_iter()
+        .map(|(_, syllables)| syllables_to_ipa_formatted(&syllables))
+        .filter(|ipa| !ipa.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn speaking_demo_word_syllables(
+    output: &speaking::PhonemicizeOutput,
+) -> Vec<(usize, Vec<speaking::Syllable>)> {
+    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
+    for syllable in output.syllables.iter() {
+        if let Some(first_phone) = syllable.phones.first() {
+            if let Some(word_idx) = token_word_index(&first_phone.features) {
+                if let Some(last_word) = words.last_mut() {
+                    if last_word.0 == word_idx {
+                        last_word.1.push(syllable.clone());
+                        continue;
+                    }
+                }
+                words.push((word_idx, vec![syllable.clone()]));
+            }
+        }
+    }
+    words
+}
+
+fn print_speaking_demo_text(reports: &[serde_json::Value]) {
+    println!("Speaking demo: {} varieties", reports.len());
+    for report in reports {
+        println!(
+            "\n== {} ({}) ==",
+            report["variety"].as_str().unwrap_or("unknown"),
+            report["name"].as_str().unwrap_or("unknown")
+        );
+        println!(
+            "language={} status={} implementation={}",
+            report["language"].as_str().unwrap_or("unknown"),
+            report["status"].as_str().unwrap_or("unknown"),
+            report["implementation_status"]
+                .as_str()
+                .unwrap_or("unknown")
+        );
+        let inventories = &report["inventories"];
+        println!(
+            "inventory: phonemes={} phones={} allophones={} epenthesis={} weak_forms={} units={} lexicons={}",
+            inventories["phonemes"].as_u64().unwrap_or(0),
+            inventories["phones"].as_u64().unwrap_or(0),
+            inventories["allophone_rules"].as_u64().unwrap_or(0),
+            inventories["epenthesis_rules"].as_u64().unwrap_or(0),
+            inventories["weak_forms"].as_u64().unwrap_or(0),
+            inventories["orthographic_unit_pronunciations"].as_u64().unwrap_or(0),
+            inventories["pronunciation_lexicons"].as_u64().unwrap_or(0),
+        );
+        let profiles = &report["profiles"];
+        println!(
+            "profiles: pipeline={} syntax={} orthography={} numbers={} punctuation={} questions={} prosody={} morphology={} acoustics={}",
+            profiles["pronunciation_pipeline"].as_str().unwrap_or("none"),
+            profiles["syntax_profile"].as_str().unwrap_or("none"),
+            profiles["orthography"].as_str().unwrap_or("none"),
+            profiles["number_names"].as_bool().unwrap_or(false),
+            profiles["punctuation"].as_bool().unwrap_or(false),
+            profiles["question_contours"].as_bool().unwrap_or(false),
+            !profiles["prosody"].is_null(),
+            profiles["morphology"].as_bool().unwrap_or(false),
+            profiles["acoustics"].as_bool().unwrap_or(false),
+        );
+
+        for case in report["cases"].as_array().into_iter().flatten() {
+            let counts = &case["counts"];
+            println!(
+                "- {}: {:?}",
+                case["name"].as_str().unwrap_or("case"),
+                case["input"].as_str().unwrap_or("")
+            );
+            println!("  /{}/", case["phonemes"].as_str().unwrap_or(""));
+            println!("  [{}]", case["phones"].as_str().unwrap_or(""));
+            println!(
+                "  counts: graphemes={} phonemes={} phones={} syllables={} boundaries={} prosody_labels={} syntax_tokens={} warnings={}",
+                counts["graphemes"].as_u64().unwrap_or(0),
+                counts["phonemes"].as_u64().unwrap_or(0),
+                counts["phones"].as_u64().unwrap_or(0),
+                counts["syllables"].as_u64().unwrap_or(0),
+                counts["boundaries"].as_u64().unwrap_or(0),
+                counts["prosody_labels"].as_u64().unwrap_or(0),
+                counts["syntax_tokens"].as_u64().unwrap_or(0),
+                counts["warnings"].as_u64().unwrap_or(0),
+            );
+        }
+    }
 }
 
 fn cmd_phonemes(text: &str) -> Result<()> {
