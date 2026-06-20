@@ -2,16 +2,16 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::cmudict::{CmuPhoneme, CmuStress, PronunciationStatus};
-use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID, PronunciationNotation};
-use crate::data::notation::arpabet::{self, split_stress};
+use crate::data::lexicons::cmudict::{CmuStress, PronunciationStatus};
+use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID};
+use crate::data::notation::{self, PronunciationNotation};
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::GraphemeToken;
-use crate::phonology::{PhoneToken, Phoneme, PhonemeToken};
+use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
 use crate::realize::{
     PhoneDecompositionPolicy, RealizationOptions, epenthetic_phones_after, realize_phoneme_at,
@@ -1206,24 +1206,17 @@ fn planned_candidate_from_notation(
     candidate: Vec<String>,
     notation: PronunciationNotation,
 ) -> Vec<PlannedPhoneme> {
-    match notation {
-        PronunciationNotation::Arpabet => candidate
-            .iter()
-            .map(|symbol| planned_phoneme_from_cmu(&variety.id.0, &CmuPhoneme::parse(symbol)))
-            .collect(),
-        PronunciationNotation::Ipa => candidate
-            .iter()
-            .flat_map(|symbol| planned_candidate_from_variety_ipa(symbol, variety))
-            .collect(),
-    }
+    notation::parse_pronunciation_candidate(variety, &candidate, notation)
+        .into_iter()
+        .map(|token| PlannedPhoneme {
+            phoneme: token.phoneme,
+            features: token.features,
+        })
+        .collect()
 }
 
 fn source_pronunciation_notation(name: Option<&str>) -> Option<PronunciationNotation> {
-    match name {
-        Some("arpabet") | Some("cmudict") => Some(PronunciationNotation::Arpabet),
-        Some("ipa") => Some(PronunciationNotation::Ipa),
-        _ => None,
-    }
+    notation::pronunciation_notation(name)
 }
 
 fn planned_candidate_from_source_pronunciation(
@@ -1235,21 +1228,6 @@ fn planned_candidate_from_source_pronunciation(
         return Vec::new();
     };
     planned_candidate_from_notation(variety, symbols.to_vec(), notation)
-}
-
-fn planned_phoneme_from_cmu(variety_id: &str, cmu: &CmuPhoneme) -> PlannedPhoneme {
-    let raw_symbol = cmu.raw_symbol();
-    let mut planned = PlannedPhoneme {
-        phoneme: arpabet::phoneme_id(variety_id, &raw_symbol),
-        features: arpabet::cmu_token_features(cmu),
-    };
-    if let Some(phone) = arpabet::reduced_phone_for_cmu(&cmu.base, cmu.stress) {
-        planned.features.values.insert(
-            FeatureId("phonology.default_phone".into()),
-            Spec::Known(FeatureValue::Text(phone.as_str().to_string())),
-        );
-    }
-    planned
 }
 
 fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhoneme) -> bool {
@@ -1264,7 +1242,6 @@ fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhonem
                 .get(&FeatureId("phonology.major".into()))
                 == Some(&Spec::Known(FeatureValue::Category("vowel".into())))
         })
-        || arpabet::is_vowel(phoneme_display_symbol(&planned.phoneme))
 }
 
 fn pronunciation_from_lexicon_id(
@@ -1346,56 +1323,14 @@ fn planned_candidate_from_variety_ipa(
     ipa: &str,
     variety: &LinguisticVariety,
 ) -> Vec<PlannedPhoneme> {
-    let aliases = phoneme_aliases_by_length(variety);
-    let chars = ipa
-        .trim_matches('/')
-        .chars()
-        .filter(|ch| !matches!(ch, '.' | 'ˌ'))
-        .collect::<Vec<_>>();
-    let mut index = 0usize;
-    let mut primary_stress_pending = false;
-    let mut candidate = Vec::new();
-    while index < chars.len() {
-        if chars[index] == 'ˈ' {
-            primary_stress_pending = true;
-            index += 1;
-            continue;
-        }
-        let rest = chars[index..].iter().collect::<String>();
-        if let Some((phoneme, consumed)) = aliases.iter().find_map(|(alias, phoneme)| {
-            rest.starts_with(alias)
-                .then_some((phoneme, alias.chars().count()))
-        }) {
-            let mut planned = planned_phoneme_from_inventory(phoneme);
-            if primary_stress_pending && planned_phoneme_is_syllabic(&planned) {
-                planned.features.values.insert(
-                    FeatureId("phonology.stress".into()),
-                    Spec::Known(FeatureValue::Category("primary".into())),
-                );
-                primary_stress_pending = false;
-            }
-            candidate.push(planned);
-            index += consumed;
-        } else {
-            index += 1;
-        }
-    }
-    candidate
-}
-
-fn planned_phoneme_is_syllabic(planned: &PlannedPhoneme) -> bool {
-    planned
-        .features
-        .values
-        .get(&FeatureId("phonology.syllabic".into()))
-        == Some(&Spec::Known(FeatureValue::Bool(true)))
+    planned_candidate_from_notation(variety, vec![ipa.to_string()], PronunciationNotation::Ipa)
 }
 
 fn planned_candidate_from_variety_aliases(
     normalized: &str,
     variety: &LinguisticVariety,
 ) -> Vec<PlannedPhoneme> {
-    let aliases = phoneme_aliases_by_length(variety);
+    let aliases = notation::phoneme_aliases_by_length(variety);
     let chars = normalized.chars().collect::<Vec<_>>();
     let mut index = 0usize;
     let mut candidate = Vec::new();
@@ -1414,20 +1349,7 @@ fn planned_candidate_from_variety_aliases(
     candidate
 }
 
-fn phoneme_aliases_by_length(variety: &LinguisticVariety) -> Vec<(String, &Phoneme)> {
-    let mut aliases = Vec::new();
-    for phoneme in variety.phonemes.phonemes.values() {
-        aliases.push((phoneme_display_symbol(&phoneme.id).to_lowercase(), phoneme));
-        for alias in &phoneme.aliases {
-            aliases.push((alias.symbol.to_lowercase(), phoneme));
-        }
-    }
-    aliases.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
-    aliases.dedup_by(|left, right| left.0 == right.0);
-    aliases
-}
-
-fn planned_phoneme_from_inventory(phoneme: &Phoneme) -> PlannedPhoneme {
+fn planned_phoneme_from_inventory(phoneme: &crate::phonology::Phoneme) -> PlannedPhoneme {
     PlannedPhoneme {
         phoneme: phoneme.id.clone(),
         features: phoneme.features.clone(),
@@ -2249,7 +2171,10 @@ pub fn phone_display_symbol(id: &PhoneId) -> &str {
 
 pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     let symbol = phoneme_display_symbol(id);
-    split_stress(symbol).0
+    match symbol.chars().last() {
+        Some('0' | '1' | '2') => &symbol[..symbol.len() - 1],
+        _ => symbol,
+    }
 }
 
 fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {

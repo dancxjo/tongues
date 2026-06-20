@@ -1,14 +1,10 @@
 pub mod cmudict;
 pub mod lexique;
 
+use crate::data::notation::PronunciationNotation;
+
 pub const CMUDICT_ID: &str = "cmudict";
 pub const LEXIQUE383_ID: &str = "lexique383";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PronunciationNotation {
-    Arpabet,
-    Ipa,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LexiconAdapter {
@@ -27,20 +23,24 @@ pub struct LexiconLookup {
 
 pub const LEXICON_IDS: &[&str] = &[CMUDICT_ID, LEXIQUE383_ID];
 
+const LEXICON_ADAPTERS: &[LexiconAdapter] = &[
+    LexiconAdapter {
+        id: CMUDICT_ID,
+        notation: PronunciationNotation::Arpabet,
+        lookup: cmudict_lookup,
+    },
+    LexiconAdapter {
+        id: LEXIQUE383_ID,
+        notation: PronunciationNotation::Ipa,
+        lookup: lexique_lookup,
+    },
+];
+
 pub fn adapter_for_id(id: &str) -> Option<LexiconAdapter> {
-    match id {
-        CMUDICT_ID => Some(LexiconAdapter {
-            id: CMUDICT_ID,
-            notation: PronunciationNotation::Arpabet,
-            lookup: cmudict_lookup,
-        }),
-        LEXIQUE383_ID => Some(LexiconAdapter {
-            id: LEXIQUE383_ID,
-            notation: PronunciationNotation::Ipa,
-            lookup: lexique_lookup,
-        }),
-        _ => None,
-    }
+    LEXICON_ADAPTERS
+        .iter()
+        .copied()
+        .find(|adapter| adapter.id == id)
 }
 
 fn cmudict_lookup(word: &str) -> LexiconLookup {
