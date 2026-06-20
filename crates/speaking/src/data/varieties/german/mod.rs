@@ -88,7 +88,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "mir", "dir", "ihm", "ihnen", "wer", "was", "die",
         ],
         object_pronouns: &[
-            "mich", "dich", "sich", "uns", "euch", "ihn", "sie", "es", "mir", "dir", "ihm", "ihnen",
+            "mich", "dich", "sich", "uns", "euch", "ihn", "mir", "dir", "ihm", "ihnen",
         ],
         auxiliaries: &[
             "bin", "bist", "ist", "sind", "seid", "war", "waren", "habe", "hast", "hat", "haben",
@@ -104,14 +104,17 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         conjunctions: &["und", "oder", "aber", "denn", "sondern"],
         particles: &["ja", "doch", "mal", "wohl"],
         enclitic_suffixes: &[],
-        complementizers: &["dass", "daß", "ob", "wenn", "weil", "als"],
+        complementizers: &[
+            "dass", "daß", "der", "die", "das", "ob", "wenn", "weil", "als",
+        ],
         adverbs: &["nicht", "sehr", "auch", "gern", "gerne"],
         adverb_suffixes: &[],
         adjectives: &[],
         adjective_suffixes: &["ig", "lich", "isch"],
         verbs: &[
             "sein", "haben", "werden", "machen", "sagen", "gehen", "kommen", "sehen", "wissen",
-            "geben", "nehmen", "sprechen", "lernen", "arbeiten", "weiß", "weiss", "kommt",
+            "geben", "nehmen", "sprechen", "lernen", "arbeiten", "lesen", "liest", "lese",
+            "denken", "denkt", "weiß", "weiss", "kommt",
         ],
         verb_suffixes: &["en"],
         subject_verb_suffixes: &["e", "st", "t"],

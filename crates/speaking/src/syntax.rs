@@ -459,6 +459,7 @@ fn build_multilingual_links(
     push_multilingual_adposition_links(words, profile, &mut links);
     push_multilingual_auxiliary_links(words, profile, &mut links);
     push_multilingual_complement_links(words, profile, &mut links);
+    push_multilingual_relative_clause_links(words, profile, &mut links);
     push_multilingual_coordination_links(words, profile, &mut links);
     push_multilingual_object_pronoun_links(words, profile, &mut links);
     for predicate_index in 0..words.len() {
@@ -502,6 +503,10 @@ fn build_multilingual_links(
                 .enumerate()
                 .skip(predicate_index + 1)
                 .take(5)
+                .take_while(|(_, word)| {
+                    !multilingual_is_complementizer(profile, word)
+                        && !multilingual_is_conjunction(profile, word)
+                })
                 .find_map(|(index, word)| {
                     multilingual_is_nominal_head(profile, word).then_some(index)
                 })
@@ -800,6 +805,55 @@ fn push_multilingual_complement_links(
                     ),
                 );
             }
+        }
+    }
+}
+
+fn push_multilingual_relative_clause_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for marker_index in 1..words.len() {
+        let marker = &words[marker_index];
+        if !multilingual_is_relative_marker(profile, marker) {
+            continue;
+        }
+        let head_index = marker_index - 1;
+        if !multilingual_is_nominal_head(profile, &words[head_index]) {
+            continue;
+        }
+        if let Some(predicate_index) = words
+            .iter()
+            .enumerate()
+            .skip(marker_index + 1)
+            .take(6)
+            .find_map(|(index, word)| {
+                let previous = index
+                    .checked_sub(1)
+                    .and_then(|previous| words.get(previous))
+                    .map(String::as_str);
+                multilingual_is_likely_verb(profile, word, previous).then_some(index)
+            })
+        {
+            push_link(
+                links,
+                link(
+                    head_index,
+                    marker_index,
+                    SyntacticLinkKind::Apposition,
+                    0.58,
+                ),
+            );
+            push_link(
+                links,
+                link(
+                    marker_index,
+                    predicate_index,
+                    SyntacticLinkKind::Complement,
+                    0.61,
+                ),
+            );
         }
     }
 }
@@ -1493,6 +1547,10 @@ fn multilingual_is_complementizer(profile: HeuristicSyntaxProfile, word: &str) -
     contains(word, profile.complementizers)
 }
 
+fn multilingual_is_relative_marker(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    multilingual_is_complementizer(profile, word) || multilingual_is_pronoun(profile, word)
+}
+
 fn multilingual_is_object_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
     contains(word, profile.object_pronouns)
 }
@@ -1609,6 +1667,21 @@ mod tests {
                 .iter()
                 .any(|link| link.left == left && link.right == right && link.kind == kind)),
             "expected {kind:?} link {left}->{right} in {analysis:#?}"
+        );
+    }
+
+    fn assert_no_link_between(
+        analysis: &SentenceSyntaxAnalysis,
+        left: usize,
+        right: usize,
+        kind: SyntacticLinkKind,
+    ) {
+        assert!(
+            !analysis.primary_parse().is_some_and(|parse| parse
+                .links
+                .iter()
+                .any(|link| link.left == left && link.right == right && link.kind == kind)),
+            "did not expect {kind:?} link {left}->{right} in {analysis:#?}"
         );
     }
 
@@ -1901,16 +1974,37 @@ mod tests {
         assert_link_between(&french, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&french, 1, 2, SyntacticLinkKind::Complement);
         assert_link_between(&french, 2, 4, SyntacticLinkKind::Complement);
+        assert_no_link_between(&french, 1, 3, SyntacticLinkKind::Object);
 
         let spanish = SpanishLinkGrammarParser.parse(&words("yo digo que ella viene"), None);
         assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Complement);
         assert_link_between(&spanish, 2, 4, SyntacticLinkKind::Complement);
+        assert_no_link_between(&spanish, 1, 3, SyntacticLinkKind::Object);
 
-        let german = GermanLinkGrammarParser.parse(&words("ich weiss dass sie kommt"), None);
+        let german =
+            GermanLinkGrammarParser.parse(&words("ich weiss dass sie das buch liest"), None);
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&german, 1, 2, SyntacticLinkKind::Complement);
-        assert_link_between(&german, 2, 4, SyntacticLinkKind::Complement);
+        assert_link_between(&german, 2, 6, SyntacticLinkKind::Complement);
+        assert_link_between(&german, 3, 6, SyntacticLinkKind::Subject);
+        assert_link_between(&german, 5, 6, SyntacticLinkKind::Object);
+        assert_no_link_between(&german, 1, 3, SyntacticLinkKind::Object);
+    }
+
+    #[test]
+    fn multilingual_parser_links_relative_clauses() {
+        let french = FrenchLinkGrammarParser.parse(&words("homme qui lit"), None);
+        assert_link_between(&french, 0, 1, SyntacticLinkKind::Apposition);
+        assert_link_between(&french, 1, 2, SyntacticLinkKind::Complement);
+
+        let spanish = SpanishLinkGrammarParser.parse(&words("hombre que lee"), None);
+        assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Apposition);
+        assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Complement);
+
+        let german = GermanLinkGrammarParser.parse(&words("mann der liest"), None);
+        assert_link_between(&german, 0, 1, SyntacticLinkKind::Apposition);
+        assert_link_between(&german, 1, 2, SyntacticLinkKind::Complement);
     }
 
     #[test]

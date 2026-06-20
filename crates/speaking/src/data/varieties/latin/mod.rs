@@ -176,7 +176,8 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         adjective_suffixes: &["ior", "ilis", "alis"],
         verbs: &[
             "amo", "amas", "amat", "amamus", "amatis", "amant", "video", "videt", "dico", "dicit",
-            "venio", "venit", "sum", "es", "est", "sunt",
+            "lego", "legit", "legunt", "puto", "putat", "venio", "venit", "sum", "es", "est",
+            "sunt",
         ],
         verb_suffixes: &["are", "ere", "ire"],
         subject_verb_suffixes: &["o", "m", "s", "t", "mus", "tis", "nt"],
