@@ -3372,12 +3372,19 @@ fn cmd_be(command: BeCommand) -> Result<()> {
         command.head2phones_model.display(),
         piper_model.display()
     );
+    eprintln!("be: cpal output={}", player.description());
 
     let mut total_samples = 0usize;
     let mut cursor = String::new();
     let mut previous = String::new();
     let mut sink = |chunk: piper::PiperAudioChunk| -> Result<()> {
         total_samples += chunk.pcm_mono_f32.len();
+        eprintln!(
+            "be: queued audio chunk samples={} total={} rate={}Hz",
+            chunk.pcm_mono_f32.len(),
+            total_samples,
+            chunk.sample_rate_hz
+        );
         player.append(&chunk.pcm_mono_f32);
         Ok(())
     };
@@ -3418,8 +3425,8 @@ fn cmd_be(command: BeCommand) -> Result<()> {
     }
 
     eprintln!();
-    eprintln!("be: waiting for CPAL playback to drain");
     drop(sink);
+    eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
     player.wait_until_done(total_samples);
     Ok(())
 }

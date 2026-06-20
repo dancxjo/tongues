@@ -902,6 +902,10 @@ pub(crate) fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f3
 pub(crate) struct AudioStreamPlayer {
     samples: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
     cursor: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    device_name: String,
+    output_sample_rate_hz: u32,
+    channels: u16,
+    sample_format: cpal::SampleFormat,
     _stream: cpal::Stream,
 }
 
@@ -1059,8 +1063,19 @@ impl AudioStreamPlayer {
         Ok(Self {
             samples,
             cursor,
+            device_name,
+            output_sample_rate_hz: output_sample_rate,
+            channels,
+            sample_format,
             _stream: stream,
         })
+    }
+
+    pub(crate) fn description(&self) -> String {
+        format!(
+            "{} format={:?} rate={}Hz channels={}",
+            self.device_name, self.sample_format, self.output_sample_rate_hz, self.channels
+        )
     }
 
     pub(crate) fn append(&self, chunk: &[f32]) {
