@@ -8576,13 +8576,18 @@ fn fetch_url_with_fallback(
     let _ = fs::remove_file(&part);
 
     let out_arg = part.to_str().unwrap_or(fallback_filename);
+    let curl_max_time = if bundled_fallback.is_some() {
+        "20"
+    } else {
+        "120"
+    };
     let status = std::process::Command::new("curl")
         .args([
             "-fsSL",
             "--connect-timeout",
             "20",
             "--max-time",
-            "120",
+            curl_max_time,
             "-o",
             out_arg,
             url,
@@ -8597,10 +8602,17 @@ fn fetch_url_with_fallback(
     }
     let _ = fs::remove_file(&part);
 
+    if let Some(fallback) = bundled_fallback {
+        if copy_bundled_fetch_fallback(fallback, &part, out, label)? {
+            return Ok(());
+        }
+    }
+
     let status = std::process::Command::new("wget")
         .args([
             "--connect-timeout=20",
-            "--read-timeout=120",
+            "--read-timeout=20",
+            "--tries=1",
             "-qO",
             out_arg,
             url,
@@ -8616,21 +8628,7 @@ fn fetch_url_with_fallback(
     let _ = fs::remove_file(&part);
 
     if let Some(fallback) = bundled_fallback {
-        let fallback = Path::new(fallback);
-        if fallback.exists() {
-            fs::copy(fallback, &part).with_context(|| {
-                format!(
-                    "copying bundled fallback {} to {}",
-                    fallback.display(),
-                    part.display()
-                )
-            })?;
-            fs::rename(&part, out)
-                .with_context(|| format!("renaming {} to {}", part.display(), out.display()))?;
-            println!(
-                "Could not download {label}; copied bundled fallback to {}",
-                out.display()
-            );
+        if copy_bundled_fetch_fallback(fallback, &part, out, label)? {
             return Ok(());
         }
     }
@@ -8639,6 +8637,33 @@ fn fetch_url_with_fallback(
         "Could not download {label}. Please download manually from:\n  {url}\nand save to {}",
         out.display()
     )
+}
+
+fn copy_bundled_fetch_fallback(
+    fallback: &str,
+    part: &Path,
+    out: &Path,
+    label: &str,
+) -> Result<bool> {
+    let fallback = Path::new(fallback);
+    if !fallback.exists() {
+        return Ok(false);
+    }
+
+    fs::copy(fallback, part).with_context(|| {
+        format!(
+            "copying bundled fallback {} to {}",
+            fallback.display(),
+            part.display()
+        )
+    })?;
+    fs::rename(part, out)
+        .with_context(|| format!("renaming {} to {}", part.display(), out.display()))?;
+    println!(
+        "Could not download {label}; copied bundled fallback to {}",
+        out.display()
+    );
+    Ok(true)
 }
 
 // ── prepare ────────────────────────────────────────────────────────────────
