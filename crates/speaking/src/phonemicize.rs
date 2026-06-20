@@ -267,6 +267,19 @@ pub trait PronunciationPipeline {
         context: TokenPronunciationContext,
     ) -> WordPronunciation;
 
+    fn uses_generic_orthography_before_unknown(&self) -> bool {
+        true
+    }
+
+    fn unknown_word_pronunciation(
+        &self,
+        word: &WordToken,
+        _variety: &LinguisticVariety,
+        context: TokenPronunciationContext,
+    ) -> WordPronunciation {
+        missing_pronunciation(word, context, "missing variety-data pronunciation")
+    }
+
     fn syntax_parser(&self, _variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
         None
     }
@@ -691,6 +704,19 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         context: TokenPronunciationContext,
     ) -> WordPronunciation {
         pronunciation_for_word(self, word, variety, context)
+    }
+
+    fn uses_generic_orthography_before_unknown(&self) -> bool {
+        false
+    }
+
+    fn unknown_word_pronunciation(
+        &self,
+        word: &WordToken,
+        variety: &LinguisticVariety,
+        context: TokenPronunciationContext,
+    ) -> WordPronunciation {
+        english_unknown_word_pronunciation(word, variety, context)
     }
 
     fn next_word_starts_with_vowelish(
@@ -1565,26 +1591,7 @@ fn variety_data_pronunciation_for_word(
 
     let candidate = planned_candidate_from_orthography_profile(&word.normalized, variety, context);
     if candidate.is_empty() {
-        return WordPronunciation {
-            candidates: Vec::new(),
-            status: PronunciationStatus::Missing,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::Unknown,
-                method: "missing variety-data pronunciation".into(),
-                version: Some("0.1".into()),
-            },
-            warnings: vec![PronunciationWarning {
-                token: word.text.clone(),
-                kind: PronunciationWarningKind::UnknownPronunciation,
-                message: format!(
-                    "no pronunciation from {} variety data: {}",
-                    variety.id.0, word.text
-                ),
-            }],
-            letter_break_offsets: Vec::new(),
-            letter_indices: Vec::new(),
-            part_of_speech: context.part_of_speech,
-        };
+        return missing_pronunciation(word, context, "missing variety-data pronunciation");
     }
 
     WordPronunciation {
@@ -1917,6 +1924,34 @@ fn pronunciation_for_word(
         return pronunciation;
     }
 
+    if pipeline.uses_generic_orthography_before_unknown() {
+        let candidate =
+            planned_candidate_from_orthography_profile(&word.normalized, variety, context);
+        if !candidate.is_empty() {
+            return WordPronunciation {
+                candidates: vec![candidate],
+                status: PronunciationStatus::Exact,
+                provenance: EvidenceProvenance {
+                    source: EvidenceSource::Rule,
+                    method: format!("{} orthography profile pronunciation", variety.id.0),
+                    version: Some("0.1".into()),
+                },
+                warnings: Vec::new(),
+                letter_break_offsets: Vec::new(),
+                letter_indices: Vec::new(),
+                part_of_speech: context.part_of_speech,
+            };
+        }
+    }
+
+    pipeline.unknown_word_pronunciation(word, variety, context)
+}
+
+fn english_unknown_word_pronunciation(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> WordPronunciation {
     use crate::data::varieties::english::morphology;
     if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
         let candidates = vec![planned_candidate_from_cmu(
@@ -1944,19 +1979,7 @@ fn pronunciation_for_word(
 
     let guessed = guess_pronunciation(&word.normalized);
     if guessed.is_empty() {
-        WordPronunciation {
-            candidates: Vec::new(),
-            status: PronunciationStatus::Missing,
-            provenance: pronunciation_provenance(PronunciationStatus::Missing),
-            warnings: vec![PronunciationWarning {
-                token: word.text.clone(),
-                kind: PronunciationWarningKind::UnknownPronunciation,
-                message: format!("unknown pronunciation: {}", word.text),
-            }],
-            letter_break_offsets: Vec::new(),
-            letter_indices: Vec::new(),
-            part_of_speech: context.part_of_speech,
-        }
+        missing_pronunciation(word, context, "unknown pronunciation")
     } else {
         // eprintln!("GUESSED: {}", word.text);
         WordPronunciation {
@@ -1976,6 +1999,30 @@ fn pronunciation_for_word(
             letter_indices: Vec::new(),
             part_of_speech: context.part_of_speech,
         }
+    }
+}
+
+fn missing_pronunciation(
+    word: &WordToken,
+    context: TokenPronunciationContext,
+    method: &str,
+) -> WordPronunciation {
+    WordPronunciation {
+        candidates: Vec::new(),
+        status: PronunciationStatus::Missing,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Unknown,
+            method: method.into(),
+            version: Some("0.1".into()),
+        },
+        warnings: vec![PronunciationWarning {
+            token: word.text.clone(),
+            kind: PronunciationWarningKind::UnknownPronunciation,
+            message: format!("unknown pronunciation: {}", word.text),
+        }],
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
     }
 }
 
@@ -5087,6 +5134,69 @@ mod tests {
     }
 
     #[test]
+    fn orthographic_pronunciation_phonemicizes_every_builtin_variety() {
+        for variety in builtin_varieties() {
+            let sample = sample_word_for_variety(&variety.id.0);
+            let output = phonemicizer_for_variety(&variety.id)
+                .expect("phonemicizer")
+                .phonemicize(&request(sample, &variety.id.0))
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "{} should phonemicize sample `{sample}`: {err}",
+                        variety.id.0
+                    )
+                });
+            assert!(
+                !output.phonemes.is_empty(),
+                "{} should produce phonemes for sample `{sample}`",
+                variety.id.0
+            );
+            assert!(
+                output
+                    .warnings
+                    .iter()
+                    .all(|warning| warning.kind != PronunciationWarningKind::UnknownPronunciation),
+                "{} should phonemicize sample `{sample}` from its declared data: {:?}",
+                variety.id.0,
+                output.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn english_unknown_word_guessing_is_pipeline_specific() {
+        let english = EnglishPhonemicizer
+            .phonemicize(&request("zzq", "en-US"))
+            .expect("English fallback should phonemicize");
+        assert!(
+            english
+                .warnings
+                .iter()
+                .any(|warning| warning.kind == PronunciationWarningKind::GuessedWord),
+            "{:?}",
+            english.warnings
+        );
+
+        let data_driven = VarietyDataPhonemicizer
+            .phonemicize(&request("zzq", "en-US"))
+            .expect("variety-data pipeline should handle declared variety data");
+        assert!(
+            data_driven
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::GuessedWord),
+            "{:?}",
+            data_driven.warnings
+        );
+        assert!(
+            data_driven
+                .phonemes
+                .iter()
+                .all(|token| { !token.provenance.method.contains("unknown-word fallback") })
+        );
+    }
+
+    #[test]
     fn punctuation_and_question_contours_are_variety_data() {
         for variety in builtin_varieties() {
             if variety.language.0 == "en" {
@@ -5184,6 +5294,20 @@ mod tests {
                     pipeline_id
                 );
             }
+        }
+    }
+
+    fn sample_word_for_variety(variety_id: &str) -> &'static str {
+        match variety_id {
+            "eo" => "ŝipo",
+            "fr-FR-Standard" => "bonjour",
+            "de-DE-Standard" => "Sprache",
+            "el-GR-Standard" => "και",
+            "grc-Attic" | "grc-Koine" => "και",
+            "la-Classical" | "la-Ecclesiastical" => "caelum",
+            "sa-Deva-Standard" => "धर्म",
+            "es-ES-Castilian" | "es-419-Standard" => "zapato",
+            _ => "hello",
         }
     }
 
