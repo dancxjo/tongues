@@ -4969,29 +4969,16 @@ mod tests {
     #[test]
     fn punctuation_and_question_contours_are_variety_data() {
         for variety in builtin_varieties() {
-            if variety.language.0 == "en" {
-                assert!(
-                    variety.punctuation.is_some(),
-                    "{} should carry English abbreviation data",
-                    variety.id.0
-                );
-                assert!(
-                    variety.question_contours.is_some(),
-                    "{} should carry English question contour data",
-                    variety.id.0
-                );
-            } else {
-                assert!(
-                    variety.punctuation.is_none(),
-                    "{} should not inherit English abbreviation data",
-                    variety.id.0
-                );
-                assert!(
-                    variety.question_contours.is_none(),
-                    "{} should not inherit English question contour data",
-                    variety.id.0
-                );
-            }
+            assert!(
+                variety.punctuation.is_some(),
+                "{} should carry punctuation boundary data",
+                variety.id.0
+            );
+            assert!(
+                variety.question_contours.is_some(),
+                "{} should carry question contour data",
+                variety.id.0
+            );
         }
 
         let english = variety_by_code("en-US").expect("English variety");
@@ -5008,11 +4995,10 @@ mod tests {
         let french_words = tokenize_words("Dr. Dupont part.");
         let french_boundaries = boundary_tokens("Dr. Dupont part.", &french_words, &french);
         assert!(
-            french_boundaries.iter().any(|boundary| {
-                boundary.after_grapheme_index == 0
-                    && boundary.terminal == Some(TerminalPunctuation::Period)
-            }),
-            "French should not inherit English title abbreviation suppression: {french_boundaries:?}"
+            french_boundaries
+                .iter()
+                .all(|boundary| boundary.after_grapheme_index != 0 || boundary.terminal.is_none()),
+            "French should use declared abbreviation data: {french_boundaries:?}"
         );
     }
 
@@ -5061,6 +5047,7 @@ mod tests {
 
     fn sample_word_for_variety(variety_id: &str) -> &'static str {
         match variety_id {
+            "en-US-GA" | "en-US-singing" | "en-GB-RP" | "en-GB-ScotE" | "en-US-AAE" => "hello",
             "eo" => "ŝipo",
             "fr-FR-Standard" => "bonjour",
             "de-DE-Standard" => "Sprache",
@@ -5070,6 +5057,32 @@ mod tests {
             "sa-Deva-Standard" => "धर्म",
             "es-ES-Castilian" | "es-419-Standard" => "zapato",
             _ => "hello",
+        }
+    }
+
+    #[test]
+    fn every_builtin_variety_phonemicizes_with_declared_data() {
+        for variety in builtin_varieties() {
+            let word = sample_word_for_variety(&variety.id.0);
+            let phonemicizer =
+                phonemicizer_for_variety(&variety.id).expect("builtin variety has phonemicizer");
+            let output = phonemicizer
+                .phonemicize(&request(word, &variety.id.0))
+                .unwrap_or_else(|error| panic!("{} should phonemicize: {error}", variety.id.0));
+            assert_eq!(output.variety, variety.id);
+            assert!(
+                !output.phonemes.is_empty(),
+                "{} should produce phonemes for {word}",
+                variety.id.0
+            );
+            assert!(
+                output
+                    .phonemes
+                    .iter()
+                    .any(|token| !matches!(token.phoneme, Spec::Known(ref id) if id.0.starts_with("boundary."))),
+                "{} should produce non-boundary phonemes for {word}",
+                variety.id.0
+            );
         }
     }
 

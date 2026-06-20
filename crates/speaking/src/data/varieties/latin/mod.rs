@@ -105,8 +105,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
             .collect(),
             ordinal_suffixes: Vec::new(),
         }),
-        punctuation: None,
-        question_contours: None,
+        punctuation: Some(crate::data::varieties::default_punctuation_profile()),
+        question_contours: Some(crate::data::varieties::default_question_contour_profile()),
         connected_speech: Vec::new(),
         phonotactics: Some(Phonotactics {
             allowed_syllable_shapes: vec![

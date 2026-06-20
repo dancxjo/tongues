@@ -9,7 +9,7 @@ pub mod spanish;
 
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
-use crate::variety::LinguisticVariety;
+use crate::variety::{LinguisticVariety, PunctuationProfile, QuestionContourProfile};
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
 pub const PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT: &str = "english_cmudict";
@@ -46,6 +46,131 @@ pub fn prosody_profile(
         default_pitch_hz: None,
         default_rate_syllables_per_second: Some(default_rate_syllables_per_second),
         rhythm_class: Some(rhythm_class.into()),
+    }
+}
+
+pub fn default_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: [
+            "mr", "mrs", "ms", "mme", "mlle", "m", "dr", "prof", "sen", "rep", "gen", "col",
+            "capt", "sgt", "lieut", "corp", "rev", "fr", "br", "st", "ave", "av", "rd", "blvd",
+            "ln", "ct", "pl", "co", "inc", "ltd", "etc", "vs", "approx", "jan", "feb", "mar",
+            "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "jr", "sr", "srta",
+            "sra", "sr", "dra", "dott", "sig", "sig.ra", "hr", "frl", "fr", "u", "bzw", "z.b",
+            "bsp", "vgl", "ca",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        title_abbreviations: [
+            "mr", "mrs", "ms", "mme", "mlle", "m", "dr", "prof", "sen", "rep", "gen", "col",
+            "capt", "sgt", "lieut", "corp", "rev", "fr", "br", "sr", "sra", "srta", "dra", "dott",
+            "sig", "sig.ra", "hr", "frl",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        ambiguous_period_abbreviations: ["st", "fr", "sr"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        sentence_starter_words_after_ambiguous_abbreviation: [
+            "the", "he", "she", "it", "they", "we", "i", "you", "this", "that", "these", "those",
+            "there", "here", "but", "and", "then", "so", "if", "when", "as", "what", "who", "how",
+            "why", "my", "your", "our", "their", "his", "her", "its", "le", "la", "les", "un",
+            "une", "des", "je", "tu", "il", "elle", "nous", "vous", "ils", "elles", "el", "la",
+            "los", "las", "yo", "nosotros", "ellos", "der", "die", "das", "ich", "du", "wir",
+            "sie", "ein", "eine",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    }
+}
+
+pub fn default_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: [
+            "am",
+            "are",
+            "aren't",
+            "is",
+            "isn't",
+            "was",
+            "wasn't",
+            "were",
+            "weren't",
+            "do",
+            "don't",
+            "does",
+            "doesn't",
+            "did",
+            "didn't",
+            "have",
+            "haven't",
+            "has",
+            "hasn't",
+            "had",
+            "hadn't",
+            "can",
+            "can't",
+            "could",
+            "couldn't",
+            "will",
+            "won't",
+            "would",
+            "wouldn't",
+            "shall",
+            "shan't",
+            "should",
+            "shouldn't",
+            "may",
+            "might",
+            "must",
+            "ought",
+            "need",
+            "dare",
+            "est",
+            "es",
+            "sont",
+            "êtes",
+            "avez",
+            "as",
+            "a",
+            "va",
+            "vas",
+            "vamos",
+            "es",
+            "eres",
+            "son",
+            "ist",
+            "sind",
+            "bist",
+            "hat",
+            "haben",
+            "kann",
+            "können",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        wh_openers: [
+            "what", "when", "where", "why", "who", "whom", "whose", "which", "how", "que", "quoi",
+            "quand", "où", "ou", "pourquoi", "qui", "comment", "qué", "que", "cuándo", "cuando",
+            "dónde", "donde", "por", "quién", "quien", "cómo", "como", "was", "wann", "wo",
+            "warum", "wer", "wie",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        alternative_coordinators: ["or", "ou", "o", "oder", "aŭ", "aut", "ἤ", "वा"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        paired_alternative_openers: ["either", "soit", "sea", "entweder", "aŭ"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
     }
 }
 

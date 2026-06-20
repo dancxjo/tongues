@@ -426,6 +426,7 @@ fn smoothed_energy_at_ms(energy_per_ms: &[f32], ms_idx: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::builtin_varieties;
 
     #[test]
     fn transcript_export_with_timing() {
@@ -474,6 +475,42 @@ mod tests {
         );
         assert_eq!(stream.words[0].boundary_source, BoundarySource::Predicted);
         assert!(stream.words[0].timing.is_none());
+    }
+
+    #[test]
+    fn pronunciations_attach_for_every_builtin_variety() {
+        for variety in builtin_varieties() {
+            let text = match variety.id.0.as_str() {
+                "en-US-GA" | "en-US-singing" | "en-GB-RP" | "en-GB-ScotE" | "en-US-AAE" => "hello",
+                "eo" => "ŝipo",
+                "fr-FR-Standard" => "bonjour",
+                "de-DE-Standard" => "Sprache",
+                "el-GR-Standard" | "grc-Attic" | "grc-Koine" => "και",
+                "la-Classical" | "la-Ecclesiastical" => "caelum",
+                "sa-Deva-Standard" => "धर्म",
+                "es-ES-Castilian" | "es-419-Standard" => "zapato",
+                _ => continue,
+            };
+            let stream = transcript_to_word_stream_for_variety(
+                WordStreamId(10),
+                &[TranscriptWord {
+                    text: text.into(),
+                    start_ms: None,
+                    end_ms: None,
+                    confidence: None,
+                }],
+                &variety.id,
+            );
+            let pronunciation = stream.words[0]
+                .pronunciation
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} should attach pronunciation", variety.id.0));
+            assert!(
+                !pronunciation.phonemes.is_empty(),
+                "{} should attach phonemes",
+                variety.id.0
+            );
+        }
     }
 
     #[test]

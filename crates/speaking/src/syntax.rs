@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::data::varieties::{
     english::syntax as english_syntax, esperanto, french, german, greek, latin, sanskrit, spanish,
 };
+use crate::data::variety_by_code;
+use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
 
 pub type WordIndex = usize;
@@ -119,6 +122,52 @@ pub trait LinkGrammarParser {
         words: &[String],
         terminal: Option<TerminalPunctuation>,
     ) -> SentenceSyntaxAnalysis;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarietyLinkGrammarParser {
+    variety: VarietyId,
+}
+
+impl Default for VarietyLinkGrammarParser {
+    fn default() -> Self {
+        Self::new(VarietyId(DEFAULT_SPEAKING_VARIETY.into()))
+    }
+}
+
+impl VarietyLinkGrammarParser {
+    pub fn new(variety: VarietyId) -> Self {
+        Self { variety }
+    }
+
+    pub fn variety(&self) -> &VarietyId {
+        &self.variety
+    }
+}
+
+impl LinkGrammarParser for VarietyLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        let Some(variety) = variety_by_code(&self.variety.0) else {
+            return SentenceSyntaxAnalysis {
+                terminal,
+                ..Default::default()
+            };
+        };
+        if let Some(analyzer) = variety.syntax_analyzer {
+            return analyzer(words, terminal);
+        }
+        if let Some(profile) = variety.syntax_heuristics {
+            return parse_heuristic_link_grammar(words, terminal, profile);
+        }
+        SentenceSyntaxAnalysis {
+            terminal,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

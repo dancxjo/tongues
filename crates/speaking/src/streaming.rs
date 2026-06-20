@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{EnglishLinkGrammarParser, LinkGrammarParser, SentenceSyntaxAnalysis};
+use crate::syntax::{LinkGrammarParser, SentenceSyntaxAnalysis, VarietyLinkGrammarParser};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StableTextChunk {
@@ -18,20 +19,24 @@ pub struct UnfinishedPrefixAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct StableTextChunker<P = EnglishLinkGrammarParser> {
+pub struct StableTextChunker<P = VarietyLinkGrammarParser> {
     parser: P,
     buffer: String,
 }
 
-impl Default for StableTextChunker<EnglishLinkGrammarParser> {
+impl Default for StableTextChunker<VarietyLinkGrammarParser> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StableTextChunker<EnglishLinkGrammarParser> {
+impl StableTextChunker<VarietyLinkGrammarParser> {
     pub fn new() -> Self {
-        Self::with_parser(EnglishLinkGrammarParser)
+        Self::with_parser(VarietyLinkGrammarParser::default())
+    }
+
+    pub fn for_variety(variety: VarietyId) -> Self {
+        Self::with_parser(VarietyLinkGrammarParser::new(variety))
     }
 }
 
@@ -234,6 +239,8 @@ fn is_closing_quote(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::VarietyId;
+    use crate::syntax::PartOfSpeech;
 
     #[test]
     fn releases_completed_sentence() {
@@ -278,5 +285,21 @@ mod tests {
         assert!(analyses.iter().any(|analysis| {
             analysis.text_with_continuation == "I want to..." && analysis.word_count == 3
         }));
+    }
+
+    #[test]
+    fn chunker_can_parse_with_variety_data() {
+        let chunks =
+            StableTextChunker::for_variety(VarietyId("fr".into())).push_str("Ils parlent.");
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "Ils parlent.");
+        assert!(
+            chunks[0]
+                .syntax
+                .tokens
+                .iter()
+                .any(|token| token.pos == PartOfSpeech::Pronoun)
+        );
     }
 }
