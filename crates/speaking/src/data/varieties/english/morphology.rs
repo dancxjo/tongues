@@ -349,6 +349,8 @@ mod tests {
             pronunciation_pipeline: None,
             syntax_profile: None,
             number_names: None,
+            punctuation: None,
+            question_contours: None,
             connected_speech: Vec::new(),
             phonotactics: None,
             orthography: None,

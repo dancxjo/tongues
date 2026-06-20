@@ -52,6 +52,8 @@ pub fn variety() -> LinguisticVariety {
                 name: "premier".into(),
             }],
         }),
+        punctuation: None,
+        question_contours: None,
         connected_speech: vec![
             ConnectedSpeechRule::DeleteFinalPhoneBeforeConsonant { phone: "ə".into() },
             ConnectedSpeechRule::Liaison {

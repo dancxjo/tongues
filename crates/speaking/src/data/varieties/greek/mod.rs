@@ -116,6 +116,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
             .collect(),
             ordinal_suffixes: Vec::new(),
         }),
+        punctuation: None,
+        question_contours: None,
         connected_speech: Vec::new(),
         phonotactics: Some(Phonotactics {
             allowed_syllable_shapes: vec![

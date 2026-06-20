@@ -42,6 +42,10 @@ pub struct LinguisticVariety {
     #[serde(default)]
     pub number_names: Option<NumberNameSet>,
     #[serde(default)]
+    pub punctuation: Option<PunctuationProfile>,
+    #[serde(default)]
+    pub question_contours: Option<QuestionContourProfile>,
+    #[serde(default)]
     pub connected_speech: Vec<ConnectedSpeechRule>,
     pub phonotactics: Option<Phonotactics>,
     pub orthography: Option<Orthography>,
@@ -84,6 +88,30 @@ pub struct OrdinalSuffixName {
     pub value: u32,
     pub suffixes: Vec<String>,
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PunctuationProfile {
+    #[serde(default)]
+    pub period_abbreviations: Vec<String>,
+    #[serde(default)]
+    pub title_abbreviations: Vec<String>,
+    #[serde(default)]
+    pub ambiguous_period_abbreviations: Vec<String>,
+    #[serde(default)]
+    pub sentence_starter_words_after_ambiguous_abbreviation: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct QuestionContourProfile {
+    #[serde(default)]
+    pub yes_no_openers: Vec<String>,
+    #[serde(default)]
+    pub wh_openers: Vec<String>,
+    #[serde(default)]
+    pub alternative_coordinators: Vec<String>,
+    #[serde(default)]
+    pub paired_alternative_openers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

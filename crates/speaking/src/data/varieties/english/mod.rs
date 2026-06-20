@@ -28,8 +28,8 @@ use crate::segment::{Environment, SegmentMatcher, SyllablePosition, WordPosition
 use crate::spec::Spec;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographicUnitKind, OrthographicUnitPronunciation,
-    VarietyImplementationStatus, VarietyStatus, WeakFormFollowingContext, WeakFormRule,
-    WeakFormStyleContext,
+    PunctuationProfile, QuestionContourProfile, VarietyImplementationStatus, VarietyStatus,
+    WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
 const P: PhoneId = PhoneId::borrowed("ipa.phone.p");
@@ -229,6 +229,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
             .collect(),
             ordinal_suffixes: Vec::new(),
         }),
+        punctuation: Some(english_punctuation_profile()),
+        question_contours: Some(english_question_contour_profile()),
         connected_speech: Vec::new(),
         phonotactics: Some(phonotactics(row.singing)),
         orthography: Some(Orthography {
@@ -252,6 +254,93 @@ pub fn variety(id: &str) -> LinguisticVariety {
                 VarietyImplementationStatus::PermissiveProfile
             }
         },
+    }
+}
+
+fn english_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: [
+            "mr", "mrs", "ms", "dr", "prof", "sen", "rep", "gen", "col", "capt", "sgt", "lieut",
+            "corp", "rev", "fr", "br", "st", "ave", "rd", "blvd", "ln", "ct", "pl", "co", "inc",
+            "ltd", "etc", "vs", "approx", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep",
+            "sept", "oct", "nov", "dec", "jr", "sr",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        title_abbreviations: [
+            "mr", "mrs", "ms", "dr", "prof", "sen", "rep", "gen", "col", "capt", "sgt", "lieut",
+            "corp", "rev", "fr", "br",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        ambiguous_period_abbreviations: ["st"].into_iter().map(str::to_string).collect(),
+        sentence_starter_words_after_ambiguous_abbreviation: [
+            "the", "he", "she", "it", "they", "we", "i", "you", "this", "that", "these", "those",
+            "there", "here", "but", "and", "then", "so", "if", "when", "as", "what", "who", "how",
+            "why", "my", "your", "our", "their", "his", "her", "its",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    }
+}
+
+fn english_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: [
+            "am",
+            "are",
+            "aren't",
+            "is",
+            "isn't",
+            "was",
+            "wasn't",
+            "were",
+            "weren't",
+            "do",
+            "don't",
+            "does",
+            "doesn't",
+            "did",
+            "didn't",
+            "have",
+            "haven't",
+            "has",
+            "hasn't",
+            "had",
+            "hadn't",
+            "can",
+            "can't",
+            "could",
+            "couldn't",
+            "will",
+            "won't",
+            "would",
+            "wouldn't",
+            "shall",
+            "shan't",
+            "should",
+            "shouldn't",
+            "may",
+            "might",
+            "must",
+            "ought",
+            "need",
+            "dare",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        wh_openers: [
+            "what", "when", "where", "why", "who", "whom", "whose", "which", "how",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        alternative_coordinators: ["or"].into_iter().map(str::to_string).collect(),
+        paired_alternative_openers: ["either"].into_iter().map(str::to_string).collect(),
     }
 }
 

@@ -246,7 +246,12 @@ pub trait PronunciationPipeline {
 
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken>;
 
-    fn boundary_extractor(&self, text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken>;
+    fn boundary_extractor(
+        &self,
+        text: &str,
+        words: &[WordToken],
+        variety: &LinguisticVariety,
+    ) -> Vec<SpeechBoundaryToken>;
 
     fn weak_form_resolver(
         &self,
@@ -271,6 +276,7 @@ pub trait PronunciationPipeline {
         _boundaries: &mut Vec<SpeechBoundaryToken>,
         _words: &[WordToken],
         _syntax: &SentenceSyntaxAnalysis,
+        _variety: &LinguisticVariety,
     ) {
     }
 
@@ -279,6 +285,7 @@ pub trait PronunciationPipeline {
         boundary: &SpeechBoundaryToken,
         _words: &[WordToken],
         _sentence_start_word_index: usize,
+        _variety: &LinguisticVariety,
     ) -> Option<ProsodicLabelKind> {
         generic_prosodic_label_for_boundary(boundary)
     }
@@ -358,7 +365,7 @@ pub trait PronunciationPipeline {
         let variety = self.variety(&canonical_variety)?;
         let normalized_text = self.text_normalizer(&input.text, &canonical_variety);
         let words = self.orthographic_tokenizer(&normalized_text);
-        let mut boundaries = self.boundary_extractor(&normalized_text, &words);
+        let mut boundaries = self.boundary_extractor(&normalized_text, &words, &variety);
         let normalized_words = words
             .iter()
             .map(|word| word.normalized.clone())
@@ -381,8 +388,8 @@ pub trait PronunciationPipeline {
                 link_parses: Vec::new(),
                 terminal: final_terminal(&boundaries),
             });
-        self.annotate_boundaries(&mut boundaries, &words, &syntax);
-        let prosody = prosody_from_boundaries(self, &boundaries, &words);
+        self.annotate_boundaries(&mut boundaries, &words, &syntax, &variety);
+        let prosody = prosody_from_boundaries(self, &boundaries, &words, &variety);
         let mut graphemes = Vec::with_capacity(words.len());
         let mut phonemes = Vec::new();
         let mut phones = Vec::new();
@@ -622,12 +629,20 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         tokenize_words(text)
     }
 
-    fn boundary_extractor(&self, text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> {
-        boundary_tokens(text, words)
+    fn boundary_extractor(
+        &self,
+        text: &str,
+        words: &[WordToken],
+        variety: &LinguisticVariety,
+    ) -> Vec<SpeechBoundaryToken> {
+        boundary_tokens(text, words, variety)
     }
 
-    fn syntax_parser(&self, _variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        Some(&EnglishLinkGrammarParser)
+    fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
+        variety
+            .syntax_profile
+            .as_deref()
+            .and_then(syntax_parser_for_profile)
     }
 
     fn annotate_boundaries(
@@ -635,8 +650,9 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         boundaries: &mut Vec<SpeechBoundaryToken>,
         words: &[WordToken],
         syntax: &SentenceSyntaxAnalysis,
+        variety: &LinguisticVariety,
     ) {
-        annotate_alternative_question_boundaries(boundaries, words, syntax);
+        annotate_alternative_question_boundaries(boundaries, words, syntax, variety);
     }
 
     fn prosodic_label_for_boundary(
@@ -644,11 +660,12 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         boundary: &SpeechBoundaryToken,
         words: &[WordToken],
         sentence_start_word_index: usize,
+        variety: &LinguisticVariety,
     ) -> Option<ProsodicLabelKind> {
         match (boundary.terminal, boundary.pause) {
             (Some(TerminalPunctuation::Question), _) => {
                 let sentence_words = words_in_sentence(words, sentence_start_word_index, boundary);
-                Some(prosodic_label_for_english_question(sentence_words))
+                Some(prosodic_label_for_question(sentence_words, variety))
             }
             _ => generic_prosodic_label_for_boundary(boundary),
         }
@@ -774,8 +791,13 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
         tokenize_words(text)
     }
 
-    fn boundary_extractor(&self, text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> {
-        boundary_tokens(text, words)
+    fn boundary_extractor(
+        &self,
+        text: &str,
+        words: &[WordToken],
+        variety: &LinguisticVariety,
+    ) -> Vec<SpeechBoundaryToken> {
+        boundary_tokens(text, words, variety)
     }
 
     fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
@@ -787,11 +809,11 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
 
     fn weak_form_resolver(
         &self,
-        _word: &WordToken,
-        _variety: &LinguisticVariety,
-        _context: TokenPronunciationContext,
+        word: &WordToken,
+        variety: &LinguisticVariety,
+        context: TokenPronunciationContext,
     ) -> Option<WordPronunciation> {
-        None
+        data_driven_weak_form_pronunciation(word, variety, context)
     }
 
     fn token_classifier(
@@ -1001,7 +1023,11 @@ fn normalize_surface_word(surface: &str) -> String {
         .collect()
 }
 
-fn boundary_tokens(text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> {
+fn boundary_tokens(
+    text: &str,
+    words: &[WordToken],
+    variety: &LinguisticVariety,
+) -> Vec<SpeechBoundaryToken> {
     if words.is_empty() {
         return Vec::new();
     }
@@ -1015,7 +1041,7 @@ fn boundary_tokens(text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> 
             .unwrap_or(text_len_chars);
         let next_word = words.get(index + 1);
         if let Some(boundary) =
-            punctuation_boundary_after_word(text, word, index, next_start, next_word)
+            punctuation_boundary_after_word(text, word, index, next_start, next_word, variety)
         {
             boundaries.push(boundary);
         } else if index + 1 < words.len() {
@@ -1056,13 +1082,17 @@ fn prosody_from_boundaries(
     pipeline: &(impl PronunciationPipeline + ?Sized),
     boundaries: &[SpeechBoundaryToken],
     words: &[WordToken],
+    variety: &LinguisticVariety,
 ) -> ProsodyTrack {
     let mut prosody = ProsodyTrack::default();
     let mut sentence_start_word_index = 0;
     for boundary in boundaries {
-        let Some(kind) =
-            pipeline.prosodic_label_for_boundary(boundary, words, sentence_start_word_index)
-        else {
+        let Some(kind) = pipeline.prosodic_label_for_boundary(
+            boundary,
+            words,
+            sentence_start_word_index,
+            variety,
+        ) else {
             if boundary.terminal.is_some() {
                 sentence_start_word_index = boundary.after_grapheme_index.saturating_add(1);
             }
@@ -1103,13 +1133,17 @@ fn annotate_alternative_question_boundaries(
     boundaries: &mut Vec<SpeechBoundaryToken>,
     words: &[WordToken],
     syntax: &SentenceSyntaxAnalysis,
+    variety: &LinguisticVariety,
 ) {
     if final_terminal(boundaries) != Some(TerminalPunctuation::Question) {
         return;
     }
+    let Some(profile) = variety.question_contours.as_ref() else {
+        return;
+    };
     if !words
         .first()
-        .is_some_and(|word| is_yes_no_question_opener(&word.normalized))
+        .is_some_and(|word| profile.yes_no_openers.contains(&word.normalized))
     {
         return;
     }
@@ -1118,7 +1152,7 @@ fn annotate_alternative_question_boundaries(
         .map(|word| word.normalized.as_str())
         .collect::<Vec<_>>();
     let Some(first_option_index) =
-        alternative_question_first_option_index(&normalized_words, syntax)
+        alternative_question_first_option_index(&normalized_words, syntax, profile)
     else {
         return;
     };
@@ -1146,12 +1180,20 @@ fn annotate_alternative_question_boundaries(
 fn alternative_question_first_option_index(
     words: &[&str],
     syntax: &SentenceSyntaxAnalysis,
+    profile: &crate::variety::QuestionContourProfile,
 ) -> Option<usize> {
     let parse = syntax.primary_parse()?;
     words
         .iter()
         .enumerate()
-        .filter(|(index, word)| **word == "or" && *index > 0 && index + 1 < words.len())
+        .filter(|(index, word)| {
+            profile
+                .alternative_coordinators
+                .iter()
+                .any(|coordinator| coordinator == *word)
+                && *index > 0
+                && index + 1 < words.len()
+        })
         .find_map(|(or_index, _)| {
             let has_linked_options = parse.links.iter().any(|link| {
                 link.kind == crate::syntax::SyntacticLinkKind::Coordination
@@ -1179,38 +1221,50 @@ fn words_in_sentence<'a>(
     }
 }
 
-fn prosodic_label_for_english_question(words: &[WordToken]) -> ProsodicLabelKind {
-    match english_question_contour(words) {
-        EnglishQuestionContour::Rising => ProsodicLabelKind::QuestionRise,
-        EnglishQuestionContour::AlternativeFall => ProsodicLabelKind::AlternativeQuestionFall,
-        EnglishQuestionContour::FinalFall => ProsodicLabelKind::FinalFall,
+fn prosodic_label_for_question(
+    words: &[WordToken],
+    variety: &LinguisticVariety,
+) -> ProsodicLabelKind {
+    let Some(profile) = variety.question_contours.as_ref() else {
+        return ProsodicLabelKind::QuestionRise;
+    };
+    match question_contour(words, profile) {
+        QuestionContour::Rising => ProsodicLabelKind::QuestionRise,
+        QuestionContour::AlternativeFall => ProsodicLabelKind::AlternativeQuestionFall,
+        QuestionContour::FinalFall => ProsodicLabelKind::FinalFall,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EnglishQuestionContour {
+enum QuestionContour {
     Rising,
     AlternativeFall,
     FinalFall,
 }
 
-fn english_question_contour(words: &[WordToken]) -> EnglishQuestionContour {
+fn question_contour(
+    words: &[WordToken],
+    profile: &crate::variety::QuestionContourProfile,
+) -> QuestionContour {
     let Some(first) = words.first().map(|word| word.normalized.as_str()) else {
-        return EnglishQuestionContour::Rising;
+        return QuestionContour::Rising;
     };
 
-    if has_alternative_question_coordination(words) {
-        return EnglishQuestionContour::AlternativeFall;
+    if has_alternative_question_coordination(words, profile) {
+        return QuestionContour::AlternativeFall;
     }
-    if is_wh_question_opener(first) {
-        return EnglishQuestionContour::FinalFall;
+    if profile.wh_openers.iter().any(|opener| opener == first) {
+        return QuestionContour::FinalFall;
     }
 
-    EnglishQuestionContour::Rising
+    QuestionContour::Rising
 }
 
-fn has_alternative_question_coordination(words: &[WordToken]) -> bool {
-    if has_either_or_coordination(words) {
+fn has_alternative_question_coordination(
+    words: &[WordToken],
+    profile: &crate::variety::QuestionContourProfile,
+) -> bool {
+    if has_paired_alternative_coordination(words, profile) {
         return true;
     }
     let normalized_words = words
@@ -1224,86 +1278,40 @@ fn has_alternative_question_coordination(words: &[WordToken]) -> bool {
             link.kind == crate::syntax::SyntacticLinkKind::Coordination
                 && (normalized_words
                     .get(link.left)
-                    .is_some_and(|word| word == "or")
+                    .is_some_and(|word| profile.alternative_coordinators.contains(word))
                     || normalized_words
                         .get(link.right)
-                        .is_some_and(|word| word == "or"))
+                        .is_some_and(|word| profile.alternative_coordinators.contains(word)))
         })
     });
     if !words
         .first()
-        .is_some_and(|word| is_yes_no_question_opener(&word.normalized))
+        .is_some_and(|word| profile.yes_no_openers.contains(&word.normalized))
         || !has_coordination_parse
     {
         return false;
     }
 
-    words
-        .iter()
-        .enumerate()
-        .skip(1)
-        .any(|(index, word)| word.normalized == "or" && index + 1 < words.len())
+    words.iter().enumerate().skip(1).any(|(index, word)| {
+        profile.alternative_coordinators.contains(&word.normalized) && index + 1 < words.len()
+    })
 }
 
-fn has_either_or_coordination(words: &[WordToken]) -> bool {
-    let Some(either_index) = words.iter().position(|word| word.normalized == "either") else {
+fn has_paired_alternative_coordination(
+    words: &[WordToken],
+    profile: &crate::variety::QuestionContourProfile,
+) -> bool {
+    let Some(either_index) = words.iter().position(|word| {
+        profile
+            .paired_alternative_openers
+            .contains(&word.normalized)
+    }) else {
         return false;
     };
     words
         .iter()
         .skip(either_index + 1)
-        .any(|word| word.normalized == "or")
-}
-
-fn is_yes_no_question_opener(word: &str) -> bool {
-    matches!(
-        word,
-        "am" | "are"
-            | "aren't"
-            | "is"
-            | "isn't"
-            | "was"
-            | "wasn't"
-            | "were"
-            | "weren't"
-            | "do"
-            | "don't"
-            | "does"
-            | "doesn't"
-            | "did"
-            | "didn't"
-            | "have"
-            | "haven't"
-            | "has"
-            | "hasn't"
-            | "had"
-            | "hadn't"
-            | "can"
-            | "can't"
-            | "could"
-            | "couldn't"
-            | "will"
-            | "won't"
-            | "would"
-            | "wouldn't"
-            | "shall"
-            | "shan't"
-            | "should"
-            | "shouldn't"
-            | "may"
-            | "might"
-            | "must"
-            | "ought"
-            | "need"
-            | "dare"
-    )
-}
-
-fn is_wh_question_opener(word: &str) -> bool {
-    matches!(
-        word,
-        "what" | "when" | "where" | "why" | "who" | "whom" | "whose" | "which" | "how"
-    )
+        .any(|word| profile.alternative_coordinators.contains(&word.normalized))
 }
 
 fn punctuation_boundary_after_word(
@@ -1312,53 +1320,8 @@ fn punctuation_boundary_after_word(
     word_index: usize,
     next_start_char: usize,
     next_word: Option<&WordToken>,
+    variety: &LinguisticVariety,
 ) -> Option<SpeechBoundaryToken> {
-    let is_abbr = matches!(
-        word.normalized.as_str(),
-        "mr" | "mrs"
-            | "ms"
-            | "dr"
-            | "prof"
-            | "sen"
-            | "rep"
-            | "gen"
-            | "col"
-            | "capt"
-            | "sgt"
-            | "lieut"
-            | "corp"
-            | "rev"
-            | "fr"
-            | "br"
-            | "st"
-            | "ave"
-            | "rd"
-            | "blvd"
-            | "ln"
-            | "ct"
-            | "pl"
-            | "co"
-            | "inc"
-            | "ltd"
-            | "etc"
-            | "vs"
-            | "approx"
-            | "jan"
-            | "feb"
-            | "mar"
-            | "apr"
-            | "jun"
-            | "jul"
-            | "aug"
-            | "sep"
-            | "sept"
-            | "oct"
-            | "nov"
-            | "dec"
-            | "jr"
-            | "sr"
-    );
-
     let mut found = None;
     for (char_index, character) in text.chars().enumerate() {
         if char_index < word.span.end_char || char_index >= next_start_char {
@@ -1372,75 +1335,40 @@ fn punctuation_boundary_after_word(
             _ => None,
         };
 
-        if terminal == Some(TerminalPunctuation::Period) && is_abbr {
-            let is_title_abbr = matches!(
-                word.normalized.as_str(),
-                "mr" | "mrs"
-                    | "ms"
-                    | "dr"
-                    | "prof"
-                    | "sen"
-                    | "rep"
-                    | "gen"
-                    | "col"
-                    | "capt"
-                    | "sgt"
-                    | "lieut"
-                    | "corp"
-                    | "rev"
-                    | "fr"
-                    | "br"
-            );
-
-            if is_title_abbr {
-                if next_word.is_some() {
-                    terminal = None;
-                }
-            } else {
-                if let Some(next) = next_word {
-                    let next_first_char = next.text.chars().next();
-                    let next_is_uppercase = next_first_char.map_or(false, |c| c.is_uppercase());
-                    if !next_is_uppercase {
+        if terminal == Some(TerminalPunctuation::Period) {
+            if let Some(profile) = variety.punctuation.as_ref()
+                && profile
+                    .period_abbreviations
+                    .iter()
+                    .any(|abbr| abbr == &word.normalized)
+            {
+                if profile
+                    .title_abbreviations
+                    .iter()
+                    .any(|abbr| abbr == &word.normalized)
+                {
+                    if next_word.is_some() {
                         terminal = None;
-                    } else if word.normalized == "st" {
-                        let next_word_lower = next.normalized.as_str();
-                        let is_sentence_starter = matches!(
-                            next_word_lower,
-                            "the"
-                                | "he"
-                                | "she"
-                                | "it"
-                                | "they"
-                                | "we"
-                                | "i"
-                                | "you"
-                                | "this"
-                                | "that"
-                                | "these"
-                                | "those"
-                                | "there"
-                                | "here"
-                                | "but"
-                                | "and"
-                                | "then"
-                                | "so"
-                                | "if"
-                                | "when"
-                                | "as"
-                                | "what"
-                                | "who"
-                                | "how"
-                                | "why"
-                                | "my"
-                                | "your"
-                                | "our"
-                                | "their"
-                                | "his"
-                                | "her"
-                                | "its"
-                        );
-                        if !is_sentence_starter {
+                    }
+                } else {
+                    if let Some(next) = next_word {
+                        let next_first_char = next.text.chars().next();
+                        let next_is_uppercase = next_first_char.map_or(false, |c| c.is_uppercase());
+                        if !next_is_uppercase {
                             terminal = None;
+                        } else if profile
+                            .ambiguous_period_abbreviations
+                            .iter()
+                            .any(|abbr| abbr == &word.normalized)
+                        {
+                            let next_word_lower = next.normalized.as_str();
+                            let is_sentence_starter = profile
+                                .sentence_starter_words_after_ambiguous_abbreviation
+                                .iter()
+                                .any(|candidate| candidate == next_word_lower);
+                            if !is_sentence_starter {
+                                terminal = None;
+                            }
                         }
                     }
                 }
@@ -2309,6 +2237,18 @@ fn weak_form_rule_applies(
         WeakFormFollowingContext::BeforeVowelish => context.next_starts_with_vowelish,
         WeakFormFollowingContext::BeforeConsonantish => !context.next_starts_with_vowelish,
     }
+}
+
+fn data_driven_weak_form_pronunciation(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    variety
+        .weak_forms
+        .iter()
+        .find(|rule| weak_form_rule_applies(rule, &word.normalized, context))
+        .map(|rule| weak_form_pronunciation(rule, variety))
 }
 
 fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> WordPronunciation {
@@ -5144,6 +5084,56 @@ mod tests {
                 output.warnings
             );
         }
+    }
+
+    #[test]
+    fn punctuation_and_question_contours_are_variety_data() {
+        for variety in builtin_varieties() {
+            if variety.language.0 == "en" {
+                assert!(
+                    variety.punctuation.is_some(),
+                    "{} should carry English abbreviation data",
+                    variety.id.0
+                );
+                assert!(
+                    variety.question_contours.is_some(),
+                    "{} should carry English question contour data",
+                    variety.id.0
+                );
+            } else {
+                assert!(
+                    variety.punctuation.is_none(),
+                    "{} should not inherit English abbreviation data",
+                    variety.id.0
+                );
+                assert!(
+                    variety.question_contours.is_none(),
+                    "{} should not inherit English question contour data",
+                    variety.id.0
+                );
+            }
+        }
+
+        let english = variety_by_code("en-US").expect("English variety");
+        let english_words = tokenize_words("Dr. Smith left.");
+        let english_boundaries = boundary_tokens("Dr. Smith left.", &english_words, &english);
+        assert!(
+            english_boundaries
+                .iter()
+                .all(|boundary| boundary.after_grapheme_index != 0 || boundary.terminal.is_none()),
+            "English title abbreviation should suppress a terminal boundary: {english_boundaries:?}"
+        );
+
+        let french = variety_by_code("fr").expect("French variety");
+        let french_words = tokenize_words("Dr. Dupont part.");
+        let french_boundaries = boundary_tokens("Dr. Dupont part.", &french_words, &french);
+        assert!(
+            french_boundaries.iter().any(|boundary| {
+                boundary.after_grapheme_index == 0
+                    && boundary.terminal == Some(TerminalPunctuation::Period)
+            }),
+            "French should not inherit English title abbreviation suppression: {french_boundaries:?}"
+        );
     }
 
     #[test]
