@@ -1486,6 +1486,7 @@ fn multilingual_is_nominal_head(profile: LinkGrammarRuleSet, word: &str) -> bool
     multilingual_is_nominal(profile, word)
         && !multilingual_is_determiner(profile, word)
         && !multilingual_is_adjective(profile, word)
+        && !multilingual_is_pronoun(profile, word)
 }
 
 fn multilingual_is_object_candidate(profile: LinkGrammarRuleSet, word: &str) -> bool {
