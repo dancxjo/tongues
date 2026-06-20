@@ -121,7 +121,7 @@ pub trait LinkGrammarParser {
     ) -> SentenceSyntaxAnalysis;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeuristicSyntaxProfile {
     pub determiners: &'static [&'static str],
     pub pronouns: &'static [&'static str],
@@ -364,6 +364,14 @@ fn parse_multilingual_link_grammar(
         link_parses: vec![parse],
         terminal,
     }
+}
+
+pub fn parse_heuristic_link_grammar(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+    profile: HeuristicSyntaxProfile,
+) -> SentenceSyntaxAnalysis {
+    parse_multilingual_link_grammar(words, terminal, profile)
 }
 
 fn build_multilingual_links(

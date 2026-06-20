@@ -9,7 +9,8 @@ use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, VarietyImplementationStatus, VarietyStatus,
+    LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
+    VarietyStatus,
 };
 
 const SEGMENTS: &[&str] = &[
@@ -35,6 +36,11 @@ pub fn variety() -> LinguisticVariety {
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_SANSKRIT.into()),
+        syntax_analyzer: None,
+        syntax_heuristics: Some(syntax_profile()),
+        orthography_pronunciation: Some(OrthographyPronunciationRules {
+            synthesize_ipa: Some(synthesize_ipa_for_orthography),
+        }),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "śūnya",
@@ -82,6 +88,14 @@ pub fn variety() -> LinguisticVariety {
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
     }
+}
+
+fn synthesize_ipa_for_orthography(
+    word: &str,
+    _variety: &LinguisticVariety,
+    _part_of_speech: Option<crate::syntax::PartOfSpeech>,
+) -> Option<String> {
+    synthesize_ipa(word)
 }
 
 pub fn syntax_profile() -> HeuristicSyntaxProfile {

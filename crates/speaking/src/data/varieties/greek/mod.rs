@@ -10,7 +10,8 @@ use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 use crate::syntax::HeuristicSyntaxProfile;
 use crate::variety::{
-    LinguisticVariety, NumberNameSet, VarietyImplementationStatus, VarietyStatus,
+    LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
+    VarietyStatus,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,11 @@ pub fn variety(id: &str) -> LinguisticVariety {
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_GREEK.into()),
+        syntax_analyzer: None,
+        syntax_heuristics: Some(syntax_profile()),
+        orthography_pronunciation: Some(OrthographyPronunciationRules {
+            synthesize_ipa: Some(synthesize_ipa_for_orthography),
+        }),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "μηδέν",
@@ -162,6 +168,14 @@ pub fn variety(id: &str) -> LinguisticVariety {
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
     }
+}
+
+fn synthesize_ipa_for_orthography(
+    word: &str,
+    variety: &LinguisticVariety,
+    _part_of_speech: Option<crate::syntax::PartOfSpeech>,
+) -> Option<String> {
+    synthesize_ipa_for_variety(word, &variety.id.0)
 }
 
 pub fn syntax_profile() -> HeuristicSyntaxProfile {

@@ -200,6 +200,9 @@ pub fn variety(id: &str) -> LinguisticVariety {
             crate::data::varieties::PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT.into(),
         ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
+        syntax_analyzer: Some(crate::syntax::parse_english_link_grammar),
+        syntax_heuristics: None,
+        orthography_pronunciation: None,
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "zero",

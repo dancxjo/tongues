@@ -9,6 +9,12 @@ use crate::phonetics::PhoneInventory;
 use crate::phonology::PhonemeInventory;
 use crate::prosody::ProsodyProfile;
 use crate::rules::{AllophoneRule, EpenthesisRule, Phonotactics};
+use crate::segment::TerminalPunctuation;
+use crate::syntax::{HeuristicSyntaxProfile, PartOfSpeech, SentenceSyntaxAnalysis};
+
+pub type SyntaxAnalyzer = fn(&[String], Option<TerminalPunctuation>) -> SentenceSyntaxAnalysis;
+pub type OrthographyIpaSynthesizer =
+    fn(&str, &LinguisticVariety, Option<PartOfSpeech>) -> Option<String>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Language {
@@ -39,6 +45,12 @@ pub struct LinguisticVariety {
     pub pronunciation_pipeline: Option<String>,
     #[serde(default)]
     pub syntax_profile: Option<String>,
+    #[serde(skip)]
+    pub syntax_analyzer: Option<SyntaxAnalyzer>,
+    #[serde(skip)]
+    pub syntax_heuristics: Option<HeuristicSyntaxProfile>,
+    #[serde(skip)]
+    pub orthography_pronunciation: Option<OrthographyPronunciationRules>,
     #[serde(default)]
     pub number_names: Option<NumberNameSet>,
     #[serde(default)]
@@ -54,6 +66,11 @@ pub struct LinguisticVariety {
     pub prosody_profile: Option<ProsodyProfile>,
     pub status: VarietyStatus,
     pub implementation_status: VarietyImplementationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrthographyPronunciationRules {
+    pub synthesize_ipa: Option<OrthographyIpaSynthesizer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

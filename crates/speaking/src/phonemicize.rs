@@ -7,20 +7,8 @@ use crate::data::lexicons::lexique;
 use crate::data::lexicons::{CMUDICT_ID, LEXIQUE383_ID};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::english::normalization as english_normalization;
-use crate::data::varieties::esperanto;
-use crate::data::varieties::french;
-use crate::data::varieties::german;
-use crate::data::varieties::greek;
-use crate::data::varieties::latin;
-use crate::data::varieties::sanskrit;
-use crate::data::varieties::spanish;
 use crate::data::varieties::{
-    ORTHOGRAPHY_PROFILE_ALIAS, ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT, ORTHOGRAPHY_PROFILE_ESPERANTO,
-    ORTHOGRAPHY_PROFILE_FRENCH, ORTHOGRAPHY_PROFILE_GERMAN, ORTHOGRAPHY_PROFILE_GREEK,
-    ORTHOGRAPHY_PROFILE_LATIN, ORTHOGRAPHY_PROFILE_SANSKRIT, ORTHOGRAPHY_PROFILE_SPANISH,
     PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT, PRONUNCIATION_PIPELINE_VARIETY_DATA,
-    SYNTAX_PROFILE_ENGLISH, SYNTAX_PROFILE_ESPERANTO, SYNTAX_PROFILE_FRENCH, SYNTAX_PROFILE_GERMAN,
-    SYNTAX_PROFILE_GREEK, SYNTAX_PROFILE_LATIN, SYNTAX_PROFILE_SANSKRIT, SYNTAX_PROFILE_SPANISH,
 };
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
@@ -36,11 +24,7 @@ use crate::realize::{
 use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunctuation};
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
-use crate::syntax::{
-    EnglishLinkGrammarParser, EsperantoLinkGrammarParser, FrenchLinkGrammarParser,
-    GermanLinkGrammarParser, GreekLinkGrammarParser, LatinLinkGrammarParser, LinkGrammarParser,
-    PartOfSpeech, SanskritLinkGrammarParser, SentenceSyntaxAnalysis, SpanishLinkGrammarParser,
-};
+use crate::syntax::{PartOfSpeech, SentenceSyntaxAnalysis};
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
     ConnectedSpeechRule, LinguisticVariety, OrthographicUnitKind, WeakFormFollowingContext,
@@ -51,76 +35,19 @@ const WORD_BOUNDARY_ID: &str = "boundary.word";
 const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
 
-type SyntaxParserFactory = fn() -> &'static dyn LinkGrammarParser;
 type LexiconPronouncer =
     fn(&WordToken, &LinguisticVariety, TokenPronunciationContext) -> Option<WordPronunciation>;
-type OrthographyPronouncer =
-    fn(&str, &LinguisticVariety, TokenPronunciationContext) -> Vec<PlannedPhoneme>;
 type PhonemicizerFactory = fn() -> Box<dyn Phonemicizer>;
-
-struct SyntaxProfileRegistration {
-    id: &'static str,
-    parser: SyntaxParserFactory,
-}
 
 struct LexiconRegistration {
     id: &'static str,
     pronounce: LexiconPronouncer,
 }
 
-struct OrthographyPronunciationRegistration {
-    id: &'static str,
-    pronounce: OrthographyPronouncer,
-}
-
 struct PronunciationPipelineRegistration {
     id: &'static str,
     phonemicizer: PhonemicizerFactory,
 }
-
-static ENGLISH_SYNTAX_PARSER: EnglishLinkGrammarParser = EnglishLinkGrammarParser;
-static ESPERANTO_SYNTAX_PARSER: EsperantoLinkGrammarParser = EsperantoLinkGrammarParser;
-static FRENCH_SYNTAX_PARSER: FrenchLinkGrammarParser = FrenchLinkGrammarParser;
-static SPANISH_SYNTAX_PARSER: SpanishLinkGrammarParser = SpanishLinkGrammarParser;
-static GERMAN_SYNTAX_PARSER: GermanLinkGrammarParser = GermanLinkGrammarParser;
-static GREEK_SYNTAX_PARSER: GreekLinkGrammarParser = GreekLinkGrammarParser;
-static LATIN_SYNTAX_PARSER: LatinLinkGrammarParser = LatinLinkGrammarParser;
-static SANSKRIT_SYNTAX_PARSER: SanskritLinkGrammarParser = SanskritLinkGrammarParser;
-
-const SYNTAX_PROFILE_REGISTRY: &[SyntaxProfileRegistration] = &[
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_ENGLISH,
-        parser: || &ENGLISH_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_ESPERANTO,
-        parser: || &ESPERANTO_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_FRENCH,
-        parser: || &FRENCH_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_SPANISH,
-        parser: || &SPANISH_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_GERMAN,
-        parser: || &GERMAN_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_GREEK,
-        parser: || &GREEK_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_LATIN,
-        parser: || &LATIN_SYNTAX_PARSER,
-    },
-    SyntaxProfileRegistration {
-        id: SYNTAX_PROFILE_SANSKRIT,
-        parser: || &SANSKRIT_SYNTAX_PARSER,
-    },
-];
 
 const LEXICON_REGISTRY: &[LexiconRegistration] = &[
     LexiconRegistration {
@@ -141,45 +68,6 @@ const PRONUNCIATION_PIPELINE_REGISTRY: &[PronunciationPipelineRegistration] = &[
     PronunciationPipelineRegistration {
         id: PRONUNCIATION_PIPELINE_VARIETY_DATA,
         phonemicizer: variety_data_phonemicizer,
-    },
-];
-
-const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration] = &[
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT,
-        pronounce: planned_candidate_from_alias_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_ESPERANTO,
-        pronounce: planned_candidate_from_esperanto_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_FRENCH,
-        pronounce: planned_candidate_from_french_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_GERMAN,
-        pronounce: planned_candidate_from_german_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_GREEK,
-        pronounce: planned_candidate_from_greek_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_LATIN,
-        pronounce: planned_candidate_from_latin_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_SANSKRIT,
-        pronounce: planned_candidate_from_sanskrit_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_SPANISH,
-        pronounce: planned_candidate_from_spanish_orthography,
-    },
-    OrthographyPronunciationRegistration {
-        id: ORTHOGRAPHY_PROFILE_ALIAS,
-        pronounce: planned_candidate_from_alias_orthography,
     },
 ];
 
@@ -218,13 +106,6 @@ pub fn phonemicizer_for_variety(
         .find(|registration| registration.id == pipeline_id)
         .map(|registration| (registration.phonemicizer)())
         .ok_or(PhonemicizeError::UnsupportedVariety { variety: canonical })
-}
-
-fn syntax_parser_for_profile(profile_id: &str) -> Option<&'static dyn LinkGrammarParser> {
-    SYNTAX_PROFILE_REGISTRY
-        .iter()
-        .find(|registration| registration.id == profile_id)
-        .map(|registration| (registration.parser)())
 }
 
 pub trait PronunciationPipeline {
@@ -280,8 +161,18 @@ pub trait PronunciationPipeline {
         missing_pronunciation(word, context, "missing variety-data pronunciation")
     }
 
-    fn syntax_parser(&self, _variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        None
+    fn syntax_analysis(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+        variety: &LinguisticVariety,
+    ) -> Option<SentenceSyntaxAnalysis> {
+        if let Some(analyzer) = variety.syntax_analyzer {
+            return Some(analyzer(words, terminal));
+        }
+        variety
+            .syntax_heuristics
+            .map(|profile| crate::syntax::parse_heuristic_link_grammar(words, terminal, profile))
     }
 
     fn annotate_boundaries(
@@ -383,9 +274,9 @@ pub trait PronunciationPipeline {
             .iter()
             .map(|word| word.normalized.clone())
             .collect::<Vec<_>>();
+        let terminal = final_terminal(&boundaries);
         let syntax = self
-            .syntax_parser(&variety)
-            .map(|parser| parser.parse(&normalized_words, final_terminal(&boundaries)))
+            .syntax_analysis(&normalized_words, terminal, &variety)
             .unwrap_or_else(|| SentenceSyntaxAnalysis {
                 tokens: normalized_words
                     .iter()
@@ -399,7 +290,7 @@ pub trait PronunciationPipeline {
                     })
                     .collect(),
                 link_parses: Vec::new(),
-                terminal: final_terminal(&boundaries),
+                terminal,
             });
         self.annotate_boundaries(&mut boundaries, &words, &syntax, &variety);
         let prosody = prosody_from_boundaries(self, &boundaries, &words, &variety);
@@ -651,13 +542,6 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         boundary_tokens(text, words, variety)
     }
 
-    fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        variety
-            .syntax_profile
-            .as_deref()
-            .and_then(syntax_parser_for_profile)
-    }
-
     fn annotate_boundaries(
         &self,
         boundaries: &mut Vec<SpeechBoundaryToken>,
@@ -824,13 +708,6 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
         variety: &LinguisticVariety,
     ) -> Vec<SpeechBoundaryToken> {
         boundary_tokens(text, words, variety)
-    }
-
-    fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        variety
-            .syntax_profile
-            .as_deref()
-            .and_then(syntax_parser_for_profile)
     }
 
     fn weak_form_resolver(
@@ -1293,27 +1170,9 @@ fn has_alternative_question_coordination(
     if has_paired_alternative_coordination(words, profile) {
         return true;
     }
-    let normalized_words = words
-        .iter()
-        .map(|word| word.normalized.clone())
-        .collect::<Vec<_>>();
-    let syntax =
-        EnglishLinkGrammarParser.parse(&normalized_words, Some(TerminalPunctuation::Question));
-    let has_coordination_parse = syntax.primary_parse().is_some_and(|parse| {
-        parse.links.iter().any(|link| {
-            link.kind == crate::syntax::SyntacticLinkKind::Coordination
-                && (normalized_words
-                    .get(link.left)
-                    .is_some_and(|word| profile.alternative_coordinators.contains(word))
-                    || normalized_words
-                        .get(link.right)
-                        .is_some_and(|word| profile.alternative_coordinators.contains(word)))
-        })
-    });
     if !words
         .first()
         .is_some_and(|word| profile.yes_no_openers.contains(&word.normalized))
-        || !has_coordination_parse
     {
         return false;
     }
@@ -1637,19 +1496,15 @@ fn planned_candidate_from_orthography_profile(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    let Some(profile_id) = variety
-        .orthography
-        .as_ref()
-        .and_then(|orthography| orthography.pronunciation.as_deref())
-    else {
-        return planned_candidate_from_variety_aliases(normalized, variety);
-    };
+    if let Some(ipa) = variety
+        .orthography_pronunciation
+        .and_then(|rules| rules.synthesize_ipa)
+        .and_then(|synthesize| synthesize(normalized, variety, context.part_of_speech))
+    {
+        return planned_candidate_from_variety_ipa(&ipa, variety);
+    }
 
-    ORTHOGRAPHY_PRONUNCIATION_REGISTRY
-        .iter()
-        .find(|registration| registration.id == profile_id)
-        .map(|registration| (registration.pronounce)(normalized, variety, context))
-        .unwrap_or_else(|| planned_candidate_from_variety_aliases(normalized, variety))
+    planned_candidate_from_variety_aliases(normalized, variety)
 }
 
 fn lexique_pronunciation(
@@ -1705,91 +1560,6 @@ fn cmudict_pronunciation(
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
     })
-}
-
-fn planned_candidate_from_french_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = french::synthesize_ipa_with_pos(normalized, context.part_of_speech) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_german_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = german::synthesize_ipa(normalized) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_greek_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = greek::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_esperanto_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = esperanto::synthesize_ipa(normalized) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_latin_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = latin::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_sanskrit_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = sanskrit::synthesize_ipa(normalized) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_spanish_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = spanish::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
-        return Vec::new();
-    };
-    planned_candidate_from_variety_ipa(&ipa, variety)
-}
-
-fn planned_candidate_from_alias_orthography(
-    normalized: &str,
-    variety: &LinguisticVariety,
-    _context: TokenPronunciationContext,
-) -> Vec<PlannedPhoneme> {
-    planned_candidate_from_variety_aliases(normalized, variety)
 }
 
 fn planned_candidate_from_variety_ipa(
@@ -3532,7 +3302,7 @@ fn find_word_index_at(c_idx: usize, words: &[WordToken]) -> Option<usize> {
 pub fn english_normalize_numbers(text: &str) -> String {
     let words = tokenize_words(text);
     let words_str: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
-    let syntax = crate::syntax::EnglishLinkGrammarParser.parse(&words_str, None);
+    let syntax = crate::syntax::parse_english_link_grammar(&words_str, None);
 
     let char_vec: Vec<char> = text.chars().collect();
     let mut result = String::new();
@@ -5247,29 +5017,21 @@ mod tests {
     }
 
     #[test]
-    fn builtin_profile_ids_resolve_through_registries() {
+    fn builtin_varieties_expose_runtime_data_hooks() {
         for variety in builtin_varieties() {
-            if let Some(profile_id) = variety.syntax_profile.as_deref() {
+            assert!(
+                variety.syntax_analyzer.is_some() || variety.syntax_heuristics.is_some(),
+                "{} should carry syntax analysis data",
+                variety.id.0
+            );
+            if variety.language.0 != "en" {
                 assert!(
-                    syntax_parser_for_profile(profile_id).is_some(),
-                    "{} declares unknown syntax profile `{}`",
-                    variety.id.0,
-                    profile_id
-                );
-            }
-
-            if let Some(profile_id) = variety
-                .orthography
-                .as_ref()
-                .and_then(|orthography| orthography.pronunciation.as_deref())
-            {
-                assert!(
-                    ORTHOGRAPHY_PRONUNCIATION_REGISTRY
-                        .iter()
-                        .any(|registration| registration.id == profile_id),
-                    "{} declares unknown orthography pronunciation profile `{}`",
-                    variety.id.0,
-                    profile_id
+                    variety
+                        .orthography_pronunciation
+                        .and_then(|rules| rules.synthesize_ipa)
+                        .is_some(),
+                    "{} should carry an orthography IPA synthesizer",
+                    variety.id.0
                 );
             }
 

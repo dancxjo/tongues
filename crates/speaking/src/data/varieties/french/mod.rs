@@ -12,7 +12,7 @@ use crate::syntax::HeuristicSyntaxProfile;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
-    VarietyImplementationStatus, VarietyStatus,
+    OrthographyPronunciationRules, VarietyImplementationStatus, VarietyStatus,
 };
 
 const SEGMENTS: &[&str] = &[
@@ -37,6 +37,11 @@ pub fn variety() -> LinguisticVariety {
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_FRENCH.into()),
+        syntax_analyzer: None,
+        syntax_heuristics: Some(syntax_profile()),
+        orthography_pronunciation: Some(OrthographyPronunciationRules {
+            synthesize_ipa: Some(synthesize_ipa_for_orthography),
+        }),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
@@ -99,6 +104,14 @@ pub fn variety() -> LinguisticVariety {
         status: VarietyStatus::Attested,
         implementation_status: VarietyImplementationStatus::Complete,
     }
+}
+
+fn synthesize_ipa_for_orthography(
+    word: &str,
+    _variety: &LinguisticVariety,
+    part_of_speech: Option<PartOfSpeech>,
+) -> Option<String> {
+    synthesize_ipa_with_pos(word, part_of_speech)
 }
 
 pub fn syntax_profile() -> HeuristicSyntaxProfile {
