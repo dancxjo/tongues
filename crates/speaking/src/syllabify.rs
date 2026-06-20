@@ -381,21 +381,30 @@ pub fn syllabification_provenance() -> EvidenceProvenance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::english::variety;
+    use crate::data::variety_by_code;
     use crate::ids::VarietyId;
     use crate::phonemicize::{
         PhonemicizeRequest, Phonemicizer, VarietyDataPhonemicizer, phone_display_symbol,
     };
 
     fn syllables_for(text: &str) -> Vec<Syllable> {
+        syllables_for_variety(text, "en-US", "en-US-GA")
+    }
+
+    fn syllables_for_variety(
+        text: &str,
+        request_variety: &str,
+        syllable_variety: &str,
+    ) -> Vec<Syllable> {
         let output = VarietyDataPhonemicizer
             .phonemicize(&PhonemicizeRequest {
                 text: text.into(),
-                variety: VarietyId("en-US".into()),
+                variety: VarietyId(request_variety.into()),
                 style: None,
             })
             .expect("phonemicize");
-        syllabify_phones(&output.phones, &variety("en-US-GA"))
+        let variety = variety_by_code(syllable_variety).expect("syllable variety");
+        syllabify_phones(&output.phones, &variety)
     }
 
     #[test]
@@ -406,6 +415,34 @@ mod tests {
     #[test]
     fn atlas_keeps_illegal_tl_split_out_of_onset() {
         assert_eq!(syllables_to_ipa(&syllables_for("atlas")), "ˈæt.ləs");
+    }
+
+    #[test]
+    fn latin_qu_assigns_realized_kw_kv_to_next_onset() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "virumque",
+                "la-Classical",
+                "la-Classical"
+            )),
+            "wiˈrum.kwe"
+        );
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety(
+                "virumque",
+                "la-Ecclesiastical",
+                "la-Ecclesiastical"
+            )),
+            "viˈrum.kve"
+        );
+    }
+
+    #[test]
+    fn koine_greek_assigns_realized_delta_rho_to_next_onset() {
+        assert_eq!(
+            syllables_to_ipa(&syllables_for_variety("Ἄνδρα", "grc-Koine", "grc-Koine")),
+            "ˈan.ðra"
+        );
     }
 
     #[test]

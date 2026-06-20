@@ -394,7 +394,10 @@ fn starts_nasal_sequence(chars: &[char], index: usize, sequence: &[char], nasals
 }
 
 fn trim_silent_finals(ipa: &str) -> String {
-    ipa.trim_end_matches(['ə', 's', 't', 'd']).to_string()
+    if let Some(stem) = ipa.strip_suffix('ə') {
+        return stem.to_string();
+    }
+    ipa.trim_end_matches(['s', 't', 'd']).to_string()
 }
 
 fn add_final_stress(ipa: &str) -> String {
@@ -520,6 +523,7 @@ mod tests {
     #[test]
     fn french_synthesizes_common_words() {
         assert_eq!(synthesize_ipa("bonjour").as_deref(), Some("/bɔ̃ˈʒuʁ/"));
+        assert_eq!(synthesize_ipa("pense").as_deref(), Some("/ˈpɑ̃s/"));
     }
 
     #[test]

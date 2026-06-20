@@ -4501,6 +4501,20 @@ mod tests {
     }
 
     #[test]
+    fn french_famous_line_keeps_pense_final_s() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let output = phonemicizer
+            .phonemicize(&request("Je pense, donc je suis.", "fr-FR-Standard"))
+            .expect("French famous line should phonemicize");
+
+        assert_eq!(
+            phoneme_symbols(&output),
+            ["ʒ", "p", "ɑ̃", "s", "d", "ɔ̃", "k", "ʒ", "s", "ɥ", "i"]
+        );
+    }
+
+    #[test]
     fn french_connected_speech_adds_liaison_and_deletes_final_schwa() {
         let phonemicizer =
             phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
