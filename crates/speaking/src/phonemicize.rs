@@ -73,11 +73,11 @@ pub trait PronunciationPipeline {
     fn variety(&self, canonical_variety: &VarietyId)
     -> Result<LinguisticVariety, PhonemicizeError>;
 
-    fn text_normalizer(&self, text: &str) -> String {
-        self.normalize_numbers(text)
+    fn text_normalizer(&self, text: &str, variety: &VarietyId) -> String {
+        self.normalize_numbers(text, variety)
     }
 
-    fn normalize_numbers(&self, text: &str) -> String {
+    fn normalize_numbers(&self, text: &str, _variety: &VarietyId) -> String {
         text.to_string()
     }
 
@@ -193,7 +193,7 @@ pub trait PronunciationPipeline {
 
         let canonical_variety = self.canonical_variety_id(&input.variety)?;
         let variety = self.variety(&canonical_variety)?;
-        let normalized_text = self.text_normalizer(&input.text);
+        let normalized_text = self.text_normalizer(&input.text, &canonical_variety);
         let words = self.orthographic_tokenizer(&normalized_text);
         let mut boundaries = self.boundary_extractor(&normalized_text, &words);
         let normalized_words = words
@@ -443,11 +443,11 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         Ok(variety)
     }
 
-    fn normalize_numbers(&self, text: &str) -> String {
+    fn normalize_numbers(&self, text: &str, _variety: &VarietyId) -> String {
         english_normalize_numbers(text)
     }
 
-    fn text_normalizer(&self, text: &str) -> String {
+    fn text_normalizer(&self, text: &str, _variety: &VarietyId) -> String {
         english_normalize_numbers(&english_spoken_form(text))
     }
 
@@ -598,6 +598,10 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
         variety_by_code(&canonical_variety.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical_variety.clone(),
         })
+    }
+
+    fn normalize_numbers(&self, text: &str, variety: &VarietyId) -> String {
+        normalize_small_numbers_for_variety(text, variety)
     }
 
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
