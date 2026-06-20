@@ -594,8 +594,8 @@ pub fn prepare_dataset_with_progress(
                             config.seed,
                             &format!("source:{}", path.display()),
                         ));
-                        let raw =
-                            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+                        let raw = fs::read_to_string(&path)
+                            .with_context(|| format!("reading {}", path.display()))?;
                         let seams_sentences = seams_sentences_from_text(&raw);
                         let discrepancies = if config.include_naive_seams_discrepancies {
                             build_naive_seams_discrepancies(
@@ -672,7 +672,8 @@ pub fn prepare_dataset_with_progress(
             .par_iter()
             .enumerate()
             .map(|(index, manifest)| {
-                let examples: Vec<Head2PhonesTrainingExample> = read_jsonl(&manifest.examples_path)?;
+                let examples: Vec<Head2PhonesTrainingExample> =
+                    read_jsonl(&manifest.examples_path)?;
                 let discrepancies: Vec<NaiveSeamsDiscrepancy> = manifest
                     .discrepancies_path
                     .as_ref()

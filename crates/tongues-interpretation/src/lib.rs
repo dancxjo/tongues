@@ -90,16 +90,22 @@ fn counted_progress_style(template: &str) -> indicatif::ProgressStyle {
     indicatif::ProgressStyle::default_bar()
         .template(template)
         .expect("valid template")
-        .with_key("human_pos", |state: &indicatif::ProgressState, w: &mut dyn Write| {
-            write!(w, "{}", format_count(state.pos())).expect("write to progress key")
-        })
-        .with_key("human_len", |state: &indicatif::ProgressState, w: &mut dyn Write| {
-            let len = state
-                .len()
-                .map(format_count)
-                .unwrap_or_else(|| "?".to_string());
-            write!(w, "{len}").expect("write to progress key")
-        })
+        .with_key(
+            "human_pos",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                write!(w, "{}", format_count(state.pos())).expect("write to progress key")
+            },
+        )
+        .with_key(
+            "human_len",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                let len = state
+                    .len()
+                    .map(format_count)
+                    .unwrap_or_else(|| "?".to_string());
+                write!(w, "{len}").expect("write to progress key")
+            },
+        )
         .progress_chars("#>-")
 }
 
@@ -971,14 +977,19 @@ fn prepare_dataset_inner(
             for event in prepared.progress {
                 progress(event);
             }
-            writeln!(utterance_writer, "{}", serde_json::to_string(&prepared.row)?)?;
+            writeln!(
+                utterance_writer,
+                "{}",
+                serde_json::to_string(&prepared.row)?
+            )?;
             utterance_writer.flush()?;
             row_by_id.insert(prepared.row.utterance_id.clone(), prepared.row.clone());
             rows.push(prepared.row);
         }
     }
     utterance_writer.flush()?;
-    let imported = import_wiktionary_audio_rows(out, config, feature_bins, &prepare_pool, progress)?;
+    let imported =
+        import_wiktionary_audio_rows(out, config, feature_bins, &prepare_pool, progress)?;
     if !imported.is_empty() {
         for row in &imported {
             writeln!(utterance_writer, "{}", serde_json::to_string(row)?)?;
@@ -3868,8 +3879,14 @@ fn prepare_asr_batch_row(
         phrase_boundary_labels: phrase_boundary_labels_for(row, max_frames),
         phoneme_sequence: ctc_target_within_input(phoneme_targets(row, phoneme_vocab), input_len),
         phone_sequence: ctc_target_within_input(phone_targets(row, phone_vocab), input_len),
-        place_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Place), input_len),
-        manner_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Manner), input_len),
+        place_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Place),
+            input_len,
+        ),
+        manner_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Manner),
+            input_len,
+        ),
         voicing_sequence: ctc_target_within_input(
             feature_targets(row, FeatureAxis::Voicing),
             input_len,
@@ -3878,7 +3895,10 @@ fn prepare_asr_batch_row(
             feature_targets(row, FeatureAxis::Syllabic),
             input_len,
         ),
-        height_sequence: ctc_target_within_input(feature_targets(row, FeatureAxis::Height), input_len),
+        height_sequence: ctc_target_within_input(
+            feature_targets(row, FeatureAxis::Height),
+            input_len,
+        ),
         backness_sequence: ctc_target_within_input(
             feature_targets(row, FeatureAxis::Backness),
             input_len,
@@ -3887,13 +3907,19 @@ fn prepare_asr_batch_row(
             feature_targets(row, FeatureAxis::Rounding),
             input_len,
         ),
-        prev_word_sequence: ctc_target_within_input(previous_word_targets(row, word_vocab), input_len),
+        prev_word_sequence: ctc_target_within_input(
+            previous_word_targets(row, word_vocab),
+            input_len,
+        ),
         current_word_sequence: ctc_target_within_input(
             current_word_targets(row, word_vocab),
             input_len,
         ),
         next_word_sequence: ctc_target_within_input(next_word_targets(row, word_vocab), input_len),
-        masked_word_sequence: ctc_target_within_input(masked_word_targets(row, word_vocab), input_len),
+        masked_word_sequence: ctc_target_within_input(
+            masked_word_targets(row, word_vocab),
+            input_len,
+        ),
         masked_word_phoneme_sequence: ctc_target_within_input(
             masked_word_phoneme_targets(row, phoneme_vocab),
             input_len,
@@ -5041,9 +5067,11 @@ pub fn evaluate<B: Backend>(
             });
         stats.merge(chunk_stats);
     }
-    let precision = stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fp).max(1) as f32;
+    let precision =
+        stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fp).max(1) as f32;
     let recall = stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fn).max(1) as f32;
-    let repair_precision = stats.repair_tp as f32 / (stats.repair_tp + stats.repair_fp).max(1) as f32;
+    let repair_precision =
+        stats.repair_tp as f32 / (stats.repair_tp + stats.repair_fp).max(1) as f32;
     let repair_recall = stats.repair_tp as f32 / (stats.repair_tp + stats.repair_fn).max(1) as f32;
     Ok(EvalReport {
         examples: eval_rows.len(),

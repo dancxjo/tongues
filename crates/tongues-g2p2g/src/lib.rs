@@ -8,7 +8,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use burn::module::AutodiffModule;
-use textplots::{Chart, Plot, Shape};
 use burn::nn::{
     transformer::{
         TransformerDecoder, TransformerDecoderConfig, TransformerDecoderInput, TransformerEncoder,
@@ -23,6 +22,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use textplots::{Chart, Plot, Shape};
 
 use tongues_core::{Vocab, BOS_ID, EOS_ID, PAD_ID};
 use tongues_data::{collate_batch, make_seq2seq_example, Lexeme, Seq2SeqExample, Task};
@@ -361,11 +361,7 @@ pub fn train_epoch<B: AutodiffBackend, R: Rng>(
             recent_losses.pop_front();
         }
         let spark = sparkline(&recent_losses.iter().copied().collect::<Vec<_>>());
-        pb.set_message(format!(
-            "{:.4}  {}",
-            total_loss / n_batches as f32,
-            spark
-        ));
+        pb.set_message(format!("{:.4}  {}", total_loss / n_batches as f32, spark));
         pb.inc(1);
     }
 
@@ -445,11 +441,7 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
             recent_losses.pop_front();
         }
         let spark = sparkline(&recent_losses.iter().copied().collect::<Vec<_>>());
-        pb.set_message(format!(
-            "{:.4}  {}",
-            total_loss / n_batches as f32,
-            spark
-        ));
+        pb.set_message(format!("{:.4}  {}", total_loss / n_batches as f32, spark));
         pb.inc(1);
     }
 
@@ -716,8 +708,7 @@ fn seq2seq_eval_batch_stats<B: Backend>(
                     .iter()
                     .enumerate()
                     .max_by(|(_, left), (_, right)| {
-                        left.partial_cmp(right)
-                            .unwrap_or(std::cmp::Ordering::Equal)
+                        left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
                     })
                     .map(|(idx, _)| idx as u32)
                     .unwrap_or(0);
@@ -783,17 +774,8 @@ fn print_loss_chart(train_history: &[(f32, f32)], val_history: &[(f32, f32)]) {
         .chain(val_history.iter())
         .map(|&(_, y)| y)
         .collect();
-    let y_min = (all_y
-        .iter()
-        .copied()
-        .fold(f32::INFINITY, f32::min)
-        * 0.95)
-        .max(0.0);
-    let y_max = all_y
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max)
-        * 1.05;
+    let y_min = (all_y.iter().copied().fold(f32::INFINITY, f32::min) * 0.95).max(0.0);
+    let y_max = all_y.iter().copied().fold(f32::NEG_INFINITY, f32::max) * 1.05;
     let y_max = if (y_max - y_min).abs() < 1e-6 {
         y_min + 0.01
     } else {
@@ -850,16 +832,22 @@ fn counted_progress_style(template: &str) -> indicatif::ProgressStyle {
     indicatif::ProgressStyle::default_bar()
         .template(template)
         .expect("valid template")
-        .with_key("human_pos", |state: &indicatif::ProgressState, w: &mut dyn Write| {
-            write!(w, "{}", format_count(state.pos())).expect("write to progress key")
-        })
-        .with_key("human_len", |state: &indicatif::ProgressState, w: &mut dyn Write| {
-            let len = state
-                .len()
-                .map(format_count)
-                .unwrap_or_else(|| "?".to_string());
-            write!(w, "{len}").expect("write to progress key")
-        })
+        .with_key(
+            "human_pos",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                write!(w, "{}", format_count(state.pos())).expect("write to progress key")
+            },
+        )
+        .with_key(
+            "human_len",
+            |state: &indicatif::ProgressState, w: &mut dyn Write| {
+                let len = state
+                    .len()
+                    .map(format_count)
+                    .unwrap_or_else(|| "?".to_string());
+                write!(w, "{len}").expect("write to progress key")
+            },
+        )
         .progress_chars("#>-")
 }
 

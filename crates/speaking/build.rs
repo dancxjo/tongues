@@ -27,7 +27,9 @@ fn ensure_cmudict(out_path: &Path) {
         return;
     }
 
-    if let Some(source_path) = Path::new(CMUDICT_SOURCE).parent().map(|_| Path::new(CMUDICT_SOURCE))
+    if let Some(source_path) = Path::new(CMUDICT_SOURCE)
+        .parent()
+        .map(|_| Path::new(CMUDICT_SOURCE))
         && source_path.exists()
     {
         fs::copy(source_path, out_path).expect("copying bundled cmudict.dict into OUT_DIR");
@@ -38,7 +40,12 @@ fn ensure_cmudict(out_path: &Path) {
     let url = CMUDICT_URL;
 
     let download_status = Command::new("curl")
-        .args(["-fsSL", "-o", tmp_path.to_str().expect("valid temp path"), url])
+        .args([
+            "-fsSL",
+            "-o",
+            tmp_path.to_str().expect("valid temp path"),
+            url,
+        ])
         .status()
         .or_else(|_| {
             Command::new("wget")

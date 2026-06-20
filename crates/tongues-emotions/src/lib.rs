@@ -73,7 +73,7 @@ impl Default for EmotionTrainConfig {
             weight_decay: 1e-4,
             batch_size: 64,
             epochs: 50,
-            early_stopping_patience: 8,
+            early_stopping_patience: 20,
             seed: 0,
         }
     }
@@ -362,6 +362,10 @@ pub fn train(data: &Path, out: &Path, config: &EmotionTrainConfig) -> Result<f32
         } else {
             patience += 1;
             if patience >= config.early_stopping_patience {
+                println!(
+                    "Early stopping after epoch {epoch}: validation loss did not improve for {} epochs",
+                    config.early_stopping_patience
+                );
                 break;
             }
         }

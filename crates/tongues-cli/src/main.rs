@@ -944,6 +944,29 @@ enum Head2PhonesCommands {
         /// Raw rolling UTF-8 text buffer
         buffer: String,
     },
+
+    /// Run prepared examples through the head2phones model with timings
+    Eval {
+        /// Directory containing the head2phones model
+        #[arg(long, default_value = "models/head2phones/v0")]
+        model: PathBuf,
+
+        /// Prepared data directory containing split JSONL files
+        #[arg(long, default_value = "datasets/head2phones/v0")]
+        data: PathBuf,
+
+        /// Prepared split to evaluate
+        #[arg(long, default_value = "test")]
+        split: String,
+
+        /// Maximum examples to run
+        #[arg(long, default_value_t = 24)]
+        limit: usize,
+
+        /// Random seed for sampling examples
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1113,6 +1136,10 @@ enum EmotionCommands {
         /// Learning rate
         #[arg(long)]
         learning_rate: Option<f32>,
+
+        /// Early stopping patience (epochs with no validation-loss improvement)
+        #[arg(long)]
+        patience: Option<usize>,
 
         /// Random seed
         #[arg(long)]
@@ -2926,6 +2953,13 @@ fn run_head2phones_command(command: Head2PhonesCommands, device_arg: DeviceArg) 
             variety,
             buffer,
         } => cmd_head2phones_infer(&model, &variety, &buffer, device_arg),
+        Head2PhonesCommands::Eval {
+            model,
+            data,
+            split,
+            limit,
+            seed,
+        } => cmd_head2phones_eval(&model, &data, &split, limit, seed, device_arg),
     }
 }
 
@@ -3222,6 +3256,164 @@ fn cmd_head2phones_infer(
     };
     println!("{output}");
     Ok(())
+}
+
+fn cmd_head2phones_eval(
+    model_dir: &Path,
+    data: &Path,
+    split: &str,
+    limit: usize,
+    seed: u64,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    anyhow::ensure!(limit > 0, "--limit must be greater than zero");
+    let manifest =
+        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
+    anyhow::ensure!(
+        manifest.family == tongues_head2phones::FAMILY,
+        "expected head2phones manifest, found `{}`",
+        manifest.family
+    );
+
+    let split_path = data.join(format!("{split}.jsonl"));
+    let rows: Vec<tongues_head2phones::Head2PhonesTrainingExample> =
+        read_jsonl_as(&split_path).with_context(|| format!("loading {}", split_path.display()))?;
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "head2phones split is empty: {}",
+        split_path.display()
+    );
+    let sample_count = rows.len().min(limit);
+    let mut sample_indexes: Vec<usize> = (0..rows.len()).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    sample_indexes.shuffle(&mut rng);
+    sample_indexes.truncate(sample_count);
+
+    println!("Head2phones eval");
+    println!("  model: {}", model_dir.display());
+    println!("  data: {}", data.display());
+    println!(
+        "  split: {} ({} rows, running {} random examples, seed={})",
+        split,
+        format_count(rows.len()),
+        format_count(sample_count),
+        seed
+    );
+
+    let start_config = std::time::Instant::now();
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    println!(
+        "  metadata: {} tokens loaded in {:.1} ms",
+        format_count(vocab.size()),
+        elapsed_ms(start_config.elapsed())
+    );
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_head2phones_eval::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &rows,
+                &sample_indexes,
+            )
+        }
+        DeviceArg::Cuda => {
+            let device = CudaDevice::default();
+            println!("  device: CUDA GPU");
+            run_head2phones_eval::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &rows,
+                &sample_indexes,
+            )
+        }
+    }
+}
+
+fn run_head2phones_eval<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    rows: &[tongues_head2phones::Head2PhonesTrainingExample],
+    sample_indexes: &[usize],
+) -> Result<()> {
+    let start_load = std::time::Instant::now();
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!(
+        "  weights: loaded in {:.1} ms",
+        elapsed_ms(start_load.elapsed())
+    );
+    println!();
+
+    let mut total_prediction = Duration::ZERO;
+    let mut exact = 0usize;
+    for (sample_index, &row_index) in sample_indexes.iter().enumerate() {
+        let row = &rows[row_index];
+        let input = head2phones_eval_input(row);
+        let start_prediction = std::time::Instant::now();
+        let prediction = predict_sentence_boundary(&model, &input, vocab, device);
+        let elapsed = start_prediction.elapsed();
+        total_prediction += elapsed;
+        let passed = prediction == row.output;
+        exact += usize::from(passed);
+
+        println!(
+            "#{:02} row={} {} {:.1} ms source={:?} variety={}",
+            sample_index + 1,
+            format_count(row_index + 1),
+            if passed { "PASS" } else { "MISS" },
+            elapsed_ms(elapsed),
+            row.row_source,
+            row.variety
+        );
+        println!("  buffer: {}", compact_display(&row.input, 140));
+        if let Some(head) = &row.head {
+            println!("  head:   {}", compact_display(head, 140));
+        }
+        println!("  gold:   {}", compact_display(&row.output, 180));
+        println!("  pred:   {}", compact_display(&prediction, 180));
+        println!();
+    }
+
+    let mean_prediction = total_prediction.as_secs_f64() * 1000.0 / sample_indexes.len() as f64;
+    println!(
+        "Summary: exact={}/{} mean_prediction={:.1} ms total_prediction={:.1} ms",
+        format_count(exact),
+        format_count(sample_indexes.len()),
+        mean_prediction,
+        elapsed_ms(total_prediction)
+    );
+    Ok(())
+}
+
+fn head2phones_eval_input(row: &tongues_head2phones::Head2PhonesTrainingExample) -> String {
+    if row.input_has_variety {
+        tongues_head2phones::format_input_for_variety(&row.variety, &row.input)
+    } else {
+        tongues_head2phones::format_input_without_variety(&row.input)
+    }
+}
+
+fn elapsed_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn compact_display(value: &str, max_chars: usize) -> String {
+    let mut compact = value.replace('\n', "\\n");
+    if compact.chars().count() <= max_chars {
+        return compact;
+    }
+    compact = compact.chars().take(max_chars.saturating_sub(3)).collect();
+    compact.push_str("...");
+    compact
 }
 
 fn cmd_sentence_parser_infer(
@@ -5637,6 +5829,7 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
             epochs,
             batch_size,
             learning_rate,
+            patience,
             seed,
         } => {
             let mut config = tongues_emotions::EmotionTrainConfig::default();
@@ -5649,6 +5842,9 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
             if let Some(learning_rate) = learning_rate {
                 config.learning_rate = learning_rate;
             }
+            if let Some(patience) = patience {
+                config.early_stopping_patience = patience;
+            }
             if let Some(seed) = seed {
                 config.seed = seed;
             }
@@ -5659,6 +5855,13 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
                 out.join("model-epoch-N.json").display()
             );
             println!("  best model: {}", out.join("model.json").display());
+            println!(
+                "  schedule: max_epochs={} early_stopping_patience={} batch_size={} learning_rate={}",
+                format_count(config.epochs),
+                format_count(config.early_stopping_patience),
+                format_count(config.batch_size),
+                config.learning_rate
+            );
             let best_loss = tongues_emotions::train(&data, &out, &config)?;
             println!(
                 "Emotion training complete. Best validation loss: {:.4}",

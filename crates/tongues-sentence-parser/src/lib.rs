@@ -399,8 +399,11 @@ pub fn prepare_dataset_with_progress(
             .enumerate()
             .map(|(file_index, path)| {
                 let path = path.clone();
-                let shard_id =
-                    format!("{:03}-source-{}", file_index + 1, sanitize_checkpoint_id(&path));
+                let shard_id = format!(
+                    "{:03}-source-{}",
+                    file_index + 1,
+                    sanitize_checkpoint_id(&path)
+                );
                 let label = path.display().to_string();
                 let mut shard_progress = Vec::new();
                 let mut collect = |event| shard_progress.push(event);

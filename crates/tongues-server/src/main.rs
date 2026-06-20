@@ -415,7 +415,10 @@ async fn list_files(
     let mut target = state.workspace_root.join(&relative);
     let mut list_relative = relative.clone();
     if target.is_file() {
-        list_relative = relative.parent().unwrap_or_else(|| FsPath::new("")).to_path_buf();
+        list_relative = relative
+            .parent()
+            .unwrap_or_else(|| FsPath::new(""))
+            .to_path_buf();
         target = state.workspace_root.join(&list_relative);
     }
 
@@ -912,7 +915,10 @@ fn parent_web_path(path: &FsPath) -> Option<String> {
 }
 
 fn download_url_for(path: &FsPath) -> String {
-    format!("/api/files/download/{}", url_path_escape(&path_to_web(path)))
+    format!(
+        "/api/files/download/{}",
+        url_path_escape(&path_to_web(path))
+    )
 }
 
 fn artifacts_for_job(workspace_root: &FsPath, args: &[String]) -> Vec<JobArtifact> {

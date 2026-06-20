@@ -53,7 +53,9 @@ Train the classifier:
 ```sh
 just emotions train \
   --data datasets/emotions/v0 \
-  --out models/emotions/v0
+  --out models/emotions/v0 \
+  --epochs 100 \
+  --patience 25
 ```
 
 Before training starts the CLI prints the checkpoint paths:
@@ -65,6 +67,11 @@ Before training starts the CLI prints the checkpoint paths:
 | `model.json` | Best validation-loss model. |
 | `model_config.json` | Labels and feature dimensions. |
 | `manifest.json` | Generic model-family artifact metadata. |
+
+Training uses precomputed pooled log-mel features from `prepare`, so each epoch
+updates a compact linear classifier instead of decoding WAV files again. If the
+run stops before `--epochs`, early stopping ended training after `--patience`
+epochs without validation-loss improvement.
 
 ## Evaluate And Infer
 

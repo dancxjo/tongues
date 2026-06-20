@@ -451,11 +451,12 @@ impl StyleTts2OnnxBackend {
                 backend_error(format!("failed to build decoder hidden input: {error}"))
             })?
             .upcast();
-        let style = Tensor::from_array((vec![1_i64, STYLE_VECTOR_DIMS as i64], style_vector.clone()))
-            .map_err(|error| {
-                backend_error(format!("failed to build decoder style input: {error}"))
-            })?
-            .upcast();
+        let style =
+            Tensor::from_array((vec![1_i64, STYLE_VECTOR_DIMS as i64], style_vector.clone()))
+                .map_err(|error| {
+                    backend_error(format!("failed to build decoder style input: {error}"))
+                })?
+                .upcast();
         let speed = Tensor::from_array((Vec::<i64>::new(), vec![self.speed]))
             .map_err(|error| {
                 backend_error(format!("failed to build decoder speed input: {error}"))
@@ -525,7 +526,9 @@ impl StyleTts2OnnxBackend {
             .or_else(|| reference_audio_uri_from_style(request.style.as_ref()))
             .map(str::to_string);
 
-        let reference_features = if let Some(speaking::StyleSource::Embedding { values, .. }) = request.style.as_ref().map(|s| &s.source) {
+        let reference_features = if let Some(speaking::StyleSource::Embedding { values, .. }) =
+            request.style.as_ref().map(|s| &s.source)
+        {
             validate_style_vector(values)?;
             values.clone()
         } else {
