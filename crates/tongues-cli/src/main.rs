@@ -3240,6 +3240,13 @@ fn cmd_head2phones_infer(
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
     let input = tongues_head2phones::format_input_for_variety(variety, buffer);
+    let input_len = vocab.encode_string(&input).len();
+    anyhow::ensure!(
+        input_len <= model_config.max_seq_len,
+        "head2phones input encodes to {} tokens, exceeding model max_seq_len={}",
+        input_len,
+        model_config.max_seq_len
+    );
     let output = match device_arg {
         DeviceArg::Cpu => {
             let device = NdArrayDevice::Cpu;
@@ -3283,29 +3290,50 @@ fn cmd_head2phones_eval(
         "head2phones split is empty: {}",
         split_path.display()
     );
-    let sample_count = rows.len().min(limit);
-    let mut sample_indexes: Vec<usize> = (0..rows.len()).collect();
+
+    let start_config = std::time::Instant::now();
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+
+    let mut shuffled_indexes: Vec<usize> = (0..rows.len()).collect();
     let mut rng = StdRng::seed_from_u64(seed);
-    sample_indexes.shuffle(&mut rng);
-    sample_indexes.truncate(sample_count);
+    shuffled_indexes.shuffle(&mut rng);
+    let mut sample_indexes = Vec::with_capacity(limit);
+    let mut skipped_long_inputs = 0usize;
+    for row_index in shuffled_indexes {
+        let row = &rows[row_index];
+        let input_len = vocab.encode_string(&head2phones_eval_input(row)).len();
+        if input_len > model_config.max_seq_len {
+            skipped_long_inputs += 1;
+            continue;
+        }
+        sample_indexes.push(row_index);
+        if sample_indexes.len() >= limit {
+            break;
+        }
+    }
+    anyhow::ensure!(
+        !sample_indexes.is_empty(),
+        "no sampled head2phones examples fit model max_seq_len={} in {}",
+        model_config.max_seq_len,
+        split_path.display()
+    );
 
     println!("Head2phones eval");
     println!("  model: {}", model_dir.display());
     println!("  data: {}", data.display());
     println!(
-        "  split: {} ({} rows, running {} random examples, seed={})",
+        "  split: {} ({} rows, running {} random examples, seed={}, skipped {} overlong while sampling)",
         split,
         format_count(rows.len()),
-        format_count(sample_count),
-        seed
+        format_count(sample_indexes.len()),
+        seed,
+        format_count(skipped_long_inputs)
     );
-
-    let start_config = std::time::Instant::now();
-    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
-    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
     println!(
-        "  metadata: {} tokens loaded in {:.1} ms",
+        "  metadata: {} tokens, max_seq_len={} loaded in {:.1} ms",
         format_count(vocab.size()),
+        format_count(model_config.max_seq_len),
         elapsed_ms(start_config.elapsed())
     );
 
