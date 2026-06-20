@@ -338,11 +338,6 @@ pub fn attach_default_pronunciations(stream: &mut TimedWordStream) {
     attach_pronunciations_for_variety(stream, &VarietyId(DEFAULT_WORD_STREAM_VARIETY.into()));
 }
 
-#[deprecated(note = "use attach_default_pronunciations or attach_pronunciations_for_variety")]
-pub fn attach_cmudict_pronunciations(stream: &mut TimedWordStream) {
-    attach_default_pronunciations(stream);
-}
-
 pub fn attach_pronunciations_for_variety(stream: &mut TimedWordStream, variety: &VarietyId) {
     let Ok(phonemicizer) = phonemicizer_for_variety(variety) else {
         return;

@@ -2448,10 +2448,7 @@ fn spell_ordinal_from_variety(value: u128, variety: &LinguisticVariety) -> Optio
             spell_ordinal_from_variety(value % 10, variety)?
         ));
     }
-    Some(format!(
-        "{}th",
-        spell_cardinal_from_variety(value, variety)?
-    ))
+    None
 }
 
 fn digit_count_power(mut value: u128) -> u128 {
@@ -2463,44 +2460,39 @@ fn digit_count_power(mut value: u128) -> u128 {
     power
 }
 
-fn decimal_separator_name(variety: &LinguisticVariety) -> &str {
+fn decimal_separator_name(variety: &LinguisticVariety) -> Option<&str> {
     variety
         .number_names
         .as_ref()
         .and_then(|names| names.decimal_separator_name.as_deref())
-        .unwrap_or("point")
 }
 
-fn range_separator_name(variety: &LinguisticVariety) -> &str {
+fn range_separator_name(variety: &LinguisticVariety) -> Option<&str> {
     variety
         .number_names
         .as_ref()
         .and_then(|names| names.range_separator_name.as_deref())
-        .unwrap_or("to")
 }
 
-fn product_separator_name(variety: &LinguisticVariety) -> &str {
+fn product_separator_name(variety: &LinguisticVariety) -> Option<&str> {
     variety
         .number_names
         .as_ref()
         .and_then(|names| names.product_separator_name.as_deref())
-        .unwrap_or("by")
 }
 
-fn slash_separator_name(variety: &LinguisticVariety) -> &str {
+fn slash_separator_name(variety: &LinguisticVariety) -> Option<&str> {
     variety
         .number_names
         .as_ref()
         .and_then(|names| names.slash_separator_name.as_deref())
-        .unwrap_or("slash")
 }
 
-fn date_separator_name(variety: &LinguisticVariety) -> &str {
+fn date_separator_name(variety: &LinguisticVariety) -> Option<&str> {
     variety
         .number_names
         .as_ref()
         .and_then(|names| names.date_separator_name.as_deref())
-        .unwrap_or("-")
 }
 
 fn currency_major_singular(variety: &LinguisticVariety) -> Option<&str> {
@@ -2568,7 +2560,7 @@ fn spell_clock_time(
     } else if minutes < 10 {
         format!(
             "{} {}",
-            names.clock_leading_zero_name.as_deref().unwrap_or("0"),
+            names.clock_leading_zero_name.as_deref()?,
             spell_out(minutes, variety)
         )
     } else {
@@ -2577,18 +2569,18 @@ fn spell_clock_time(
     Some(format!("{} {}", spell_out(hour, variety), minute_text))
 }
 
-fn spell_dotted_number(first: u128, segments: &[String], variety: &LinguisticVariety) -> String {
-    let point = variety
-        .number_names
-        .as_ref()
-        .and_then(|names| names.decimal_separator_name.as_deref())
-        .unwrap_or("point");
+fn spell_dotted_number(
+    first: u128,
+    segments: &[String],
+    variety: &LinguisticVariety,
+) -> Option<String> {
+    let point = decimal_separator_name(variety)?;
     let mut parts = vec![spell_out(first, variety)];
     for segment in segments {
         parts.push(point.to_string());
         parts.push(spell_digit_sequence(segment, variety));
     }
-    parts.join(" ")
+    Some(parts.join(" "))
 }
 
 fn spell_year(year: u128, variety: &LinguisticVariety) -> String {
@@ -2610,7 +2602,7 @@ fn spell_year(year: u128, variety: &LinguisticVariety) -> String {
 }
 
 fn spell_ordinal(value: u128, variety: &LinguisticVariety) -> String {
-    spell_ordinal_from_variety(value, variety).unwrap_or_else(|| format!("{}th", value))
+    spell_ordinal_from_variety(value, variety).unwrap_or_else(|| value.to_string())
 }
 
 fn ordinal_at(
@@ -2627,18 +2619,29 @@ fn ordinal_at(
     if digits.is_empty() || index + 1 >= characters.len() {
         return None;
     }
-    let suffix = [characters[index], characters[index + 1]]
+    let value = digits.parse::<u128>().ok()?;
+    let suffixes = &variety.number_names.as_ref()?.ordinal_suffixes;
+    let Some(end) = suffixes
         .iter()
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if !matches!(suffix.as_str(), "st" | "nd" | "rd" | "th") {
+        .filter(|ordinal| u128::from(ordinal.value) == value)
+        .flat_map(|ordinal| ordinal.suffixes.iter())
+        .find_map(|suffix| {
+            let suffix_len = suffix.chars().count();
+            let end = index + suffix_len;
+            (end <= characters.len()
+                && characters[index..end]
+                    .iter()
+                    .collect::<String>()
+                    .eq_ignore_ascii_case(suffix))
+            .then_some(end)
+        })
+    else {
         return None;
-    }
-    let end = index + 2;
+    };
     if end < characters.len() && characters[end].is_alphanumeric() {
         return None;
     }
-    Some((spell_ordinal(digits.parse::<u128>().ok()?, variety), end))
+    Some((spell_ordinal(value, variety), end))
 }
 
 fn leading_decimal_at(
@@ -2675,7 +2678,7 @@ fn leading_decimal_at(
         return Some((
             format!(
                 "{} {} {}",
-                decimal_separator_name(variety),
+                decimal_separator_name(variety)?,
                 spell_digit_sequence(&digits, variety),
                 spell_unit(variety, 2, &suffix_word.to_lowercase()).unwrap_or_default()
             ),
@@ -2686,7 +2689,7 @@ fn leading_decimal_at(
     Some((
         format!(
             "{} {}",
-            decimal_separator_name(variety),
+            decimal_separator_name(variety)?,
             spell_digit_sequence(&digits, variety)
         ),
         index,
@@ -2725,7 +2728,7 @@ fn numeric_product_at(
         format!(
             "{} {} {}",
             spell_out(left, variety),
-            product_separator_name(variety),
+            product_separator_name(variety)?,
             spell_out(right, variety)
         ),
         index,
@@ -2832,16 +2835,15 @@ fn dashed_number_at(
             spell_digit_sequence(&groups[1], variety),
             day_spelled,
         ];
-        return Some((
-            parts.join(&format!(" {} ", date_separator_name(variety))),
-            index,
-        ));
+        let date_separator = date_separator_name(variety)?;
+        return Some((parts.join(&format!(" {} ", date_separator)), index));
     }
+    let range_separator = range_separator_name(variety)?;
     let parts = groups
         .iter()
         .map(|group| Some(spell_out(group.parse::<u128>().ok()?, variety)))
         .collect::<Option<Vec<_>>>()?;
-    let mut text = parts.join(&format!(" {} ", range_separator_name(variety)));
+    let mut text = parts.join(&format!(" {} ", range_separator));
     let end = if let Some((unit, suffix_end)) = suffix {
         text.push(' ');
         text.push_str(&unit);
@@ -2878,6 +2880,7 @@ fn slash_number_at(
         return None;
     }
 
+    let slash_separator = slash_separator_name(variety)?;
     let parts = groups
         .iter()
         .enumerate()
@@ -2890,10 +2893,7 @@ fn slash_number_at(
             }
         })
         .collect::<Option<Vec<_>>>()?;
-    Some((
-        parts.join(&format!(" {} ", slash_separator_name(variety))),
-        index,
-    ))
+    Some((parts.join(&format!(" {} ", slash_separator)), index))
 }
 
 fn phone_number_digits_at(characters: &[char], start: usize) -> Option<(String, usize)> {
@@ -3426,18 +3426,24 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
 
                                 if decimal_suffix_valid {
                                     let unit_str = decimal_suffix_word.to_lowercase();
-                                    result.push_str(&format!(
-                                        "{} {}",
-                                        spell_dotted_number(val, &segments, variety),
-                                        spell_unit(variety, val, &unit_str).unwrap_or_default()
-                                    ));
-                                    idx = decimal_suffix_temp;
-                                    continue;
+                                    if let Some(dotted) =
+                                        spell_dotted_number(val, &segments, variety)
+                                    {
+                                        result.push_str(&format!(
+                                            "{} {}",
+                                            dotted,
+                                            spell_unit(variety, val, &unit_str).unwrap_or_default()
+                                        ));
+                                        idx = decimal_suffix_temp;
+                                        continue;
+                                    }
                                 }
 
-                                result.push_str(&spell_dotted_number(val, &segments, variety));
-                                idx = decimal_temp;
-                                continue;
+                                if let Some(dotted) = spell_dotted_number(val, &segments, variety) {
+                                    result.push_str(&dotted);
+                                    idx = decimal_temp;
+                                    continue;
+                                }
                             }
                         }
 
@@ -3457,8 +3463,10 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
     result
 }
 
-pub fn english_spoken_form(text: &str) -> String {
-    let variety = variety_by_code("en-US").expect("built-in English variety");
+pub fn spoken_form_for_variety(text: &str, variety: &VarietyId) -> String {
+    let Some(variety) = variety_by_code(&variety.0) else {
+        return text.to_string();
+    };
     let out = apply_spoken_form_rewrites(text, &variety);
     replace_number_abbreviation_from_variety_data(&out, &variety)
 }
@@ -3467,10 +3475,6 @@ pub fn english_spoken_form(text: &str) -> String {
 fn english_normalize_numbers(text: &str) -> String {
     let variety = variety_by_code("en-US").expect("built-in English variety");
     normalize_general_numbers(text, &variety)
-}
-
-fn replace_number_abbreviation(text: &str) -> String {
-    replace_conditional_number_abbreviation(text, "No.", "Number")
 }
 
 fn replace_conditional_number_abbreviation(text: &str, from: &str, to: &str) -> String {
@@ -3624,15 +3628,21 @@ mod tests {
     #[test]
     fn english_spoken_form_expands_shared_pronunciation_rewrites() {
         assert_eq!(
-            english_spoken_form("Dr. Smith saw No. 5 at 3.14 p.m."),
+            spoken_form_for_variety(
+                "Dr. Smith saw No. 5 at 3.14 p.m.",
+                &VarietyId("en-US".into())
+            ),
             "Doctor Smith saw Number 5 at 3.14 p m"
         );
         assert_eq!(
-            english_spoken_form("The Loadstone Rock"),
+            spoken_form_for_variety("The Loadstone Rock", &VarietyId("en-US".into())),
             "The Lodestone Rock"
         );
         assert_eq!(
-            english_spoken_form("He lives on Sansome St. The house is blue."),
+            spoken_form_for_variety(
+                "He lives on Sansome St. The house is blue.",
+                &VarietyId("en-US".into())
+            ),
             "He lives on Sansome St. The house is blue."
         );
     }
@@ -4827,6 +4837,31 @@ mod tests {
                 "{} should declare text normalization data",
                 variety.id.0
             );
+            if matches!(
+                variety.text_normalization.number_normalization,
+                NumberNormalizationProfile::General
+            ) {
+                let names = variety
+                    .number_names
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{} should declare number names", variety.id.0));
+                assert!(
+                    names.decimal_separator_name.is_some()
+                        && names.clock_zero_minute_name.is_some()
+                        && names.clock_leading_zero_name.is_some()
+                        && names.range_separator_name.is_some()
+                        && names.product_separator_name.is_some()
+                        && names.slash_separator_name.is_some()
+                        && names.date_separator_name.is_some()
+                        && names.currency_major_singular.is_some()
+                        && names.currency_major_plural.is_some()
+                        && names.currency_minor_singular.is_some()
+                        && names.currency_minor_plural.is_some()
+                        && !names.ordinal_suffixes.is_empty(),
+                    "{} should declare every general number-normalization label it uses",
+                    variety.id.0
+                );
+            }
             assert!(
                 variety.syntax_analyzer.is_some() || variety.syntax_heuristics.is_some(),
                 "{} should carry syntax analysis data",

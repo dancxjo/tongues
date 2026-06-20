@@ -332,6 +332,13 @@ fn english_number_names() -> crate::variety::NumberNameSet {
         name: name.into(),
     })
     .collect();
+    names.ordinal_suffixes = (0..=99)
+        .map(|value| crate::variety::OrdinalSuffixName {
+            value,
+            suffixes: vec![english_ordinal_suffix(value).into()],
+            name: spell_english_ordinal_value(value),
+        })
+        .collect();
     names.decimal_separator_name = Some("point".into());
     names.clock_zero_minute_name = Some("o'clock".into());
     names.clock_leading_zero_name = Some("oh".into());
@@ -344,6 +351,71 @@ fn english_number_names() -> crate::variety::NumberNameSet {
     names.currency_minor_singular = Some("cent".into());
     names.currency_minor_plural = Some("cents".into());
     names
+}
+
+fn english_ordinal_suffix(value: u32) -> &'static str {
+    if matches!(value % 100, 11..=13) {
+        return "th";
+    }
+    match value % 10 {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
+    }
+}
+
+fn spell_english_ordinal_value(value: u32) -> String {
+    match value {
+        0 => "zeroth".into(),
+        1 => "first".into(),
+        2 => "second".into(),
+        3 => "third".into(),
+        4 => "fourth".into(),
+        5 => "fifth".into(),
+        6 => "sixth".into(),
+        7 => "seventh".into(),
+        8 => "eighth".into(),
+        9 => "ninth".into(),
+        10 => "tenth".into(),
+        11 => "eleventh".into(),
+        12 => "twelfth".into(),
+        13 => "thirteenth".into(),
+        14 => "fourteenth".into(),
+        15 => "fifteenth".into(),
+        16 => "sixteenth".into(),
+        17 => "seventeenth".into(),
+        18 => "eighteenth".into(),
+        19 => "nineteenth".into(),
+        20 => "twentieth".into(),
+        30 => "thirtieth".into(),
+        40 => "fortieth".into(),
+        50 => "fiftieth".into(),
+        60 => "sixtieth".into(),
+        70 => "seventieth".into(),
+        80 => "eightieth".into(),
+        90 => "ninetieth".into(),
+        _ if value < 100 && value % 10 != 0 => format!(
+            "{}-{}",
+            spell_english_cardinal_tens(value - (value % 10)),
+            spell_english_ordinal_value(value % 10)
+        ),
+        _ => value.to_string(),
+    }
+}
+
+fn spell_english_cardinal_tens(value: u32) -> &'static str {
+    match value {
+        20 => "twenty",
+        30 => "thirty",
+        40 => "forty",
+        50 => "fifty",
+        60 => "sixty",
+        70 => "seventy",
+        80 => "eighty",
+        90 => "ninety",
+        _ => "",
+    }
 }
 
 fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
