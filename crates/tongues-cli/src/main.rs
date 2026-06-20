@@ -3502,6 +3502,25 @@ fn speak_head2phones_sentence<B: Backend>(
 ) -> Result<()> {
     let input = tongues_head2phones::format_input_for_variety(variety, sentence);
     let input_len = vocab.encode_string(&input).len();
+    if input_len > model_config.max_seq_len {
+        let chunks = split_long_sentence(sentence, variety, vocab, model_config.max_seq_len)?;
+        if chunks.len() > 1 || (chunks.len() == 1 && chunks[0] != sentence) {
+            for chunk in chunks {
+                speak_head2phones_sentence(
+                    &chunk,
+                    variety,
+                    head2phones,
+                    vocab,
+                    model_config,
+                    device,
+                    piper,
+                    sink,
+                )?;
+            }
+            return Ok(());
+        }
+    }
+
     anyhow::ensure!(
         input_len <= model_config.max_seq_len,
         "head2phones input encodes to {} tokens, exceeding model max_seq_len={}",
@@ -3551,6 +3570,99 @@ fn speak_head2phones_sentence<B: Backend>(
         })?;
     }
     Ok(())
+}
+
+fn split_long_sentence(
+    sentence: &str,
+    variety: &str,
+    vocab: &Vocab,
+    max_seq_len: usize,
+) -> Result<Vec<String>> {
+    let words: Vec<&str> = sentence.split_whitespace().collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut best_i = None;
+
+    // Priorities:
+    // 1: Semicolon, Colon, Dash/Em-dash (ending with ';', ':', '—', '--')
+    // 2: Comma (ending with ',')
+    // 3: Conjunctions ('and', 'but', 'or', 'so', 'because', 'when', 'although', 'while', 'if', 'then')
+    // 4: Any space
+    for priority in 1..=4 {
+        for i in (1..words.len()).rev() {
+            let prefix = words[..i].join(" ");
+            let input = tongues_head2phones::format_input_for_variety(variety, &prefix);
+            if vocab.encode_string(&input).len() <= max_seq_len {
+                let matches_priority = match priority {
+                    1 => {
+                        let last_word = words[i - 1];
+                        last_word.ends_with(';')
+                            || last_word.ends_with(':')
+                            || last_word.ends_with('—')
+                            || last_word.ends_with("--")
+                    }
+                    2 => words[i - 1].ends_with(','),
+                    3 => {
+                        let w_prev = words[i - 1].to_lowercase();
+                        let w_curr = words[i].to_lowercase();
+                        let conj = |w: &str| {
+                            matches!(
+                                w.trim_matches(|c: char| !c.is_alphabetic()),
+                                "and" | "but"
+                                    | "or"
+                                    | "so"
+                                    | "because"
+                                    | "when"
+                                    | "although"
+                                    | "while"
+                                    | "if"
+                                    | "then"
+                            )
+                        };
+                        conj(&w_prev) || conj(&w_curr)
+                    }
+                    4 => true,
+                    _ => unreachable!(),
+                };
+                if matches_priority {
+                    best_i = Some(i);
+                    break;
+                }
+            }
+        }
+        if best_i.is_some() {
+            break;
+        }
+    }
+
+    if let Some(i) = best_i {
+        let first_half = words[..i].join(" ");
+        let second_half = words[i..].join(" ");
+        Ok(vec![first_half, second_half])
+    } else {
+        // Fallback: split in half by character length
+        let mid = sentence.len() / 2;
+        let mut split_idx = mid;
+        while !sentence.is_char_boundary(split_idx) && split_idx > 0 {
+            split_idx -= 1;
+        }
+        if split_idx == 0 {
+            split_idx = mid;
+            while !sentence.is_char_boundary(split_idx) && split_idx < sentence.len() {
+                split_idx += 1;
+            }
+        }
+        if split_idx > 0 && split_idx < sentence.len() {
+            Ok(vec![
+                sentence[..split_idx].to_string(),
+                sentence[split_idx..].to_string(),
+            ])
+        } else {
+            Ok(vec![sentence.to_string()])
+        }
+    }
 }
 
 fn synthesize_rule_based_fallback(
@@ -3686,7 +3798,6 @@ fn next_piper_symbol_from_ipa(
         (":", ":", false),
         ("!", "!", false),
         ("?", "?", false),
-        (".", ".", false),
     ] {
         if let Some(remaining) = rest.strip_prefix(ipa) {
             if vowel && !base.ends_with(['0', '1', '2']) {

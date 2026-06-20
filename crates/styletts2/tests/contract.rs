@@ -1,5 +1,5 @@
 use speaking::{
-    BoundaryKind, EnglishPhonemicizer, EvidenceProvenance, EvidenceSource, FeatureBundle,
+    BoundaryKind, EvidenceProvenance, EvidenceSource, FeatureBundle,
     PauseKind, PhoneId, PhoneToken, PhonemeId, PhonemeToken, PhonemicizeRequest, Phonemicizer,
     ProsodicLabel, ProsodicLabelKind, ProsodyTrack, SpeakerId, Spec, SpeechBoundaryToken, StyleRef,
     StyleSource, TerminalPunctuation, TextSpan, TimeSpan, UtteranceId, UtterancePlan, VarietyId,
@@ -909,7 +909,8 @@ fn preflight_rejects_unknown_symbols_before_backend_runtime() {
 }
 
 fn styletts2_text_from_english(text: &str) -> String {
-    let phonemicized = EnglishPhonemicizer
+    let phonemicized = speaking::phonemicizer_for_variety(&VarietyId("en-US".into()))
+        .expect("load en-US phonemicizer")
         .phonemicize(&PhonemicizeRequest {
             text: text.into(),
             variety: VarietyId("en-US".into()),
