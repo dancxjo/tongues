@@ -9,10 +9,10 @@ use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::varieties::esperanto;
 use crate::data::varieties::french;
 use crate::data::varieties::german;
-use crate::data::varieties::greek::{self, GreekVariety};
-use crate::data::varieties::latin::{self, LatinVariety};
+use crate::data::varieties::greek;
+use crate::data::varieties::latin;
 use crate::data::varieties::sanskrit;
-use crate::data::varieties::spanish::{self, SpanishVariety};
+use crate::data::varieties::spanish;
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -1728,10 +1728,7 @@ fn planned_candidate_from_greek_orthography(
     variety: &LinguisticVariety,
     _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    let Some(greek_variety) = GreekVariety::from_id(&variety.id.0) else {
-        return Vec::new();
-    };
-    let Some(ipa) = greek::synthesize_ipa(normalized, greek_variety) else {
+    let Some(ipa) = greek::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
         return Vec::new();
     };
     planned_candidate_from_variety_ipa(&ipa, variety)
@@ -1753,10 +1750,7 @@ fn planned_candidate_from_latin_orthography(
     variety: &LinguisticVariety,
     _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    let Some(latin_variety) = LatinVariety::from_id(&variety.id.0) else {
-        return Vec::new();
-    };
-    let Some(ipa) = latin::synthesize_ipa(normalized, latin_variety) else {
+    let Some(ipa) = latin::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
         return Vec::new();
     };
     planned_candidate_from_variety_ipa(&ipa, variety)
@@ -1778,10 +1772,7 @@ fn planned_candidate_from_spanish_orthography(
     variety: &LinguisticVariety,
     _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    let Some(spanish_variety) = SpanishVariety::from_id(&variety.id.0) else {
-        return Vec::new();
-    };
-    let Some(ipa) = spanish::synthesize_ipa(normalized, spanish_variety) else {
+    let Some(ipa) = spanish::synthesize_ipa_for_variety(normalized, &variety.id.0) else {
         return Vec::new();
     };
     planned_candidate_from_variety_ipa(&ipa, variety)

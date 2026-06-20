@@ -40,13 +40,13 @@ const THETA: PhoneId = PhoneId::borrowed("ipa.phone.θ");
 const W: PhoneId = PhoneId::borrowed("ipa.phone.w");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpanishVariety {
+enum SpanishVariety {
     Castilian,
     LatinAmericanStandard,
 }
 
 impl SpanishVariety {
-    pub fn from_id(id: &str) -> Option<Self> {
+    fn from_id(id: &str) -> Option<Self> {
         match id {
             "es" | "es-ES" | "es-ES-Castilian" => Some(Self::Castilian),
             "es-419" | "es-419-Standard" | "es-LatAm" => Some(Self::LatinAmericanStandard),
@@ -54,14 +54,14 @@ impl SpanishVariety {
         }
     }
 
-    pub fn id(self) -> &'static str {
+    fn id(self) -> &'static str {
         match self {
             Self::Castilian => "es-ES-Castilian",
             Self::LatinAmericanStandard => "es-419-Standard",
         }
     }
 
-    pub fn accent_tag(self) -> &'static str {
+    fn accent_tag(self) -> &'static str {
         match self {
             Self::Castilian => "Castilian",
             Self::LatinAmericanStandard => "LatAm",
@@ -333,7 +333,12 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
     }
 }
 
-pub fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
+pub fn synthesize_ipa_for_variety(word: &str, variety_id: &str) -> Option<String> {
+    let variety = SpanishVariety::from_id(variety_id)?;
+    synthesize_ipa(word, variety)
+}
+
+fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
     let normalized = normalize_spanish_word(word)?;
     let chars = normalized;
     let stress_vowel = stress_vowel_index(&chars)?;
@@ -443,7 +448,7 @@ pub fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
     (!ipa.is_empty()).then_some(format!("/{ipa}/"))
 }
 
-pub fn synthetic_pronunciations(word: &str) -> Vec<(SpanishVariety, String)> {
+fn synthetic_pronunciations(word: &str) -> Vec<(SpanishVariety, String)> {
     [
         SpanishVariety::Castilian,
         SpanishVariety::LatinAmericanStandard,

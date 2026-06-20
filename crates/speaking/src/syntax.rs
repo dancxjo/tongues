@@ -462,8 +462,7 @@ fn build_multilingual_links(
         {
             continue;
         }
-        if let Some(subject_index) = multilingual_subject_before(words, profile, predicate_index)
-        {
+        if let Some(subject_index) = multilingual_subject_before(words, profile, predicate_index) {
             push_link(
                 &mut links,
                 link(
@@ -473,9 +472,10 @@ fn build_multilingual_links(
                     0.72,
                 ),
             );
-            if let Some(object_index) = (subject_index + 1..predicate_index).rev().find(|index| {
-                multilingual_is_object_candidate(profile, &words[*index])
-            }) {
+            if let Some(object_index) = (subject_index + 1..predicate_index)
+                .rev()
+                .find(|index| multilingual_is_object_candidate(profile, &words[*index]))
+            {
                 push_link(
                     &mut links,
                     link(
@@ -494,7 +494,7 @@ fn build_multilingual_links(
                 .skip(predicate_index + 1)
                 .take(5)
                 .find_map(|(index, word)| {
-                    multilingual_is_object_candidate(profile, word).then_some(index)
+                    multilingual_is_nominal_head(profile, word).then_some(index)
                 })
             {
                 push_link(
@@ -522,8 +522,7 @@ fn multilingual_subject_before(
         .rev()
         .find(|index| multilingual_is_pronoun(profile, &words[*index]))
         .or_else(|| {
-            (start..predicate_index)
-                .find(|index| multilingual_is_subject(profile, &words[*index]))
+            (start..predicate_index).find(|index| multilingual_is_subject(profile, &words[*index]))
         })
 }
 
@@ -1486,8 +1485,7 @@ fn multilingual_is_likely_verb(
             multilingual_is_pronoun(profile, previous)
                 && !multilingual_is_determiner(profile, previous)
                 && !multilingual_is_object_pronoun(profile, previous)
-        })
-            && has_suffix(word, profile.subject_verb_suffixes))
+        }) && has_suffix(word, profile.subject_verb_suffixes))
 }
 
 fn multilingual_is_nominal(profile: HeuristicSyntaxProfile, word: &str) -> bool {
@@ -1559,9 +1557,10 @@ mod tests {
         kind: SyntacticLinkKind,
     ) {
         assert!(
-            analysis.primary_parse().is_some_and(|parse| parse.links.iter().any(
-                |link| link.left == left && link.right == right && link.kind == kind
-            )),
+            analysis.primary_parse().is_some_and(|parse| parse
+                .links
+                .iter()
+                .any(|link| link.left == left && link.right == right && link.kind == kind)),
             "expected {kind:?} link {left}->{right} in {analysis:#?}"
         );
     }

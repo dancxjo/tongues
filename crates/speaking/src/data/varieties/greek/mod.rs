@@ -14,14 +14,14 @@ use crate::variety::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GreekVariety {
+enum GreekVariety {
     Modern,
     Ancient,
     Koine,
 }
 
 impl GreekVariety {
-    pub fn from_id(id: &str) -> Option<Self> {
+    fn from_id(id: &str) -> Option<Self> {
         match id {
             "el" | "el-GR" | "el-GR-Standard" => Some(Self::Modern),
             "grc" | "grc-Attic" | "grc-Ancient" => Some(Self::Ancient),
@@ -30,7 +30,7 @@ impl GreekVariety {
         }
     }
 
-    pub fn id(self) -> &'static str {
+    fn id(self) -> &'static str {
         match self {
             Self::Modern => "el-GR-Standard",
             Self::Ancient => "grc-Attic",
@@ -248,7 +248,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         adverbs: &["δεν", "μη", "πολύ", "πολυ", "καλά", "καλα"],
         adverb_suffixes: &[],
         adjectives: &[],
-        adjective_suffixes: &["ος", "η", "ο"],
+        adjective_suffixes: &["ος", "η"],
         verbs: &[
             "λέγω",
             "λεγω",
@@ -274,7 +274,12 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
     }
 }
 
-pub fn synthesize_ipa(word: &str, variety: GreekVariety) -> Option<String> {
+pub fn synthesize_ipa_for_variety(word: &str, variety_id: &str) -> Option<String> {
+    let variety = GreekVariety::from_id(variety_id)?;
+    synthesize_ipa(word, variety)
+}
+
+fn synthesize_ipa(word: &str, variety: GreekVariety) -> Option<String> {
     let normalized = normalize_greek_word(word)?;
     let stress_position = normalized
         .iter()

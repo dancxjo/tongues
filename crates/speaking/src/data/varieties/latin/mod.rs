@@ -14,13 +14,13 @@ use crate::variety::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LatinVariety {
+enum LatinVariety {
     Classical,
     Ecclesiastical,
 }
 
 impl LatinVariety {
-    pub fn from_id(id: &str) -> Option<Self> {
+    fn from_id(id: &str) -> Option<Self> {
         match id {
             "la" | "la-Classical" => Some(Self::Classical),
             "la-Ecclesiastical" | "la-Church" => Some(Self::Ecclesiastical),
@@ -28,7 +28,7 @@ impl LatinVariety {
         }
     }
 
-    pub fn id(self) -> &'static str {
+    fn id(self) -> &'static str {
         match self {
             Self::Classical => "la-Classical",
             Self::Ecclesiastical => "la-Ecclesiastical",
@@ -184,7 +184,12 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
     }
 }
 
-pub fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
+pub fn synthesize_ipa_for_variety(word: &str, variety_id: &str) -> Option<String> {
+    let variety = LatinVariety::from_id(variety_id)?;
+    synthesize_ipa(word, variety)
+}
+
+fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
     let chars = normalize_latin_word(word)?;
     let vowel_index = stress_vowel_index(&chars)?;
     let mut ipa = String::new();
