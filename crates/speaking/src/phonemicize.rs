@@ -3,6 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
+use crate::data::lexicons::lexique;
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::varieties::esperanto;
@@ -1414,6 +1415,17 @@ fn planned_candidates_from_cmu(
         .collect()
 }
 
+fn planned_candidates_from_ipa(
+    variety: &LinguisticVariety,
+    candidates: Vec<String>,
+) -> Vec<Vec<PlannedPhoneme>> {
+    candidates
+        .into_iter()
+        .map(|candidate| planned_candidate_from_variety_ipa(&candidate, variety))
+        .filter(|candidate| !candidate.is_empty())
+        .collect()
+}
+
 fn planned_phoneme_from_cmu(variety_id: &str, cmu: &CmuPhoneme) -> PlannedPhoneme {
     let raw_symbol = cmu.raw_symbol();
     PlannedPhoneme {
@@ -1442,6 +1454,12 @@ fn variety_data_pronunciation_for_word(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
+    if variety.language.0 == "fr"
+        && let Some(pronunciation) = lexique_pronunciation(word, variety, context)
+    {
+        return pronunciation;
+    }
+
     let candidate = match variety.language.0.as_str() {
         "eo" => planned_candidate_from_esperanto_orthography(&word.normalized, variety),
         "fr" => planned_candidate_from_french_orthography(&word.normalized, variety),
@@ -1488,6 +1506,34 @@ fn variety_data_pronunciation_for_word(
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
     }
+}
+
+fn lexique_pronunciation(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    let entry = lexique::bundled().lookup_entry(&word.normalized);
+    if entry.candidates.is_empty() {
+        return None;
+    }
+    let candidates = planned_candidates_from_ipa(variety, entry.candidates);
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(WordPronunciation {
+        candidates,
+        status: entry.status,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Lexicon,
+            method: format!("lexique383 {} lookup", status_label(entry.status)),
+            version: Some(entry.source.into()),
+        },
+        warnings: Vec::new(),
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    })
 }
 
 fn planned_candidate_from_french_orthography(
@@ -2605,6 +2651,15 @@ fn confidence_for_status(status: PronunciationStatus) -> f32 {
         PronunciationStatus::Normalized => 0.95,
         PronunciationStatus::Guessed => 0.55,
         PronunciationStatus::Missing => 0.0,
+    }
+}
+
+fn status_label(status: PronunciationStatus) -> &'static str {
+    match status {
+        PronunciationStatus::Exact => "exact",
+        PronunciationStatus::Normalized => "normalized",
+        PronunciationStatus::Guessed => "guessed",
+        PronunciationStatus::Missing => "missing",
     }
 }
 
