@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::{CMUDICT_ID, LexiconAdapter, LexiconLookup, PronunciationStatus};
+use crate::data::lexicons::{self, CMUDICT_ID, LexiconAdapter, LexiconLookup, PronunciationStatus};
 use crate::data::notation::PronunciationNotation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +81,22 @@ pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
     lookup,
 }];
 
+struct RuntimeCmudictFiles {
+    base: &'static str,
+    variant_pronunciations: &'static str,
+}
+
+const RUNTIME_FILES: &[RuntimeCmudictFiles] = &[
+    RuntimeCmudictFiles {
+        base: "cmudict.dict",
+        variant_pronunciations: "cmudict.vp",
+    },
+    RuntimeCmudictFiles {
+        base: "cmudict-0.7b",
+        variant_pronunciations: "cmudict-0.7b.vp",
+    },
+];
+
 pub fn lookup(word: &str) -> LexiconLookup {
     let entry = bundled().lookup_entry(word);
     LexiconLookup {
@@ -128,31 +143,19 @@ mmm M
     }
 
     fn load_from_runtime_path() -> Option<Self> {
-        let home = if let Some(home_var) = std::env::var_os("MORTAR_SEA_HOME") {
-            PathBuf::from(home_var)
-        } else {
-            dirs::data_local_dir()?.join("mortar-sea")
-        };
-
-        let mut base_path = home.join("models/speaking/en-us/cmudict.dict");
-        let mut vp_path = home.join("models/speaking/en-us/cmudict.vp");
-
-        if !base_path.exists() {
-            base_path = home.join("models/speaking/en-us/cmudict-0.7b");
-            vp_path = home.join("models/speaking/en-us/cmudict-0.7b.vp");
-        }
-
-        if base_path.exists() {
-            if let Ok(base_data) = std::fs::read_to_string(&base_path) {
+        for runtime_files in RUNTIME_FILES {
+            for base_path in lexicons::runtime_file_candidates(&[runtime_files.base]) {
+                let Ok(base_data) = std::fs::read_to_string(&base_path) else {
+                    continue;
+                };
                 let mut lexicon = Self {
                     entries: HashMap::new(),
                 };
                 lexicon.extend_from_str(&base_data, "base cmu");
 
-                if vp_path.exists() {
-                    if let Ok(vp_data) = std::fs::read_to_string(&vp_path) {
-                        lexicon.extend_from_str(&vp_data, "base cmu");
-                    }
+                let vp_path = base_path.with_file_name(runtime_files.variant_pronunciations);
+                if let Ok(vp_data) = std::fs::read_to_string(&vp_path) {
+                    lexicon.extend_from_str(&vp_data, "base cmu");
                 }
 
                 lexicon.extend_from_str(

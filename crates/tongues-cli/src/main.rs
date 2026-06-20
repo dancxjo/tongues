@@ -6743,7 +6743,8 @@ fn speaking_demo_samples(variety: &speaking::LinguisticVariety) -> Vec<SpeakingD
         .unwrap_or_default();
     let baseline = speaking_demo_join_words(&words, 5).unwrap_or_else(|| variety.name.clone());
     let short = speaking_demo_join_words(&words, 3).unwrap_or_else(|| baseline.clone());
-    let utterance = speaking_demo_utterance(&words).unwrap_or_else(|| format!("{short}?"));
+    let utterance =
+        speaking_demo_utterance(variety, &words).unwrap_or_else(|| format!("{short}?"));
 
     vec![
         SpeakingDemoSample {
@@ -6780,7 +6781,13 @@ fn speaking_demo_join_words(words: &[String], limit: usize) -> Option<String> {
     (!sample.is_empty()).then_some(sample)
 }
 
-fn speaking_demo_utterance(words: &[String]) -> Option<String> {
+fn speaking_demo_utterance(
+    variety: &speaking::LinguisticVariety,
+    words: &[String],
+) -> Option<String> {
+    if let Some(text) = speaking_demo_builtin_utterance(&variety.id.0) {
+        return Some(text.to_string());
+    }
     let words = words
         .iter()
         .filter(|word| !word.trim().is_empty())
@@ -6793,6 +6800,21 @@ fn speaking_demo_utterance(words: &[String]) -> Option<String> {
         [first, second] => Some(format!("{first}, {second}?")),
         [first] => Some(format!("{first}?")),
         [] => None,
+    }
+}
+
+fn speaking_demo_builtin_utterance(variety: &str) -> Option<&'static str> {
+    match variety {
+        "en-US-GA" | "en-US" => Some("Hello, world?"),
+        "es-ES-Castilian" | "es-419-Standard" => Some("La casa, esta lista?"),
+        "fr-FR-Standard" => Some("La maison, est prete?"),
+        "de-DE-Standard" => Some("Das Haus, ist bereit?"),
+        "eo-001-Standard" => Some("La domo, estas preta?"),
+        "el-GR-Standard" => Some("Το σπιτι, ειναι ετοιμο?"),
+        "grc-Attic" | "grc-Koine" => Some("και λογος, και φως?"),
+        "la-Classical" | "la-Ecclesiastical" => Some("Salve, amice?"),
+        "sa-Deva-Standard" => Some("धर्म, कर्म?"),
+        _ => None,
     }
 }
 

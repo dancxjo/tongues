@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::{LEXIQUE383_ID, LexiconAdapter, LexiconLookup, PronunciationStatus};
+use crate::data::lexicons::{
+    self, LEXIQUE383_ID, LexiconAdapter, LexiconLookup, PronunciationStatus,
+};
 use crate::data::notation::PronunciationNotation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +33,8 @@ pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
     notation: PronunciationNotation::Ipa,
     lookup,
 }];
+
+const RUNTIME_FILES: &[&str] = &["Lexique383.tsv", "lexique383.tsv"];
 
 pub fn lookup(word: &str) -> LexiconLookup {
     let entry = bundled().lookup_entry(word);
@@ -65,19 +68,8 @@ impl LexiqueLexicon {
     }
 
     fn load_from_runtime_path() -> Option<Self> {
-        let home = if let Some(home_var) = std::env::var_os("MORTAR_SEA_HOME") {
-            PathBuf::from(home_var)
-        } else {
-            dirs::data_local_dir()?.join("mortar-sea")
-        };
-
-        for path in [
-            home.join("models/speaking/fr-fr/Lexique383.tsv"),
-            home.join("models/speaking/fr-fr/lexique383.tsv"),
-        ] {
-            if path.exists()
-                && let Ok(data) = std::fs::read_to_string(&path)
-            {
+        for path in lexicons::runtime_file_candidates(RUNTIME_FILES) {
+            if let Ok(data) = std::fs::read_to_string(&path) {
                 let mut lexicon = Self {
                     entries: HashMap::new(),
                 };
