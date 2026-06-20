@@ -68,6 +68,80 @@ split-sentences:
 run *args:
     cargo run --bin tongues -- "$@"
 
+# Package or extract versioned release artifacts
+release action family:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    case "{{family}}" in
+        head2phones)
+            version="v0"
+            release_dir="releases/head2phones-${version}"
+            archive="${release_dir}/head2phones-${version}.tar.gz"
+            source_dir="models/head2phones/${version}"
+            ;;
+        *)
+            echo "Unknown release family: {{family}}" >&2
+            echo "Available: head2phones" >&2
+            exit 2
+            ;;
+    esac
+
+    case "{{action}}" in
+        package)
+            mkdir -p "$release_dir"
+            (
+                cd "$source_dir"
+                sha256sum \
+                    model.bin \
+                    model-epoch-4.bin \
+                    vocab.json \
+                    head2phones_config.json \
+                    manifest.json \
+                    model_config.json \
+                    train_config.json \
+                    train_state.json \
+                    > SHA256SUMS
+            )
+            tar --sort=name \
+                --mtime='2026-06-20 00:00:00Z' \
+                --owner=0 \
+                --group=0 \
+                --numeric-owner \
+                -czf "$archive" \
+                -C "$source_dir" \
+                SHA256SUMS \
+                head2phones_config.json \
+                manifest.json \
+                model-epoch-4.bin \
+                model.bin \
+                model_config.json \
+                train_config.json \
+                train_state.json \
+                vocab.json
+            sha256sum "$archive" | sed "s#${release_dir}/##" > "${release_dir}/SHA256SUMS"
+            echo "Packaged $archive"
+            ;;
+        extract)
+            test -f "$archive" || {
+                echo "Missing release archive: $archive" >&2
+                exit 1
+            }
+            tmp="$(mktemp -d)"
+            trap 'rm -rf "$tmp"' EXIT
+            tar -xzf "$archive" -C "$tmp"
+            (cd "$tmp" && sha256sum -c SHA256SUMS)
+            mkdir -p "$source_dir"
+            cp -a "$tmp"/. "$source_dir"/
+            echo "Extracted $archive to $source_dir"
+            ;;
+        *)
+            echo "Unknown release action: {{action}}" >&2
+            echo "Available: package, extract" >&2
+            exit 2
+            ;;
+    esac
+
 # Forward a model-family command to the tongues CLI
 g2p2g *args:
     cargo run --bin tongues -- g2p2g "$@"

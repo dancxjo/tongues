@@ -68,6 +68,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Wiktionary](docs/wiktionary.md)
 - [Sentence parser](docs/sentence-parser.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
+- [Head2Phones v0 model card](docs/models/head2phones-v0.md)
 - [Interpretation](docs/interpretation.md)
 - [Emotions](docs/emotions.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
@@ -139,6 +140,7 @@ just emotions clean --all
 | `g2p2g` | spelling <-> broad IPA | active |
 | `wiktionary` | multilingual orthography/phonology | active |
 | `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
+| `head2phones` | streaming head chunk -> phones front end | experimental |
 
 Legacy verb-first commands still work for now, but the active CLI shape is model-family first: `tongues g2p2g ...`, `tongues wiktionary ...`, and so on.
 
