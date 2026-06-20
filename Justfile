@@ -100,6 +100,10 @@ archive:
 speak *args:
     cargo run --bin tongues -- speak "$@"
 
+# Demonstrate the speaking library across every built-in language variety
+speaking *args:
+    cargo run --bin tongues -- speaking-demo "$@"
+
 # Phonemize text into an IPA sequence
 phonemes *args:
     cargo run --bin tongues -- phonemes "$@"

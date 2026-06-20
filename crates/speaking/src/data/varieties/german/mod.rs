@@ -13,6 +13,13 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
+    &[crate::data::varieties::VarietyRegistration {
+        canonical_id: "de-DE-Standard",
+        aliases: &["de", "deu", "de-DE"],
+        load: |_| variety(),
+    }];
+
 const SEGMENTS: &[&str] = &[
     "a", "aː", "e", "ɛ", "i", "iː", "o", "oː", "u", "uː", "y", "ø", "œ", "ə", "ɐ", "aɪ̯", "aʊ̯",
     "ɔʏ̯", "b", "ç", "d", "f", "ɡ", "h", "j", "k", "l", "m", "n", "ŋ", "p", "r", "s", "ʃ", "t",

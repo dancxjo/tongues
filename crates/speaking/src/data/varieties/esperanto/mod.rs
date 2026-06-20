@@ -14,6 +14,13 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
+    &[crate::data::varieties::VarietyRegistration {
+        canonical_id: "eo",
+        aliases: &[],
+        load: |_| variety(),
+    }];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EsperantoSegment {
     grapheme: &'static str,

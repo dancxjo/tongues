@@ -14,6 +14,19 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "es-ES-Castilian",
+        aliases: &["es", "es-ES"],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "es-419-Standard",
+        aliases: &["es-419", "es-LatAm"],
+        load: variety,
+    },
+];
+
 const A: PhoneId = PhoneId::borrowed("ipa.phone.a");
 const E: PhoneId = PhoneId::borrowed("ipa.phone.e");
 const I: PhoneId = PhoneId::borrowed("ipa.phone.i");
@@ -756,10 +769,12 @@ mod tests {
         let latam = variety("es-419-Standard");
         assert_eq!(castilian.language.0, "es");
         assert_eq!(latam.language.0, "es");
-        assert!(castilian
-            .phonemes
-            .phonemes
-            .contains_key(&PhonemeId("es-ES-Castilian.phoneme.θ".into())));
+        assert!(
+            castilian
+                .phonemes
+                .phonemes
+                .contains_key(&PhonemeId("es-ES-Castilian.phoneme.θ".into()))
+        );
     }
 
     #[test]

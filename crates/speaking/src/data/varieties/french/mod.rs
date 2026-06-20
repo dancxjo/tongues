@@ -15,6 +15,13 @@ use crate::variety::{
     OrthographyPronunciationRules, VarietyImplementationStatus, VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
+    &[crate::data::varieties::VarietyRegistration {
+        canonical_id: "fr-FR-Standard",
+        aliases: &["fr", "fra", "fr-FR"],
+        load: |_| variety(),
+    }];
+
 const SEGMENTS: &[&str] = &[
     "a", "ɑ̃", "e", "ɛ", "ɛ̃", "i", "o", "ɔ", "ɔ̃", "u", "y", "ø", "œ", "œ̃", "ə", "b", "d", "f", "ɡ",
     "ʒ", "j", "k", "l", "m", "n", "ɲ", "p", "ʁ", "s", "ʃ", "t", "v", "w", "ɥ", "z",

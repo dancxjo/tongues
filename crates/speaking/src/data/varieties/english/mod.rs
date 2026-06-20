@@ -33,6 +33,34 @@ use crate::variety::{
     WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "en-US-GA",
+        aliases: &["en-US"],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "en-US-singing",
+        aliases: &[],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "en-GB-RP",
+        aliases: &[],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "en-GB-ScotE",
+        aliases: &[],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "en-US-AAE",
+        aliases: &[],
+        load: variety,
+    },
+];
+
 const P: PhoneId = PhoneId::borrowed("ipa.phone.p");
 const ASPIRATED_P: PhoneId = PhoneId::borrowed("ipa.phone.pʰ");
 const UNASPIRATED_P: PhoneId = PhoneId::borrowed("ipa.phone.p˭");
@@ -203,7 +231,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         ),
         text_normalization: crate::data::varieties::english_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
-        syntax_analyzer: Some(crate::syntax::parse_english_link_grammar),
+        syntax_analyzer: Some(crate::syntax::parse_builtin_link_grammar),
         syntax_heuristics: None,
         orthography_pronunciation: None,
         number_names: Some(english_number_names()),

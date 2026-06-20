@@ -4,9 +4,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
-use crate::data::varieties::{
-    english::syntax as english_syntax, esperanto, french, german, greek, latin, sanskrit, spanish,
-};
+use crate::data::varieties::english::syntax as english_syntax;
 use crate::data::variety_by_code;
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
@@ -253,19 +251,6 @@ impl HeuristicSyntaxProfile {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EnglishLinkGrammarParser;
-
-impl LinkGrammarParser for EnglishLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_english_link_grammar(words, terminal)
-    }
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct LinkParserCommandBackend {
     command: Option<String>,
@@ -303,101 +288,7 @@ impl LinkParserCommandBackend {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FrenchLinkGrammarParser;
-
-impl LinkGrammarParser for FrenchLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, french::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SpanishLinkGrammarParser;
-
-impl LinkGrammarParser for SpanishLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, spanish::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GermanLinkGrammarParser;
-
-impl LinkGrammarParser for GermanLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, german::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EsperantoLinkGrammarParser;
-
-impl LinkGrammarParser for EsperantoLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, esperanto::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct LatinLinkGrammarParser;
-
-impl LinkGrammarParser for LatinLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, latin::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GreekLinkGrammarParser;
-
-impl LinkGrammarParser for GreekLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, greek::syntax_profile())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SanskritLinkGrammarParser;
-
-impl LinkGrammarParser for SanskritLinkGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
-        parse_multilingual_link_grammar(words, terminal, sanskrit::syntax_profile())
-    }
-}
-
-#[deprecated(note = "use EnglishLinkGrammarParser for English-specific syntax")]
-pub type HeuristicLinkGrammarParser = EnglishLinkGrammarParser;
-
-pub fn parse_english_link_grammar(
+pub fn parse_builtin_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
@@ -406,10 +297,10 @@ pub fn parse_english_link_grammar(
             return analysis;
         }
     }
-    parse_english_heuristic_link_grammar(words, terminal)
+    parse_builtin_heuristic_link_grammar(words, terminal)
 }
 
-pub fn parse_english_heuristic_link_grammar(
+pub fn parse_builtin_heuristic_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
@@ -2406,6 +2297,10 @@ mod tests {
             .collect()
     }
 
+    fn parse_variety(code: &str, sentence: &str) -> SentenceSyntaxAnalysis {
+        VarietyLinkGrammarParser::new(VarietyId(code.into())).parse(&words(sentence), None)
+    }
+
     fn assert_link(analysis: &SentenceSyntaxAnalysis, kind: SyntacticLinkKind) {
         assert!(
             analysis
@@ -2482,10 +2377,12 @@ Found 1 linkage (1 had no P.P. violations)
         assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Determiner);
         assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Subject);
         assert_link_between(&analysis, 2, 3, SyntacticLinkKind::Object);
-        assert!(analysis.primary_parse().is_some_and(|parse| parse
-            .links
-            .iter()
-            .all(|link| link.source == SyntacticLinkSource::LinkGrammarProjection)));
+        assert!(analysis.primary_parse().is_some_and(|parse| {
+            parse
+                .links
+                .iter()
+                .all(|link| link.source == SyntacticLinkSource::LinkGrammarProjection)
+        }));
     }
 
     #[test]
@@ -2511,9 +2408,11 @@ Found 1 linkage (1 had no P.P. violations)
             analysis.raw_link_grammar_parses[0].links[0].label,
             "ZZcustom"
         );
-        assert!(analysis
-            .primary_parse()
-            .is_some_and(|parse| parse.links.is_empty()));
+        assert!(
+            analysis
+                .primary_parse()
+                .is_some_and(|parse| parse.links.is_empty())
+        );
     }
 
     #[test]
@@ -2522,7 +2421,7 @@ Found 1 linkage (1 had no P.P. violations)
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>();
-        let analysis = parse_english_link_grammar(&words, Some(TerminalPunctuation::Question));
+        let analysis = parse_builtin_link_grammar(&words, Some(TerminalPunctuation::Question));
 
         assert!(analysis.word_has_link(0, SyntacticLinkKind::Auxiliary));
         assert!(analysis.word_has_link(5, SyntacticLinkKind::Coordination));
@@ -2583,7 +2482,7 @@ Found 1 linkage (1 had no P.P. violations)
         ];
 
         for (sentence, expected_links) in samples {
-            let analysis = parse_english_link_grammar(&words(sentence), None);
+            let analysis = parse_builtin_link_grammar(&words(sentence), None);
             for expected_link in expected_links {
                 assert_link(&analysis, expected_link);
             }
@@ -2634,7 +2533,7 @@ Found 1 linkage (1 had no P.P. violations)
         ];
 
         for (sentence, expected_links) in samples {
-            let analysis = parse_english_link_grammar(&words(sentence), None);
+            let analysis = parse_builtin_link_grammar(&words(sentence), None);
             for expected_link in expected_links {
                 assert_link(&analysis, expected_link);
             }
@@ -2702,7 +2601,7 @@ Found 1 linkage (1 had no P.P. violations)
         ];
 
         for (sentence, expected_links) in samples {
-            let analysis = parse_english_link_grammar(&words(sentence), None);
+            let analysis = parse_builtin_link_grammar(&words(sentence), None);
             assert_eq!(
                 analysis.tokens[1].pos,
                 PartOfSpeech::Verb,
@@ -2716,13 +2615,13 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn english_parser_handles_relative_and_subordinate_clauses() {
-        let relative = parse_english_link_grammar(&words("the man who saw mary left"), None);
+        let relative = parse_builtin_link_grammar(&words("the man who saw mary left"), None);
         assert_link_between(&relative, 1, 2, SyntacticLinkKind::Apposition);
         assert_link_between(&relative, 2, 3, SyntacticLinkKind::Complement);
         assert_link_between(&relative, 2, 3, SyntacticLinkKind::Subject);
         assert_link_between(&relative, 3, 4, SyntacticLinkKind::Object);
 
-        let subordinate = parse_english_link_grammar(&words("because she left john waited"), None);
+        let subordinate = parse_builtin_link_grammar(&words("because she left john waited"), None);
         assert_link_between(&subordinate, 0, 2, SyntacticLinkKind::Complement);
         assert_link_between(&subordinate, 1, 2, SyntacticLinkKind::Subject);
         assert_link_between(&subordinate, 3, 4, SyntacticLinkKind::Subject);
@@ -2730,7 +2629,7 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn english_parser_does_not_promote_clause_subjects_to_matrix_objects() {
-        let analysis = parse_english_link_grammar(&words("i know that she left"), None);
+        let analysis = parse_builtin_link_grammar(&words("i know that she left"), None);
 
         assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Complement);
@@ -2741,17 +2640,17 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn english_parser_handles_possessives_particles_and_passives() {
-        let possessive = parse_english_link_grammar(&words("mary's old friend arrived"), None);
+        let possessive = parse_builtin_link_grammar(&words("mary's old friend arrived"), None);
         assert_link_between(&possessive, 0, 2, SyntacticLinkKind::Determiner);
         assert_link_between(&possessive, 1, 2, SyntacticLinkKind::Modifier);
         assert_link_between(&possessive, 2, 3, SyntacticLinkKind::Subject);
 
-        let particle = parse_english_link_grammar(&words("they turn off the light"), None);
+        let particle = parse_builtin_link_grammar(&words("they turn off the light"), None);
         assert_link_between(&particle, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&particle, 1, 2, SyntacticLinkKind::Modifier);
         assert_link_between(&particle, 1, 4, SyntacticLinkKind::Object);
 
-        let passive = parse_english_link_grammar(&words("the ball was thrown by mary"), None);
+        let passive = parse_builtin_link_grammar(&words("the ball was thrown by mary"), None);
         assert_link_between(&passive, 1, 3, SyntacticLinkKind::Subject);
         assert_link_between(&passive, 2, 3, SyntacticLinkKind::Auxiliary);
         assert_link_between(&passive, 4, 5, SyntacticLinkKind::Preposition);
@@ -2759,7 +2658,7 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn english_parser_normalizes_internal_punctuation_and_skips_empty_tokens() {
-        let analysis = parse_english_link_grammar(
+        let analysis = parse_builtin_link_grammar(
             &["(".into(), "JOHN'S".into(), "old,".into(), "clock!".into()],
             None,
         );
@@ -2772,53 +2671,53 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn multilingual_parsers_emit_basic_function_links() {
-        let french = FrenchLinkGrammarParser.parse(&words("ils parlent"), None);
+        let french = parse_variety("fr-FR-Standard", "ils parlent");
         assert_eq!(french.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&french, SyntacticLinkKind::Subject);
 
-        let spanish = SpanishLinkGrammarParser.parse(&words("ellos hablan"), None);
+        let spanish = parse_variety("es-ES-Castilian", "ellos hablan");
         assert_eq!(spanish.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&spanish, SyntacticLinkKind::Subject);
 
-        let german = GermanLinkGrammarParser.parse(&words("sie sprechen"), None);
+        let german = parse_variety("de-DE-Standard", "sie sprechen");
         assert_eq!(german.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&german, SyntacticLinkKind::Subject);
 
-        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi parolas"), None);
+        let esperanto = parse_variety("eo", "mi parolas");
         assert_eq!(esperanto.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&esperanto, SyntacticLinkKind::Subject);
 
-        let latin = LatinLinkGrammarParser.parse(&words("ego amo"), None);
+        let latin = parse_variety("la-Classical", "ego amo");
         assert_eq!(latin.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&latin, SyntacticLinkKind::Subject);
 
-        let greek = GreekLinkGrammarParser.parse(&words("εγώ λέγω"), None);
+        let greek = parse_variety("el-GR-Standard", "εγώ λέγω");
         assert_eq!(greek.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&greek, SyntacticLinkKind::Subject);
 
-        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहम् गच्छति"), None);
+        let sanskrit = parse_variety("sa-Deva-Standard", "अहम् गच्छति");
         assert_eq!(sanskrit.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&sanskrit, SyntacticLinkKind::Subject);
     }
 
     #[test]
     fn multilingual_parsers_emit_deeper_phrase_and_clause_links() {
-        let french = FrenchLinkGrammarParser.parse(&words("la petite maison sur la colline"), None);
+        let french = parse_variety("fr-FR-Standard", "la petite maison sur la colline");
         assert_link_between(&french, 0, 2, SyntacticLinkKind::Determiner);
         assert_link_between(&french, 1, 2, SyntacticLinkKind::Modifier);
         assert_link(&french, SyntacticLinkKind::Preposition);
 
-        let spanish = SpanishLinkGrammarParser.parse(&words("yo veo la casa grande"), None);
+        let spanish = parse_variety("es-ES-Castilian", "yo veo la casa grande");
         assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&spanish, 1, 3, SyntacticLinkKind::Object);
         assert_link_between(&spanish, 4, 3, SyntacticLinkKind::Modifier);
 
-        let german = GermanLinkGrammarParser.parse(&words("ich gebe ihm das buch"), None);
+        let german = parse_variety("de-DE-Standard", "ich gebe ihm das buch");
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&german, 2, 1, SyntacticLinkKind::Object);
         assert_link_between(&german, 3, 4, SyntacticLinkKind::Determiner);
 
-        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi estas tre feliĉa"), None);
+        let esperanto = parse_variety("eo", "mi estas tre feliĉa");
         assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&esperanto, 1, 3, SyntacticLinkKind::Complement);
         assert_link_between(&esperanto, 3, 2, SyntacticLinkKind::Modifier);
@@ -2826,22 +2725,22 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn classical_and_indic_parsers_handle_preverbal_objects() {
-        let latin = LatinLinkGrammarParser.parse(&words("puella puerum amat"), None);
+        let latin = parse_variety("la-Classical", "puella puerum amat");
         assert_link_between(&latin, 0, 2, SyntacticLinkKind::Subject);
         assert_link_between(&latin, 1, 2, SyntacticLinkKind::Object);
 
-        let greek = GreekLinkGrammarParser.parse(&words("εγώ βλέπω τον κόσμο"), None);
+        let greek = parse_variety("el-GR-Standard", "εγώ βλέπω τον κόσμο");
         assert_link_between(&greek, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&greek, 1, 3, SyntacticLinkKind::Object);
 
-        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहं फलम् खादति"), None);
+        let sanskrit = parse_variety("sa-Deva-Standard", "अहं फलम् खादति");
         assert_link_between(&sanskrit, 0, 2, SyntacticLinkKind::Subject);
         assert_link_between(&sanskrit, 1, 2, SyntacticLinkKind::Object);
     }
 
     #[test]
     fn multilingual_parser_handles_punctuation_clitics_and_empty_tokens() {
-        let punctuated = FrenchLinkGrammarParser.parse(
+        let punctuated = VarietyLinkGrammarParser::new(VarietyId("fr-FR-Standard".into())).parse(
             &["«".into(), "ils,".into(), "parlent!".into(), "»".into()],
             None,
         );
@@ -2850,27 +2749,26 @@ Found 1 linkage (1 had no P.P. violations)
         assert_eq!(punctuated.tokens[1].text, "parlent!");
         assert_link_between(&punctuated, 0, 1, SyntacticLinkKind::Subject);
 
-        let latin = LatinLinkGrammarParser.parse(&words("puella puerque venit"), None);
+        let latin = parse_variety("la-Classical", "puella puerque venit");
         assert_link(&latin, SyntacticLinkKind::Coordination);
         assert_link_between(&latin, 0, 2, SyntacticLinkKind::Subject);
     }
 
     #[test]
     fn multilingual_parser_links_complementizer_clauses() {
-        let french = FrenchLinkGrammarParser.parse(&words("je sais que tu viens"), None);
+        let french = parse_variety("fr-FR-Standard", "je sais que tu viens");
         assert_link_between(&french, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&french, 1, 2, SyntacticLinkKind::Complement);
         assert_link_between(&french, 2, 4, SyntacticLinkKind::Complement);
         assert_no_link_between(&french, 1, 3, SyntacticLinkKind::Object);
 
-        let spanish = SpanishLinkGrammarParser.parse(&words("yo digo que ella viene"), None);
+        let spanish = parse_variety("es-ES-Castilian", "yo digo que ella viene");
         assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Complement);
         assert_link_between(&spanish, 2, 4, SyntacticLinkKind::Complement);
         assert_no_link_between(&spanish, 1, 3, SyntacticLinkKind::Object);
 
-        let german =
-            GermanLinkGrammarParser.parse(&words("ich weiss dass sie das buch liest"), None);
+        let german = parse_variety("de-DE-Standard", "ich weiss dass sie das buch liest");
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&german, 1, 2, SyntacticLinkKind::Complement);
         assert_link_between(&german, 2, 6, SyntacticLinkKind::Complement);
@@ -2881,49 +2779,49 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn multilingual_parser_links_relative_clauses() {
-        let french = FrenchLinkGrammarParser.parse(&words("homme qui lit"), None);
+        let french = parse_variety("fr-FR-Standard", "homme qui lit");
         assert_link_between(&french, 0, 1, SyntacticLinkKind::Apposition);
         assert_link_between(&french, 1, 2, SyntacticLinkKind::Complement);
 
-        let spanish = SpanishLinkGrammarParser.parse(&words("hombre que lee"), None);
+        let spanish = parse_variety("es-ES-Castilian", "hombre que lee");
         assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Apposition);
         assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Complement);
 
-        let german = GermanLinkGrammarParser.parse(&words("mann der liest"), None);
+        let german = parse_variety("de-DE-Standard", "mann der liest");
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Apposition);
         assert_link_between(&german, 1, 2, SyntacticLinkKind::Complement);
     }
 
     #[test]
     fn multilingual_parser_covers_underfit_profile_edges() {
-        let french = FrenchLinkGrammarParser.parse(&words("je le vois dans la maison"), None);
+        let french = parse_variety("fr-FR-Standard", "je le vois dans la maison");
         assert_link_between(&french, 0, 2, SyntacticLinkKind::Subject);
         assert_link_between(&french, 1, 2, SyntacticLinkKind::Object);
         assert_link_between(&french, 3, 5, SyntacticLinkKind::Preposition);
 
-        let spanish = SpanishLinkGrammarParser.parse(&words("ella lo ve con el niño"), None);
+        let spanish = parse_variety("es-ES-Castilian", "ella lo ve con el niño");
         assert_link_between(&spanish, 0, 2, SyntacticLinkKind::Subject);
         assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Object);
         assert_link_between(&spanish, 3, 5, SyntacticLinkKind::Preposition);
 
-        let german = GermanLinkGrammarParser.parse(&words("ich bin sehr freundlich"), None);
+        let german = parse_variety("de-DE-Standard", "ich bin sehr freundlich");
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&german, 1, 3, SyntacticLinkKind::Complement);
         assert_link_between(&german, 3, 2, SyntacticLinkKind::Modifier);
 
-        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi vidas lin kaj ŝin"), None);
+        let esperanto = parse_variety("eo", "mi vidas lin kaj ŝin");
         assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&esperanto, 1, 2, SyntacticLinkKind::Object);
         assert_link(&esperanto, SyntacticLinkKind::Coordination);
 
-        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहं ग्रामम् मध्ये गच्छति"), None);
+        let sanskrit = parse_variety("sa-Deva-Standard", "अहं ग्रामम् मध्ये गच्छति");
         assert_link_between(&sanskrit, 0, 3, SyntacticLinkKind::Subject);
         assert_link_between(&sanskrit, 1, 2, SyntacticLinkKind::Preposition);
     }
 
     #[test]
     fn french_parser_does_not_treat_common_ent_adjectives_as_verbs() {
-        let analysis = FrenchLinkGrammarParser.parse(&words("un homme intelligent"), None);
+        let analysis = parse_variety("fr-FR-Standard", "un homme intelligent");
 
         assert_ne!(analysis.tokens[2].pos, PartOfSpeech::Verb);
         assert_link(&analysis, SyntacticLinkKind::Determiner);
@@ -2931,7 +2829,7 @@ Found 1 linkage (1 had no P.P. violations)
 
     #[test]
     fn emits_vocative_from_upstream_oh_voc_pattern() {
-        let analysis = parse_english_link_grammar(&words("Oh Joe listen"), None);
+        let analysis = parse_builtin_link_grammar(&words("Oh Joe listen"), None);
 
         assert_link(&analysis, SyntacticLinkKind::Vocative);
     }

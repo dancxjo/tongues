@@ -431,6 +431,18 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
+    /// Demonstrate the speaking library across built-in language varieties
+    #[command(name = "speaking-demo", alias = "speaking")]
+    SpeakingDemo {
+        /// Restrict the demo to one variety; repeat to select multiple.
+        #[arg(long = "variety")]
+        varieties: Vec<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        format: SpeakingDemoFormat,
+    },
+
     /// Phonemize text into a broad IPA phoneme sequence
     Phonemes {
         /// The text to phonemize
@@ -1437,6 +1449,12 @@ enum WiktionaryNotationArg {
     Phonemes,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SpeakingDemoFormat {
+    Text,
+    Json,
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 enum MaskPolicyArg {
     Single,
@@ -1672,6 +1690,7 @@ fn main() -> Result<()> {
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
         Commands::Speak(command) => speak::run_speak(command),
+        Commands::SpeakingDemo { varieties, format } => cmd_speaking_demo(varieties, *format),
         Commands::Phonemes { text } => cmd_phonemes(&text),
         Commands::Phones { text } => cmd_phones(&text),
         Commands::Models { command } => models::run(command),

@@ -384,7 +384,7 @@ mod tests {
     use crate::data::english::variety;
     use crate::ids::VarietyId;
     use crate::phonemicize::{
-        VarietyDataPhonemicizer, PhonemicizeRequest, Phonemicizer, phone_display_symbol,
+        PhonemicizeRequest, Phonemicizer, VarietyDataPhonemicizer, phone_display_symbol,
     };
 
     fn syllables_for(text: &str) -> Vec<Syllable> {

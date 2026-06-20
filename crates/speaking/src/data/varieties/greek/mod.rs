@@ -14,6 +14,24 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "el-GR-Standard",
+        aliases: &["el", "el-GR"],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "grc-Attic",
+        aliases: &["grc", "grc-Ancient"],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "grc-Koine",
+        aliases: &["el-Koine"],
+        load: variety,
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GreekVariety {
     Modern,

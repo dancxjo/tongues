@@ -14,6 +14,19 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "la-Classical",
+        aliases: &["la"],
+        load: variety,
+    },
+    crate::data::varieties::VarietyRegistration {
+        canonical_id: "la-Ecclesiastical",
+        aliases: &["la-Church"],
+        load: variety,
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LatinVariety {
     Classical,

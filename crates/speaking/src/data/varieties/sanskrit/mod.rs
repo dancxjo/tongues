@@ -13,6 +13,13 @@ use crate::variety::{
     VarietyStatus,
 };
 
+pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
+    &[crate::data::varieties::VarietyRegistration {
+        canonical_id: "sa-Deva-Standard",
+        aliases: &["sa", "san", "sa-Deva"],
+        load: |_| variety(),
+    }];
+
 const SEGMENTS: &[&str] = &[
     "a", "aː", "i", "iː", "u", "uː", "r̩", "eː", "ai̯", "oː", "au̯", "k", "kʰ", "ɡ", "ɡʱ", "ŋ", "t͡ɕ",
     "t͡ɕʰ", "d͡ʑ", "d͡ʑʱ", "ɲ", "ʈ", "ʈʰ", "ɖ", "ɖʱ", "ɳ", "t", "tʰ", "d", "dʱ", "n", "p", "pʰ", "b",
