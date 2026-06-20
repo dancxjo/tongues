@@ -3502,8 +3502,19 @@ fn speak_head2phones_sentence<B: Backend>(
         model_config.max_seq_len
     );
     let output = predict_sentence_boundary(head2phones, &input, vocab, device);
-    let phones = extract_head2phones_phones(&output)
-        .with_context(|| format!("head2phones did not emit a phone block for `{sentence}`"))?;
+    let Some(phones) = extract_head2phones_phones(&output) else {
+        let fallback = clean_be_sentence_for_fallback(sentence);
+        eprintln!(
+            "\nbe: head={:?}\nbe: head2phones={} ; using fallback={:?}",
+            sentence,
+            compact_display(&output, 160),
+            fallback
+        );
+        if !fallback.is_empty() {
+            synthesize_rule_based_fallback(&fallback, variety, piper, sink)?;
+        }
+        return Ok(());
+    };
     let sequence = piper_sequence_from_head2phones_phones(&phones);
     eprintln!(
         "\nbe: head={:?}\nbe: phones={}\nbe: piper={}",
@@ -3551,6 +3562,19 @@ fn synthesize_rule_based_fallback(
     })?;
     let plan = speak::utterance_plan_from_phonemicized(&output);
     piper.synthesize_plan_streaming(&plan, sink)
+}
+
+fn clean_be_sentence_for_fallback(sentence: &str) -> String {
+    let trimmed = sentence.trim();
+    let stripped = trimmed
+        .trim_matches(|character: char| {
+            matches!(
+                character,
+                '*' | '_' | '`' | '#' | '>' | '-' | '=' | '~' | '\\' | '/'
+            )
+        })
+        .trim();
+    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn extract_head2phones_phones(output: &str) -> Option<String> {
