@@ -27,8 +27,8 @@ use crate::syllabify::syllabify_phones;
 use crate::syntax::{PartOfSpeech, SentenceSyntaxAnalysis};
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
-    ConnectedSpeechRule, LinguisticVariety, OrthographicUnitKind, WeakFormFollowingContext,
-    WeakFormRule, WeakFormStyleContext,
+    ConnectedSpeechRule, LinguisticVariety, NumberNormalizationProfile, OrthographicUnitKind,
+    WeakFormFollowingContext, WeakFormRule, WeakFormStyleContext,
 };
 
 const WORD_BOUNDARY_ID: &str = "boundary.word";
@@ -118,7 +118,7 @@ pub trait PronunciationPipeline {
     -> Result<LinguisticVariety, PhonemicizeError>;
 
     fn text_normalizer(&self, text: &str, variety: &VarietyId) -> String {
-        self.normalize_numbers(text, variety)
+        normalize_text_for_variety(text, variety)
     }
 
     fn normalize_numbers(&self, text: &str, _variety: &VarietyId) -> String {
@@ -529,12 +529,8 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         Ok(variety)
     }
 
-    fn normalize_numbers(&self, text: &str, _variety: &VarietyId) -> String {
-        english_normalize_numbers(text)
-    }
-
     fn text_normalizer(&self, text: &str, _variety: &VarietyId) -> String {
-        english_normalize_numbers(&english_spoken_form(text))
+        normalize_text_for_variety(text, _variety)
     }
 
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
@@ -673,10 +669,6 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
         variety_by_code(&canonical_variety.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical_variety.clone(),
         })
-    }
-
-    fn normalize_numbers(&self, text: &str, variety: &VarietyId) -> String {
-        normalize_small_numbers_for_variety(text, variety)
     }
 
     fn orthographic_tokenizer(&self, text: &str) -> Vec<WordToken> {
@@ -2802,10 +2794,53 @@ pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     split_stress(symbol).0
 }
 
+fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {
+    let Some(variety) = variety_by_code(&variety.0) else {
+        return text.to_string();
+    };
+    let mut normalized = apply_spoken_form_rewrites(text, &variety);
+    normalized = replace_number_abbreviation_from_variety_data(&normalized, &variety);
+    match variety.text_normalization.number_normalization {
+        NumberNormalizationProfile::None => normalized,
+        NumberNormalizationProfile::SmallNumbers => {
+            normalize_small_numbers_with_variety(&normalized, &variety)
+        }
+        NumberNormalizationProfile::EnglishGeneral => english_normalize_numbers(&normalized),
+    }
+}
+
+fn apply_spoken_form_rewrites(text: &str, variety: &LinguisticVariety) -> String {
+    let mut out = text.to_string();
+    for rewrite in &variety.text_normalization.spoken_form_rewrites {
+        out = out.replace(&rewrite.from, &rewrite.to);
+    }
+    out
+}
+
+fn replace_number_abbreviation_from_variety_data(
+    text: &str,
+    variety: &LinguisticVariety,
+) -> String {
+    let Some(rewrite) = variety
+        .text_normalization
+        .spoken_form_rewrites
+        .iter()
+        .find(|rewrite| rewrite.from == "No.")
+    else {
+        return text.to_string();
+    };
+
+    replace_conditional_number_abbreviation(text, &rewrite.from, &rewrite.to)
+}
+
 fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> String {
     let Some(variety) = variety_by_code(&variety.0) else {
         return text.to_string();
     };
+    normalize_small_numbers_with_variety(text, &variety)
+}
+
+fn normalize_small_numbers_with_variety(text: &str, variety: &LinguisticVariety) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut out = String::new();
     let mut index = 0usize;
@@ -2834,7 +2869,7 @@ fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> Strin
         let replacement = digits
             .parse::<u32>()
             .ok()
-            .and_then(|value| localized_number_word(&variety, value, &suffix));
+            .and_then(|value| localized_number_word(variety, value, &suffix));
         if let Some(word) = replacement {
             out.push_str(&word);
         } else {
@@ -3639,28 +3674,30 @@ pub fn english_normalize_numbers(text: &str) -> String {
 }
 
 pub fn english_spoken_form(text: &str) -> String {
-    let mut out = text.to_string();
-    for rewrite in english_normalization::SPOKEN_FORM_REWRITES {
-        out = out.replace(rewrite.from, rewrite.to);
-    }
-    replace_number_abbreviation(&out)
+    let variety = variety_by_code("en-US").expect("built-in English variety");
+    let out = apply_spoken_form_rewrites(text, &variety);
+    replace_number_abbreviation_from_variety_data(&out, &variety)
 }
 
 fn replace_number_abbreviation(text: &str) -> String {
+    replace_conditional_number_abbreviation(text, "No.", "Number")
+}
+
+fn replace_conditional_number_abbreviation(text: &str, from: &str, to: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(index) = rest.find("No.") {
+    while let Some(index) = rest.find(from) {
         out.push_str(&rest[..index]);
-        let after = &rest[index + 3..];
+        let after = &rest[index + from.len()..];
         if after
             .trim_start()
             .chars()
             .next()
             .is_some_and(|ch| ch.is_ascii_digit())
         {
-            out.push_str("Number");
+            out.push_str(to);
         } else {
-            out.push_str("No.");
+            out.push_str(from);
         }
         rest = after;
     }

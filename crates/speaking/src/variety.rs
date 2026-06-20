@@ -44,6 +44,8 @@ pub struct LinguisticVariety {
     #[serde(default)]
     pub pronunciation_pipeline: Option<String>,
     #[serde(default)]
+    pub text_normalization: TextNormalizationProfile,
+    #[serde(default)]
     pub syntax_profile: Option<String>,
     #[serde(skip)]
     pub syntax_analyzer: Option<SyntaxAnalyzer>,
@@ -105,6 +107,29 @@ pub struct OrdinalSuffixName {
     pub value: u32,
     pub suffixes: Vec<String>,
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TextNormalizationProfile {
+    #[serde(default)]
+    pub spoken_form_rewrites: Vec<TextRewrite>,
+    #[serde(default)]
+    pub number_normalization: NumberNormalizationProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextRewrite {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberNormalizationProfile {
+    #[default]
+    None,
+    SmallNumbers,
+    EnglishGeneral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

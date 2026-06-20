@@ -199,6 +199,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT.into(),
         ),
+        text_normalization: crate::data::varieties::english_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
         syntax_analyzer: Some(crate::syntax::parse_english_link_grammar),
         syntax_heuristics: None,

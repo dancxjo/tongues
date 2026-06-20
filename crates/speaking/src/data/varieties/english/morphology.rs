@@ -347,6 +347,7 @@ mod tests {
             orthographic_unit_pronunciations: Vec::new(),
             pronunciation_lexicons: Vec::new(),
             pronunciation_pipeline: None,
+            text_normalization: Default::default(),
             syntax_profile: None,
             syntax_analyzer: None,
             syntax_heuristics: None,

@@ -101,6 +101,7 @@ pub fn variety() -> LinguisticVariety {
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
         ),
+        text_normalization: crate::data::varieties::small_number_text_normalization_profile(),
         syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ESPERANTO.into()),
         syntax_analyzer: None,
         syntax_heuristics: Some(syntax_profile()),

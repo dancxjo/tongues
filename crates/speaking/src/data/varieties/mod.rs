@@ -9,7 +9,10 @@ pub mod spanish;
 
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
-use crate::variety::{LinguisticVariety, PunctuationProfile, QuestionContourProfile};
+use crate::variety::{
+    LinguisticVariety, NumberNormalizationProfile, PunctuationProfile, QuestionContourProfile,
+    TextNormalizationProfile, TextRewrite,
+};
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
 pub const PRONUNCIATION_PIPELINE_ENGLISH_CMUDICT: &str = "english_cmudict";
@@ -46,6 +49,26 @@ pub fn prosody_profile(
         default_pitch_hz: None,
         default_rate_syllables_per_second: Some(default_rate_syllables_per_second),
         rhythm_class: Some(rhythm_class.into()),
+    }
+}
+
+pub fn small_number_text_normalization_profile() -> TextNormalizationProfile {
+    TextNormalizationProfile {
+        spoken_form_rewrites: Vec::new(),
+        number_normalization: NumberNormalizationProfile::SmallNumbers,
+    }
+}
+
+pub fn english_text_normalization_profile() -> TextNormalizationProfile {
+    TextNormalizationProfile {
+        spoken_form_rewrites: english::normalization::SPOKEN_FORM_REWRITES
+            .iter()
+            .map(|rewrite| TextRewrite {
+                from: rewrite.from.into(),
+                to: rewrite.to.into(),
+            })
+            .collect(),
+        number_normalization: NumberNormalizationProfile::EnglishGeneral,
     }
 }
 
