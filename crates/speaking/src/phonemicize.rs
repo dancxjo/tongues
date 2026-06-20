@@ -2812,6 +2812,9 @@ fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {
 fn apply_spoken_form_rewrites(text: &str, variety: &LinguisticVariety) -> String {
     let mut out = text.to_string();
     for rewrite in &variety.text_normalization.spoken_form_rewrites {
+        if rewrite.from == "No." {
+            continue;
+        }
         out = out.replace(&rewrite.from, &rewrite.to);
     }
     out

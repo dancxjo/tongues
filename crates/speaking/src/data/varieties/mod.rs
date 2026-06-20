@@ -60,14 +60,19 @@ pub fn small_number_text_normalization_profile() -> TextNormalizationProfile {
 }
 
 pub fn english_text_normalization_profile() -> TextNormalizationProfile {
+    let mut spoken_form_rewrites = english::normalization::SPOKEN_FORM_REWRITES
+        .iter()
+        .map(|rewrite| TextRewrite {
+            from: rewrite.from.into(),
+            to: rewrite.to.into(),
+        })
+        .collect::<Vec<_>>();
+    spoken_form_rewrites.push(TextRewrite {
+        from: "No.".into(),
+        to: "Number".into(),
+    });
     TextNormalizationProfile {
-        spoken_form_rewrites: english::normalization::SPOKEN_FORM_REWRITES
-            .iter()
-            .map(|rewrite| TextRewrite {
-                from: rewrite.from.into(),
-                to: rewrite.to.into(),
-            })
-            .collect(),
+        spoken_form_rewrites,
         number_normalization: NumberNormalizationProfile::EnglishGeneral,
     }
 }
