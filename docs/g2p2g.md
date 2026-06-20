@@ -181,7 +181,7 @@ Metrics currently include:
 
 Use exact match for strict whole-output correctness and token accuracy for "mostly got the pronunciation/spelling right."
 
-## CMUdict
+## Lexicons
 
 ```sh
 just fetch
@@ -191,10 +191,17 @@ Direct form:
 
 ```sh
 cargo run --release -- fetch-cmudict --out data/cmudict.dict
+cargo run --release -- fetch-lexique --out data/Lexique383.tsv
 ```
 
 CMUdict is fetched from:
 
 ```text
 https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict
+```
+
+Lexique383 is fetched from:
+
+```text
+https://www.lexique.org/databases/Lexique383/Lexique383.tsv
 ```

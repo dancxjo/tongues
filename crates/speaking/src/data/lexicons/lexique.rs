@@ -129,8 +129,14 @@ impl LexiqueLexicon {
             return;
         };
         let headers = header.split('\t').collect::<Vec<_>>();
-        let ortho_idx = headers.iter().position(|header| *header == "ortho").unwrap_or(0);
-        let phon_idx = headers.iter().position(|header| *header == "phon").unwrap_or(1);
+        let ortho_idx = headers
+            .iter()
+            .position(|header| *header == "ortho")
+            .unwrap_or(0);
+        let phon_idx = headers
+            .iter()
+            .position(|header| *header == "phon")
+            .unwrap_or(1);
 
         for line in lines.map(str::trim).filter(|line| !line.is_empty()) {
             let columns = line.split('\t').collect::<Vec<_>>();
@@ -165,10 +171,12 @@ pub fn bundled() -> &'static LexiqueLexicon {
 }
 
 pub fn normalize_for_lookup(word: &str) -> String {
-    word.trim_matches(|character: char| !(character.is_alphabetic() || matches!(character, '\'' | '’' | '-')))
-        .to_lowercase()
-        .replace('œ', "oe")
-        .replace('æ', "ae")
+    word.trim_matches(|character: char| {
+        !(character.is_alphabetic() || matches!(character, '\'' | '’' | '-'))
+    })
+    .to_lowercase()
+    .replace('œ', "oe")
+    .replace('æ', "ae")
 }
 
 pub fn lexique_phon_to_ipa(input: &str) -> Option<String> {
@@ -180,8 +188,8 @@ pub fn lexique_phon_to_ipa(input: &str) -> Option<String> {
         match ch {
             '/' | '[' | ']' | '.' | 'ˈ' | 'ˌ' | ' ' => {}
             'a' | 'b' | 'd' | 'e' | 'f' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 's'
-            | 't' | 'u' | 'v' | 'w' | 'y' | 'z' | 'ɑ' | 'ɛ' | 'ɔ' | 'ə' | 'ø' | 'œ'
-            | 'ʁ' | 'ʃ' | 'ʒ' | 'ɲ' | 'ɥ' | 'ɡ' => out.push(ch),
+            | 't' | 'u' | 'v' | 'w' | 'y' | 'z' | 'ɑ' | 'ɛ' | 'ɔ' | 'ə' | 'ø' | 'œ' | 'ʁ' | 'ʃ'
+            | 'ʒ' | 'ɲ' | 'ɥ' | 'ɡ' => out.push(ch),
             'g' => out.push('ɡ'),
             'R' => out.push('ʁ'),
             'S' => out.push('ʃ'),

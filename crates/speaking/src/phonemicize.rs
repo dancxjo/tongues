@@ -4580,6 +4580,32 @@ mod tests {
     }
 
     #[test]
+    fn french_uses_lexique_before_rule_fallback() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let output = phonemicizer
+            .phonemicize(&request("vous voulez", "fr-FR-Standard"))
+            .expect("French should phonemicize");
+
+        assert_eq!(phoneme_symbols(&output), ["v", "u", "v", "u", "l", "e"]);
+        assert_eq!(
+            output.phonemes[0].provenance.source,
+            EvidenceSource::Lexicon
+        );
+    }
+
+    #[test]
+    fn french_rule_fallback_handles_regular_final_ez() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let output = phonemicizer
+            .phonemicize(&request("parlez", "fr-FR-Standard"))
+            .expect("French fallback should phonemicize");
+
+        assert_eq!(phoneme_symbols(&output), ["p", "a", "ʁ", "l", "e"]);
+    }
+
+    #[test]
     fn builtin_non_english_varieties_phonemicize_from_variety_data() {
         let spanish = phonemicizer_for_variety(&VarietyId("es".into()))
             .expect("Spanish phonemicizer")

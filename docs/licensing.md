@@ -9,6 +9,7 @@ Treat prepared data directories as local artifacts unless you have reviewed thei
 | Source/backend | Use | License/terms note |
 |---|---|---|
 | OpenEPD (`open-english-pronouncing-dictionary`) | Primary lexical source for spelling, IPA variants, rarity, and source labels. | OpenEPD is documented upstream as CC-BY-SA 4.0 because it includes WikiPron/Wiktionary-derived data. |
+| Lexique383 | Optional/bundled French lexicon source for `speaking` French lookup. | Lexique383 is documented by its maintainers as CC BY-SA 4.0; preserve attribution and share-alike notes when redistributing full derived data. |
 | WikiPron/Wiktionary-derived labels | Preserved through OpenEPD source labels and used to add Wiktionary reference URLs. | WikiPron/Wiktionary material is share-alike; preserve attribution and license notes when redistributing generated data. |
 | `speaking` crate phonemicizer | Derives narrow phones, syllables, stress, and placeholder acoustic features locally. | Project-local code under this repository's license. |
 | eSpeak NG | Optional local WAV generation with a small rotating voice set. | eSpeak NG is GPL-3-or-later; some data/docs mention CC-BY-SA components. Review eSpeak NG terms before redistributing generated audio. |

@@ -181,6 +181,13 @@ enum Commands {
         out: PathBuf,
     },
 
+    /// Download Lexique383 from lexique.org
+    FetchLexique {
+        /// Output path for the downloaded file
+        #[arg(long, default_value = "data/Lexique383.tsv")]
+        out: PathBuf,
+    },
+
     /// Download and extract public emotion corpora for StyleTTS2 signatures
     FetchCorpora {
         /// Output directory for the datasets
@@ -1531,6 +1538,7 @@ fn main() -> Result<()> {
             run_wiktionary_command(command, device_arg, output_mode)
         }
         Commands::FetchCmudict { out } => cmd_fetch_cmudict(&out),
+        Commands::FetchLexique { out } => cmd_fetch_lexique(&out),
         Commands::FetchCorpora {
             out_dir,
             corpora,
@@ -7254,41 +7262,46 @@ fn write_atomic_text(path: &Path, text: &str) -> Result<()> {
 
 fn cmd_fetch_cmudict(out: &Path) -> Result<()> {
     const URL: &str = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict";
-    println!("Fetching CMUdict from {}", URL);
+    fetch_url(URL, out, "CMUdict", "cmudict.dict")
+}
+
+// ── fetch-lexique ──────────────────────────────────────────────────────────
+
+fn cmd_fetch_lexique(out: &Path) -> Result<()> {
+    const URL: &str = "https://www.lexique.org/databases/Lexique383/Lexique383.tsv";
+    fetch_url(URL, out, "Lexique383", "Lexique383.tsv")
+}
+
+fn fetch_url(url: &str, out: &Path, label: &str, fallback_filename: &str) -> Result<()> {
+    println!("Fetching {label} from {url}");
 
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).context("creating output directory")?;
     }
 
-    // Use curl if available (standard on Linux/macOS), fall back to wget
+    let out_arg = out.to_str().unwrap_or(fallback_filename);
     let status = std::process::Command::new("curl")
-        .args(["-fsSL", "-o", out.to_str().unwrap_or("cmudict.dict"), URL])
+        .args(["-fsSL", "-o", out_arg, url])
         .status();
 
-    match status {
-        Ok(s) if s.success() => {
-            println!("Saved to {}", out.display());
-            Ok(())
-        }
-        _ => {
-            // Try wget
-            let s = std::process::Command::new("wget")
-                .args(["-qO", out.to_str().unwrap_or("cmudict.dict"), URL])
-                .status()
-                .context("neither curl nor wget succeeded")?;
-            if s.success() {
-                println!("Saved to {}", out.display());
-                Ok(())
-            } else {
-                anyhow::bail!(
-                    "Could not download CMUdict. \
-                     Please download manually from:\n  {}\nand save to {}",
-                    URL,
-                    out.display()
-                )
-            }
-        }
+    if matches!(status, Ok(status) if status.success()) {
+        println!("Saved to {}", out.display());
+        return Ok(());
     }
+
+    let status = std::process::Command::new("wget")
+        .args(["-qO", out_arg, url])
+        .status()
+        .context("neither curl nor wget succeeded")?;
+    if status.success() {
+        println!("Saved to {}", out.display());
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Could not download {label}. Please download manually from:\n  {url}\nand save to {}",
+        out.display()
+    )
 }
 
 // ── prepare ────────────────────────────────────────────────────────────────

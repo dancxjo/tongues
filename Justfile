@@ -56,9 +56,10 @@ interpreation *args:
 prepare *args:
     cargo run --bin tongues -- g2p2g prepare --out datasets/g2p2g/openepd-v0 "$@"
 
-# Fetch/Download the CMUdict lexicon data file
+# Fetch/Download pronunciation lexicon data files
 fetch *args:
     cargo run --bin tongues -- fetch-cmudict --out data/cmudict.dict "$@"
+    cargo run --bin tongues -- fetch-lexique --out data/Lexique383.tsv "$@"
 
 # Update the markdown table of pronunciation discrepancies across pronouncers
 discrepancies *args:

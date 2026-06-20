@@ -32,7 +32,7 @@ Tongues is also evolving into a broader speech research toolkit containing model
 - Spelling-to-phoneme and phoneme-to-spelling inference.
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
-- Rule-based phonemicization and realization helpers in the local `speaking` crate.
+- Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
 - Experimental StyleTTS2/Piper-adjacent speech plumbing.
 
 ## Quick Start

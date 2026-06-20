@@ -11,8 +11,8 @@ use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStat
 
 const SEGMENTS: &[&str] = &[
     "a", "aː", "e", "ɛ", "i", "iː", "o", "oː", "u", "uː", "y", "ø", "œ", "ə", "ɐ", "aɪ̯", "aʊ̯",
-    "ɔʏ̯", "b", "ç", "d", "f", "ɡ", "h", "j", "k", "l", "m", "n", "p", "r", "s", "ʃ", "t", "t͡s",
-    "v", "x", "z",
+    "ɔʏ̯", "b", "ç", "d", "f", "ɡ", "h", "j", "k", "l", "m", "n", "ŋ", "p", "r", "s", "ʃ", "t",
+    "t͡s", "t͡ʃ", "v", "x", "z",
 ];
 
 pub fn variety() -> LinguisticVariety {
@@ -48,6 +48,8 @@ pub fn synthesize_ipa(word: &str) -> Option<String> {
         let rest = chars[index..].iter().collect::<String>();
         let (symbol, consumed) = if rest.starts_with("sch") {
             ("ʃ", 3)
+        } else if rest.starts_with("tsch") {
+            ("t͡ʃ", 4)
         } else if rest.starts_with("ch") {
             (
                 if previous_is_back_vowel(&chars, index) {
@@ -65,8 +67,20 @@ pub fn synthesize_ipa(word: &str) -> Option<String> {
             ("aʊ̯", 2)
         } else if rest.starts_with("ie") {
             ("iː", 2)
-        } else if rest.starts_with("sp") || rest.starts_with("st") {
+        } else if (rest.starts_with("sp") || rest.starts_with("st"))
+            && is_word_initial(&chars, index)
+        {
             ("ʃ", 1)
+        } else if rest.starts_with("sp") || rest.starts_with("st") {
+            ("s", 1)
+        } else if rest.starts_with("pf") {
+            ("pf", 2)
+        } else if rest.starts_with("ck") {
+            ("k", 2)
+        } else if rest.starts_with("ng") {
+            ("ŋ", 2)
+        } else if rest.starts_with("ig") && index + 2 == chars.len() {
+            ("iç", 2)
         } else {
             (single(chars[index])?, 1)
         };
@@ -129,6 +143,13 @@ fn normalize(word: &str) -> Option<Vec<char>> {
 
 fn previous_is_back_vowel(chars: &[char], index: usize) -> bool {
     index > 0 && matches!(chars[index - 1], 'a' | 'o' | 'u')
+}
+
+fn is_word_initial(chars: &[char], index: usize) -> bool {
+    index == 0
+        || chars
+            .get(index.wrapping_sub(1))
+            .is_some_and(|ch| matches!(ch, '-' | '\'' | '’'))
 }
 
 fn add_initial_stress(ipa: &str) -> String {
@@ -240,5 +261,13 @@ mod tests {
     #[test]
     fn german_synthesizes_common_words() {
         assert_eq!(synthesize_ipa("Sprache").as_deref(), Some("/ˈʃpraxə/"));
+    }
+
+    #[test]
+    fn german_handles_common_clusters_and_final_ig() {
+        assert_eq!(synthesize_ipa("König").as_deref(), Some("/ˈkøniç/"));
+        assert_eq!(synthesize_ipa("Ding").as_deref(), Some("/ˈdiŋ/"));
+        assert_eq!(synthesize_ipa("backen").as_deref(), Some("/ˈbakən/"));
+        assert_eq!(synthesize_ipa("Wespe").as_deref(), Some("/ˈvəspə/"));
     }
 }
