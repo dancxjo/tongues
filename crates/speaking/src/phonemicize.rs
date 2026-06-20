@@ -28,7 +28,9 @@ use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunct
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
 use crate::syntax::{
-    EnglishLinkGrammarParser, LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis,
+    EnglishLinkGrammarParser, EsperantoLinkGrammarParser, FrenchLinkGrammarParser,
+    GermanLinkGrammarParser, GreekLinkGrammarParser, LatinLinkGrammarParser, LinkGrammarParser,
+    PartOfSpeech, SanskritLinkGrammarParser, SentenceSyntaxAnalysis, SpanishLinkGrammarParser,
 };
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
@@ -613,6 +615,19 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
 
     fn boundary_extractor(&self, text: &str, words: &[WordToken]) -> Vec<SpeechBoundaryToken> {
         boundary_tokens(text, words)
+    }
+
+    fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
+        match variety.language.0.as_str() {
+            "eo" => Some(&EsperantoLinkGrammarParser),
+            "fr" => Some(&FrenchLinkGrammarParser),
+            "es" => Some(&SpanishLinkGrammarParser),
+            "de" => Some(&GermanLinkGrammarParser),
+            "el" | "grc" => Some(&GreekLinkGrammarParser),
+            "la" => Some(&LatinLinkGrammarParser),
+            "sa" => Some(&SanskritLinkGrammarParser),
+            _ => None,
+        }
     }
 
     fn weak_form_resolver(
@@ -1469,7 +1484,7 @@ fn variety_data_pronunciation_for_word(
 
     let candidate = match variety.language.0.as_str() {
         "eo" => planned_candidate_from_esperanto_orthography(&word.normalized, variety),
-        "fr" => planned_candidate_from_french_orthography(&word.normalized, variety),
+        "fr" => planned_candidate_from_french_orthography(&word.normalized, variety, context),
         "de" => planned_candidate_from_german_orthography(&word.normalized, variety),
         "el" | "grc" => planned_candidate_from_greek_orthography(&word.normalized, variety),
         "la" => planned_candidate_from_latin_orthography(&word.normalized, variety),
@@ -1546,8 +1561,9 @@ fn lexique_pronunciation(
 fn planned_candidate_from_french_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    let Some(ipa) = french::synthesize_ipa(normalized) else {
+    let Some(ipa) = french::synthesize_ipa_with_pos(normalized, context.part_of_speech) else {
         return Vec::new();
     };
     planned_candidate_from_variety_ipa(&ipa, variety)
@@ -4858,6 +4874,22 @@ mod tests {
     }
 
     #[test]
+    fn french_syntax_marks_ent_verbs_for_silent_ending() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let output = phonemicizer
+            .phonemicize(&request("ils parlent", "fr-FR-Standard"))
+            .expect("French should phonemicize with syntax context");
+
+        assert_eq!(output.syntax.tokens[1].pos, PartOfSpeech::Verb);
+        assert!(
+            !phoneme_symbols(&output).contains(&"ɑ̃".to_string()),
+            "{:?}",
+            phoneme_symbols(&output)
+        );
+    }
+
+    #[test]
     fn french_connected_speech_adds_liaison_and_deletes_final_schwa() {
         let phonemicizer =
             phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
@@ -4917,7 +4949,7 @@ mod tests {
             .expect("Spanish should phonemicize from variety aliases");
         assert_eq!(spanish.variety.0, "es");
         assert_eq!(phoneme_symbols(&spanish), vec!["p", "a", "t", "o"]);
-        assert!(spanish.syntax.link_parses.is_empty());
+        assert_eq!(spanish.syntax.link_parses.len(), 1);
 
         let castilian = phonemicizer_for_variety(&VarietyId("es-ES-Castilian".into()))
             .expect("Castilian Spanish phonemicizer")
@@ -4944,6 +4976,7 @@ mod tests {
             .phonemicize(&request("bonjour", "fra"))
             .expect("French should phonemicize from spelling rules");
         assert_eq!(phoneme_symbols(&french), vec!["b", "ɔ̃", "ʒ", "u", "ʁ"]);
+        assert_eq!(french.syntax.link_parses.len(), 1);
 
         let german = phonemicizer_for_variety(&VarietyId("deu".into()))
             .expect("German phonemicizer")

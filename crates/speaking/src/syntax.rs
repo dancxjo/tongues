@@ -132,6 +132,97 @@ impl LinkGrammarParser for EnglishLinkGrammarParser {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FrenchLinkGrammarParser;
+
+impl LinkGrammarParser for FrenchLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::French)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SpanishLinkGrammarParser;
+
+impl LinkGrammarParser for SpanishLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::Spanish)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GermanLinkGrammarParser;
+
+impl LinkGrammarParser for GermanLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::German)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EsperantoLinkGrammarParser;
+
+impl LinkGrammarParser for EsperantoLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::Esperanto)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LatinLinkGrammarParser;
+
+impl LinkGrammarParser for LatinLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::Latin)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GreekLinkGrammarParser;
+
+impl LinkGrammarParser for GreekLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::Greek)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SanskritLinkGrammarParser;
+
+impl LinkGrammarParser for SanskritLinkGrammarParser {
+    fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> SentenceSyntaxAnalysis {
+        parse_multilingual_link_grammar(words, terminal, LanguageSyntax::Sanskrit)
+    }
+}
+
 #[deprecated(note = "use EnglishLinkGrammarParser for English-specific syntax")]
 pub type HeuristicLinkGrammarParser = EnglishLinkGrammarParser;
 
@@ -168,6 +259,197 @@ pub fn parse_english_link_grammar(
         tokens,
         link_parses: vec![parse],
         terminal,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LanguageSyntax {
+    French,
+    Spanish,
+    German,
+    Esperanto,
+    Latin,
+    Greek,
+    Sanskrit,
+}
+
+fn parse_multilingual_link_grammar(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+    language: LanguageSyntax,
+) -> SentenceSyntaxAnalysis {
+    let normalized = words
+        .iter()
+        .map(|word| normalize_syntax_word(word))
+        .collect::<Vec<_>>();
+    let links = build_multilingual_links(&normalized, language);
+    let parse = SyntacticLinkParse { links, rank: 0.72 };
+    let tokens = normalized
+        .iter()
+        .enumerate()
+        .map(|(word_index, word)| {
+            let previous = word_index
+                .checked_sub(1)
+                .and_then(|index| normalized.get(index))
+                .map(String::as_str);
+            let mut syntactic_links = parse
+                .links
+                .iter()
+                .filter_map(|link| {
+                    (link.left == word_index || link.right == word_index).then_some(link.kind)
+                })
+                .collect::<Vec<_>>();
+            syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+            syntactic_links.dedup();
+            let pos = multilingual_pos(language, word, previous);
+            SyntaxToken {
+                word_index,
+                text: words[word_index].clone(),
+                pos,
+                prosodic_role: multilingual_prosodic_role(pos, &syntactic_links),
+                syntactic_links,
+            }
+        })
+        .collect();
+
+    SentenceSyntaxAnalysis {
+        tokens,
+        link_parses: vec![parse],
+        terminal,
+    }
+}
+
+fn build_multilingual_links(words: &[String], language: LanguageSyntax) -> Vec<SyntacticLink> {
+    let mut links = Vec::new();
+    for (index, window) in words.windows(2).enumerate() {
+        let left = window[0].as_str();
+        let right = window[1].as_str();
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| words.get(previous))
+            .map(String::as_str);
+        if multilingual_is_determiner(language, left) && multilingual_is_nominal(language, right) {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Determiner, 0.78),
+            );
+        }
+        if multilingual_is_pronoun(language, left)
+            && multilingual_is_likely_verb(language, right, Some(left))
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Subject, 0.77),
+            );
+        }
+        if multilingual_is_auxiliary(language, left)
+            && multilingual_is_likely_verb(language, right, Some(left))
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Auxiliary, 0.76),
+            );
+        }
+        if multilingual_is_preposition(language, left) && multilingual_is_nominal(language, right) {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Preposition, 0.76),
+            );
+        }
+        if multilingual_is_adverb(language, left)
+            && (multilingual_is_likely_verb(language, right, Some(left))
+                || multilingual_is_adjective(language, right))
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Modifier, 0.66),
+            );
+        }
+        if multilingual_is_conjunction(language, left) {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Coordination, 0.68),
+            );
+        }
+        if multilingual_is_likely_verb(language, left, previous)
+            && multilingual_is_nominal(language, right)
+            && !multilingual_is_preposition(language, right)
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Object, 0.66),
+            );
+        }
+    }
+    for predicate_index in 0..words.len() {
+        let previous = predicate_index
+            .checked_sub(1)
+            .and_then(|index| words.get(index))
+            .map(String::as_str);
+        if !multilingual_is_likely_verb(language, &words[predicate_index], previous)
+            && !multilingual_is_auxiliary(language, &words[predicate_index])
+        {
+            continue;
+        }
+        if let Some(subject_index) = (0..predicate_index)
+            .rev()
+            .take(4)
+            .find(|index| multilingual_is_subject(language, &words[*index]))
+        {
+            push_link(
+                &mut links,
+                link(
+                    subject_index,
+                    predicate_index,
+                    SyntacticLinkKind::Subject,
+                    0.72,
+                ),
+            );
+        }
+    }
+    links
+}
+
+fn multilingual_pos(language: LanguageSyntax, word: &str, previous: Option<&str>) -> PartOfSpeech {
+    if multilingual_is_auxiliary(language, word) {
+        PartOfSpeech::Auxiliary
+    } else if multilingual_is_determiner(language, word) {
+        PartOfSpeech::Determiner
+    } else if multilingual_is_preposition(language, word) {
+        PartOfSpeech::Preposition
+    } else if multilingual_is_pronoun(language, word) {
+        PartOfSpeech::Pronoun
+    } else if multilingual_is_conjunction(language, word) {
+        PartOfSpeech::Conjunction
+    } else if multilingual_is_adverb(language, word) {
+        PartOfSpeech::Adverb
+    } else if multilingual_is_likely_verb(language, word, previous) {
+        PartOfSpeech::Verb
+    } else if multilingual_is_adjective(language, word) {
+        PartOfSpeech::Adjective
+    } else if multilingual_is_nominal(language, word) {
+        PartOfSpeech::Noun
+    } else {
+        PartOfSpeech::Unknown
+    }
+}
+
+fn multilingual_prosodic_role(pos: PartOfSpeech, links: &[SyntacticLinkKind]) -> ProsodicRole {
+    if links.contains(&SyntacticLinkKind::Object) || links.contains(&SyntacticLinkKind::Complement)
+    {
+        ProsodicRole::Focus
+    } else if matches!(
+        pos,
+        PartOfSpeech::Auxiliary
+            | PartOfSpeech::Determiner
+            | PartOfSpeech::Preposition
+            | PartOfSpeech::Pronoun
+            | PartOfSpeech::Conjunction
+            | PartOfSpeech::Particle
+    ) {
+        ProsodicRole::FunctionWeak
+    } else {
+        ProsodicRole::Content
     }
 }
 
@@ -312,8 +594,16 @@ fn build_links(words: &[String]) -> Vec<SyntacticLink> {
 }
 
 fn normalize_syntax_word(word: &str) -> String {
-    word.trim_matches(|character: char| !character.is_alphabetic() && character != '\'')
-        .to_ascii_lowercase()
+    word.trim_matches(|character: char| !is_syntax_word_character(character))
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn is_syntax_word_character(character: char) -> bool {
+    character.is_alphabetic()
+        || character == '\''
+        || matches!(character, '\u{0300}'..='\u{036F}' | '\u{0900}'..='\u{094D}')
 }
 
 fn push_prepositional_phrase_links(words: &[String], links: &mut Vec<SyntacticLink>) {
@@ -685,6 +975,584 @@ fn is_parenthetical_marker(word: &str) -> bool {
     english_syntax::is_parenthetical_marker(word)
 }
 
+fn multilingual_is_determiner(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => contains(
+            word,
+            &[
+                "le", "la", "les", "l'", "un", "une", "des", "du", "de", "mon", "ma", "mes", "ton",
+                "ta", "tes", "son", "sa", "ses", "notre", "nos", "votre", "vos", "leur", "leurs",
+                "ce", "cet", "cette", "ces",
+            ],
+        ),
+        LanguageSyntax::Spanish => contains(
+            word,
+            &[
+                "el", "la", "los", "las", "un", "una", "unos", "unas", "mi", "mis", "tu", "tus",
+                "su", "sus", "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "estos",
+                "estas", "ese", "esa", "esos", "esas",
+            ],
+        ),
+        LanguageSyntax::German => contains(
+            word,
+            &[
+                "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer",
+                "eines", "mein", "meine", "dein", "deine", "sein", "seine", "ihr", "ihre", "unser",
+                "unsere", "dieser", "diese", "dieses",
+            ],
+        ),
+        LanguageSyntax::Esperanto => contains(word, &["la", "tiu", "tiuj", "ĉi", "ci"]),
+        LanguageSyntax::Latin => contains(
+            word,
+            &[
+                "hic", "haec", "hoc", "ille", "illa", "illud", "iste", "ista", "istud", "is", "ea",
+                "id", "meus", "mea", "tuus", "tua", "suus", "sua",
+            ],
+        ),
+        LanguageSyntax::Greek => contains(
+            word,
+            &[
+                "ο", "η", "το", "οι", "τα", "του", "της", "των", "τον", "την", "τους", "τις",
+            ],
+        ),
+        LanguageSyntax::Sanskrit => false,
+    }
+}
+
+fn multilingual_is_pronoun(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => contains(
+            word,
+            &[
+                "je", "j'", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles", "me", "m'",
+                "te", "t'", "se", "s'", "moi", "toi", "lui", "eux", "leur", "y", "en", "qui",
+                "que",
+            ],
+        ),
+        LanguageSyntax::Spanish => contains(
+            word,
+            &[
+                "yo", "tu", "tú", "el", "él", "ella", "usted", "nosotros", "nosotras", "vosotros",
+                "vosotras", "ellos", "ellas", "ustedes", "me", "te", "se", "nos", "os", "lo", "la",
+                "los", "las", "le", "les", "que", "quien", "quién",
+            ],
+        ),
+        LanguageSyntax::German => contains(
+            word,
+            &[
+                "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich", "sich", "uns",
+                "euch", "mir", "dir", "ihm", "ihnen", "wer", "was", "die",
+            ],
+        ),
+        LanguageSyntax::Esperanto => contains(
+            word,
+            &[
+                "mi", "vi", "li", "ŝi", "ĝi", "ni", "ili", "oni", "si", "min", "vin", "lin", "ŝin",
+                "ĝin", "nin", "ilin", "kiu", "kio",
+            ],
+        ),
+        LanguageSyntax::Latin => contains(
+            word,
+            &[
+                "ego", "tu", "nos", "vos", "me", "te", "se", "qui", "quae", "quod", "quis", "quid",
+            ],
+        ),
+        LanguageSyntax::Greek => contains(
+            word,
+            &[
+                "εγώ",
+                "εγω",
+                "εσύ",
+                "εσυ",
+                "αυτός",
+                "αυτος",
+                "αυτή",
+                "αυτη",
+                "αυτό",
+                "αυτο",
+                "εμείς",
+                "εμεις",
+                "εσείς",
+                "εσεις",
+                "αυτοί",
+                "αυτοι",
+                "αυτές",
+                "αυτες",
+                "τις",
+                "τι",
+            ],
+        ),
+        LanguageSyntax::Sanskrit => contains(
+            word,
+            &[
+                "अहम्",
+                "त्वम्",
+                "सः",
+                "सा",
+                "तत्",
+                "वयम्",
+                "यूयम्",
+                "ते",
+                "असौ",
+                "कः",
+                "का",
+                "किम्",
+            ],
+        ),
+    }
+}
+
+fn multilingual_is_auxiliary(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => contains(
+            word,
+            &[
+                "suis", "es", "est", "sommes", "êtes", "sont", "étais", "était", "étaient",
+                "serai", "seras", "sera", "serons", "serez", "seront", "ai", "as", "a", "avons",
+                "avez", "ont", "avais", "avait", "avaient", "aurai", "aura", "auront", "vais",
+                "vas", "va", "allons", "allez", "vont",
+            ],
+        ),
+        LanguageSyntax::Spanish => contains(
+            word,
+            &[
+                "soy", "eres", "es", "somos", "son", "estoy", "estas", "estás", "esta", "está",
+                "estamos", "estan", "están", "he", "has", "ha", "hemos", "han", "habia", "había",
+                "habian", "habían", "voy", "vas", "va", "vamos", "van",
+            ],
+        ),
+        LanguageSyntax::German => contains(
+            word,
+            &[
+                "bin", "bist", "ist", "sind", "seid", "war", "waren", "habe", "hast", "hat",
+                "haben", "habt", "hatte", "hatten", "werde", "wirst", "wird", "werden", "wollen",
+                "können", "müssen", "sollen", "dürfen", "mögen",
+            ],
+        ),
+        LanguageSyntax::Esperanto => false,
+        LanguageSyntax::Latin => contains(
+            word,
+            &[
+                "sum", "es", "est", "sumus", "estis", "sunt", "eram", "erat", "erant", "fui",
+                "fuit", "fuerunt",
+            ],
+        ),
+        LanguageSyntax::Greek => contains(
+            word,
+            &[
+                "είμαι",
+                "ειμαι",
+                "είσαι",
+                "εισαι",
+                "είναι",
+                "ειναι",
+                "είμαστε",
+                "ειμαστε",
+                "είστε",
+                "ειστε",
+                "ήμουν",
+                "ημουν",
+                "εἰμί",
+                "ἐστί",
+                "ἐστίν",
+                "εἰσί",
+            ],
+        ),
+        LanguageSyntax::Sanskrit => {
+            contains(word, &["अस्मि", "असि", "अस्ति", "स्मः", "स्थ", "सन्ति", "आसीत्"])
+        }
+    }
+}
+
+fn multilingual_is_preposition(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => contains(
+            word,
+            &[
+                "à", "a", "de", "d'", "dans", "en", "sur", "sous", "avec", "sans", "pour", "par",
+                "chez", "avant", "après", "entre", "vers", "contre",
+            ],
+        ),
+        LanguageSyntax::Spanish => contains(
+            word,
+            &[
+                "a", "de", "en", "con", "sin", "por", "para", "sobre", "bajo", "entre", "hasta",
+                "desde", "contra", "hacia",
+            ],
+        ),
+        LanguageSyntax::German => contains(
+            word,
+            &[
+                "an", "auf", "aus", "bei", "durch", "für", "gegen", "in", "mit", "nach", "ohne",
+                "seit", "über", "um", "unter", "von", "vor", "zu", "zwischen",
+            ],
+        ),
+        LanguageSyntax::Esperanto => contains(
+            word,
+            &[
+                "al", "de", "en", "kun", "sen", "por", "per", "pri", "sur", "sub", "inter",
+                "antaŭ", "post", "kontraŭ",
+            ],
+        ),
+        LanguageSyntax::Latin => contains(
+            word,
+            &[
+                "ad", "in", "de", "cum", "sine", "per", "pro", "sub", "super", "ab", "ex",
+            ],
+        ),
+        LanguageSyntax::Greek => contains(
+            word,
+            &[
+                "σε", "με", "από", "απο", "για", "προς", "κατά", "κατα", "υπέρ", "υπερ", "περί",
+                "περι", "ἐν", "εἰς", "ἐκ",
+            ],
+        ),
+        LanguageSyntax::Sanskrit => contains(word, &["प्रति", "अनु", "अधि", "उप", "परि", "वि"]),
+    }
+}
+
+fn multilingual_is_conjunction(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => contains(word, &["et", "ou", "mais", "donc", "car", "ni"]),
+        LanguageSyntax::Spanish => contains(word, &["y", "e", "o", "u", "pero", "sino", "ni"]),
+        LanguageSyntax::German => contains(word, &["und", "oder", "aber", "denn", "sondern"]),
+        LanguageSyntax::Esperanto => contains(word, &["kaj", "aŭ", "sed", "nek"]),
+        LanguageSyntax::Latin => {
+            contains(word, &["et", "aut", "sed", "atque", "nec", "neque", "vel"])
+        }
+        LanguageSyntax::Greek => contains(word, &["και", "ή", "η", "αλλά", "αλλα", "δέ", "δε"]),
+        LanguageSyntax::Sanskrit => contains(word, &["च", "वा", "तु", "अथ"]),
+    }
+}
+
+fn multilingual_is_adverb(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => {
+            contains(word, &["ne", "pas", "plus", "très", "tres", "bien", "mal"])
+                || word.ends_with("ment")
+        }
+        LanguageSyntax::Spanish => {
+            contains(
+                word,
+                &["no", "muy", "bien", "mal", "ya", "tambien", "también"],
+            ) || word.ends_with("mente")
+        }
+        LanguageSyntax::German => contains(word, &["nicht", "sehr", "auch", "gern", "gerne"]),
+        LanguageSyntax::Esperanto => {
+            contains(word, &["ne", "tre", "ankaŭ", "jam", "nun"]) || word.ends_with('e')
+        }
+        LanguageSyntax::Latin => contains(word, &["non", "ne", "bene", "male", "iam", "nunc"]),
+        LanguageSyntax::Greek => contains(word, &["δεν", "μη", "πολύ", "πολυ", "καλά", "καλα"]),
+        LanguageSyntax::Sanskrit => contains(word, &["न", "मा", "सु", "एव"]),
+    }
+}
+
+fn multilingual_is_adjective(language: LanguageSyntax, word: &str) -> bool {
+    match language {
+        LanguageSyntax::French => {
+            contains(
+                word,
+                &[
+                    "grand",
+                    "grande",
+                    "petit",
+                    "petite",
+                    "bon",
+                    "bonne",
+                    "mauvais",
+                    "mauvaise",
+                    "intelligent",
+                    "intelligente",
+                    "important",
+                    "importante",
+                ],
+            ) || word.ends_with("able")
+                || word.ends_with("ible")
+                || word.ends_with("ique")
+        }
+        LanguageSyntax::Spanish => {
+            contains(
+                word,
+                &[
+                    "bueno", "buena", "malo", "mala", "grande", "pequeño", "pequeña",
+                ],
+            ) || word.ends_with("able")
+                || word.ends_with("ible")
+                || word.ends_with("ico")
+                || word.ends_with("ica")
+        }
+        LanguageSyntax::German => {
+            word.ends_with("ig") || word.ends_with("lich") || word.ends_with("isch")
+        }
+        LanguageSyntax::Esperanto => {
+            word.ends_with('a') || word.ends_with("aj") || word.ends_with("an")
+        }
+        LanguageSyntax::Latin => {
+            word.ends_with("us")
+                || word.ends_with('a')
+                || word.ends_with("um")
+                || word.ends_with("is")
+        }
+        LanguageSyntax::Greek => word.ends_with("ος") || word.ends_with("η") || word.ends_with("ο"),
+        LanguageSyntax::Sanskrit => false,
+    }
+}
+
+fn multilingual_is_likely_verb(
+    language: LanguageSyntax,
+    word: &str,
+    previous: Option<&str>,
+) -> bool {
+    if multilingual_is_auxiliary(language, word) {
+        return true;
+    }
+    match language {
+        LanguageSyntax::French => french_is_likely_verb(word, previous),
+        LanguageSyntax::Spanish => spanish_is_likely_verb(word, previous),
+        LanguageSyntax::German => german_is_likely_verb(word, previous),
+        LanguageSyntax::Esperanto => esperanto_is_likely_verb(word),
+        LanguageSyntax::Latin => latin_is_likely_verb(word, previous),
+        LanguageSyntax::Greek => greek_is_likely_verb(word, previous),
+        LanguageSyntax::Sanskrit => sanskrit_is_likely_verb(word, previous),
+    }
+}
+
+fn multilingual_is_nominal(language: LanguageSyntax, word: &str) -> bool {
+    !word.is_empty()
+        && !multilingual_is_preposition(language, word)
+        && !multilingual_is_conjunction(language, word)
+        && !multilingual_is_adverb(language, word)
+        && !multilingual_is_likely_verb(language, word, None)
+}
+
+fn multilingual_is_subject(language: LanguageSyntax, word: &str) -> bool {
+    multilingual_is_pronoun(language, word) || multilingual_is_nominal(language, word)
+}
+
+fn french_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    if contains(
+        word,
+        &[
+            "être",
+            "etre",
+            "avoir",
+            "aller",
+            "faire",
+            "dire",
+            "pouvoir",
+            "vouloir",
+            "savoir",
+            "venir",
+            "voir",
+            "devoir",
+            "prendre",
+            "parler",
+            "aimer",
+            "donner",
+            "changer",
+            "manger",
+            "finir",
+            "choisir",
+            "recueillez",
+            "voulez",
+            "étaient",
+            "etaient",
+            "parlent",
+            "mangent",
+            "finissent",
+        ],
+    ) {
+        return true;
+    }
+    if french_non_verbal_ent_exception(word) {
+        return false;
+    }
+    let has_subject_before = previous.is_some_and(|previous| {
+        contains(
+            previous,
+            &[
+                "je", "j'", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles", "qui",
+            ],
+        )
+    });
+    if word.ends_with("ent") {
+        return has_subject_before
+            || word.ends_with("aient")
+            || word.ends_with("issent")
+            || word.ends_with("èrent")
+            || word.ends_with("erent");
+    }
+    word.ends_with("er")
+        || word.ends_with("ir")
+        || word.ends_with("re")
+        || word.ends_with("ez")
+        || word.ends_with("ons")
+        || word.ends_with("ait")
+        || word.ends_with("ais")
+}
+
+fn french_non_verbal_ent_exception(word: &str) -> bool {
+    contains(
+        word,
+        &[
+            "intelligent",
+            "président",
+            "president",
+            "moment",
+            "vent",
+            "argent",
+            "enfant",
+            "parent",
+            "client",
+            "document",
+            "comment",
+            "souvent",
+            "vraiment",
+            "lentement",
+            "seulement",
+        ],
+    )
+}
+
+fn spanish_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    contains(
+        word,
+        &[
+            "ser", "estar", "haber", "tener", "hacer", "decir", "poder", "querer", "saber",
+            "venir", "ver", "dar", "hablar", "comer", "vivir",
+        ],
+    ) || word.ends_with("ar")
+        || word.ends_with("er")
+        || word.ends_with("ir")
+        || word.ends_with("amos")
+        || word.ends_with("emos")
+        || word.ends_with("imos")
+        || word.ends_with("ando")
+        || word.ends_with("iendo")
+        || word.ends_with("ado")
+        || word.ends_with("ido")
+        || (previous
+            .is_some_and(|previous| multilingual_is_pronoun(LanguageSyntax::Spanish, previous))
+            && (word.ends_with("o")
+                || word.ends_with("as")
+                || word.ends_with("es")
+                || word.ends_with("a")
+                || word.ends_with("e")
+                || word.ends_with("an")
+                || word.ends_with("en")))
+}
+
+fn german_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    if contains(
+        word,
+        &[
+            "sein", "haben", "werden", "machen", "sagen", "gehen", "kommen", "sehen", "wissen",
+            "geben", "nehmen", "sprechen", "lernen", "arbeiten",
+        ],
+    ) {
+        return true;
+    }
+    if word.ends_with("en") {
+        return true;
+    }
+    previous.is_some_and(|previous| multilingual_is_pronoun(LanguageSyntax::German, previous))
+        && (word.ends_with("e") || word.ends_with("st") || word.ends_with('t'))
+}
+
+fn esperanto_is_likely_verb(word: &str) -> bool {
+    word.ends_with('i')
+        || word.ends_with("as")
+        || word.ends_with("is")
+        || word.ends_with("os")
+        || word.ends_with("us")
+        || word.ends_with('u')
+}
+
+fn latin_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    if contains(
+        word,
+        &[
+            "amo", "amas", "amat", "amamus", "amatis", "amant", "video", "videt", "dico", "dicit",
+            "venio", "venit", "sum", "es", "est", "sunt",
+        ],
+    ) {
+        return true;
+    }
+    if word.ends_with("are") || word.ends_with("ere") || word.ends_with("ire") {
+        return true;
+    }
+    previous.is_some_and(|previous| multilingual_is_pronoun(LanguageSyntax::Latin, previous))
+        && (word.ends_with('o')
+            || word.ends_with('m')
+            || word.ends_with('s')
+            || word.ends_with('t')
+            || word.ends_with("mus")
+            || word.ends_with("tis")
+            || word.ends_with("nt"))
+}
+
+fn greek_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    if contains(
+        word,
+        &[
+            "λέγω",
+            "λεγω",
+            "λέγει",
+            "λεγει",
+            "βλέπω",
+            "βλεπω",
+            "βλέπει",
+            "βλεπει",
+            "έχω",
+            "εχω",
+            "έχει",
+            "εχει",
+            "είμαι",
+            "ειμαι",
+            "είναι",
+            "ειναι",
+        ],
+    ) {
+        return true;
+    }
+    previous.is_some_and(|previous| multilingual_is_pronoun(LanguageSyntax::Greek, previous))
+        && (word.ends_with('ω')
+            || word.ends_with("εις")
+            || word.ends_with("ει")
+            || word.ends_with("ουμε")
+            || word.ends_with("ετε")
+            || word.ends_with("ουν"))
+}
+
+fn sanskrit_is_likely_verb(word: &str, previous: Option<&str>) -> bool {
+    if contains(
+        word,
+        &[
+            "गच्छति",
+            "गच्छन्ति",
+            "भवति",
+            "भवन्ति",
+            "वदति",
+            "वदन्ति",
+            "अस्ति",
+            "सन्ति",
+        ],
+    ) {
+        return true;
+    }
+    previous.is_some_and(|previous| multilingual_is_pronoun(LanguageSyntax::Sanskrit, previous))
+        && (word.ends_with("ति")
+            || word.ends_with("न्ति")
+            || word.ends_with("मि")
+            || word.ends_with("सि")
+            || word.ends_with("तः")
+            || word.ends_with("थ"))
+}
+
+fn contains(word: &str, words: &[&str]) -> bool {
+    words.contains(&word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,7 +1563,7 @@ mod tests {
         sentence
             .split_whitespace()
             .map(|word| {
-                word.trim_matches(|character: char| !character.is_alphabetic() && character != '\'')
+                word.trim_matches(|character: char| !is_syntax_word_character(character))
                     .to_string()
             })
             .filter(|word| !word.is_empty())
@@ -907,6 +1775,45 @@ mod tests {
                 assert_link(&analysis, expected_link);
             }
         }
+    }
+
+    #[test]
+    fn multilingual_parsers_emit_basic_function_links() {
+        let french = FrenchLinkGrammarParser.parse(&words("ils parlent"), None);
+        assert_eq!(french.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&french, SyntacticLinkKind::Subject);
+
+        let spanish = SpanishLinkGrammarParser.parse(&words("ellos hablan"), None);
+        assert_eq!(spanish.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&spanish, SyntacticLinkKind::Subject);
+
+        let german = GermanLinkGrammarParser.parse(&words("sie sprechen"), None);
+        assert_eq!(german.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&german, SyntacticLinkKind::Subject);
+
+        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi parolas"), None);
+        assert_eq!(esperanto.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&esperanto, SyntacticLinkKind::Subject);
+
+        let latin = LatinLinkGrammarParser.parse(&words("ego amo"), None);
+        assert_eq!(latin.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&latin, SyntacticLinkKind::Subject);
+
+        let greek = GreekLinkGrammarParser.parse(&words("εγώ λέγω"), None);
+        assert_eq!(greek.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&greek, SyntacticLinkKind::Subject);
+
+        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहम् गच्छति"), None);
+        assert_eq!(sanskrit.tokens[1].pos, PartOfSpeech::Verb);
+        assert_link(&sanskrit, SyntacticLinkKind::Subject);
+    }
+
+    #[test]
+    fn french_parser_does_not_treat_common_ent_adjectives_as_verbs() {
+        let analysis = FrenchLinkGrammarParser.parse(&words("un homme intelligent"), None);
+
+        assert_ne!(analysis.tokens[2].pos, PartOfSpeech::Verb);
+        assert_link(&analysis, SyntacticLinkKind::Determiner);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
+use crate::syntax::PartOfSpeech;
 use crate::variety::{LinguisticVariety, VarietyImplementationStatus, VarietyStatus};
 
 const SEGMENTS: &[&str] = &[
@@ -40,7 +41,15 @@ pub fn variety() -> LinguisticVariety {
 }
 
 pub fn synthesize_ipa(word: &str) -> Option<String> {
+    synthesize_ipa_with_pos(word, None)
+}
+
+pub fn synthesize_ipa_with_pos(word: &str, part_of_speech: Option<PartOfSpeech>) -> Option<String> {
     let chars = normalize(word)?;
+    let mute_final_ent = matches!(
+        part_of_speech,
+        Some(PartOfSpeech::Verb | PartOfSpeech::Auxiliary)
+    );
     let mut ipa = String::new();
     let mut index = 0usize;
     while index < chars.len() {
@@ -53,6 +62,8 @@ pub fn synthesize_ipa(word: &str) -> Option<String> {
             ("ɛ", 5)
         } else if rest.starts_with("ait") || rest.starts_with("ais") {
             ("ɛ", 3)
+        } else if mute_final_ent && rest.starts_with("ent") && index + 3 == chars.len() {
+            ("", 3)
         } else if rest.starts_with("ez") && index + 2 == chars.len() {
             ("e", 2)
         } else if rest.starts_with("er") && index + 2 == chars.len() {
@@ -307,5 +318,17 @@ mod tests {
     #[test]
     fn french_synthesizes_common_words() {
         assert_eq!(synthesize_ipa("bonjour").as_deref(), Some("/bɔ̃ˈʒuʁ/"));
+    }
+
+    #[test]
+    fn french_mutes_final_ent_when_syntax_marks_a_verb() {
+        assert_eq!(
+            synthesize_ipa_with_pos("parlent", Some(PartOfSpeech::Verb)).as_deref(),
+            Some("/ˈpaʁl/")
+        );
+        assert_eq!(
+            synthesize_ipa_with_pos("parlent", None).as_deref(),
+            Some("/paˈʁlɑ̃/")
+        );
     }
 }
