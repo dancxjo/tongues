@@ -1,4 +1,3 @@
-use crate::data::notation::arpabet;
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, PhoneId, PhonemeId};
@@ -481,7 +480,7 @@ fn default_phone_id(variety: &LinguisticVariety, token: &PhonemeToken) -> Spec<P
         };
     };
 
-    if let Some(phone) = stress_aware_phone_id(token) {
+    if let Some(phone) = token_default_phone(token) {
         return Spec::Known(phone);
     }
 
@@ -498,34 +497,13 @@ fn default_phone_id(variety: &LinguisticVariety, token: &PhonemeToken) -> Spec<P
                 .get(&base_id)
                 .and_then(|phoneme| phoneme.default_phone.clone())
         })
-        .or_else(|| {
-            let base = phoneme_base_symbol(id);
-            arpabet::entry(base).map(|entry| arpabet::phone_id_for_ipa(entry.phone_symbol))
-        })
         .map(Spec::Known)
         .unwrap_or(Spec::Unknown)
 }
 
-fn stress_aware_phone_id(token: &PhonemeToken) -> Option<PhoneId> {
-    let (base, stress) = token_source_base_and_stress(token).or_else(|| {
-        let Spec::Known(id) = &token.phoneme else {
-            return None;
-        };
-        let symbol = phoneme_display_symbol(id);
-        let (base, stress) = arpabet::split_stress(symbol);
-        Some((base.to_string(), stress.map(|digit| digit.to_string())))
-    })?;
-    arpabet::reduced_phone_for_stress_label(&base, stress.as_deref())
-}
-
-fn token_source_base_and_stress(token: &PhonemeToken) -> Option<(String, Option<String>)> {
-    let source_schema = token_category_feature(&token.features, "source_schema")?;
-    if !arpabet::stress_aware_source_schema(source_schema) {
-        return None;
-    }
-    let base = token_category_feature(&token.features, "base_symbol")?.to_string();
-    let stress = token_category_feature(&token.features, "stress").map(str::to_string);
-    Some((base, stress))
+fn token_default_phone(token: &PhonemeToken) -> Option<PhoneId> {
+    token_category_feature(&token.features, "default_phone")
+        .map(|phone| PhoneId::from(phone.to_string()))
 }
 
 fn phoneme_token_features(
@@ -538,15 +516,14 @@ fn phoneme_token_features(
     let Spec::Known(id) = &token.phoneme else {
         return None;
     };
-    phoneme_features(variety, id)
-        .cloned()
-        .or_else(|| arpabet::entry(phoneme_base_symbol(id)).map(arpabet::feature_bundle))
+    phoneme_features(variety, id).cloned()
 }
 
 fn base_phoneme_id(id: &PhonemeId) -> Option<PhonemeId> {
     let (prefix, symbol) = id.0.rsplit_once(".phoneme.")?;
-    let (base, stress) = arpabet::split_stress(symbol);
-    stress.map(|_| PhonemeId(format!("{prefix}.phoneme.{base}")))
+    symbol
+        .strip_suffix(['0', '1', '2'])
+        .map(|base| PhonemeId(format!("{prefix}.phoneme.{base}")))
 }
 
 fn phoneme_display_symbol(id: &PhonemeId) -> &str {
@@ -555,7 +532,7 @@ fn phoneme_display_symbol(id: &PhonemeId) -> &str {
 
 fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     let symbol = phoneme_display_symbol(id);
-    arpabet::split_stress(symbol).0
+    symbol.strip_suffix(['0', '1', '2']).unwrap_or(symbol)
 }
 
 fn token_category_feature<'a>(features: &'a FeatureBundle, name: &str) -> Option<&'a str> {

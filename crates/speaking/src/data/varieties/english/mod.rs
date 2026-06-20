@@ -354,6 +354,7 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
             part_of_speech: Some(spec.part_of_speech),
             next_part_of_speech: None,
             source_pronunciation: spec.symbols.iter().map(|symbol| (*symbol).into()).collect(),
+            source_pronunciation_notation: Some("arpabet".into()),
         })
         .chain(std::iter::once(PronunciationSelectionRule {
             lexical_item: "st".into(),
@@ -363,6 +364,7 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            source_pronunciation_notation: Some("arpabet".into()),
         }))
         .collect()
 }
@@ -443,6 +445,7 @@ fn orthographic_unit(
             .map(|symbol| CmuPhoneme::parse(symbol))
             .map(|phoneme| phoneme.raw_symbol())
             .collect(),
+        source_pronunciation_notation: Some("arpabet".into()),
     }
 }
 
@@ -528,6 +531,7 @@ fn weak_form(
             .map(|symbol| CmuPhoneme::parse(symbol))
             .map(|phoneme| phoneme.raw_symbol())
             .collect(),
+        source_pronunciation_notation: Some("arpabet".into()),
         following,
         style,
     }

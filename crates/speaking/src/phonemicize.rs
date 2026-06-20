@@ -2,9 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
-use crate::data::lexicons::lexique;
-use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID};
+use crate::data::lexicons::cmudict::{CmuPhoneme, CmuStress, PronunciationStatus};
+use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID, PronunciationNotation};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
 use crate::data::{canonical_variety_id, variety_by_code};
@@ -1190,43 +1189,67 @@ pub struct TokenPronunciationContext {
     pub next_part_of_speech: Option<PartOfSpeech>,
 }
 
-fn planned_candidate_from_cmu(
+fn planned_candidates_from_notation(
     variety: &LinguisticVariety,
-    candidate: Vec<CmuPhoneme>,
-) -> Vec<PlannedPhoneme> {
-    candidate
-        .iter()
-        .map(|cmu| planned_phoneme_from_cmu(&variety.id.0, cmu))
-        .collect()
-}
-
-fn planned_candidates_from_cmu(
-    variety: &LinguisticVariety,
-    candidates: Vec<Vec<CmuPhoneme>>,
+    candidates: Vec<Vec<String>>,
+    notation: PronunciationNotation,
 ) -> Vec<Vec<PlannedPhoneme>> {
     candidates
         .into_iter()
-        .map(|candidate| planned_candidate_from_cmu(variety, candidate))
-        .collect()
-}
-
-fn planned_candidates_from_ipa(
-    variety: &LinguisticVariety,
-    candidates: Vec<String>,
-) -> Vec<Vec<PlannedPhoneme>> {
-    candidates
-        .into_iter()
-        .map(|candidate| planned_candidate_from_variety_ipa(&candidate, variety))
+        .map(|candidate| planned_candidate_from_notation(variety, candidate, notation))
         .filter(|candidate| !candidate.is_empty())
         .collect()
 }
 
+fn planned_candidate_from_notation(
+    variety: &LinguisticVariety,
+    candidate: Vec<String>,
+    notation: PronunciationNotation,
+) -> Vec<PlannedPhoneme> {
+    match notation {
+        PronunciationNotation::Arpabet => candidate
+            .iter()
+            .map(|symbol| planned_phoneme_from_cmu(&variety.id.0, &CmuPhoneme::parse(symbol)))
+            .collect(),
+        PronunciationNotation::Ipa => candidate
+            .iter()
+            .flat_map(|symbol| planned_candidate_from_variety_ipa(symbol, variety))
+            .collect(),
+    }
+}
+
+fn source_pronunciation_notation(name: Option<&str>) -> Option<PronunciationNotation> {
+    match name {
+        Some("arpabet") | Some("cmudict") => Some(PronunciationNotation::Arpabet),
+        Some("ipa") => Some(PronunciationNotation::Ipa),
+        _ => None,
+    }
+}
+
+fn planned_candidate_from_source_pronunciation(
+    variety: &LinguisticVariety,
+    symbols: &[String],
+    notation: Option<&str>,
+) -> Vec<PlannedPhoneme> {
+    let Some(notation) = source_pronunciation_notation(notation) else {
+        return Vec::new();
+    };
+    planned_candidate_from_notation(variety, symbols.to_vec(), notation)
+}
+
 fn planned_phoneme_from_cmu(variety_id: &str, cmu: &CmuPhoneme) -> PlannedPhoneme {
     let raw_symbol = cmu.raw_symbol();
-    PlannedPhoneme {
+    let mut planned = PlannedPhoneme {
         phoneme: arpabet::phoneme_id(variety_id, &raw_symbol),
         features: arpabet::cmu_token_features(cmu),
+    };
+    if let Some(phone) = arpabet::reduced_phone_for_cmu(&cmu.base, cmu.stress) {
+        planned.features.values.insert(
+            FeatureId("phonology.default_phone".into()),
+            Spec::Known(FeatureValue::Text(phone.as_str().to_string())),
+        );
     }
+    planned
 }
 
 fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhoneme) -> bool {
@@ -1287,26 +1310,14 @@ fn pronunciation_from_lexicon_adapter(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> Option<WordPronunciation> {
-    match adapter {
-        lexicons::LexiconAdapter::ArpabetDictionary => {
-            arpabet_dictionary_pronunciation(word, variety, context)
-        }
-        lexicons::LexiconAdapter::IpaDictionary => {
-            ipa_dictionary_pronunciation(word, variety, context)
-        }
-    }
-}
-
-fn ipa_dictionary_pronunciation(
-    word: &WordToken,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> Option<WordPronunciation> {
-    let entry = lexique::bundled().lookup_entry(&word.normalized);
+    let entry = (adapter.lookup)(&word.normalized);
     if entry.candidates.is_empty() {
         return None;
     }
-    let candidates = planned_candidates_from_ipa(variety, entry.candidates);
+    let selection =
+        choose_context_sensitive_candidates(variety, &entry.lookup, entry.candidates, context);
+    let candidates =
+        planned_candidates_from_notation(variety, selection.candidates, adapter.notation);
     if candidates.is_empty() {
         return None;
     }
@@ -1315,37 +1326,15 @@ fn ipa_dictionary_pronunciation(
         status: entry.status,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Lexicon,
-            method: format!("lexique383 {} lookup", status_label(entry.status)),
+            method: pronunciation_lookup_method(
+                adapter.id,
+                entry.status,
+                entry.source,
+                context.part_of_speech,
+                selection.applied_pos,
+            ),
             version: Some(entry.source.into()),
         },
-        warnings: Vec::new(),
-        letter_break_offsets: Vec::new(),
-        letter_indices: Vec::new(),
-        part_of_speech: context.part_of_speech,
-    })
-}
-
-fn arpabet_dictionary_pronunciation(
-    word: &WordToken,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> Option<WordPronunciation> {
-    let entry = cmudict::bundled().lookup_entry(&word.normalized);
-    if entry.candidates.is_empty() {
-        return None;
-    }
-
-    let selection =
-        choose_context_sensitive_candidates(variety, &entry.lookup, entry.candidates, context);
-    Some(WordPronunciation {
-        candidates: planned_candidates_from_cmu(variety, selection.candidates),
-        status: entry.status,
-        provenance: cmudict_pronunciation_provenance(
-            entry.status,
-            entry.source,
-            context.part_of_speech,
-            selection.applied_pos,
-        ),
         warnings: Vec::new(),
         letter_break_offsets: Vec::new(),
         letter_indices: Vec::new(),
@@ -1548,14 +1537,14 @@ fn is_short_uppercase_initialism_surface(surface: &str) -> bool {
 
 #[derive(Debug)]
 struct CandidateSelection {
-    candidates: Vec<Vec<CmuPhoneme>>,
+    candidates: Vec<Vec<String>>,
     applied_pos: bool,
 }
 
 fn choose_context_sensitive_candidates(
     variety: &LinguisticVariety,
     lookup: &str,
-    candidates: Vec<Vec<CmuPhoneme>>,
+    candidates: Vec<Vec<String>>,
     context: TokenPronunciationContext,
 ) -> CandidateSelection {
     let Some(rule) = pronunciation_selection_rule(variety, lookup, context) else {
@@ -1573,7 +1562,7 @@ fn choose_context_sensitive_candidates(
 }
 
 fn choose_matching_candidate(
-    candidates: &[Vec<CmuPhoneme>],
+    candidates: &[Vec<String>],
     symbols: &[String],
     applied_pos: bool,
 ) -> Option<CandidateSelection> {
@@ -1621,12 +1610,8 @@ fn canonical_pronunciation_pos(part_of_speech: PartOfSpeech) -> PartOfSpeech {
     }
 }
 
-fn candidate_matches_symbols(candidate: &[CmuPhoneme], symbols: &[String]) -> bool {
-    candidate.len() == symbols.len()
-        && candidate
-            .iter()
-            .zip(symbols)
-            .all(|(phoneme, symbol)| *phoneme == CmuPhoneme::parse(symbol))
+fn candidate_matches_symbols(candidate: &[String], symbols: &[String]) -> bool {
+    candidate == symbols
 }
 
 fn weak_form_rule_applies(
@@ -1672,12 +1657,11 @@ fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> 
             })
             .collect()
     } else {
-        let source_symbols = rule
-            .source_pronunciation
-            .iter()
-            .map(|symbol| CmuPhoneme::parse(symbol))
-            .collect();
-        planned_candidate_from_cmu(variety, source_symbols)
+        planned_candidate_from_source_pronunciation(
+            variety,
+            &rule.source_pronunciation,
+            rule.source_pronunciation_notation.as_deref(),
+        )
     };
     let method = format!("variety weak form: {}", rule.id.replace('_', " "));
     WordPronunciation {
@@ -1862,13 +1846,10 @@ fn orthographic_unit_planned_candidate(
         return fallback_orthographic_unit_planned_candidate(&normalized, variety, kind);
     };
     if !entry.source_pronunciation.is_empty() {
-        return planned_candidate_from_cmu(
+        return planned_candidate_from_source_pronunciation(
             variety,
-            entry
-                .source_pronunciation
-                .iter()
-                .map(|symbol| CmuPhoneme::parse(symbol))
-                .collect(),
+            &entry.source_pronunciation,
+            entry.source_pronunciation_notation.as_deref(),
         );
     }
     entry
@@ -2212,47 +2193,28 @@ fn status_label(status: PronunciationStatus) -> &'static str {
     }
 }
 
-fn cmudict_pronunciation_provenance(
-    _status: PronunciationStatus,
+fn pronunciation_lookup_method(
+    lexicon_id: &str,
+    status: PronunciationStatus,
     source: &'static str,
     part_of_speech: Option<PartOfSpeech>,
     applied_pos: bool,
-) -> EvidenceProvenance {
-    let mut provenance = EvidenceProvenance {
-        source: EvidenceSource::Lexicon,
-        method: format!("{} lookup", source),
-        version: Some("0.1".into()),
+) -> String {
+    let mut method = if source == lexicon_id {
+        format!("{} {} lookup", lexicon_id, status_label(status))
+    } else {
+        format!("{} {} lookup", source, status_label(status))
     };
     if applied_pos {
         if let Some(part_of_speech) = part_of_speech {
-            provenance.method = format!(
+            method = format!(
                 "{} + link-grammar POS {}",
-                provenance.method,
+                method,
                 part_of_speech_feature_value(part_of_speech)
             );
         }
     }
-    provenance
-}
-
-fn pronunciation_provenance(status: PronunciationStatus) -> EvidenceProvenance {
-    match status {
-        PronunciationStatus::Exact | PronunciationStatus::Normalized => EvidenceProvenance {
-            source: EvidenceSource::Lexicon,
-            method: format!("cmudict {status:?} lookup").to_lowercase(),
-            version: Some("0.1".into()),
-        },
-        PronunciationStatus::Guessed => EvidenceProvenance {
-            source: EvidenceSource::Rule,
-            method: "declared pronunciation guess".into(),
-            version: Some("0.1".into()),
-        },
-        PronunciationStatus::Missing => EvidenceProvenance {
-            source: EvidenceSource::Unknown,
-            method: "missing pronunciation".into(),
-            version: Some("0.1".into()),
-        },
-    }
+    method
 }
 
 pub fn phoneme_display_symbol(id: &PhonemeId) -> &str {
@@ -4887,6 +4849,45 @@ mod tests {
                     "{} declares unknown pronunciation lexicon `{}`",
                     variety.id.0,
                     lexicon_id
+                );
+            }
+
+            for rule in &variety.weak_forms {
+                assert!(
+                    rule.source_pronunciation.is_empty()
+                        || source_pronunciation_notation(
+                            rule.source_pronunciation_notation.as_deref()
+                        )
+                        .is_some(),
+                    "{} weak form `{}` has source pronunciation without declared notation",
+                    variety.id.0,
+                    rule.id
+                );
+            }
+
+            for entry in &variety.orthographic_unit_pronunciations {
+                assert!(
+                    entry.source_pronunciation.is_empty()
+                        || source_pronunciation_notation(
+                            entry.source_pronunciation_notation.as_deref()
+                        )
+                        .is_some(),
+                    "{} orthographic unit `{}` has source pronunciation without declared notation",
+                    variety.id.0,
+                    entry.unit
+                );
+            }
+
+            for rule in &variety.pronunciation_selection_rules {
+                assert!(
+                    rule.source_pronunciation.is_empty()
+                        || source_pronunciation_notation(
+                            rule.source_pronunciation_notation.as_deref()
+                        )
+                        .is_some(),
+                    "{} pronunciation rule `{}` has source pronunciation without declared notation",
+                    variety.id.0,
+                    rule.lexical_item
                 );
             }
 

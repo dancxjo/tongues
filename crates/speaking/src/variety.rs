@@ -237,6 +237,8 @@ pub struct WeakFormRule {
     #[serde(default)]
     pub source_pronunciation: Vec<String>,
     #[serde(default)]
+    pub source_pronunciation_notation: Option<String>,
+    #[serde(default)]
     pub following: WeakFormFollowingContext,
     #[serde(default)]
     pub style: WeakFormStyleContext,
@@ -249,6 +251,8 @@ pub struct OrthographicUnitPronunciation {
     pub pronunciation: Vec<PhonemeId>,
     #[serde(default)]
     pub source_pronunciation: Vec<String>,
+    #[serde(default)]
+    pub source_pronunciation_notation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +264,8 @@ pub struct PronunciationSelectionRule {
     pub next_part_of_speech: Option<PartOfSpeech>,
     #[serde(default)]
     pub source_pronunciation: Vec<String>,
+    #[serde(default)]
+    pub source_pronunciation_notation: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
