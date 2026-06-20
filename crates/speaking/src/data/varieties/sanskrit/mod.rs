@@ -89,8 +89,9 @@ fn synthesize_devanagari(text: &str) -> Option<String> {
             }
         }
         match ch {
-            'ं' | 'ँ' => ipa.push('ŋ'),
+            'ं' | 'ँ' => ipa.push_str(anusvara_for_devanagari(chars.get(index + 1).copied())),
             'ः' => ipa.push('h'),
+            '।' | '॥' => {}
             _ => return None,
         }
         index += 1;
@@ -128,7 +129,11 @@ fn synthesize_iast(text: &str) -> Option<String> {
     let mut index = 0usize;
     while index < chars.len() {
         let rest = chars[index..].iter().collect::<String>();
-        let (symbol, consumed) = if rest.starts_with("kh") {
+        let (symbol, consumed) = if rest.starts_with("ai") {
+            ("ai̯", 2)
+        } else if rest.starts_with("au") {
+            ("au̯", 2)
+        } else if rest.starts_with("kh") {
             ("kʰ", 2)
         } else if rest.starts_with("gh") {
             ("ɡʱ", 2)
@@ -148,6 +153,8 @@ fn synthesize_iast(text: &str) -> Option<String> {
             ("pʰ", 2)
         } else if rest.starts_with("bh") {
             ("bʱ", 2)
+        } else if chars[index] == 'ṃ' {
+            (anusvara_for_iast(chars.get(index + 1).copied()), 1)
         } else {
             (iast_single(chars[index])?, 1)
         };
@@ -269,6 +276,28 @@ fn iast_single(ch: char) -> Option<&'static str> {
     })
 }
 
+fn anusvara_for_devanagari(next: Option<char>) -> &'static str {
+    match next {
+        Some('क' | 'ख' | 'ग' | 'घ' | 'ङ') => "ŋ",
+        Some('च' | 'छ' | 'ज' | 'झ' | 'ञ') => "ɲ",
+        Some('ट' | 'ठ' | 'ड' | 'ढ' | 'ण') => "ɳ",
+        Some('त' | 'थ' | 'द' | 'ध' | 'न') => "n",
+        Some('प' | 'फ' | 'ब' | 'भ' | 'म') => "m",
+        _ => "ŋ",
+    }
+}
+
+fn anusvara_for_iast(next: Option<char>) -> &'static str {
+    match next {
+        Some('k' | 'g' | 'ṅ') => "ŋ",
+        Some('c' | 'j' | 'ñ') => "ɲ",
+        Some('ṭ' | 'ḍ' | 'ṇ') => "ɳ",
+        Some('t' | 'd' | 'n') => "n",
+        Some('p' | 'b' | 'm') => "m",
+        _ => "ŋ",
+    }
+}
+
 fn is_devanagari(ch: char) -> bool {
     ('\u{0900}'..='\u{097F}').contains(&ch)
 }
@@ -364,5 +393,13 @@ mod tests {
     fn sanskrit_synthesizes_devanagari_and_iast() {
         assert_eq!(synthesize_ipa("धर्म").as_deref(), Some("/ˈdʱarma/"));
         assert_eq!(synthesize_ipa("dharma").as_deref(), Some("/ˈdʱarma/"));
+    }
+
+    #[test]
+    fn sanskrit_handles_iast_diphthongs_and_contextual_anusvara() {
+        assert_eq!(synthesize_ipa("aiśa").as_deref(), Some("/ˈai̯ɕa/"));
+        assert_eq!(synthesize_ipa("saṃbhava").as_deref(), Some("/ˈsambʱava/"));
+        assert_eq!(synthesize_ipa("संबन्ध").as_deref(), Some("/ˈsambandʱa/"));
+        assert_eq!(synthesize_ipa("संकेत").as_deref(), Some("/ˈsaŋkeːta/"));
     }
 }

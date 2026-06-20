@@ -34,8 +34,8 @@ impl LatinVariety {
 }
 
 const CLASSICAL_SEGMENTS: &[&str] = &[
-    "a", "e", "i", "o", "u", "y", "ae̯", "au̯", "oe̯", "b", "k", "d", "f", "ɡ", "h", "j", "l", "m",
-    "n", "p", "r", "s", "t", "w", "ks", "z",
+    "a", "e", "i", "o", "u", "y", "ae̯", "au̯", "oe̯", "b", "k", "kʰ", "d", "f", "ɡ", "h", "j", "l",
+    "m", "n", "p", "pʰ", "r", "s", "t", "tʰ", "w", "ks", "z",
 ];
 
 const ECCLESIASTICAL_SEGMENTS: &[&str] = &[
@@ -156,6 +156,13 @@ pub fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
             }
             'y' | 'ȳ' => ipa.push('y'),
             'b' => ipa.push('b'),
+            'c' if matches!(next, Some('h')) => {
+                match variety {
+                    LatinVariety::Classical => ipa.push_str("kʰ"),
+                    LatinVariety::Ecclesiastical => ipa.push('k'),
+                }
+                index += 1;
+            }
             'c' if matches!(variety, LatinVariety::Ecclesiastical)
                 && is_ecclesiastical_front_context(&chars, index) =>
             {
@@ -175,7 +182,10 @@ pub fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
             'm' => ipa.push('m'),
             'n' => ipa.push('n'),
             'p' if matches!(next, Some('h')) => {
-                ipa.push('f');
+                match variety {
+                    LatinVariety::Classical => ipa.push_str("pʰ"),
+                    LatinVariety::Ecclesiastical => ipa.push('f'),
+                }
                 index += 1;
             }
             'p' => ipa.push('p'),
@@ -196,6 +206,13 @@ pub fn synthesize_ipa(word: &str, variety: LatinVariety) -> Option<String> {
                 ipa.push('ʃ');
             }
             's' => ipa.push('s'),
+            't' if matches!(next, Some('h')) => {
+                match variety {
+                    LatinVariety::Classical => ipa.push_str("tʰ"),
+                    LatinVariety::Ecclesiastical => ipa.push('t'),
+                }
+                index += 1;
+            }
             't' if matches!(variety, LatinVariety::Ecclesiastical)
                 && matches!(next, Some('i' | 'ī'))
                 && after_next.is_some_and(is_vowel) =>
@@ -351,9 +368,31 @@ fn is_heavy_syllable(chars: &[char], vowel_index: usize) -> bool {
     matches!(
         chars.get(vowel_index),
         Some('ā' | 'ē' | 'ī' | 'ō' | 'ū' | 'ȳ')
-    ) || chars
-        .get(vowel_index + 1)
-        .is_some_and(|next| !is_vowel(*next))
+    ) || coda_weight_after_vowel(chars, vowel_index) >= 2
+}
+
+fn coda_weight_after_vowel(chars: &[char], vowel_index: usize) -> usize {
+    let mut weight = 0usize;
+    let mut index = vowel_index + 1;
+    while let Some(ch) = chars.get(index).copied() {
+        if is_vowel(ch) {
+            break;
+        }
+        if matches!(ch, '-' | '\'' | '’') {
+            index += 1;
+            continue;
+        }
+        if matches!(ch, 'x' | 'z') {
+            weight += 2;
+        } else if matches!(ch, 'q') && matches!(chars.get(index + 1), Some('u' | 'ū')) {
+            weight += 2;
+            index += 1;
+        } else {
+            weight += 1;
+        }
+        index += 1;
+    }
+    weight
 }
 
 fn starts_diphthong(
@@ -467,6 +506,26 @@ mod tests {
         assert_eq!(
             synthesize_ipa("caelum", LatinVariety::Ecclesiastical).as_deref(),
             Some("/ˈt͡ʃaelum/")
+        );
+    }
+
+    #[test]
+    fn latin_handles_stress_weight_and_greek_aspirates() {
+        assert_eq!(
+            synthesize_ipa("dominus", LatinVariety::Classical).as_deref(),
+            Some("/ˈdominus/")
+        );
+        assert_eq!(
+            synthesize_ipa("scriptūra", LatinVariety::Classical).as_deref(),
+            Some("/skriˈptura/")
+        );
+        assert_eq!(
+            synthesize_ipa("theologia", LatinVariety::Classical).as_deref(),
+            Some("/tʰeoˈloɡia/")
+        );
+        assert_eq!(
+            synthesize_ipa("theologia", LatinVariety::Ecclesiastical).as_deref(),
+            Some("/teoˈlod͡ʒia/")
         );
     }
 }

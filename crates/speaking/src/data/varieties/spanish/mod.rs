@@ -317,7 +317,10 @@ pub fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
                 index += 1;
             }
             'q' => ipa.push('k'),
-            'r' if at_word_start || matches!(next, Some('r')) => {
+            'r' if at_word_start
+                || follows_trill_trigger(&chars, index)
+                || matches!(next, Some('r')) =>
+            {
                 ipa.push('r');
                 if matches!(next, Some('r')) {
                     index += 1;
@@ -332,7 +335,10 @@ pub fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
             'w' => ipa.push('w'),
             'x' => ipa.push_str("ks"),
             'y' => {
-                if index + 1 == chars.len() {
+                if is_final_vocalic_y(&chars, index) {
+                    if vowel_index == stress_vowel {
+                        ipa.push('ˈ');
+                    }
                     ipa.push('i');
                     vowel_index += 1;
                 } else {
@@ -476,7 +482,7 @@ fn stress_vowel_index(chars: &[char]) -> Option<usize> {
         if is_silent_qu_gu_u(chars, index) {
             continue;
         }
-        if is_vowel(*c) {
+        if is_vowel(*c) || is_final_vocalic_y(chars, index) {
             vowels.push((index, *c));
             if matches!(*c, 'á' | 'é' | 'í' | 'ó' | 'ú') {
                 return Some(vowels.len() - 1);
@@ -495,7 +501,7 @@ fn stress_vowel_index(chars: &[char]) -> Option<usize> {
     if vowels.len() == 1 {
         return Some(0);
     }
-    if matches!(final_letter, 'a' | 'e' | 'i' | 'o' | 'u' | 'n' | 's') {
+    if matches!(final_letter, 'a' | 'e' | 'i' | 'o' | 'u' | 'y' | 'n' | 's') {
         Some(vowels.len().saturating_sub(2))
     } else {
         Some(vowels.len() - 1)
@@ -586,6 +592,18 @@ fn is_silent_qu_gu_u(chars: &[char], index: usize) -> bool {
         && matches!(chars.get(index + 1), Some('e' | 'é' | 'i' | 'í'))
 }
 
+fn is_final_vocalic_y(chars: &[char], index: usize) -> bool {
+    chars.get(index).copied() == Some('y') && index + 1 == chars.len()
+}
+
+fn follows_trill_trigger(chars: &[char], index: usize) -> bool {
+    index > 0
+        && matches!(
+            chars.get(index - 1),
+            Some('l' | 'n' | 's' | '-' | '\'' | '’')
+        )
+}
+
 fn phone_symbol(phone: &PhoneId) -> &str {
     phone
         .as_str()
@@ -628,6 +646,22 @@ mod tests {
         assert_eq!(
             synthesize_ipa("perro", SpanishVariety::LatinAmericanStandard).as_deref(),
             Some("/ˈpero/")
+        );
+    }
+
+    #[test]
+    fn spanish_handles_rhotic_contexts_and_final_vocalic_y() {
+        assert_eq!(
+            synthesize_ipa("alrededor", SpanishVariety::LatinAmericanStandard).as_deref(),
+            Some("/alredeˈdoɾ/")
+        );
+        assert_eq!(
+            synthesize_ipa("israel", SpanishVariety::LatinAmericanStandard).as_deref(),
+            Some("/israˈel/")
+        );
+        assert_eq!(
+            synthesize_ipa("uruguay", SpanishVariety::LatinAmericanStandard).as_deref(),
+            Some("/uɾuɡuˈai/")
         );
     }
 }

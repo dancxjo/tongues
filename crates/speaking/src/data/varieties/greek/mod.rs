@@ -45,18 +45,18 @@ impl GreekVariety {
 
 const MODERN_SEGMENTS: &[&str] = &[
     "a", "e", "i", "o", "u", "v", "ɣ", "ʝ", "ð", "z", "θ", "k", "c", "l", "m", "n", "ks", "p", "r",
-    "s", "t", "f", "x", "ç", "ps", "b", "d", "ɡ",
+    "s", "t", "f", "x", "ç", "ps", "b", "d", "ɡ", "ŋ",
 ];
 
 const ANCIENT_SEGMENTS: &[&str] = &[
     "a", "aː", "e", "eː", "ɛː", "i", "iː", "o", "oː", "u", "uː", "y", "yː", "ai̯", "au̯", "ei̯", "eu̯",
     "oi̯", "ou̯", "b", "ɡ", "d", "z", "tʰ", "k", "l", "m", "n", "ks", "p", "r", "s", "t", "pʰ", "kʰ",
-    "ps", "h",
+    "ps", "h", "ŋ",
 ];
 
 const KOINE_SEGMENTS: &[&str] = &[
     "a", "e", "i", "o", "u", "y", "ai̯", "au̯", "eu̯", "oi̯", "b", "β", "ɣ", "d", "ð", "z", "θ", "k",
-    "l", "m", "n", "ks", "p", "r", "s", "t", "f", "x", "ps", "h",
+    "l", "m", "n", "ŋ", "ks", "p", "r", "s", "t", "f", "x", "ps", "h",
 ];
 
 pub fn variety(id: &str) -> LinguisticVariety {
@@ -239,7 +239,9 @@ fn modern_symbol(letters: &[GreekLetter], index: usize) -> Option<(&'static str,
         }
         ('μ', Some('π')) => Some(("b", 2)),
         ('ν', Some('τ')) => Some(("d", 2)),
-        ('γ', Some('κ')) | ('γ', Some('γ')) => Some(("ɡ", 2)),
+        ('γ', Some('γ')) | ('γ', Some('κ')) => Some(("ŋɡ", 2)),
+        ('γ', Some('χ')) => Some(("ŋx", 2)),
+        ('γ', Some('ξ')) => Some(("ŋks", 2)),
         _ => Some((modern_single(c, modern_front_context(letters, index))?, 1)),
     }
 }
@@ -297,6 +299,10 @@ fn ancient_symbol(letters: &[GreekLetter], index: usize) -> Option<(&'static str
         ('ε', Some('υ')) => Some(("eu̯", 2)),
         ('ο', Some('ι')) => Some(("oi̯", 2)),
         ('ο', Some('υ')) => Some(("ou̯", 2)),
+        ('γ', Some('γ')) => Some(("ŋɡ", 2)),
+        ('γ', Some('κ')) => Some(("ŋk", 2)),
+        ('γ', Some('χ')) => Some(("ŋkʰ", 2)),
+        ('γ', Some('ξ')) => Some(("ŋks", 2)),
         _ => Some((ancient_single(c)?, 1)),
     }
 }
@@ -341,6 +347,9 @@ fn koine_symbol(letters: &[GreekLetter], index: usize) -> Option<(&'static str, 
         ('ο', Some('υ')) => Some(("u", 2)),
         ('α', Some('υ')) => Some(("au̯", 2)),
         ('ε', Some('υ')) => Some(("eu̯", 2)),
+        ('γ', Some('γ')) | ('γ', Some('κ')) => Some(("ŋk", 2)),
+        ('γ', Some('χ')) => Some(("ŋx", 2)),
+        ('γ', Some('ξ')) => Some(("ŋks", 2)),
         _ => Some((koine_single(c)?, 1)),
     }
 }
@@ -572,6 +581,22 @@ mod tests {
         assert_eq!(
             synthesize_ipa("και", GreekVariety::Koine).as_deref(),
             Some("/ˈke/")
+        );
+    }
+
+    #[test]
+    fn greek_handles_gamma_nasal_clusters() {
+        assert_eq!(
+            synthesize_ipa("άγγελος", GreekVariety::Modern).as_deref(),
+            Some("/ˈaŋɡelos/")
+        );
+        assert_eq!(
+            synthesize_ipa("ἄγγελος", GreekVariety::Ancient).as_deref(),
+            Some("/ˈaŋɡelos/")
+        );
+        assert_eq!(
+            synthesize_ipa("άγχος", GreekVariety::Modern).as_deref(),
+            Some("/ˈaŋxos/")
         );
     }
 }
