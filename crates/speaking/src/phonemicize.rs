@@ -2538,8 +2538,8 @@ fn realize_connected_allophone_before_word(
     let Some(next) = next else {
         return;
     };
-    apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
     if phonemes.len() < 2 {
+        apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
         return;
     }
 
@@ -2567,6 +2567,7 @@ fn realize_connected_allophone_before_word(
 
     phones[phone_index] = realized.clone();
     phonemes[target_index].realized_as = vec![realized];
+    apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
 }
 
 fn apply_french_connected_speech(
@@ -2595,12 +2596,23 @@ fn apply_french_connected_speech(
 }
 
 fn phoneme_token_is_syllabic(variety: &LinguisticVariety, token: &PhonemeToken) -> bool {
-    phoneme_token_features(variety, token).and_then(|features| {
-        features
+    if token
+        .features
+        .values
+        .get(&FeatureId("phonology.syllabic".into()))
+        == Some(&Spec::Known(FeatureValue::Bool(true)))
+    {
+        return true;
+    }
+    let Spec::Known(id) = &token.phoneme else {
+        return false;
+    };
+    variety.phonemes.phonemes.get(id).and_then(|phoneme| {
+        phoneme
+            .features
             .values
             .get(&FeatureId("phonology.syllabic".into()))
-            .cloned()
-    }) == Some(Spec::Known(FeatureValue::Bool(true)))
+    }) == Some(&Spec::Known(FeatureValue::Bool(true)))
 }
 
 fn final_phone_symbol(phones: &[PhoneToken]) -> Option<&str> {
