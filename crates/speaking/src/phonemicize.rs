@@ -259,6 +259,9 @@ pub trait PronunciationPipeline {
                 if !has_pause_boundary {
                     realize_connected_allophone_before_word(
                         &variety,
+                        words
+                            .get(word_index - 1)
+                            .map(|word| word.normalized.as_str()),
                         &mut phonemes,
                         &mut phones,
                         word_phonemes.first(),
@@ -2526,14 +2529,16 @@ fn has_pause_boundary_after_word(boundaries: &[SpeechBoundaryToken], word_index:
 
 fn realize_connected_allophone_before_word(
     variety: &LinguisticVariety,
+    previous_word: Option<&str>,
     phonemes: &mut [PhonemeToken],
-    phones: &mut [PhoneToken],
+    phones: &mut Vec<PhoneToken>,
     next: Option<&PhonemeToken>,
     careful_style: bool,
 ) {
     let Some(next) = next else {
         return;
     };
+    apply_french_connected_speech(variety, previous_word, phones, next, careful_style);
     if phonemes.len() < 2 {
         return;
     }
@@ -2562,6 +2567,88 @@ fn realize_connected_allophone_before_word(
 
     phones[phone_index] = realized.clone();
     phonemes[target_index].realized_as = vec![realized];
+}
+
+fn apply_french_connected_speech(
+    variety: &LinguisticVariety,
+    previous_word: Option<&str>,
+    phones: &mut Vec<PhoneToken>,
+    next: &PhonemeToken,
+    careful_style: bool,
+) {
+    if variety.language.0 != "fr" {
+        return;
+    }
+    let next_is_vowel = phoneme_token_is_syllabic(variety, next);
+    if !careful_style && !next_is_vowel && final_phone_symbol(phones) == Some("ə") {
+        phones.pop();
+    }
+    if next_is_vowel && let Some(symbol) = previous_word.and_then(french_liaison_symbol_after_word)
+    {
+        phones.push(connected_speech_phone_token(
+            variety,
+            symbol,
+            "french liaison",
+            0.85,
+        ));
+    }
+}
+
+fn phoneme_token_is_syllabic(variety: &LinguisticVariety, token: &PhonemeToken) -> bool {
+    phoneme_token_features(variety, token).and_then(|features| {
+        features
+            .values
+            .get(&FeatureId("phonology.syllabic".into()))
+            .cloned()
+    }) == Some(Spec::Known(FeatureValue::Bool(true)))
+}
+
+fn final_phone_symbol(phones: &[PhoneToken]) -> Option<&str> {
+    phones.iter().rev().find_map(|phone| {
+        if is_boundary_phone(phone) || phone.provenance.method.contains("epenthesis rule") {
+            return None;
+        }
+        let Spec::Known(id) = &phone.phone else {
+            return None;
+        };
+        Some(phone_display_symbol(id))
+    })
+}
+
+fn french_liaison_symbol_after_word(word: &str) -> Option<&'static str> {
+    match word {
+        "les" | "des" | "mes" | "tes" | "ses" | "nos" | "vos" | "nous" | "vous" | "deux"
+        | "trois" => Some("z"),
+        "un" | "mon" | "ton" | "son" | "en" | "on" => Some("n"),
+        _ => None,
+    }
+}
+
+fn connected_speech_phone_token(
+    variety: &LinguisticVariety,
+    symbol: &str,
+    method: &'static str,
+    confidence: f32,
+) -> PhoneToken {
+    let phone_id = PhoneId(format!("ipa.phone.{symbol}").into());
+    let features = variety
+        .phones
+        .phones
+        .get(&phone_id)
+        .map(|phone| phone.features.clone())
+        .unwrap_or_default();
+    PhoneToken {
+        phone: Spec::Known(phone_id),
+        span: None,
+        features,
+        acoustic_evidence: Vec::new(),
+        confidence,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Rule,
+            method: method.into(),
+            version: Some("0.1".into()),
+        },
+    }
 }
 
 fn phone_insert_index_for_phoneme_offset(phones: &[PhoneToken], offset: usize) -> usize {
@@ -2743,6 +2830,150 @@ pub fn phone_display_symbol(id: &PhoneId) -> &str {
 pub fn phoneme_base_symbol(id: &PhonemeId) -> &str {
     let symbol = phoneme_display_symbol(id);
     split_stress(symbol).0
+}
+
+fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> String {
+    let language = variety_language_code(&variety.0);
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if !chars[index].is_ascii_digit() {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        while index < chars.len() && chars[index].is_ascii_digit() {
+            index += 1;
+        }
+        let digits = chars[start..index].iter().collect::<String>();
+        let suffix_start = index;
+        while index < chars.len() && chars[index].is_alphabetic() {
+            index += 1;
+        }
+        let suffix = chars[suffix_start..index].iter().collect::<String>();
+        let replacement = digits
+            .parse::<u32>()
+            .ok()
+            .and_then(|value| localized_number_word(language, value, &suffix));
+        if let Some(word) = replacement {
+            out.push_str(word);
+        } else {
+            out.push_str(&digits);
+            out.push_str(&suffix);
+        }
+    }
+    out
+}
+
+fn variety_language_code(variety: &str) -> &str {
+    variety
+        .split_once('-')
+        .map_or(variety, |(language, _)| language)
+}
+
+fn localized_number_word(language: &str, value: u32, suffix: &str) -> Option<&'static str> {
+    match language {
+        "fr" => french_number_word(value, suffix),
+        "de" => german_number_word(value, suffix),
+        "es" => spanish_number_word(value, suffix),
+        _ => None,
+    }
+}
+
+fn french_number_word(value: u32, suffix: &str) -> Option<&'static str> {
+    if matches!(suffix, "er" | "re") {
+        return (value == 1).then_some("premier");
+    }
+    if !suffix.is_empty() {
+        return None;
+    }
+    Some(match value {
+        0 => "zéro",
+        1 => "un",
+        2 => "deux",
+        3 => "trois",
+        4 => "quatre",
+        5 => "cinq",
+        6 => "six",
+        7 => "sept",
+        8 => "huit",
+        9 => "neuf",
+        10 => "dix",
+        11 => "onze",
+        12 => "douze",
+        13 => "treize",
+        14 => "quatorze",
+        15 => "quinze",
+        16 => "seize",
+        17 => "dix-sept",
+        18 => "dix-huit",
+        19 => "dix-neuf",
+        20 => "vingt",
+        _ => return None,
+    })
+}
+
+fn german_number_word(value: u32, suffix: &str) -> Option<&'static str> {
+    if !suffix.is_empty() {
+        return None;
+    }
+    Some(match value {
+        0 => "null",
+        1 => "eins",
+        2 => "zwei",
+        3 => "drei",
+        4 => "vier",
+        5 => "fünf",
+        6 => "sechs",
+        7 => "sieben",
+        8 => "acht",
+        9 => "neun",
+        10 => "zehn",
+        11 => "elf",
+        12 => "zwölf",
+        13 => "dreizehn",
+        14 => "vierzehn",
+        15 => "fünfzehn",
+        16 => "sechzehn",
+        17 => "siebzehn",
+        18 => "achtzehn",
+        19 => "neunzehn",
+        20 => "zwanzig",
+        _ => return None,
+    })
+}
+
+fn spanish_number_word(value: u32, suffix: &str) -> Option<&'static str> {
+    if !suffix.is_empty() {
+        return None;
+    }
+    Some(match value {
+        0 => "cero",
+        1 => "uno",
+        2 => "dos",
+        3 => "tres",
+        4 => "cuatro",
+        5 => "cinco",
+        6 => "seis",
+        7 => "siete",
+        8 => "ocho",
+        9 => "nueve",
+        10 => "diez",
+        11 => "once",
+        12 => "doce",
+        13 => "trece",
+        14 => "catorce",
+        15 => "quince",
+        16 => "dieciséis",
+        17 => "diecisiete",
+        18 => "dieciocho",
+        19 => "diecinueve",
+        20 => "veinte",
+        _ => return None,
+    })
 }
 
 fn spell_out(i: u128) -> String {
@@ -3657,14 +3888,18 @@ mod tests {
             "This is the twenty-first case."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("It was 70°F outside."),
+            EnglishPhonemicizer.text_normalizer("It was 70°F outside.", &VarietyId("en-US".into())),
             "It was seventy degrees Fahrenheit outside."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("The CPU ran at 3.5GHz."),
+            EnglishPhonemicizer
+                .text_normalizer("The CPU ran at 3.5GHz.", &VarietyId("en-US".into())),
             "The CPU ran at three point five gigahertz."
         );
-        assert_eq!(EnglishPhonemicizer.text_normalizer("No. 5"), "Number five");
+        assert_eq!(
+            EnglishPhonemicizer.text_normalizer("No. 5", &VarietyId("en-US".into())),
+            "Number five"
+        );
         assert_eq!(
             english_normalize_numbers("A 5% discount."),
             "A five percent discount."
@@ -4407,15 +4642,16 @@ mod tests {
         );
 
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("AT&T called."),
+            EnglishPhonemicizer.text_normalizer("AT&T called.", &VarietyId("en-US".into())),
             "A T and T called."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("R&D approved it."),
+            EnglishPhonemicizer.text_normalizer("R&D approved it.", &VarietyId("en-US".into())),
             "R and D approved it."
         );
         assert_eq!(
-            EnglishPhonemicizer.text_normalizer("C++ is different from C#."),
+            EnglishPhonemicizer
+                .text_normalizer("C++ is different from C#.", &VarietyId("en-US".into())),
             "C plus plus is different from C sharp."
         );
     }
@@ -4607,6 +4843,58 @@ mod tests {
             .expect("French fallback should phonemicize");
 
         assert_eq!(phoneme_symbols(&output), ["p", "a", "ʁ", "l", "e"]);
+    }
+
+    #[test]
+    fn french_connected_speech_adds_liaison_and_deletes_final_schwa() {
+        let phonemicizer =
+            phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
+        let liaison = phonemicizer
+            .phonemicize(&request("vous avez", "fr-FR-Standard"))
+            .expect("French liaison should phonemicize");
+        assert!(
+            phone_symbols(&liaison)
+                .windows(4)
+                .any(|window| window == ["v", "u", "z", "|"]),
+            "{:?}",
+            phone_symbols(&liaison)
+        );
+
+        let schwa = phonemicizer
+            .phonemicize(&request("le garçon", "fr-FR-Standard"))
+            .expect("French schwa deletion should phonemicize");
+        assert!(
+            phone_symbols(&schwa)
+                .windows(2)
+                .any(|window| window == ["l", "|"]),
+            "{:?}",
+            phone_symbols(&schwa)
+        );
+    }
+
+    #[test]
+    fn builtin_non_english_number_normalizers_spell_small_numbers() {
+        assert_eq!(
+            normalize_small_numbers_for_variety(
+                "J'ai 3 amis.",
+                &VarietyId("fr-FR-Standard".into())
+            ),
+            "J'ai trois amis."
+        );
+        assert_eq!(
+            normalize_small_numbers_for_variety(
+                "Tengo 12 gatos.",
+                &VarietyId("es-419-Standard".into())
+            ),
+            "Tengo doce gatos."
+        );
+        assert_eq!(
+            normalize_small_numbers_for_variety(
+                "Ich habe 5 Katzen.",
+                &VarietyId("de-DE-Standard".into())
+            ),
+            "Ich habe fünf Katzen."
+        );
     }
 
     #[test]

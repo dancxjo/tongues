@@ -230,13 +230,19 @@ pub fn lexique_phon_to_ipa(input: &str) -> Option<String> {
 pub const GENERATED_OVERRIDES: &str = "\
 ortho\tphon
 des\tde
+deux\tdø
+dix\tdis
 est\tɛ
+huit\tɥit
 les\tle
 mes\tme
+premier\tpʁəmje
 recueillez\tʁəkœje
 ses\tse
 tes\tte
+trois\ttʁwa
 très\ttʁɛ
+un\tœ̃
 voulez\tvule
 ";
 
