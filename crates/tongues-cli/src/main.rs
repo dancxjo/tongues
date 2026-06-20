@@ -11004,6 +11004,16 @@ mod tests {
     }
 
     #[test]
+    fn test_split_long_sentence() {
+        let vocab = Vocab::build(&[], &[], &[]);
+        let sentence = "It was not a gift that was taught; it was a gift that came to her on a rainy night when she was six, when she was tracing the curve of a wooden spoon on her grandmother’s kitchen table and the spoon’s silver handle seemed to glow with a faint, pulsing light.";
+        let chunks = split_long_sentence(sentence, "en-US", &vocab, 100).unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "It was not a gift that was taught;");
+        assert!(chunks[1].starts_with("it was a gift"));
+    }
+
+    #[test]
     fn speaking_demo_paragraph_picker_skips_toc_and_prefers_deeper_text() {
         let toc = "Chapitre I Monsieur Myriel Chapitre II Monsieur Myriel devient monseigneur Bienvenu Chapitre III À bon évêque dur évêché.";
         let early = "Cette phrase lisible arrive tôt dans le fichier, mais elle ne doit pas être le premier choix du mode paragraphe.";
