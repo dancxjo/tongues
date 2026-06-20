@@ -1013,6 +1013,10 @@ struct BeCommand {
     #[arg(long, default_value = DEFAULT_HEAD2PHONES_MODEL_DIR)]
     head2phones_model: PathBuf,
 
+    /// Use seams sentence detection plus the speaking phonemicizer instead of head2phones
+    #[arg(long)]
+    mechanical: bool,
+
     /// Requested language/pronunciation variety for head2phones
     #[arg(long, default_value = "en-US")]
     variety: String,
@@ -1768,12 +1772,12 @@ fn command_needs_device(command: &Commands) -> bool {
             )
         }
         Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
+        Commands::Be(command) => !command.mechanical,
         Commands::Train { .. }
         | Commands::Eval { .. }
         | Commands::Refine { .. }
         | Commands::Predict { .. }
         | Commands::Repl { .. }
-        | Commands::Be(_)
         | Commands::Discrepancies { .. } => true,
         _ => false,
     }
@@ -3337,24 +3341,34 @@ fn cmd_head2phones_infer(
 
 fn cmd_be(command: BeCommand) -> Result<()> {
     let device = NdArrayDevice::Cpu;
-    let manifest = tongues_neural::read_manifest(
-        &command
-            .head2phones_model
-            .join(tongues_neural::ARTIFACT_MANIFEST_FILE),
-    )?;
-    anyhow::ensure!(
-        manifest.family == tongues_head2phones::FAMILY,
-        "expected head2phones manifest, found `{}`",
-        manifest.family
-    );
-    let model_config: ModelConfig =
-        read_json_file(&command.head2phones_model.join("model_config.json"))?;
-    let vocab: Vocab = read_json_file(&command.head2phones_model.join("vocab.json"))?;
-    let head2phones = load_model::<CpuInferBackend>(
-        &model_config,
-        &command.head2phones_model.join("model"),
-        &device,
-    )?;
+    let head2phones = if command.mechanical {
+        None
+    } else {
+        let manifest = tongues_neural::read_manifest(
+            &command
+                .head2phones_model
+                .join(tongues_neural::ARTIFACT_MANIFEST_FILE),
+        )?;
+        anyhow::ensure!(
+            manifest.family == tongues_head2phones::FAMILY,
+            "expected head2phones manifest, found `{}`",
+            manifest.family
+        );
+        let model_config: ModelConfig =
+            read_json_file(&command.head2phones_model.join("model_config.json"))?;
+        let vocab: Vocab = read_json_file(&command.head2phones_model.join("vocab.json"))?;
+        let model = load_model::<CpuInferBackend>(
+            &model_config,
+            &command.head2phones_model.join("model"),
+            &device,
+        )?;
+        Some((model, vocab, model_config))
+    };
+    let seams_detector = if command.mechanical {
+        Some(seams::SentenceDetectorDialog::new().context("initializing seams detector")?)
+    } else {
+        None
+    };
 
     let piper_model = models::ensure_piper_voice_model_available()?;
     let piper_config_path = piper::piper_voice_config_path(&piper_model);
@@ -3367,11 +3381,19 @@ fn cmd_be(command: BeCommand) -> Result<()> {
         "be: ollama={} model={} prompt={:?}",
         command.ollama_url, command.ollama_model, command.prompt
     );
-    eprintln!(
-        "be: resident head2phones CPU model={} piper={}",
-        command.head2phones_model.display(),
-        piper_model.display()
-    );
+    if command.mechanical {
+        eprintln!(
+            "be: mechanical seams+phonemicizer variety={} piper={}",
+            command.variety,
+            piper_model.display()
+        );
+    } else {
+        eprintln!(
+            "be: resident head2phones CPU model={} piper={}",
+            command.head2phones_model.display(),
+            piper_model.display()
+        );
+    }
     eprintln!("be: cpal output={}", player.description());
 
     let mut total_samples = 0usize;
@@ -3395,33 +3417,46 @@ fn cmd_be(command: BeCommand) -> Result<()> {
             .flush()
             .context("flushing streamed text")?;
         cursor.push_str(piece);
-        for sentence in collect_completed_sentence_parser_prefixes(&mut cursor, &mut previous) {
-            speak_head2phones_sentence(
-                &sentence,
-                &command.variety,
-                &head2phones,
-                &vocab,
-                &model_config,
-                &device,
-                &mut piper,
-                &mut sink,
-            )?;
+        let sentences = if let Some(detector) = seams_detector.as_ref() {
+            collect_completed_seams_prefixes(&mut cursor, &mut previous, detector)?
+        } else {
+            collect_completed_sentence_parser_prefixes(&mut cursor, &mut previous)
+        };
+        for sentence in sentences {
+            if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
+                speak_head2phones_sentence(
+                    &sentence,
+                    &command.variety,
+                    head2phones,
+                    vocab,
+                    model_config,
+                    &device,
+                    &mut piper,
+                    &mut sink,
+                )?;
+            } else {
+                synthesize_mechanical_sentence(&sentence, &command.variety, &mut piper, &mut sink)?;
+            }
         }
         Ok(())
     })?;
 
     let tail = cursor.split_whitespace().collect::<Vec<_>>().join(" ");
     if !tail.is_empty() {
-        speak_head2phones_sentence(
-            &tail,
-            &command.variety,
-            &head2phones,
-            &vocab,
-            &model_config,
-            &device,
-            &mut piper,
-            &mut sink,
-        )?;
+        if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
+            speak_head2phones_sentence(
+                &tail,
+                &command.variety,
+                head2phones,
+                vocab,
+                model_config,
+                &device,
+                &mut piper,
+                &mut sink,
+            )?;
+        } else {
+            synthesize_mechanical_sentence(&tail, &command.variety, &mut piper, &mut sink)?;
+        }
     }
 
     eprintln!();
@@ -3671,16 +3706,47 @@ fn synthesize_rule_based_fallback(
     piper: &mut piper::PiperOnnxBackend,
     sink: &mut dyn piper::PiperAudioSink,
 ) -> Result<()> {
+    synthesize_mechanical_sentence(sentence, variety, piper, sink)
+}
+
+fn synthesize_mechanical_sentence(
+    sentence: &str,
+    variety: &str,
+    piper: &mut piper::PiperOnnxBackend,
+    sink: &mut dyn piper::PiperAudioSink,
+) -> Result<()> {
     let variety = speaking::VarietyId(variety.to_string());
     let phonemicizer = speaking::phonemicizer_for_variety(&variety)
-        .map_err(|error| anyhow::anyhow!("failed to load fallback phonemicizer: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to load phonemicizer: {error}"))?;
     let output = phonemicizer.phonemicize(&speaking::PhonemicizeRequest {
         text: sentence.to_string(),
         variety,
         style: None,
     })?;
     let plan = speak::utterance_plan_from_phonemicized(&output);
+    eprintln!(
+        "\nbe: mechanical={:?}\nbe: phones={}",
+        sentence,
+        format_be_mechanical_phones(&output)
+    );
     piper.synthesize_plan_streaming(&plan, sink)
+}
+
+fn format_be_mechanical_phones(output: &speaking::PhonemicizeOutput) -> String {
+    output
+        .phones
+        .iter()
+        .filter_map(|phone| match &phone.phone {
+            speaking::Spec::Known(id) => Some(
+                id.as_str()
+                    .strip_prefix("ipa.phone.")
+                    .unwrap_or(id.as_str())
+                    .to_string(),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn clean_be_sentence_for_fallback(sentence: &str) -> String {
@@ -3897,6 +3963,60 @@ fn collect_completed_sentence_parser_prefixes(
         }
     }
     sentences
+}
+
+fn collect_completed_seams_prefixes(
+    cursor: &mut String,
+    previous: &mut String,
+    detector: &seams::SentenceDetectorDialog,
+) -> Result<Vec<String>> {
+    let detections = detector
+        .detect_sentences_borrowed(cursor)
+        .context("detecting sentence seams")?;
+    let cursor_base = cursor.as_ptr() as usize;
+    let cursor_len = cursor.len();
+    let mut drain_end = 0usize;
+    let mut sentences = Vec::new();
+
+    for detected in detections {
+        if !seams_sentence_is_stream_complete(detected.raw_content) {
+            continue;
+        }
+
+        let start = (detected.raw_content.as_ptr() as usize).saturating_sub(cursor_base);
+        let end = start + detected.raw_content.len();
+        if start < drain_end || end > cursor_len {
+            continue;
+        }
+
+        let sentence = detected
+            .normalize()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        drain_end = end;
+        if !sentence.is_empty() {
+            *previous = sentence.clone();
+            sentences.push(sentence);
+        }
+    }
+
+    if drain_end > 0 {
+        *cursor = cursor[drain_end..].to_string();
+    }
+
+    Ok(sentences)
+}
+
+fn seams_sentence_is_stream_complete(sentence: &str) -> bool {
+    let trimmed = sentence.trim_end();
+    let without_closers = trimmed.trim_end_matches(|ch| {
+        matches!(ch, '"' | '\'' | ')' | ']' | '}' | '\u{2019}' | '\u{201d}')
+    });
+    without_closers
+        .chars()
+        .last()
+        .is_some_and(|ch| matches!(ch, '.' | '?' | '!'))
 }
 
 fn cmd_head2phones_eval(

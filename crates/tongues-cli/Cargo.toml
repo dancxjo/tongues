@@ -38,6 +38,7 @@ indicatif = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 open-english-pronouncing-dictionary = "0.1.0"
+seams = "0.1.2"
 
 [dependencies.ort]
 version = "=2.0.0-rc.12"
