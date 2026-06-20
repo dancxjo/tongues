@@ -151,18 +151,28 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         pronouns: &[
             "ego", "tu", "nos", "vos", "me", "te", "se", "qui", "quae", "quod", "quis", "quid",
         ],
+        object_pronouns: &[
+            "me", "te", "se", "nos", "vos", "eum", "eam", "id", "eos", "eas",
+        ],
         auxiliaries: &[
+            "sum", "es", "est", "sumus", "estis", "sunt", "eram", "erat", "erant", "fui", "fuit",
+            "fuerunt",
+        ],
+        copulas: &[
             "sum", "es", "est", "sumus", "estis", "sunt", "eram", "erat", "erant", "fui", "fuit",
             "fuerunt",
         ],
         prepositions: &[
             "ad", "in", "de", "cum", "sine", "per", "pro", "sub", "super", "ab", "ex",
         ],
+        postpositions: &["causa", "gratia"],
         conjunctions: &["et", "aut", "sed", "atque", "nec", "neque", "vel"],
+        particles: &["ne", "que", "ve"],
+        complementizers: &["quod", "ut", "ne", "cum", "quia", "si"],
         adverbs: &["non", "ne", "bene", "male", "iam", "nunc"],
         adverb_suffixes: &[],
         adjectives: &[],
-        adjective_suffixes: &["us", "a", "um", "is"],
+        adjective_suffixes: &["ior", "ilis", "alis"],
         verbs: &[
             "amo", "amas", "amat", "amamus", "amatis", "amant", "video", "videt", "dico", "dicit",
             "venio", "venit", "sum", "es", "est", "sunt",
@@ -170,6 +180,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         verb_suffixes: &["are", "ere", "ire"],
         subject_verb_suffixes: &["o", "m", "s", "t", "mus", "tis", "nt"],
         non_verbs: &[],
+        ..HeuristicSyntaxProfile::empty()
     }
 }
 

@@ -87,16 +87,23 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich", "sich", "uns", "euch",
             "mir", "dir", "ihm", "ihnen", "wer", "was", "die",
         ],
+        object_pronouns: &[
+            "mich", "dich", "sich", "uns", "euch", "ihn", "sie", "es", "mir", "dir", "ihm", "ihnen",
+        ],
         auxiliaries: &[
             "bin", "bist", "ist", "sind", "seid", "war", "waren", "habe", "hast", "hat", "haben",
             "habt", "hatte", "hatten", "werde", "wirst", "wird", "werden", "wollen", "können",
             "müssen", "sollen", "dürfen", "mögen",
         ],
+        copulas: &["bin", "bist", "ist", "sind", "seid", "war", "waren"],
         prepositions: &[
             "an", "auf", "aus", "bei", "durch", "für", "gegen", "in", "mit", "nach", "ohne",
             "seit", "über", "um", "unter", "von", "vor", "zu", "zwischen",
         ],
+        postpositions: &[],
         conjunctions: &["und", "oder", "aber", "denn", "sondern"],
+        particles: &["ja", "doch", "mal", "wohl"],
+        complementizers: &["dass", "daß", "ob", "wenn", "weil", "als"],
         adverbs: &["nicht", "sehr", "auch", "gern", "gerne"],
         adverb_suffixes: &[],
         adjectives: &[],
@@ -108,6 +115,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         verb_suffixes: &["en"],
         subject_verb_suffixes: &["e", "st", "t"],
         non_verbs: &[],
+        ..HeuristicSyntaxProfile::empty()
     }
 }
 

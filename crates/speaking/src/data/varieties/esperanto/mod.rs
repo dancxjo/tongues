@@ -163,20 +163,26 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "mi", "vi", "li", "ŝi", "ĝi", "ni", "ili", "oni", "si", "min", "vin", "lin", "ŝin",
             "ĝin", "nin", "ilin", "kiu", "kio",
         ],
+        object_pronouns: &["min", "vin", "lin", "ŝin", "ĝin", "nin", "ilin"],
         auxiliaries: &[],
+        copulas: &["estas", "estis", "estos", "estus", "estu"],
         prepositions: &[
             "al", "de", "en", "kun", "sen", "por", "per", "pri", "sur", "sub", "inter", "antaŭ",
             "post", "kontraŭ",
         ],
+        postpositions: &[],
         conjunctions: &["kaj", "aŭ", "sed", "nek"],
+        particles: &["ĉu", "ja"],
+        complementizers: &["ke", "ĉu", "kiam", "se", "kiel"],
         adverbs: &["ne", "tre", "ankaŭ", "jam", "nun"],
         adverb_suffixes: &["e"],
         adjectives: &[],
         adjective_suffixes: &["a", "aj", "an"],
-        verbs: &[],
+        verbs: &["estas", "estis", "estos", "estus", "estu"],
         verb_suffixes: &["i", "as", "is", "os", "us", "u"],
         subject_verb_suffixes: &[],
         non_verbs: &[],
+        ..HeuristicSyntaxProfile::empty()
     }
 }
 

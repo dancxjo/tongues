@@ -294,16 +294,26 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "vosotras", "ellos", "ellas", "ustedes", "me", "te", "se", "nos", "os", "lo", "la",
             "los", "las", "le", "les", "que", "quien", "quién",
         ],
+        object_pronouns: &[
+            "me", "te", "se", "nos", "os", "lo", "la", "los", "las", "le", "les",
+        ],
         auxiliaries: &[
             "soy", "eres", "es", "somos", "son", "estoy", "estas", "estás", "esta", "está",
             "estamos", "estan", "están", "he", "has", "ha", "hemos", "han", "habia", "había",
             "habian", "habían", "voy", "vas", "va", "vamos", "van",
         ],
+        copulas: &[
+            "soy", "eres", "es", "somos", "son", "estoy", "estas", "estás", "esta", "está",
+            "estamos", "estan", "están",
+        ],
         prepositions: &[
             "a", "de", "en", "con", "sin", "por", "para", "sobre", "bajo", "entre", "hasta",
             "desde", "contra", "hacia",
         ],
+        postpositions: &[],
         conjunctions: &["y", "e", "o", "u", "pero", "sino", "ni"],
+        particles: &[],
+        complementizers: &["que", "si", "cuando", "como", "porque"],
         adverbs: &["no", "muy", "bien", "mal", "ya", "tambien", "también"],
         adverb_suffixes: &["mente"],
         adjectives: &[
@@ -319,6 +329,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         ],
         subject_verb_suffixes: &["o", "as", "es", "a", "e", "an", "en"],
         non_verbs: &[],
+        ..HeuristicSyntaxProfile::empty()
     }
 }
 

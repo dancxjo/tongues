@@ -44,6 +44,115 @@ const NO_LETTER_INDEX: usize = usize::MAX;
 const LEXICON_CMUDICT: &str = "cmudict";
 const LEXICON_LEXIQUE383: &str = "lexique383";
 
+type SyntaxParserFactory = fn() -> &'static dyn LinkGrammarParser;
+type LexiconPronouncer =
+    fn(&WordToken, &LinguisticVariety, TokenPronunciationContext) -> Option<WordPronunciation>;
+type OrthographyPronouncer =
+    fn(&str, &LinguisticVariety, TokenPronunciationContext) -> Vec<PlannedPhoneme>;
+
+struct SyntaxProfileRegistration {
+    id: &'static str,
+    parser: SyntaxParserFactory,
+}
+
+struct LexiconRegistration {
+    id: &'static str,
+    pronounce: LexiconPronouncer,
+}
+
+struct OrthographyPronunciationRegistration {
+    id: &'static str,
+    pronounce: OrthographyPronouncer,
+}
+
+static ENGLISH_SYNTAX_PARSER: EnglishLinkGrammarParser = EnglishLinkGrammarParser;
+static ESPERANTO_SYNTAX_PARSER: EsperantoLinkGrammarParser = EsperantoLinkGrammarParser;
+static FRENCH_SYNTAX_PARSER: FrenchLinkGrammarParser = FrenchLinkGrammarParser;
+static SPANISH_SYNTAX_PARSER: SpanishLinkGrammarParser = SpanishLinkGrammarParser;
+static GERMAN_SYNTAX_PARSER: GermanLinkGrammarParser = GermanLinkGrammarParser;
+static GREEK_SYNTAX_PARSER: GreekLinkGrammarParser = GreekLinkGrammarParser;
+static LATIN_SYNTAX_PARSER: LatinLinkGrammarParser = LatinLinkGrammarParser;
+static SANSKRIT_SYNTAX_PARSER: SanskritLinkGrammarParser = SanskritLinkGrammarParser;
+
+const SYNTAX_PROFILE_REGISTRY: &[SyntaxProfileRegistration] = &[
+    SyntaxProfileRegistration {
+        id: "english",
+        parser: || &ENGLISH_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "esperanto",
+        parser: || &ESPERANTO_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "french",
+        parser: || &FRENCH_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "spanish",
+        parser: || &SPANISH_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "german",
+        parser: || &GERMAN_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "greek",
+        parser: || &GREEK_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "latin",
+        parser: || &LATIN_SYNTAX_PARSER,
+    },
+    SyntaxProfileRegistration {
+        id: "sanskrit",
+        parser: || &SANSKRIT_SYNTAX_PARSER,
+    },
+];
+
+const LEXICON_REGISTRY: &[LexiconRegistration] = &[LexiconRegistration {
+    id: LEXICON_LEXIQUE383,
+    pronounce: lexique_pronunciation,
+}];
+
+const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration] = &[
+    OrthographyPronunciationRegistration {
+        id: "english_cmudict",
+        pronounce: planned_candidate_from_alias_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "esperanto",
+        pronounce: planned_candidate_from_esperanto_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "french",
+        pronounce: planned_candidate_from_french_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "german",
+        pronounce: planned_candidate_from_german_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "greek",
+        pronounce: planned_candidate_from_greek_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "latin",
+        pronounce: planned_candidate_from_latin_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "sanskrit",
+        pronounce: planned_candidate_from_sanskrit_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "spanish",
+        pronounce: planned_candidate_from_spanish_orthography,
+    },
+    OrthographyPronunciationRegistration {
+        id: "alias",
+        pronounce: planned_candidate_from_alias_orthography,
+    },
+];
+
 pub trait Phonemicizer {
     fn phonemicize(
         &self,
@@ -74,6 +183,13 @@ fn has_pronunciation_lexicon(variety: &LinguisticVariety, lexicon_id: &str) -> b
         .pronunciation_lexicons
         .iter()
         .any(|id| id == lexicon_id)
+}
+
+fn syntax_parser_for_profile(profile_id: &str) -> Option<&'static dyn LinkGrammarParser> {
+    SYNTAX_PROFILE_REGISTRY
+        .iter()
+        .find(|registration| registration.id == profile_id)
+        .map(|registration| (registration.parser)())
 }
 
 pub trait PronunciationPipeline {
@@ -627,17 +743,10 @@ impl PronunciationPipeline for VarietyDataPhonemicizer {
     }
 
     fn syntax_parser(&self, variety: &LinguisticVariety) -> Option<&dyn LinkGrammarParser> {
-        match variety.syntax_profile.as_deref() {
-            Some("english") => Some(&EnglishLinkGrammarParser),
-            Some("esperanto") => Some(&EsperantoLinkGrammarParser),
-            Some("french") => Some(&FrenchLinkGrammarParser),
-            Some("spanish") => Some(&SpanishLinkGrammarParser),
-            Some("german") => Some(&GermanLinkGrammarParser),
-            Some("greek") => Some(&GreekLinkGrammarParser),
-            Some("latin") => Some(&LatinLinkGrammarParser),
-            Some("sanskrit") => Some(&SanskritLinkGrammarParser),
-            _ => None,
-        }
+        variety
+            .syntax_profile
+            .as_deref()
+            .and_then(syntax_parser_for_profile)
     }
 
     fn weak_form_resolver(
@@ -1487,14 +1596,9 @@ fn variety_data_pronunciation_for_word(
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
     for lexicon in &variety.pronunciation_lexicons {
-        match lexicon.as_str() {
-            LEXICON_LEXIQUE383 => {
-                if let Some(pronunciation) = lexique_pronunciation(word, variety, context) {
-                    return pronunciation;
-                }
-            }
-            LEXICON_CMUDICT => {}
-            _ => {}
+        if let Some(pronunciation) = pronunciation_from_lexicon_id(lexicon, word, variety, context)
+        {
+            return pronunciation;
         }
     }
 
@@ -1537,27 +1641,36 @@ fn variety_data_pronunciation_for_word(
     }
 }
 
+fn pronunciation_from_lexicon_id(
+    lexicon_id: &str,
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    LEXICON_REGISTRY
+        .iter()
+        .find(|registration| registration.id == lexicon_id)
+        .and_then(|registration| (registration.pronounce)(word, variety, context))
+}
+
 fn planned_candidate_from_orthography_profile(
     normalized: &str,
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
-    match variety
+    let Some(profile_id) = variety
         .orthography
         .as_ref()
         .and_then(|orthography| orthography.pronunciation.as_deref())
-    {
-        Some("english_cmudict") => planned_candidate_from_variety_aliases(normalized, variety),
-        Some("esperanto") => planned_candidate_from_esperanto_orthography(normalized, variety),
-        Some("french") => planned_candidate_from_french_orthography(normalized, variety, context),
-        Some("german") => planned_candidate_from_german_orthography(normalized, variety),
-        Some("greek") => planned_candidate_from_greek_orthography(normalized, variety),
-        Some("latin") => planned_candidate_from_latin_orthography(normalized, variety),
-        Some("sanskrit") => planned_candidate_from_sanskrit_orthography(normalized, variety),
-        Some("spanish") => planned_candidate_from_spanish_orthography(normalized, variety),
-        Some("alias") | None => planned_candidate_from_variety_aliases(normalized, variety),
-        Some(_) => planned_candidate_from_variety_aliases(normalized, variety),
-    }
+    else {
+        return planned_candidate_from_variety_aliases(normalized, variety);
+    };
+
+    ORTHOGRAPHY_PRONUNCIATION_REGISTRY
+        .iter()
+        .find(|registration| registration.id == profile_id)
+        .map(|registration| (registration.pronounce)(normalized, variety, context))
+        .unwrap_or_else(|| planned_candidate_from_variety_aliases(normalized, variety))
 }
 
 fn lexique_pronunciation(
@@ -1602,6 +1715,7 @@ fn planned_candidate_from_french_orthography(
 fn planned_candidate_from_german_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(ipa) = german::synthesize_ipa(normalized) else {
         return Vec::new();
@@ -1612,6 +1726,7 @@ fn planned_candidate_from_german_orthography(
 fn planned_candidate_from_greek_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(greek_variety) = GreekVariety::from_id(&variety.id.0) else {
         return Vec::new();
@@ -1625,6 +1740,7 @@ fn planned_candidate_from_greek_orthography(
 fn planned_candidate_from_esperanto_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(ipa) = esperanto::synthesize_ipa(normalized) else {
         return Vec::new();
@@ -1635,6 +1751,7 @@ fn planned_candidate_from_esperanto_orthography(
 fn planned_candidate_from_latin_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(latin_variety) = LatinVariety::from_id(&variety.id.0) else {
         return Vec::new();
@@ -1648,6 +1765,7 @@ fn planned_candidate_from_latin_orthography(
 fn planned_candidate_from_sanskrit_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(ipa) = sanskrit::synthesize_ipa(normalized) else {
         return Vec::new();
@@ -1658,6 +1776,7 @@ fn planned_candidate_from_sanskrit_orthography(
 fn planned_candidate_from_spanish_orthography(
     normalized: &str,
     variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
 ) -> Vec<PlannedPhoneme> {
     let Some(spanish_variety) = SpanishVariety::from_id(&variety.id.0) else {
         return Vec::new();
@@ -1666,6 +1785,14 @@ fn planned_candidate_from_spanish_orthography(
         return Vec::new();
     };
     planned_candidate_from_variety_ipa(&ipa, variety)
+}
+
+fn planned_candidate_from_alias_orthography(
+    normalized: &str,
+    variety: &LinguisticVariety,
+    _context: TokenPronunciationContext,
+) -> Vec<PlannedPhoneme> {
+    planned_candidate_from_variety_aliases(normalized, variety)
 }
 
 fn planned_candidate_from_variety_ipa(
@@ -4970,6 +5097,47 @@ mod tests {
                 variety.id.0,
                 output.warnings
             );
+        }
+    }
+
+    #[test]
+    fn builtin_profile_ids_resolve_through_registries() {
+        for variety in builtin_varieties() {
+            if let Some(profile_id) = variety.syntax_profile.as_deref() {
+                assert!(
+                    syntax_parser_for_profile(profile_id).is_some(),
+                    "{} declares unknown syntax profile `{}`",
+                    variety.id.0,
+                    profile_id
+                );
+            }
+
+            if let Some(profile_id) = variety
+                .orthography
+                .as_ref()
+                .and_then(|orthography| orthography.pronunciation.as_deref())
+            {
+                assert!(
+                    ORTHOGRAPHY_PRONUNCIATION_REGISTRY
+                        .iter()
+                        .any(|registration| registration.id == profile_id),
+                    "{} declares unknown orthography pronunciation profile `{}`",
+                    variety.id.0,
+                    profile_id
+                );
+            }
+
+            for lexicon_id in &variety.pronunciation_lexicons {
+                assert!(
+                    lexicon_id == LEXICON_CMUDICT
+                        || LEXICON_REGISTRY
+                            .iter()
+                            .any(|registration| registration.id == lexicon_id),
+                    "{} declares unknown pronunciation lexicon `{}`",
+                    variety.id.0,
+                    lexicon_id
+                );
+            }
         }
     }
 

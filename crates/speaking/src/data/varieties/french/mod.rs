@@ -103,17 +103,28 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "je", "j'", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles", "me", "m'", "te",
             "t'", "se", "s'", "moi", "toi", "lui", "eux", "leur", "y", "en", "qui", "que",
         ],
+        object_pronouns: &[
+            "me", "m'", "te", "t'", "se", "s'", "nous", "vous", "le", "la", "les", "lui", "leur",
+            "y", "en",
+        ],
         auxiliaries: &[
             "suis", "es", "est", "sommes", "êtes", "sont", "étais", "était", "étaient", "serai",
             "seras", "sera", "serons", "serez", "seront", "ai", "as", "a", "avons", "avez", "ont",
             "avais", "avait", "avaient", "aurai", "aura", "auront", "vais", "vas", "va", "allons",
             "allez", "vont",
         ],
+        copulas: &[
+            "suis", "es", "est", "sommes", "êtes", "sont", "étais", "était", "étaient", "serai",
+            "sera", "seront",
+        ],
         prepositions: &[
             "à", "a", "de", "d'", "dans", "en", "sur", "sous", "avec", "sans", "pour", "par",
             "chez", "avant", "après", "entre", "vers", "contre",
         ],
+        postpositions: &[],
         conjunctions: &["et", "ou", "mais", "donc", "car", "ni"],
+        particles: &[],
+        complementizers: &["que", "qu'", "si", "quand", "lorsque", "comme"],
         adverbs: &["ne", "pas", "plus", "très", "tres", "bien", "mal"],
         adverb_suffixes: &["ment"],
         adjectives: &[
@@ -181,6 +192,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
             "lentement",
             "seulement",
         ],
+        ..HeuristicSyntaxProfile::empty()
     }
 }
 

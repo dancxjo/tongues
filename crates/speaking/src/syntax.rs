@@ -125,9 +125,14 @@ pub trait LinkGrammarParser {
 pub struct HeuristicSyntaxProfile {
     pub determiners: &'static [&'static str],
     pub pronouns: &'static [&'static str],
+    pub object_pronouns: &'static [&'static str],
     pub auxiliaries: &'static [&'static str],
+    pub copulas: &'static [&'static str],
     pub prepositions: &'static [&'static str],
+    pub postpositions: &'static [&'static str],
     pub conjunctions: &'static [&'static str],
+    pub particles: &'static [&'static str],
+    pub complementizers: &'static [&'static str],
     pub adverbs: &'static [&'static str],
     pub adverb_suffixes: &'static [&'static str],
     pub adjectives: &'static [&'static str],
@@ -143,9 +148,14 @@ impl HeuristicSyntaxProfile {
         Self {
             determiners: &[],
             pronouns: &[],
+            object_pronouns: &[],
             auxiliaries: &[],
+            copulas: &[],
             prepositions: &[],
+            postpositions: &[],
             conjunctions: &[],
+            particles: &[],
+            complementizers: &[],
             adverbs: &[],
             adverb_suffixes: &[],
             adjectives: &[],
@@ -387,6 +397,12 @@ fn build_multilingual_links(
                 link(index, index + 1, SyntacticLinkKind::Preposition, 0.76),
             );
         }
+        if multilingual_is_nominal(profile, left) && multilingual_is_postposition(profile, right) {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Preposition, 0.73),
+            );
+        }
         if multilingual_is_adverb(profile, left)
             && (multilingual_is_likely_verb(profile, right, Some(left))
                 || multilingual_is_adjective(profile, right))
@@ -402,6 +418,23 @@ fn build_multilingual_links(
                 link(index, index + 1, SyntacticLinkKind::Coordination, 0.68),
             );
         }
+        if multilingual_is_particle(profile, right)
+            && (multilingual_is_nominal(profile, left)
+                || multilingual_is_likely_verb(profile, left, previous))
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Modifier, 0.56),
+            );
+        }
+        if multilingual_is_object_pronoun(profile, left)
+            && multilingual_is_likely_verb(profile, right, Some(left))
+        {
+            push_link(
+                &mut links,
+                link(index, index + 1, SyntacticLinkKind::Object, 0.67),
+            );
+        }
         if multilingual_is_likely_verb(profile, left, previous)
             && multilingual_is_nominal(profile, right)
             && !multilingual_is_preposition(profile, right)
@@ -412,6 +445,13 @@ fn build_multilingual_links(
             );
         }
     }
+    push_multilingual_determiner_phrase_links(words, profile, &mut links);
+    push_multilingual_modifier_phrase_links(words, profile, &mut links);
+    push_multilingual_adposition_links(words, profile, &mut links);
+    push_multilingual_auxiliary_links(words, profile, &mut links);
+    push_multilingual_complement_links(words, profile, &mut links);
+    push_multilingual_coordination_links(words, profile, &mut links);
+    push_multilingual_object_pronoun_links(words, profile, &mut links);
     for predicate_index in 0..words.len() {
         let previous = predicate_index
             .checked_sub(1)
@@ -422,10 +462,7 @@ fn build_multilingual_links(
         {
             continue;
         }
-        if let Some(subject_index) = (0..predicate_index)
-            .rev()
-            .take(4)
-            .find(|index| multilingual_is_subject(profile, &words[*index]))
+        if let Some(subject_index) = multilingual_subject_before(words, profile, predicate_index)
         {
             push_link(
                 &mut links,
@@ -436,9 +473,383 @@ fn build_multilingual_links(
                     0.72,
                 ),
             );
+            if let Some(object_index) = (subject_index + 1..predicate_index).rev().find(|index| {
+                multilingual_is_object_candidate(profile, &words[*index])
+            }) {
+                push_link(
+                    &mut links,
+                    link(
+                        object_index,
+                        predicate_index,
+                        SyntacticLinkKind::Object,
+                        0.63,
+                    ),
+                );
+            }
+        }
+        if !multilingual_is_copula(profile, &words[predicate_index]) {
+            if let Some(object_index) = words
+                .iter()
+                .enumerate()
+                .skip(predicate_index + 1)
+                .take(5)
+                .find_map(|(index, word)| {
+                    multilingual_is_object_candidate(profile, word).then_some(index)
+                })
+            {
+                push_link(
+                    &mut links,
+                    link(
+                        predicate_index,
+                        object_index,
+                        SyntacticLinkKind::Object,
+                        0.66,
+                    ),
+                );
+            }
         }
     }
     links
+}
+
+fn multilingual_subject_before(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    predicate_index: usize,
+) -> Option<usize> {
+    let start = predicate_index.saturating_sub(6);
+    (start..predicate_index)
+        .rev()
+        .find(|index| multilingual_is_pronoun(profile, &words[*index]))
+        .or_else(|| {
+            (start..predicate_index)
+                .find(|index| multilingual_is_subject(profile, &words[*index]))
+        })
+}
+
+fn push_multilingual_determiner_phrase_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for determiner_index in 0..words.len() {
+        if !multilingual_is_determiner(profile, &words[determiner_index]) {
+            continue;
+        }
+        if let Some(head_index) = words
+            .iter()
+            .enumerate()
+            .skip(determiner_index + 1)
+            .take(4)
+            .find_map(|(index, word)| multilingual_is_nominal_head(profile, word).then_some(index))
+        {
+            push_link(
+                links,
+                link(
+                    determiner_index,
+                    head_index,
+                    SyntacticLinkKind::Determiner,
+                    0.78,
+                ),
+            );
+        }
+    }
+}
+
+fn push_multilingual_modifier_phrase_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for modifier_index in 0..words.len() {
+        let word = &words[modifier_index];
+        if multilingual_is_adjective(profile, word) {
+            if let Some(head_index) = words
+                .iter()
+                .enumerate()
+                .skip(modifier_index + 1)
+                .take(3)
+                .find_map(|(index, word)| {
+                    multilingual_is_nominal_head(profile, word).then_some(index)
+                })
+                .or_else(|| {
+                    (0..modifier_index)
+                        .rev()
+                        .take(3)
+                        .find(|index| multilingual_is_nominal_head(profile, &words[*index]))
+                })
+            {
+                push_link(
+                    links,
+                    link(
+                        modifier_index,
+                        head_index,
+                        SyntacticLinkKind::Modifier,
+                        0.65,
+                    ),
+                );
+            }
+        }
+        if multilingual_is_adverb(profile, word) {
+            if let Some(head_index) = words
+                .iter()
+                .enumerate()
+                .skip(modifier_index + 1)
+                .take(4)
+                .find_map(|(index, word)| {
+                    let previous = index
+                        .checked_sub(1)
+                        .and_then(|previous| words.get(previous))
+                        .map(String::as_str);
+                    (multilingual_is_likely_verb(profile, word, previous)
+                        || multilingual_is_adjective(profile, word))
+                    .then_some(index)
+                })
+                .or_else(|| {
+                    (0..modifier_index).rev().take(4).find(|index| {
+                        let previous = index
+                            .checked_sub(1)
+                            .and_then(|previous| words.get(previous))
+                            .map(String::as_str);
+                        multilingual_is_likely_verb(profile, &words[*index], previous)
+                            || multilingual_is_adjective(profile, &words[*index])
+                    })
+                })
+            {
+                push_link(
+                    links,
+                    link(
+                        head_index,
+                        modifier_index,
+                        SyntacticLinkKind::Modifier,
+                        0.64,
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn push_multilingual_adposition_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for adposition_index in 0..words.len() {
+        if multilingual_is_preposition(profile, &words[adposition_index]) {
+            if let Some(object_index) = words
+                .iter()
+                .enumerate()
+                .skip(adposition_index + 1)
+                .take(4)
+                .find_map(|(index, word)| {
+                    multilingual_is_nominal_head(profile, word).then_some(index)
+                })
+            {
+                push_link(
+                    links,
+                    link(
+                        adposition_index,
+                        object_index,
+                        SyntacticLinkKind::Preposition,
+                        0.76,
+                    ),
+                );
+            }
+        }
+        if multilingual_is_postposition(profile, &words[adposition_index]) {
+            if let Some(object_index) = (0..adposition_index)
+                .rev()
+                .take(4)
+                .find(|index| multilingual_is_nominal_head(profile, &words[*index]))
+            {
+                push_link(
+                    links,
+                    link(
+                        object_index,
+                        adposition_index,
+                        SyntacticLinkKind::Preposition,
+                        0.73,
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn push_multilingual_auxiliary_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for auxiliary_index in 0..words.len() {
+        if !multilingual_is_auxiliary(profile, &words[auxiliary_index]) {
+            continue;
+        }
+        if let Some(verb_index) = words
+            .iter()
+            .enumerate()
+            .skip(auxiliary_index + 1)
+            .take(5)
+            .find_map(|(index, word)| {
+                multilingual_is_likely_verb(profile, word, Some(&words[auxiliary_index]))
+                    .then_some(index)
+            })
+        {
+            push_link(
+                links,
+                link(
+                    auxiliary_index,
+                    verb_index,
+                    SyntacticLinkKind::Auxiliary,
+                    0.74,
+                ),
+            );
+        }
+    }
+}
+
+fn push_multilingual_complement_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for predicate_index in 0..words.len() {
+        let previous = predicate_index
+            .checked_sub(1)
+            .and_then(|index| words.get(index))
+            .map(String::as_str);
+        if multilingual_is_copula(profile, &words[predicate_index]) {
+            if let Some(complement_index) = words
+                .iter()
+                .enumerate()
+                .skip(predicate_index + 1)
+                .take(5)
+                .find_map(|(index, word)| {
+                    (multilingual_is_nominal_head(profile, word)
+                        || multilingual_is_adjective(profile, word))
+                    .then_some(index)
+                })
+            {
+                push_link(
+                    links,
+                    link(
+                        predicate_index,
+                        complement_index,
+                        SyntacticLinkKind::Complement,
+                        0.72,
+                    ),
+                );
+            }
+        }
+        if multilingual_is_likely_verb(profile, &words[predicate_index], previous)
+            || multilingual_is_auxiliary(profile, &words[predicate_index])
+        {
+            if let Some(complementizer_index) = words
+                .iter()
+                .enumerate()
+                .skip(predicate_index + 1)
+                .take(6)
+                .find_map(|(index, word)| {
+                    multilingual_is_complementizer(profile, word).then_some(index)
+                })
+            {
+                push_link(
+                    links,
+                    link(
+                        predicate_index,
+                        complementizer_index,
+                        SyntacticLinkKind::Complement,
+                        0.66,
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn push_multilingual_coordination_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for conjunction_index in 1..words.len().saturating_sub(1) {
+        if !multilingual_is_conjunction(profile, &words[conjunction_index]) {
+            continue;
+        }
+        push_link(
+            links,
+            link(
+                conjunction_index - 1,
+                conjunction_index + 1,
+                SyntacticLinkKind::Coordination,
+                0.7,
+            ),
+        );
+        push_link(
+            links,
+            link(
+                conjunction_index,
+                conjunction_index + 1,
+                SyntacticLinkKind::Coordination,
+                0.68,
+            ),
+        );
+    }
+    for particle_index in 1..words.len() {
+        if multilingual_is_particle(profile, &words[particle_index])
+            && multilingual_is_conjunction(profile, &words[particle_index])
+        {
+            push_link(
+                links,
+                link(
+                    particle_index - 1,
+                    particle_index,
+                    SyntacticLinkKind::Coordination,
+                    0.62,
+                ),
+            );
+        }
+    }
+}
+
+fn push_multilingual_object_pronoun_links(
+    words: &[String],
+    profile: HeuristicSyntaxProfile,
+    links: &mut Vec<SyntacticLink>,
+) {
+    for pronoun_index in 0..words.len() {
+        if !multilingual_is_object_pronoun(profile, &words[pronoun_index]) {
+            continue;
+        }
+        if let Some(verb_index) = words
+            .iter()
+            .enumerate()
+            .skip(pronoun_index + 1)
+            .take(4)
+            .find_map(|(index, word)| {
+                let previous = index
+                    .checked_sub(1)
+                    .and_then(|previous| words.get(previous))
+                    .map(String::as_str);
+                multilingual_is_likely_verb(profile, word, previous).then_some(index)
+            })
+            .or_else(|| {
+                (0..pronoun_index).rev().take(3).find(|index| {
+                    let previous = index
+                        .checked_sub(1)
+                        .and_then(|previous| words.get(previous))
+                        .map(String::as_str);
+                    multilingual_is_likely_verb(profile, &words[*index], previous)
+                })
+            })
+        {
+            push_link(
+                links,
+                link(pronoun_index, verb_index, SyntacticLinkKind::Object, 0.67),
+            );
+        }
+    }
 }
 
 fn multilingual_pos(
@@ -1022,12 +1433,32 @@ fn multilingual_is_auxiliary(profile: HeuristicSyntaxProfile, word: &str) -> boo
     contains(word, profile.auxiliaries)
 }
 
+fn multilingual_is_copula(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    contains(word, profile.copulas)
+}
+
 fn multilingual_is_preposition(profile: HeuristicSyntaxProfile, word: &str) -> bool {
     contains(word, profile.prepositions)
 }
 
+fn multilingual_is_postposition(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    contains(word, profile.postpositions)
+}
+
 fn multilingual_is_conjunction(profile: HeuristicSyntaxProfile, word: &str) -> bool {
     contains(word, profile.conjunctions)
+}
+
+fn multilingual_is_particle(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    contains(word, profile.particles)
+}
+
+fn multilingual_is_complementizer(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    contains(word, profile.complementizers)
+}
+
+fn multilingual_is_object_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    contains(word, profile.object_pronouns)
 }
 
 fn multilingual_is_adverb(profile: HeuristicSyntaxProfile, word: &str) -> bool {
@@ -1051,20 +1482,40 @@ fn multilingual_is_likely_verb(
     }
     contains(word, profile.verbs)
         || has_suffix(word, profile.verb_suffixes)
-        || (previous.is_some_and(|previous| multilingual_is_pronoun(profile, previous))
+        || (previous.is_some_and(|previous| {
+            multilingual_is_pronoun(profile, previous)
+                && !multilingual_is_determiner(profile, previous)
+                && !multilingual_is_object_pronoun(profile, previous)
+        })
             && has_suffix(word, profile.subject_verb_suffixes))
 }
 
 fn multilingual_is_nominal(profile: HeuristicSyntaxProfile, word: &str) -> bool {
     !word.is_empty()
+        && !multilingual_is_determiner(profile, word)
         && !multilingual_is_preposition(profile, word)
+        && !multilingual_is_postposition(profile, word)
         && !multilingual_is_conjunction(profile, word)
+        && !multilingual_is_particle(profile, word)
+        && !multilingual_is_complementizer(profile, word)
         && !multilingual_is_adverb(profile, word)
         && !multilingual_is_likely_verb(profile, word, None)
 }
 
+fn multilingual_is_nominal_head(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    multilingual_is_nominal(profile, word)
+        && !multilingual_is_determiner(profile, word)
+        && !multilingual_is_adjective(profile, word)
+}
+
+fn multilingual_is_object_candidate(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    multilingual_is_object_pronoun(profile, word) || multilingual_is_nominal_head(profile, word)
+}
+
 fn multilingual_is_subject(profile: HeuristicSyntaxProfile, word: &str) -> bool {
-    multilingual_is_pronoun(profile, word) || multilingual_is_nominal(profile, word)
+    multilingual_is_pronoun(profile, word)
+        || (multilingual_is_nominal_head(profile, word)
+            && !multilingual_is_object_pronoun(profile, word))
 }
 
 fn has_suffix(word: &str, suffixes: &[&str]) -> bool {
@@ -1098,6 +1549,20 @@ mod tests {
                 .primary_parse()
                 .is_some_and(|parse| parse.links.iter().any(|link| link.kind == kind)),
             "expected {kind:?} in {analysis:#?}"
+        );
+    }
+
+    fn assert_link_between(
+        analysis: &SentenceSyntaxAnalysis,
+        left: usize,
+        right: usize,
+        kind: SyntacticLinkKind,
+    ) {
+        assert!(
+            analysis.primary_parse().is_some_and(|parse| parse.links.iter().any(
+                |link| link.left == left && link.right == right && link.kind == kind
+            )),
+            "expected {kind:?} link {left}->{right} in {analysis:#?}"
         );
     }
 
@@ -1328,6 +1793,44 @@ mod tests {
         let sanskrit = SanskritLinkGrammarParser.parse(&words("अहम् गच्छति"), None);
         assert_eq!(sanskrit.tokens[1].pos, PartOfSpeech::Verb);
         assert_link(&sanskrit, SyntacticLinkKind::Subject);
+    }
+
+    #[test]
+    fn multilingual_parsers_emit_deeper_phrase_and_clause_links() {
+        let french = FrenchLinkGrammarParser.parse(&words("la petite maison sur la colline"), None);
+        assert_link_between(&french, 0, 2, SyntacticLinkKind::Determiner);
+        assert_link_between(&french, 1, 2, SyntacticLinkKind::Modifier);
+        assert_link(&french, SyntacticLinkKind::Preposition);
+
+        let spanish = SpanishLinkGrammarParser.parse(&words("yo veo la casa grande"), None);
+        assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&spanish, 1, 3, SyntacticLinkKind::Object);
+        assert_link_between(&spanish, 4, 3, SyntacticLinkKind::Modifier);
+
+        let german = GermanLinkGrammarParser.parse(&words("ich gebe ihm das buch"), None);
+        assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&german, 2, 1, SyntacticLinkKind::Object);
+        assert_link_between(&german, 3, 4, SyntacticLinkKind::Determiner);
+
+        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi estas tre feliĉa"), None);
+        assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&esperanto, 1, 3, SyntacticLinkKind::Complement);
+        assert_link_between(&esperanto, 3, 2, SyntacticLinkKind::Modifier);
+    }
+
+    #[test]
+    fn classical_and_indic_parsers_handle_preverbal_objects() {
+        let latin = LatinLinkGrammarParser.parse(&words("puella puerum amat"), None);
+        assert_link_between(&latin, 0, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&latin, 1, 2, SyntacticLinkKind::Object);
+
+        let greek = GreekLinkGrammarParser.parse(&words("εγώ βλέπω τον κόσμο"), None);
+        assert_link_between(&greek, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&greek, 1, 3, SyntacticLinkKind::Object);
+
+        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहं फलम् खादति"), None);
+        assert_link_between(&sanskrit, 0, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&sanskrit, 1, 2, SyntacticLinkKind::Object);
     }
 
     #[test]
