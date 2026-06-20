@@ -177,21 +177,28 @@ pub trait PronunciationPipeline {
 
     fn annotate_boundaries(
         &self,
-        _boundaries: &mut Vec<SpeechBoundaryToken>,
-        _words: &[WordToken],
-        _syntax: &SentenceSyntaxAnalysis,
-        _variety: &LinguisticVariety,
+        boundaries: &mut Vec<SpeechBoundaryToken>,
+        words: &[WordToken],
+        syntax: &SentenceSyntaxAnalysis,
+        variety: &LinguisticVariety,
     ) {
+        annotate_alternative_question_boundaries(boundaries, words, syntax, variety);
     }
 
     fn prosodic_label_for_boundary(
         &self,
         boundary: &SpeechBoundaryToken,
-        _words: &[WordToken],
-        _sentence_start_word_index: usize,
-        _variety: &LinguisticVariety,
+        words: &[WordToken],
+        sentence_start_word_index: usize,
+        variety: &LinguisticVariety,
     ) -> Option<ProsodicLabelKind> {
-        generic_prosodic_label_for_boundary(boundary)
+        match (boundary.terminal, boundary.pause) {
+            (Some(TerminalPunctuation::Question), _) => {
+                let sentence_words = words_in_sentence(words, sentence_start_word_index, boundary);
+                Some(prosodic_label_for_question(sentence_words, variety))
+            }
+            _ => generic_prosodic_label_for_boundary(boundary),
+        }
     }
 
     fn phoneme_planner(
@@ -540,32 +547,6 @@ impl PronunciationPipeline for EnglishPhonemicizer {
         variety: &LinguisticVariety,
     ) -> Vec<SpeechBoundaryToken> {
         boundary_tokens(text, words, variety)
-    }
-
-    fn annotate_boundaries(
-        &self,
-        boundaries: &mut Vec<SpeechBoundaryToken>,
-        words: &[WordToken],
-        syntax: &SentenceSyntaxAnalysis,
-        variety: &LinguisticVariety,
-    ) {
-        annotate_alternative_question_boundaries(boundaries, words, syntax, variety);
-    }
-
-    fn prosodic_label_for_boundary(
-        &self,
-        boundary: &SpeechBoundaryToken,
-        words: &[WordToken],
-        sentence_start_word_index: usize,
-        variety: &LinguisticVariety,
-    ) -> Option<ProsodicLabelKind> {
-        match (boundary.terminal, boundary.pause) {
-            (Some(TerminalPunctuation::Question), _) => {
-                let sentence_words = words_in_sentence(words, sentence_start_word_index, boundary);
-                Some(prosodic_label_for_question(sentence_words, variety))
-            }
-            _ => generic_prosodic_label_for_boundary(boundary),
-        }
     }
 
     fn weak_form_resolver(
@@ -4999,6 +4980,63 @@ mod tests {
                 .iter()
                 .all(|boundary| boundary.after_grapheme_index != 0 || boundary.terminal.is_none()),
             "French should use declared abbreviation data: {french_boundaries:?}"
+        );
+
+        let sanskrit = variety_by_code("san").expect("Sanskrit variety");
+        let sanskrit_words = tokenize_words("Dr. Smith left.");
+        let sanskrit_boundaries = boundary_tokens("Dr. Smith left.", &sanskrit_words, &sanskrit);
+        assert!(
+            sanskrit_boundaries.iter().any(|boundary| {
+                boundary.after_grapheme_index == 0
+                    && boundary.terminal == Some(TerminalPunctuation::Period)
+            }),
+            "English abbreviation data should not leak into Sanskrit: {sanskrit_boundaries:?}"
+        );
+
+        let english_questions = english
+            .question_contours
+            .as_ref()
+            .expect("English question contours");
+        assert!(english_questions.wh_openers.contains(&"what".into()));
+        assert!(!english_questions.wh_openers.contains(&"qué".into()));
+
+        let spanish = variety_by_code("es").expect("Spanish variety");
+        let spanish_questions = spanish
+            .question_contours
+            .as_ref()
+            .expect("Spanish question contours");
+        assert!(spanish_questions.wh_openers.contains(&"qué".into()));
+        assert!(!spanish_questions.wh_openers.contains(&"what".into()));
+    }
+
+    #[test]
+    fn non_english_question_contours_are_used_from_variety_data() {
+        let spanish = phonemicizer_for_variety(&VarietyId("es".into()))
+            .expect("Spanish phonemicizer")
+            .phonemicize(&request("qué casa?", "es"))
+            .expect("Spanish wh question should phonemicize");
+        assert!(
+            spanish
+                .prosody
+                .labels
+                .iter()
+                .any(|label| label.kind == ProsodicLabelKind::FinalFall),
+            "Spanish wh question should use Spanish contour data: {:?}",
+            spanish.prosody.labels
+        );
+
+        let esperanto = phonemicizer_for_variety(&VarietyId("eo".into()))
+            .expect("Esperanto phonemicizer")
+            .phonemicize(&request("ĉu vi?", "eo"))
+            .expect("Esperanto yes/no question should phonemicize");
+        assert!(
+            esperanto
+                .prosody
+                .labels
+                .iter()
+                .any(|label| label.kind == ProsodicLabelKind::QuestionRise),
+            "Esperanto yes/no question should use Esperanto contour data: {:?}",
+            esperanto.prosody.labels
         );
     }
 

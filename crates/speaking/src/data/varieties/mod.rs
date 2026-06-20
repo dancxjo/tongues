@@ -49,48 +49,175 @@ pub fn prosody_profile(
     }
 }
 
-pub fn default_punctuation_profile() -> PunctuationProfile {
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+pub fn english_punctuation_profile() -> PunctuationProfile {
     PunctuationProfile {
-        period_abbreviations: [
+        period_abbreviations: strings(&[
             "mr", "mrs", "ms", "mme", "mlle", "m", "dr", "prof", "sen", "rep", "gen", "col",
             "capt", "sgt", "lieut", "corp", "rev", "fr", "br", "st", "ave", "av", "rd", "blvd",
             "ln", "ct", "pl", "co", "inc", "ltd", "etc", "vs", "approx", "jan", "feb", "mar",
-            "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "jr", "sr", "srta",
-            "sra", "sr", "dra", "dott", "sig", "sig.ra", "hr", "frl", "fr", "u", "bzw", "z.b",
-            "bsp", "vgl", "ca",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        title_abbreviations: [
-            "mr", "mrs", "ms", "mme", "mlle", "m", "dr", "prof", "sen", "rep", "gen", "col",
-            "capt", "sgt", "lieut", "corp", "rev", "fr", "br", "sr", "sra", "srta", "dra", "dott",
-            "sig", "sig.ra", "hr", "frl",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        ambiguous_period_abbreviations: ["st", "fr", "sr"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        sentence_starter_words_after_ambiguous_abbreviation: [
+            "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "jr", "sr",
+        ]),
+        title_abbreviations: strings(&[
+            "mr", "mrs", "ms", "dr", "prof", "sen", "rep", "gen", "col", "capt", "sgt", "lieut",
+            "corp", "rev", "fr", "br", "sr",
+        ]),
+        ambiguous_period_abbreviations: strings(&["st", "fr", "sr"]),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
             "the", "he", "she", "it", "they", "we", "i", "you", "this", "that", "these", "those",
             "there", "here", "but", "and", "then", "so", "if", "when", "as", "what", "who", "how",
-            "why", "my", "your", "our", "their", "his", "her", "its", "le", "la", "les", "un",
-            "une", "des", "je", "tu", "il", "elle", "nous", "vous", "ils", "elles", "el", "la",
-            "los", "las", "yo", "nosotros", "ellos", "der", "die", "das", "ich", "du", "wir",
-            "sie", "ein", "eine",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
+            "why", "my", "your", "our", "their", "his", "her", "its",
+        ]),
     }
 }
 
-pub fn default_question_contour_profile() -> QuestionContourProfile {
+pub fn french_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&[
+            "m", "mme", "mlle", "dr", "dre", "prof", "st", "ste", "av", "bd", "etc", "janv",
+            "févr", "fevr", "avr", "sept", "oct", "nov", "déc", "dec",
+        ]),
+        title_abbreviations: strings(&["m", "mme", "mlle", "dr", "dre", "prof"]),
+        ambiguous_period_abbreviations: strings(&["st", "ste"]),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "le", "la", "les", "un", "une", "des", "je", "tu", "il", "elle", "nous", "vous", "ils",
+            "elles", "ce", "cette", "ces", "mais", "et", "donc", "que", "qui", "quand", "pourquoi",
+            "comment",
+        ]),
+    }
+}
+
+pub fn spanish_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&[
+            "sr", "sra", "srta", "dr", "dra", "prof", "av", "etc", "aprox", "ene", "feb", "mar",
+            "abr", "jun", "jul", "ago", "sept", "oct", "nov", "dic",
+        ]),
+        title_abbreviations: strings(&["sr", "sra", "srta", "dr", "dra", "prof"]),
+        ambiguous_period_abbreviations: strings(&["sr"]),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "el", "la", "los", "las", "un", "una", "unos", "unas", "yo", "tú", "tu", "él", "el",
+            "ella", "nosotros", "ellos", "ellas", "este", "esta", "estos", "estas", "pero", "y",
+            "entonces", "que", "qué", "cuando", "cuándo", "por", "quién", "quien", "cómo", "como",
+        ]),
+    }
+}
+
+pub fn german_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&[
+            "hr", "fr", "dr", "prof", "bzw", "z.b", "bsp", "vgl", "ca", "u", "b.a", "d.h", "usw",
+            "jan", "feb", "mär", "maerz", "apr", "jun", "jul", "aug", "sep", "okt", "nov", "dez",
+        ]),
+        title_abbreviations: strings(&["hr", "fr", "dr", "prof"]),
+        ambiguous_period_abbreviations: strings(&["fr"]),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "der", "die", "das", "ein", "eine", "ich", "du", "er", "sie", "es", "wir", "ihr",
+            "aber", "und", "dann", "wenn", "was", "wer", "wie", "warum", "wo",
+        ]),
+    }
+}
+
+pub fn esperanto_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&["d-ro", "s-ro", "s-ino", "prof", "ktp", "ekz", "t.e"]),
+        title_abbreviations: strings(&["d-ro", "s-ro", "s-ino", "prof"]),
+        ambiguous_period_abbreviations: Vec::new(),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "la", "mi", "vi", "li", "ŝi", "sxi", "ĝi", "gxi", "ni", "ili", "ĉu", "cxu", "kiu",
+            "kio", "kie", "kiam", "kial", "kiel", "sed", "kaj",
+        ]),
+    }
+}
+
+pub fn latin_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&["etc", "cf", "ca"]),
+        title_abbreviations: Vec::new(),
+        ambiguous_period_abbreviations: Vec::new(),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "hic", "haec", "hoc", "ille", "ego", "tu", "nos", "vos", "et", "sed", "aut", "quis",
+            "quid", "cur", "ubi", "quando",
+        ]),
+    }
+}
+
+pub fn greek_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&["κ", "π.χ", "δηλ"]),
+        title_abbreviations: Vec::new(),
+        ambiguous_period_abbreviations: Vec::new(),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "ο",
+            "η",
+            "το",
+            "οι",
+            "τα",
+            "εγώ",
+            "εγω",
+            "εσύ",
+            "εσυ",
+            "αυτός",
+            "αυτος",
+            "και",
+            "αλλά",
+            "αλλα",
+            "τι",
+            "πού",
+            "που",
+            "πότε",
+            "ποτε",
+            "γιατί",
+            "γιατι",
+            "πώς",
+            "πως",
+        ]),
+    }
+}
+
+pub fn sanskrit_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: Vec::new(),
+        title_abbreviations: Vec::new(),
+        ambiguous_period_abbreviations: Vec::new(),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "अहम्",
+            "अहं",
+            "त्वम्",
+            "सः",
+            "सा",
+            "तत्",
+            "वयम्",
+            "ते",
+            "कः",
+            "का",
+            "किम्",
+            "च",
+            "वा",
+            "aham",
+            "ahaṃ",
+            "tvam",
+            "saḥ",
+            "sā",
+            "tat",
+            "vayam",
+            "te",
+            "kaḥ",
+            "kā",
+            "kim",
+            "ca",
+            "vā",
+            "va",
+        ]),
+    }
+}
+
+pub fn english_question_contour_profile() -> QuestionContourProfile {
     QuestionContourProfile {
-        yes_no_openers: [
+        yes_no_openers: strings(&[
             "am",
             "are",
             "aren't",
@@ -130,47 +257,116 @@ pub fn default_question_contour_profile() -> QuestionContourProfile {
             "ought",
             "need",
             "dare",
-            "est",
-            "es",
-            "sont",
-            "êtes",
-            "avez",
-            "as",
-            "a",
-            "va",
-            "vas",
-            "vamos",
-            "es",
-            "eres",
-            "son",
-            "ist",
-            "sind",
-            "bist",
-            "hat",
-            "haben",
-            "kann",
-            "können",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        wh_openers: [
-            "what", "when", "where", "why", "who", "whom", "whose", "which", "how", "que", "quoi",
-            "quand", "où", "ou", "pourquoi", "qui", "comment", "qué", "que", "cuándo", "cuando",
-            "dónde", "donde", "por", "quién", "quien", "cómo", "como", "was", "wann", "wo",
-            "warum", "wer", "wie",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        alternative_coordinators: ["or", "ou", "o", "oder", "aŭ", "aut", "ἤ", "वा"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        paired_alternative_openers: ["either", "soit", "sea", "entweder", "aŭ"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        ]),
+        wh_openers: strings(&[
+            "what", "when", "where", "why", "who", "whom", "whose", "which", "how",
+        ]),
+        alternative_coordinators: strings(&["or"]),
+        paired_alternative_openers: strings(&["either"]),
+    }
+}
+
+pub fn french_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["est", "es", "sont", "êtes", "avez", "as", "a", "va", "vas"]),
+        wh_openers: strings(&[
+            "que", "quoi", "quand", "où", "ou", "pourquoi", "qui", "comment",
+        ]),
+        alternative_coordinators: strings(&["ou"]),
+        paired_alternative_openers: strings(&["soit"]),
+    }
+}
+
+pub fn spanish_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&[
+            "vamos", "es", "eres", "son", "está", "esta", "están", "estan",
+        ]),
+        wh_openers: strings(&[
+            "qué", "que", "cuándo", "cuando", "dónde", "donde", "por", "quién", "quien", "cómo",
+            "como", "cuál", "cual",
+        ]),
+        alternative_coordinators: strings(&["o"]),
+        paired_alternative_openers: strings(&["sea"]),
+    }
+}
+
+pub fn german_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["ist", "sind", "bist", "hat", "haben", "kann", "können"]),
+        wh_openers: strings(&[
+            "was", "wann", "wo", "warum", "wer", "wie", "welche", "welcher",
+        ]),
+        alternative_coordinators: strings(&["oder"]),
+        paired_alternative_openers: strings(&["entweder"]),
+    }
+}
+
+pub fn esperanto_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["ĉu", "cxu"]),
+        wh_openers: strings(&["kio", "kiu", "kiam", "kie", "kial", "kiel", "kiom"]),
+        alternative_coordinators: strings(&["aŭ", "aux"]),
+        paired_alternative_openers: strings(&["aŭ", "aux"]),
+    }
+}
+
+pub fn latin_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["num", "nonne", "utrum"]),
+        wh_openers: strings(&[
+            "quis", "quid", "quando", "ubi", "cur", "quomodo", "quo", "unde",
+        ]),
+        alternative_coordinators: strings(&["aut", "vel"]),
+        paired_alternative_openers: strings(&["utrum"]),
+    }
+}
+
+pub fn greek_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["είναι", "ειναι", "ἆρα", "άρα", "ara"]),
+        wh_openers: strings(&[
+            "τι",
+            "πού",
+            "που",
+            "ποιος",
+            "πότε",
+            "ποτε",
+            "γιατί",
+            "γιατι",
+            "πώς",
+            "πως",
+            "τίς",
+            "τί",
+        ]),
+        alternative_coordinators: strings(&["ή", "η", "ἤ"]),
+        paired_alternative_openers: strings(&["είτε", "ειτε"]),
+    }
+}
+
+pub fn sanskrit_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["किम्", "किं", "kim"]),
+        wh_openers: strings(&[
+            "कः",
+            "का",
+            "किम्",
+            "किं",
+            "कदा",
+            "कुत्र",
+            "कथम्",
+            "कथं",
+            "कस्मात्",
+            "kaḥ",
+            "kā",
+            "kim",
+            "kadā",
+            "kutra",
+            "katham",
+            "kasmāt",
+        ]),
+        alternative_coordinators: strings(&["वा", "vā", "va"]),
+        paired_alternative_openers: Vec::new(),
     }
 }
 

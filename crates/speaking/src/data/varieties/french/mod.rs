@@ -57,8 +57,8 @@ pub fn variety() -> LinguisticVariety {
                 name: "premier".into(),
             }],
         }),
-        punctuation: Some(crate::data::varieties::default_punctuation_profile()),
-        question_contours: Some(crate::data::varieties::default_question_contour_profile()),
+        punctuation: Some(crate::data::varieties::french_punctuation_profile()),
+        question_contours: Some(crate::data::varieties::french_question_contour_profile()),
         connected_speech: vec![
             ConnectedSpeechRule::DeleteFinalPhoneBeforeConsonant { phone: "ə".into() },
             ConnectedSpeechRule::Liaison {
