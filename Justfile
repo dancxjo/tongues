@@ -15,6 +15,10 @@ race *args:
 continue *args:
     @cargo run -q -p xtask -- continue "$@"
 
+# Stream an Ollama story through resident CPU head2phones and Piper playback
+be *args:
+    @cargo run -q --bin tongues -- --cpu be "$@"
+
 # Stream stdin through the sentence parser and emit one sentence per line
 parse *args:
     @cargo run -q --bin tongues -- sentence-parser stream "$@"

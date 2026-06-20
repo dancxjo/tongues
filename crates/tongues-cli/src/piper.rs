@@ -233,7 +233,7 @@ pub fn piper_synthesis_chunks_from_plan(plan: &UtterancePlan) -> Result<Vec<Pipe
     piper_sequence_from_plan(plan).map(piper_synthesis_chunks_from_sequence)
 }
 
-fn piper_synthesis_chunks_from_sequence(
+pub fn piper_synthesis_chunks_from_sequence(
     sequence: PiperPhonemeSequence,
 ) -> Vec<PiperSynthesisChunk> {
     let mut chunks = Vec::new();
@@ -670,6 +670,10 @@ impl PiperOnnxBackend {
         self.config.sample_rate_hz
     }
 
+    pub fn voice_config(&self) -> &PiperVoiceConfig {
+        &self.config
+    }
+
     #[allow(dead_code)]
     pub fn synthesize_plan(&mut self, plan: &UtterancePlan) -> Result<PiperSynthesisOutput> {
         let mut pcm_mono_f32 = Vec::new();
@@ -848,6 +852,10 @@ impl PiperOnnxBackend {
 
     pub fn sample_rate_hz(&self) -> u32 {
         0
+    }
+
+    pub fn voice_config(&self) -> &PiperVoiceConfig {
+        unreachable!("Piper ONNX synthesis requires building with the `piper-onnx` feature")
     }
 
     #[allow(dead_code)]

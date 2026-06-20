@@ -431,6 +431,9 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
+    /// Stream an Ollama story through head2phones and Piper playback
+    Be(BeCommand),
+
     /// Demonstrate the speaking library across built-in language varieties
     #[command(name = "speaking-demo", alias = "speaking")]
     SpeakingDemo {
@@ -990,6 +993,29 @@ enum Head2PhonesCommands {
         #[arg(long, default_value_t = 42)]
         seed: u64,
     },
+}
+
+#[derive(Debug, Args, Clone)]
+struct BeCommand {
+    /// Ollama server URL
+    #[arg(long, default_value = "http://localhost:11434")]
+    ollama_url: String,
+
+    /// Ollama model to ask for text
+    #[arg(long, default_value = "gpt-oss:20b")]
+    ollama_model: String,
+
+    /// Prompt sent to Ollama
+    #[arg(long, default_value = "Tell me a story.")]
+    prompt: String,
+
+    /// Directory containing the resident head2phones model
+    #[arg(long, default_value = DEFAULT_HEAD2PHONES_MODEL_DIR)]
+    head2phones_model: PathBuf,
+
+    /// Requested language/pronunciation variety for head2phones
+    #[arg(long, default_value = "en-US")]
+    variety: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1701,6 +1727,7 @@ fn main() -> Result<()> {
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
         Commands::Speak(command) => speak::run_speak(command),
+        Commands::Be(command) => cmd_be(command),
         Commands::SpeakingDemo {
             mode,
             varieties,
@@ -1746,6 +1773,7 @@ fn command_needs_device(command: &Commands) -> bool {
         | Commands::Refine { .. }
         | Commands::Predict { .. }
         | Commands::Repl { .. }
+        | Commands::Be(_)
         | Commands::Discrepancies { .. } => true,
         _ => false,
     }
@@ -3305,6 +3333,428 @@ fn cmd_head2phones_infer(
     };
     println!("{output}");
     Ok(())
+}
+
+fn cmd_be(command: BeCommand) -> Result<()> {
+    let device = NdArrayDevice::Cpu;
+    let manifest = tongues_neural::read_manifest(
+        &command
+            .head2phones_model
+            .join(tongues_neural::ARTIFACT_MANIFEST_FILE),
+    )?;
+    anyhow::ensure!(
+        manifest.family == tongues_head2phones::FAMILY,
+        "expected head2phones manifest, found `{}`",
+        manifest.family
+    );
+    let model_config: ModelConfig =
+        read_json_file(&command.head2phones_model.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&command.head2phones_model.join("vocab.json"))?;
+    let head2phones = load_model::<CpuInferBackend>(
+        &model_config,
+        &command.head2phones_model.join("model"),
+        &device,
+    )?;
+
+    let piper_model = models::ensure_piper_voice_model_available()?;
+    let piper_config_path = piper::piper_voice_config_path(&piper_model);
+    let piper_config = piper::PiperVoiceConfig::from_json_file(&piper_config_path)?;
+    let mut piper = piper::PiperOnnxBackend::load(&piper_model, piper_config)?;
+    let player = speak::AudioStreamPlayer::new(piper.sample_rate_hz())
+        .context("failed to start CPAL playback")?;
+
+    eprintln!(
+        "be: ollama={} model={} prompt={:?}",
+        command.ollama_url, command.ollama_model, command.prompt
+    );
+    eprintln!(
+        "be: resident head2phones CPU model={} piper={}",
+        command.head2phones_model.display(),
+        piper_model.display()
+    );
+
+    let mut total_samples = 0usize;
+    let mut cursor = String::new();
+    let mut previous = String::new();
+    let mut sink = |chunk: piper::PiperAudioChunk| -> Result<()> {
+        total_samples += chunk.pcm_mono_f32.len();
+        player.append(&chunk.pcm_mono_f32);
+        Ok(())
+    };
+
+    stream_ollama_generate(&command, |piece| {
+        print!("{piece}");
+        std::io::stdout()
+            .flush()
+            .context("flushing streamed text")?;
+        cursor.push_str(piece);
+        for sentence in collect_completed_sentence_parser_prefixes(&mut cursor, &mut previous) {
+            speak_head2phones_sentence(
+                &sentence,
+                &command.variety,
+                &head2phones,
+                &vocab,
+                &model_config,
+                &device,
+                &mut piper,
+                &mut sink,
+            )?;
+        }
+        Ok(())
+    })?;
+
+    let tail = cursor.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !tail.is_empty() {
+        speak_head2phones_sentence(
+            &tail,
+            &command.variety,
+            &head2phones,
+            &vocab,
+            &model_config,
+            &device,
+            &mut piper,
+            &mut sink,
+        )?;
+    }
+
+    eprintln!();
+    eprintln!("be: waiting for CPAL playback to drain");
+    drop(sink);
+    player.wait_until_done(total_samples);
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateStreamResponse {
+    #[serde(default)]
+    response: String,
+    #[serde(default)]
+    done: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn stream_ollama_generate(
+    command: &BeCommand,
+    mut on_piece: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let url = format!(
+        "{}/api/generate",
+        command.ollama_url.trim().trim_end_matches('/')
+    );
+    let body = serde_json::to_string(&serde_json::json!({
+        "model": command.ollama_model,
+        "prompt": command.prompt,
+        "stream": true,
+        "think": false,
+        "options": {
+            "temperature": 0.8
+        }
+    }))?;
+    let response = ureq::post(&url)
+        .header("Content-Type", "application/json")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send(body)
+        .with_context(|| format!("POST {url}"))?;
+    let status = response.status();
+    anyhow::ensure!(status.is_success(), "POST {url} returned HTTP {status}");
+
+    let mut body = response.into_body();
+    let reader = std::io::BufReader::new(body.as_reader());
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("reading Ollama stream from {url}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: OllamaGenerateStreamResponse =
+            serde_json::from_str(&line).with_context(|| format!("parsing Ollama event: {line}"))?;
+        if let Some(error) = event.error {
+            anyhow::bail!("Ollama returned an error: {error}");
+        }
+        if !event.response.is_empty() {
+            on_piece(&event.response)?;
+        }
+        if event.done {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn speak_head2phones_sentence<B: Backend>(
+    sentence: &str,
+    variety: &str,
+    head2phones: &Seq2SeqModel<B>,
+    vocab: &Vocab,
+    model_config: &ModelConfig,
+    device: &B::Device,
+    piper: &mut piper::PiperOnnxBackend,
+    sink: &mut dyn piper::PiperAudioSink,
+) -> Result<()> {
+    let input = tongues_head2phones::format_input_for_variety(variety, sentence);
+    let input_len = vocab.encode_string(&input).len();
+    anyhow::ensure!(
+        input_len <= model_config.max_seq_len,
+        "head2phones input encodes to {} tokens, exceeding model max_seq_len={}",
+        input_len,
+        model_config.max_seq_len
+    );
+    let output = predict_sentence_boundary(head2phones, &input, vocab, device);
+    let phones = extract_head2phones_phones(&output)
+        .with_context(|| format!("head2phones did not emit a phone block for `{sentence}`"))?;
+    let sequence = piper_sequence_from_head2phones_phones(&phones);
+    eprintln!(
+        "\nbe: head={:?}\nbe: phones={}\nbe: piper={}",
+        sentence,
+        phones,
+        sequence.symbols.join(" ")
+    );
+    if sequence.symbols.is_empty() {
+        synthesize_rule_based_fallback(sentence, variety, piper, sink)?;
+        return Ok(());
+    }
+    for chunk in piper::piper_synthesis_chunks_from_sequence(sequence) {
+        let ids = chunk
+            .sequence
+            .to_text_ids_compatible(piper.voice_config())?;
+        let mut audio = piper.synthesize_ids(&ids)?.pcm_mono_f32;
+        audio.extend(
+            std::iter::repeat(0.0)
+                .take((piper.sample_rate_hz() as usize * chunk.pause_after_ms as usize) / 1000),
+        );
+        sink.emit(piper::PiperAudioChunk {
+            chunk_index: 0,
+            is_final: true,
+            pause_after_ms: chunk.pause_after_ms,
+            sample_rate_hz: piper.sample_rate_hz(),
+            pcm_mono_f32: audio,
+        })?;
+    }
+    Ok(())
+}
+
+fn synthesize_rule_based_fallback(
+    sentence: &str,
+    variety: &str,
+    piper: &mut piper::PiperOnnxBackend,
+    sink: &mut dyn piper::PiperAudioSink,
+) -> Result<()> {
+    let variety = speaking::VarietyId(variety.to_string());
+    let phonemicizer = speaking::phonemicizer_for_variety(&variety)
+        .map_err(|error| anyhow::anyhow!("failed to load fallback phonemicizer: {error}"))?;
+    let output = phonemicizer.phonemicize(&speaking::PhonemicizeRequest {
+        text: sentence.to_string(),
+        variety,
+        style: None,
+    })?;
+    let plan = speak::utterance_plan_from_phonemicized(&output);
+    piper.synthesize_plan_streaming(&plan, sink)
+}
+
+fn extract_head2phones_phones(output: &str) -> Option<String> {
+    let start =
+        output.find(tongues_head2phones::PHONES_OPEN)? + tongues_head2phones::PHONES_OPEN.len();
+    let end = output[start..].find(tongues_head2phones::PHONES_CLOSE)? + start;
+    Some(output[start..end].trim().to_string())
+}
+
+fn piper_sequence_from_head2phones_phones(phones: &str) -> piper::PiperPhonemeSequence {
+    let mut symbols = Vec::new();
+    let mut stress = None;
+    let mut rest = phones;
+    while !rest.is_empty() {
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            rest = consume_char(rest);
+            continue;
+        }
+        if let Some((symbol, used_stress, remaining)) = next_piper_symbol_from_ipa(rest, stress) {
+            if symbol == " " {
+                if !symbols.last().is_some_and(|last| last == " ") {
+                    symbols.push(symbol.to_string());
+                }
+            } else {
+                symbols.push(symbol.to_string());
+            }
+            rest = remaining;
+            if used_stress {
+                stress = None;
+            }
+            continue;
+        }
+        if rest.starts_with('ˈ') {
+            stress = Some('1');
+        } else if rest.starts_with('ˌ') {
+            stress = Some('2');
+        }
+        rest = consume_char(rest);
+    }
+    piper::PiperPhonemeSequence { symbols }
+}
+
+fn next_piper_symbol_from_ipa(
+    rest: &str,
+    stress: Option<char>,
+) -> Option<(&'static str, bool, &str)> {
+    for (ipa, base, vowel) in [
+        ("t͡ʃ", "CH", false),
+        ("d͡ʒ", "JH", false),
+        ("aʊ", "AW", true),
+        ("aɪ", "AY", true),
+        ("eɪ", "EY", true),
+        ("oʊ", "OW", true),
+        ("ɔɪ", "OY", true),
+        ("iː", "IY", true),
+        ("uː", "UW", true),
+        ("ɑ", "AA", true),
+        ("æ", "AE", true),
+        ("ʌ", "AH", true),
+        ("ə", "AH0", true),
+        ("ɐ", "AH0", true),
+        ("ɔ", "AO", true),
+        ("ɛ", "EH", true),
+        ("ɝ", "ER1", true),
+        ("ɚ", "ER0", true),
+        ("ɪ", "IH", true),
+        ("i", "IY", true),
+        ("ʊ", "UH", true),
+        ("u", "UW", true),
+        ("b", "B", false),
+        ("d", "D", false),
+        ("ð", "DH", false),
+        ("f", "F", false),
+        ("ɡ", "G", false),
+        ("g", "G", false),
+        ("h", "HH", false),
+        ("k", "K", false),
+        ("l", "L", false),
+        ("ɫ", "L", false),
+        ("m", "M", false),
+        ("n", "N", false),
+        ("ŋ", "NG", false),
+        ("p", "P", false),
+        ("ɹ", "R", false),
+        ("r", "R", false),
+        ("s", "S", false),
+        ("ʃ", "SH", false),
+        ("t", "T", false),
+        ("θ", "TH", false),
+        ("v", "V", false),
+        ("w", "W", false),
+        ("j", "Y", false),
+        ("z", "Z", false),
+        ("ʒ", "ZH", false),
+        ("|", " ", false),
+        (",", ",", false),
+        (";", ";", false),
+        (":", ":", false),
+        ("!", "!", false),
+        ("?", "?", false),
+        (".", ".", false),
+    ] {
+        if let Some(remaining) = rest.strip_prefix(ipa) {
+            if vowel && !base.ends_with(['0', '1', '2']) {
+                return Some((
+                    stressful_vowel_symbol(base, stress),
+                    stress.is_some(),
+                    remaining,
+                ));
+            }
+            return Some((base, false, remaining));
+        }
+    }
+    None
+}
+
+fn stressful_vowel_symbol(base: &str, stress: Option<char>) -> &'static str {
+    match (base, stress.unwrap_or('0')) {
+        ("AA", '1') => "AA1",
+        ("AA", '2') => "AA2",
+        ("AA", _) => "AA0",
+        ("AE", '1') => "AE1",
+        ("AE", '2') => "AE2",
+        ("AE", _) => "AE0",
+        ("AH", '1') => "AH1",
+        ("AH", '2') => "AH2",
+        ("AH", _) => "AH0",
+        ("AO", '1') => "AO1",
+        ("AO", '2') => "AO2",
+        ("AO", _) => "AO0",
+        ("AW", '1') => "AW1",
+        ("AW", '2') => "AW2",
+        ("AW", _) => "AW0",
+        ("AY", '1') => "AY1",
+        ("AY", '2') => "AY2",
+        ("AY", _) => "AY0",
+        ("EH", '1') => "EH1",
+        ("EH", '2') => "EH2",
+        ("EH", _) => "EH0",
+        ("EY", '1') => "EY1",
+        ("EY", '2') => "EY2",
+        ("EY", _) => "EY0",
+        ("IH", '1') => "IH1",
+        ("IH", '2') => "IH2",
+        ("IH", _) => "IH0",
+        ("IY", '1') => "IY1",
+        ("IY", '2') => "IY2",
+        ("IY", _) => "IY0",
+        ("OW", '1') => "OW1",
+        ("OW", '2') => "OW2",
+        ("OW", _) => "OW0",
+        ("OY", '1') => "OY1",
+        ("OY", '2') => "OY2",
+        ("OY", _) => "OY0",
+        ("UH", '1') => "UH1",
+        ("UH", '2') => "UH2",
+        ("UH", _) => "UH0",
+        ("UW", '1') => "UW1",
+        ("UW", '2') => "UW2",
+        ("UW", _) => "UW0",
+        _ => "AH0",
+    }
+}
+
+fn consume_char(value: &str) -> &str {
+    let len = value
+        .chars()
+        .next()
+        .map(|character| character.len_utf8())
+        .unwrap_or(0);
+    &value[len..]
+}
+
+fn collect_completed_sentence_parser_prefixes(
+    cursor: &mut String,
+    previous: &mut String,
+) -> Vec<String> {
+    let mut sentences = Vec::new();
+    loop {
+        let sentence_end = completed_sentence_prefix_end(cursor);
+        let paragraph_fragment = leading_paragraph_fragment_end(cursor);
+        let end = match (sentence_end, paragraph_fragment) {
+            (Some(sentence_end), Some((_, paragraph_end))) if paragraph_end < sentence_end => {
+                paragraph_end
+            }
+            (Some(sentence_end), _) => sentence_end,
+            (None, Some((_, paragraph_end))) => paragraph_end,
+            (None, None) => break,
+        };
+        let sentence = cursor[..end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        *cursor = cursor[end..].to_string();
+        if !sentence.is_empty() {
+            *previous = sentence.clone();
+            sentences.push(sentence);
+        }
+    }
+    sentences
 }
 
 fn cmd_head2phones_eval(

@@ -696,7 +696,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     Ok(())
 }
 
-fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
+pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
     UtterancePlan {
         id: UtteranceId("styletts2.demo.utterance".into()),
         variety: output.variety.clone(),
@@ -899,14 +899,14 @@ pub(crate) fn write_wav_mono_f32(path: &Path, sample_rate_hz: u32, samples: &[f3
     Ok(())
 }
 
-pub struct AudioStreamPlayer {
+pub(crate) struct AudioStreamPlayer {
     samples: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
     cursor: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     _stream: cpal::Stream,
 }
 
 impl AudioStreamPlayer {
-    pub fn new(input_sample_rate: u32) -> Result<Self> {
+    pub(crate) fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         use std::sync::{
             atomic::{AtomicUsize, Ordering},
@@ -1063,12 +1063,12 @@ impl AudioStreamPlayer {
         })
     }
 
-    pub fn append(&self, chunk: &[f32]) {
+    pub(crate) fn append(&self, chunk: &[f32]) {
         let mut guard = self.samples.lock().unwrap();
         guard.extend_from_slice(chunk);
     }
 
-    pub fn wait_until_done(&self, input_sample_count: usize) {
+    pub(crate) fn wait_until_done(&self, input_sample_count: usize) {
         use std::sync::atomic::Ordering;
         use std::time::Duration;
         while self.cursor.load(Ordering::Relaxed) < input_sample_count {
