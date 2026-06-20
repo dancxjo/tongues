@@ -15,7 +15,7 @@ use rand::Rng;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use speaking::{EnglishPhonemicizer, PhonemicizeRequest, Phonemicizer, VarietyId};
+use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -833,11 +833,12 @@ pub fn parse_cmudict(text: &str) -> Vec<String> {
 
 /// Phonemicize a single base word into its broad and narrow IPA string representations.
 pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
-    let phonemicizer = EnglishPhonemicizer;
+    let variety = VarietyId("en-US".to_string());
+    let phonemicizer = phonemicizer_for_variety(&variety).ok()?;
     let phonemicized = phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: base_word.to_string(),
-            variety: VarietyId("en-US".to_string()),
+            variety,
             style: None,
         })
         .ok()?;

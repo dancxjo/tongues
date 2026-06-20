@@ -46,6 +46,13 @@ enum SpanishVariety {
     LatinAmericanStandard,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpanishSyntheticPronunciation {
+    pub variety_id: &'static str,
+    pub accent: &'static str,
+    pub ipa: String,
+}
+
 impl SpanishVariety {
     fn from_id(id: &str) -> Option<Self> {
         match id {
@@ -476,13 +483,19 @@ fn synthesize_ipa(word: &str, variety: SpanishVariety) -> Option<String> {
     (!ipa.is_empty()).then_some(format!("/{ipa}/"))
 }
 
-fn synthetic_pronunciations(word: &str) -> Vec<(SpanishVariety, String)> {
+pub fn synthetic_pronunciations(word: &str) -> Vec<SpanishSyntheticPronunciation> {
     [
         SpanishVariety::Castilian,
         SpanishVariety::LatinAmericanStandard,
     ]
     .into_iter()
-    .filter_map(|variety| synthesize_ipa(word, variety).map(|ipa| (variety, ipa)))
+    .filter_map(|variety| {
+        synthesize_ipa(word, variety).map(|ipa| SpanishSyntheticPronunciation {
+            variety_id: variety.id(),
+            accent: variety.accent_tag(),
+            ipa,
+        })
+    })
     .collect()
 }
 
@@ -741,12 +754,10 @@ mod tests {
         let latam = variety("es-419-Standard");
         assert_eq!(castilian.language.0, "es");
         assert_eq!(latam.language.0, "es");
-        assert!(
-            castilian
-                .phonemes
-                .phonemes
-                .contains_key(&PhonemeId("es-ES-Castilian.phoneme.θ".into()))
-        );
+        assert!(castilian
+            .phonemes
+            .phonemes
+            .contains_key(&PhonemeId("es-ES-Castilian.phoneme.θ".into())));
     }
 
     #[test]

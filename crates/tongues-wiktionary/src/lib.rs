@@ -1435,20 +1435,19 @@ pub fn extract_page_data(
         && has_language_section(wikitext, "Spanish")
         && should_synthesize_spanish_title(spelling)
     {
-        for (variety, ipa) in spanish::synthetic_pronunciations(spelling) {
-            let key = format!("spa\t{spelling}\t{ipa}");
+        for pronunciation in spanish::synthetic_pronunciations(spelling) {
+            let key = format!("spa\t{spelling}\t{}", pronunciation.ipa);
             if seen.insert(key) {
                 data.phonemes.push(PronunciationEntry {
                     lang: "spa".to_string(),
                     wiktionary_lang: "es".to_string(),
                     spelling: spelling.to_string(),
-                    ipa,
+                    ipa: pronunciation.ipa,
                     notation: "phonemic".to_string(),
-                    accent: Some(variety.accent_tag().to_string()),
+                    accent: Some(pronunciation.accent.to_string()),
                     raw_template: format!(
                         "{{{{synthetic-spanish|{}|{}}}}}",
-                        variety.id(),
-                        spelling
+                        pronunciation.variety_id, spelling
                     ),
                 });
             }
