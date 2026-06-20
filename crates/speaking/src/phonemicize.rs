@@ -288,6 +288,7 @@ pub trait PronunciationPipeline {
                     })
                     .collect(),
                 link_parses: Vec::new(),
+                raw_link_grammar_parses: Vec::new(),
                 terminal,
             });
         self.annotate_boundaries(&mut boundaries, &words, &syntax, &variety);
@@ -1423,7 +1424,7 @@ fn planned_candidate_from_variety_aliases(
             candidate.push(planned_phoneme_from_inventory(phoneme));
             index += consumed;
         } else {
-            index += chars[index].len_utf8();
+            return Vec::new();
         }
     }
     candidate
@@ -1512,61 +1513,6 @@ fn pronunciation_for_word(
     pipeline.unknown_word_pronunciation(word, variety, context)
 }
 
-fn english_unknown_word_pronunciation(
-    word: &WordToken,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> WordPronunciation {
-    use crate::data::varieties::english::morphology;
-    if let Some(morph_parts) = morphology::decompose_word(variety, &word.normalized) {
-        let candidates = vec![planned_candidate_from_cmu(
-            variety,
-            morphology::compose_pronunciation(variety, &morph_parts),
-        )];
-        return WordPronunciation {
-            candidates,
-            status: PronunciationStatus::Exact,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::Rule,
-                method: "morphological composition".into(),
-                version: Some("0.1".into()),
-            },
-            warnings: Vec::new(),
-            letter_break_offsets: Vec::new(),
-            letter_indices: Vec::new(),
-            part_of_speech: context.part_of_speech,
-        };
-    }
-
-    if let Some(pronunciation) = inflected_cmudict_pronunciation(word, variety, context) {
-        return pronunciation;
-    }
-
-    let guessed = guess_pronunciation(&word.normalized);
-    if guessed.is_empty() {
-        missing_pronunciation(word, context, "unknown pronunciation")
-    } else {
-        // eprintln!("GUESSED: {}", word.text);
-        WordPronunciation {
-            candidates: vec![planned_candidate_from_cmu(variety, guessed)],
-            status: PronunciationStatus::Guessed,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::Rule,
-                method: "unknown-word fallback".into(),
-                version: Some("0.1".into()),
-            },
-            warnings: vec![PronunciationWarning {
-                token: word.text.clone(),
-                kind: PronunciationWarningKind::GuessedWord,
-                message: format!("guessed word: {}", word.text),
-            }],
-            letter_break_offsets: Vec::new(),
-            letter_indices: Vec::new(),
-            part_of_speech: context.part_of_speech,
-        }
-    }
-}
-
 fn missing_pronunciation(
     word: &WordToken,
     context: TokenPronunciationContext,
@@ -1589,141 +1535,6 @@ fn missing_pronunciation(
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
     }
-}
-
-fn inflected_cmudict_pronunciation(
-    word: &WordToken,
-    variety: &LinguisticVariety,
-    context: TokenPronunciationContext,
-) -> Option<WordPronunciation> {
-    let normalized = word.normalized.as_str();
-    let (entry, suffix) = inflection_lemma_candidates(normalized)?
-        .into_iter()
-        .map(|(lemma, suffix)| (cmudict::bundled().lookup_entry(&lemma), suffix))
-        .find(|(entry, _)| !entry.candidates.is_empty())?;
-
-    let selection = choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
-    let candidates = selection
-        .candidates
-        .into_iter()
-        .map(|mut candidate| {
-            candidate.extend(inflection_suffix_phonemes(&candidate, suffix));
-            candidate
-        })
-        .collect::<Vec<_>>();
-    Some(WordPronunciation {
-        candidates: planned_candidates_from_cmu(variety, candidates),
-        status: PronunciationStatus::Guessed,
-        provenance: EvidenceProvenance {
-            source: EvidenceSource::Rule,
-            method: format!(
-                "cmudict lemma `{}` + regular {} inflection",
-                entry.lookup, suffix
-            ),
-            version: Some("0.1".into()),
-        },
-        warnings: vec![PronunciationWarning {
-            token: word.text.clone(),
-            kind: PronunciationWarningKind::GuessedWord,
-            message: format!("guessed inflected word from lemma: {}", word.text),
-        }],
-        letter_break_offsets: Vec::new(),
-        letter_indices: Vec::new(),
-        part_of_speech: context.part_of_speech,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-enum InflectionSuffix {
-    Ed,
-    S,
-}
-
-impl fmt::Display for InflectionSuffix {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ed => formatter.write_str("-ed"),
-            Self::S => formatter.write_str("-s"),
-        }
-    }
-}
-
-fn inflection_lemma_candidates(word: &str) -> Option<Vec<(String, InflectionSuffix)>> {
-    let mut candidates = Vec::new();
-    if let Some(stem) = word.strip_suffix("ied")
-        && stem.len() > 1
-    {
-        candidates.push((format!("{stem}y"), InflectionSuffix::Ed));
-    }
-    if let Some(stem) = word.strip_suffix("ed")
-        && stem.len() > 1
-    {
-        candidates.push((undouble_final_consonant(stem), InflectionSuffix::Ed));
-        candidates.push((stem.to_string(), InflectionSuffix::Ed));
-    }
-    if let Some(stem) = word.strip_suffix("es")
-        && stem.len() > 1
-    {
-        candidates.push((stem.to_string(), InflectionSuffix::S));
-        candidates.push((format!("{stem}e"), InflectionSuffix::S));
-    }
-    if let Some(stem) = word.strip_suffix('s')
-        && stem.len() > 1
-    {
-        if let Some(base) = stem.strip_suffix("ie") {
-            candidates.push((format!("{base}y"), InflectionSuffix::S));
-        }
-        candidates.push((stem.to_string(), InflectionSuffix::S));
-        candidates.push((format!("{stem}e"), InflectionSuffix::S));
-    }
-    (!candidates.is_empty()).then_some(candidates)
-}
-
-fn undouble_final_consonant(stem: &str) -> String {
-    let mut chars = stem.chars().collect::<Vec<_>>();
-    if chars.len() >= 2 {
-        let last = chars[chars.len() - 1];
-        let previous = chars[chars.len() - 2];
-        if last == previous && is_ascii_consonant(last) {
-            chars.pop();
-        }
-    }
-    chars.into_iter().collect()
-}
-
-fn is_ascii_consonant(ch: char) -> bool {
-    ch.is_ascii_alphabetic() && !matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u')
-}
-
-fn inflection_suffix_phonemes(
-    candidate: &[CmuPhoneme],
-    suffix: InflectionSuffix,
-) -> Vec<CmuPhoneme> {
-    let final_base = candidate
-        .last()
-        .map(|phoneme| phoneme.base.as_str())
-        .unwrap_or("");
-    let symbols: &[&str] = match suffix {
-        InflectionSuffix::Ed if matches!(final_base, "T" | "D") => &["IH0", "D"],
-        InflectionSuffix::Ed if is_voiceless_cmu_consonant(final_base) => &["T"],
-        InflectionSuffix::Ed => &["D"],
-        InflectionSuffix::S if matches!(final_base, "S" | "Z" | "SH" | "ZH" | "CH" | "JH") => {
-            &["IH0", "Z"]
-        }
-        InflectionSuffix::S if is_voiceless_cmu_consonant(final_base) => &["S"],
-        InflectionSuffix::S => &["Z"],
-    };
-    symbols
-        .iter()
-        .map(|symbol| CmuPhoneme::parse(symbol))
-        .collect()
-}
-
-fn is_voiceless_cmu_consonant(base: &str) -> bool {
-    matches!(
-        base,
-        "P" | "T" | "K" | "F" | "TH" | "S" | "SH" | "CH" | "HH"
-    )
 }
 
 fn is_short_uppercase_initialism_surface(surface: &str) -> bool {
@@ -2122,145 +1933,6 @@ fn planned_candidate_from_orthographic_words(
         .collect()
 }
 
-fn guess_pronunciation(word: &str) -> Vec<CmuPhoneme> {
-    let lower = word.to_lowercase();
-    let chars = lower.chars().collect::<Vec<_>>();
-    let mut phonemes = Vec::new();
-    let mut index = 0usize;
-
-    while index < chars.len() {
-        let rest = chars[index..].iter().collect::<String>();
-        if let Some((symbols, consumed)) = fallback_symbols_for_grapheme(&rest, index, chars.len())
-        {
-            phonemes.extend(symbols.iter().map(|symbol| CmuPhoneme::parse(symbol)));
-            index += consumed;
-            continue;
-        }
-
-        if let Some(symbol) = fallback_symbol_for_char(chars[index], index, chars.len()) {
-            phonemes.push(CmuPhoneme::parse(symbol));
-        }
-        index += 1;
-    }
-
-    let vowels = [
-        "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
-    ];
-    if let Some(first_vowel_idx) = phonemes
-        .iter()
-        .position(|p| vowels.contains(&p.base.as_str()))
-    {
-        phonemes[first_vowel_idx].stress = Some(CmuStress::Primary);
-    }
-    phonemes
-}
-
-fn fallback_symbols_for_grapheme(
-    rest: &str,
-    index: usize,
-    word_len: usize,
-) -> Option<(&'static [&'static str], usize)> {
-    const TH: &[&str] = &["TH"];
-    const SH: &[&str] = &["SH"];
-    const CH: &[&str] = &["CH"];
-    const PH: &[&str] = &["F"];
-    const CK: &[&str] = &["K"];
-    const NG: &[&str] = &["NG"];
-    const QU: &[&str] = &["K", "W"];
-    const WR: &[&str] = &["R"];
-    const KN: &[&str] = &["N"];
-    const TION: &[&str] = &["SH", "AH0", "N"];
-    const SION: &[&str] = &["ZH", "AH0", "N"];
-    const EA: &[&str] = &["IY0"];
-    const EE: &[&str] = &["IY0"];
-    const OO: &[&str] = &["UW0"];
-    const OU: &[&str] = &["AW0"];
-    const OW: &[&str] = &["OW0"];
-    const AI: &[&str] = &["EY0"];
-    const AY: &[&str] = &["EY0"];
-    const OY: &[&str] = &["OY0"];
-    const IE_FINAL: &[&str] = &["IY0"];
-    const SILENT: &[&str] = &[];
-
-    if rest.starts_with("tion") {
-        return Some((TION, 4));
-    }
-    if rest.starts_with("sion") {
-        return Some((SION, 4));
-    }
-    if rest.starts_with("ie") && index + 2 == word_len {
-        return Some((IE_FINAL, 2));
-    }
-    if index == 0 && rest.starts_with("wr") {
-        return Some((WR, 2));
-    }
-    if index == 0 && rest.starts_with("kn") {
-        return Some((KN, 2));
-    }
-    for (prefix, symbols) in [
-        ("th", TH),
-        ("sh", SH),
-        ("ch", CH),
-        ("ph", PH),
-        ("ck", CK),
-        ("ng", NG),
-        ("qu", QU),
-        ("ea", EA),
-        ("ee", EE),
-        ("oo", OO),
-        ("ou", OU),
-        ("ow", OW),
-        ("ai", AI),
-        ("ay", AY),
-        ("oy", OY),
-    ] {
-        if rest.starts_with(prefix) {
-            return Some((symbols, prefix.len()));
-        }
-    }
-    if rest.starts_with('e') && index + 1 == word_len && word_len > 3 {
-        return Some((SILENT, 1));
-    }
-    None
-}
-
-fn fallback_symbol_for_char(
-    character: char,
-    index: usize,
-    word_len: usize,
-) -> Option<&'static str> {
-    match character {
-        'a' => Some("AE0"),
-        'b' => Some("B"),
-        'c' => Some("K"),
-        'd' => Some("D"),
-        'e' => Some("EH0"),
-        'f' => Some("F"),
-        'g' => Some("G"),
-        'h' => Some("HH"),
-        'i' => Some("IH0"),
-        'j' => Some("JH"),
-        'k' => Some("K"),
-        'l' => Some("L"),
-        'm' => Some("M"),
-        'n' => Some("N"),
-        'o' => Some("AO0"),
-        'p' => Some("P"),
-        'q' => Some("K"),
-        'r' => Some("R"),
-        's' => Some("S"),
-        't' => Some("T"),
-        'u' => Some("AH0"),
-        'v' => Some("V"),
-        'w' => Some("W"),
-        'x' => Some("K"),
-        'y' if index + 1 == word_len => Some("IY0"),
-        'y' => Some("Y"),
-        'z' => Some("Z"),
-        _ => None,
-    }
-}
-
 fn boundary_phone_token() -> PhoneToken {
     boundary_phone_token_with_id(WORD_BOUNDARY_ID, "word-boundary")
 }
@@ -2587,7 +2259,7 @@ fn pronunciation_provenance(status: PronunciationStatus) -> EvidenceProvenance {
         },
         PronunciationStatus::Guessed => EvidenceProvenance {
             source: EvidenceSource::Rule,
-            method: "unknown-word fallback".into(),
+            method: "declared pronunciation guess".into(),
             version: Some("0.1".into()),
         },
         PronunciationStatus::Missing => EvidenceProvenance {
@@ -3996,43 +3668,36 @@ mod tests {
     fn unknown_dataset_names_use_grapheme_clusters_not_raw_letters() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("CORINTHE PONTMERCY CHANVRERIE MONDETOUR", "en-US"))
-            .expect("unknown dataset names should phonemicize");
+            .expect("unknown dataset names should be reported");
 
-        assert_eq!(
-            cmudict_symbols_for_word(&output, 0),
-            ["K", "AO1", "R", "IH0", "N", "TH"]
-        );
-        assert_eq!(
-            cmudict_symbols_for_word(&output, 1),
-            ["P", "AO1", "N", "T", "M", "EH0", "R", "K", "IY0"]
-        );
         assert!(
-            cmudict_symbols_for_word(&output, 2).contains(&"CH".to_string()),
-            "CHANVRERIE should keep ch as one phoneme"
+            output.phonemes.is_empty(),
+            "unknown dataset names should not use an English grapheme guesser"
         );
-        assert!(
-            cmudict_symbols_for_word(&output, 3).contains(&"AW0".to_string()),
-            "MONDETOUR should keep ou as one vowel"
+        assert_eq!(
+            output
+                .warnings
+                .iter()
+                .filter(|warning| warning.kind == PronunciationWarningKind::UnknownPronunciation)
+                .count(),
+            4
         );
     }
 
     #[test]
-    fn regular_inflections_try_cmudict_lemmas_before_grapheme_fallback() {
+    fn regular_inflections_do_not_use_hidden_english_lemma_fallback() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("PARCELLED COMBATED ANNIHILATES", "en-US"))
-            .expect("regular inflections should phonemicize from lemmas");
+            .expect("regular inflections should be reported when undeclared");
 
+        assert!(output.phonemes.is_empty());
         assert_eq!(
-            cmudict_symbols_for_word(&output, 0),
-            ["P", "AA1", "R", "S", "AH0", "L", "D"]
-        );
-        assert_eq!(
-            cmudict_symbols_for_word(&output, 1),
-            ["K", "AA1", "M", "B", "AE0", "T", "IH0", "D"]
-        );
-        assert_eq!(
-            cmudict_symbols_for_word(&output, 2),
-            ["AH0", "N", "AY1", "AH0", "L", "EY2", "T", "S"]
+            output
+                .warnings
+                .iter()
+                .filter(|warning| warning.kind == PronunciationWarningKind::UnknownPronunciation)
+                .count(),
+            3
         );
     }
 
@@ -4498,13 +4163,13 @@ mod tests {
     #[test]
     fn nasal_assimilation_applies_only_before_velars() {
         let before_k = VarietyDataPhonemicizer
-            .phonemicize(&request("nka", "en-US"))
-            .expect("fallback");
+            .phonemicize(&request("in case", "en-US"))
+            .expect("declared words before velar");
         assert!(phone_symbols(&before_k).contains(&"ŋ".into()));
 
         let before_d = VarietyDataPhonemicizer
-            .phonemicize(&request("nda", "en-US"))
-            .expect("fallback");
+            .phonemicize(&request("in debt", "en-US"))
+            .expect("declared words before non-velar");
         assert!(phone_symbols(&before_d).contains(&"n".into()));
         assert!(!phone_symbols(&before_d).contains(&"ŋ".into()));
     }
@@ -4758,32 +4423,26 @@ mod tests {
     fn generic_pipeline_does_not_use_english_unknown_guessing() {
         let english = VarietyDataPhonemicizer
             .phonemicize(&request("zzq", "en-US"))
-            .expect("English fallback should phonemicize");
+            .expect("English variety-data pipeline should report unknown words");
         assert!(
             english
                 .warnings
                 .iter()
-                .any(|warning| warning.kind == PronunciationWarningKind::GuessedWord),
+                .any(|warning| warning.kind == PronunciationWarningKind::UnknownPronunciation),
             "{:?}",
             english.warnings
         );
-
-        let data_driven = VarietyDataPhonemicizer
-            .phonemicize(&request("zzq", "en-US"))
-            .expect("variety-data pipeline should handle declared variety data");
         assert!(
-            data_driven
+            english
                 .warnings
                 .iter()
                 .all(|warning| warning.kind != PronunciationWarningKind::GuessedWord),
             "{:?}",
-            data_driven.warnings
+            english.warnings
         );
         assert!(
-            data_driven
-                .phonemes
-                .iter()
-                .all(|token| { !token.provenance.method.contains("unknown-word fallback") })
+            english.phonemes.is_empty(),
+            "generic pipeline should not synthesize English-only fallback phonemes"
         );
     }
 
@@ -5159,12 +4818,12 @@ mod tests {
     fn unknown_word_missing_is_explicitly_marked() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("zzq", "en-US"))
-            .expect("fallback should phonemicize");
+            .expect("unknown word should be reported");
 
-        assert!(output.phonemes.iter().all(|token| {
-            token.provenance.source == EvidenceSource::Rule
-                && token.provenance.method.contains("unknown-word fallback")
-                && token.confidence < 1.0
+        assert!(output.phonemes.is_empty());
+        assert!(output.warnings.iter().any(|warning| {
+            warning.kind == PronunciationWarningKind::UnknownPronunciation
+                && warning.message.contains("unknown pronunciation")
         }));
     }
 

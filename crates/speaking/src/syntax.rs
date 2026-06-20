@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::data::varieties::{
@@ -14,6 +17,8 @@ pub type WordIndex = usize;
 pub struct SentenceSyntaxAnalysis {
     pub tokens: Vec<SyntaxToken>,
     pub link_parses: Vec<SyntacticLinkParse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_link_grammar_parses: Vec<RawLinkGrammarParse>,
     pub terminal: Option<TerminalPunctuation>,
 }
 
@@ -30,6 +35,34 @@ pub struct SyntaxToken {
 pub struct SyntacticLinkParse {
     pub links: Vec<SyntacticLink>,
     pub rank: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawLinkGrammarParse {
+    pub links: Vec<RawLinkGrammarLink>,
+    pub cost: Option<RawLinkGrammarCost>,
+    pub accepted: bool,
+    pub backend: RawLinkGrammarBackend,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawLinkGrammarLink {
+    pub left: WordIndex,
+    pub right: WordIndex,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RawLinkGrammarCost {
+    pub unused: Option<f32>,
+    pub disjunct: Option<f32>,
+    pub length: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawLinkGrammarBackend {
+    LinkParserCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +97,7 @@ pub enum SyntacticLinkKind {
 #[serde(rename_all = "snake_case")]
 pub enum SyntacticLinkSource {
     HeuristicGrammarIsland,
+    LinkGrammarProjection,
     AmbiguityVariant,
 }
 
@@ -232,6 +266,43 @@ impl LinkGrammarParser for EnglishLinkGrammarParser {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct LinkParserCommandBackend {
+    command: Option<String>,
+    dictionary: Option<String>,
+}
+
+impl LinkParserCommandBackend {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_command(command: impl Into<String>) -> Self {
+        Self {
+            command: Some(command.into()),
+            dictionary: None,
+        }
+    }
+
+    pub fn with_dictionary(mut self, dictionary: impl Into<String>) -> Self {
+        self.dictionary = Some(dictionary.into());
+        self
+    }
+
+    pub fn parse(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+    ) -> Option<SentenceSyntaxAnalysis> {
+        parse_with_link_parser_command(
+            words,
+            terminal,
+            self.command.as_deref(),
+            self.dictionary.as_deref(),
+        )
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrenchLinkGrammarParser;
 
@@ -330,6 +401,13 @@ pub fn parse_english_link_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
+    parse_english_heuristic_link_grammar(words, terminal)
+}
+
+pub fn parse_english_heuristic_link_grammar(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+) -> SentenceSyntaxAnalysis {
     let pairs = words
         .iter()
         .filter_map(|word| {
@@ -369,6 +447,7 @@ pub fn parse_english_link_grammar(
     SentenceSyntaxAnalysis {
         tokens,
         link_parses: vec![parse],
+        raw_link_grammar_parses: Vec::new(),
         terminal,
     }
 }
@@ -422,6 +501,7 @@ fn parse_multilingual_link_grammar(
     SentenceSyntaxAnalysis {
         tokens,
         link_parses: vec![parse],
+        raw_link_grammar_parses: Vec::new(),
         terminal,
     }
 }
@@ -1119,6 +1199,405 @@ impl SyntaxRuleContext {
             .iter()
             .find(|word| word.word_index == word_index)
             .is_some_and(|word| word.links.contains(&kind))
+    }
+}
+
+fn use_link_parser_command_backend() -> bool {
+    match std::env::var("TONGUES_LINK_GRAMMAR_BACKEND") {
+        Ok(value)
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "heuristic" | "off" | "false" | "0"
+            ) =>
+        {
+            false
+        }
+        Ok(value)
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "command" | "link-parser"
+            ) =>
+        {
+            true
+        }
+        _ => link_parser_command_available(),
+    }
+}
+
+fn link_parser_command_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let command = std::env::var("LINK_GRAMMAR_PARSER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "link-parser".to_string());
+        Command::new(command)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+fn parse_with_link_parser_command(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+    command: Option<&str>,
+    dictionary: Option<&str>,
+) -> Option<SentenceSyntaxAnalysis> {
+    let normalized_words = words
+        .iter()
+        .filter_map(|word| {
+            let normalized = normalize_syntax_word(word);
+            (!normalized.is_empty()).then(|| (word.clone(), normalized))
+        })
+        .collect::<Vec<_>>();
+    if normalized_words.is_empty() {
+        return Some(SentenceSyntaxAnalysis {
+            terminal,
+            ..Default::default()
+        });
+    }
+
+    let sentence = link_parser_sentence(words, terminal);
+    let command = command
+        .map(str::to_string)
+        .or_else(|| std::env::var("LINK_GRAMMAR_PARSER").ok())
+        .unwrap_or_else(|| "link-parser".to_string());
+    let dictionary = dictionary
+        .map(str::to_string)
+        .or_else(|| std::env::var("LINK_GRAMMAR_EN_DICTIONARY").ok());
+
+    let mut process = Command::new(command);
+    if let Some(dictionary) = dictionary.filter(|value| !value.trim().is_empty()) {
+        process.arg(dictionary);
+    }
+    process
+        .arg("--quiet")
+        .arg("-verbosity=0")
+        .arg("-graphics=1")
+        .arg("-links=1")
+        .arg("-limit=1")
+        .arg("-timeout=5")
+        .arg("-width=16381")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = process.spawn().ok()?;
+    {
+        let stdin = child.stdin.as_mut()?;
+        writeln!(stdin, "{sentence}").ok()?;
+        writeln!(stdin, "!exit").ok()?;
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    analysis_from_link_parser_output(&stdout, &normalized_words, terminal)
+}
+
+fn link_parser_sentence(words: &[String], terminal: Option<TerminalPunctuation>) -> String {
+    let mut sentence = words.join(" ");
+    let punctuation = match terminal {
+        Some(TerminalPunctuation::Question) => Some('?'),
+        Some(TerminalPunctuation::Exclamation) => Some('!'),
+        Some(TerminalPunctuation::Period) => Some('.'),
+        None => None,
+    };
+    if let Some(punctuation) = punctuation {
+        if !sentence.ends_with(['.', '?', '!']) {
+            sentence.push(punctuation);
+        }
+    }
+    sentence
+}
+
+fn analysis_from_link_parser_output(
+    output: &str,
+    original_normalized_words: &[(String, String)],
+    terminal: Option<TerminalPunctuation>,
+) -> Option<SentenceSyntaxAnalysis> {
+    let lines = output.lines().collect::<Vec<_>>();
+    let word_line_index = link_parser_word_line_index(&lines, original_normalized_words)?;
+    let word_positions =
+        link_parser_word_positions(lines[word_line_index], original_normalized_words)?;
+    let mut raw_links = Vec::new();
+    for line in lines[..word_line_index].iter().rev() {
+        if line.trim_start().starts_with("Linkage ") {
+            break;
+        }
+        raw_links.extend(parse_link_parser_arc_line(line, &word_positions));
+    }
+    raw_links.sort_by(|left, right| {
+        left.left
+            .cmp(&right.left)
+            .then(left.right.cmp(&right.right))
+            .then(left.label.cmp(&right.label))
+    });
+    raw_links.dedup_by(|left, right| {
+        left.left == right.left && left.right == right.right && left.label == right.label
+    });
+    if raw_links.is_empty() {
+        return None;
+    }
+
+    let cost = lines
+        .iter()
+        .find_map(|line| parse_link_parser_cost_vector(line));
+    let raw_parse = RawLinkGrammarParse {
+        links: raw_links,
+        cost,
+        accepted: true,
+        backend: RawLinkGrammarBackend::LinkParserCommand,
+    };
+    Some(project_raw_link_grammar_parse(
+        original_normalized_words,
+        terminal,
+        raw_parse,
+    ))
+}
+
+fn link_parser_word_line_index(
+    lines: &[&str],
+    original_normalized_words: &[(String, String)],
+) -> Option<usize> {
+    lines.iter().position(|line| {
+        let normalized_line_words = line
+            .split_whitespace()
+            .filter_map(normalize_link_parser_output_word)
+            .collect::<Vec<_>>();
+        original_normalized_words.iter().all(|(_, word)| {
+            normalized_line_words
+                .iter()
+                .any(|candidate| candidate == word)
+        })
+    })
+}
+
+fn normalize_link_parser_output_word(token: &str) -> Option<String> {
+    let token = token
+        .trim_matches(|character: char| matches!(character, '[' | ']'))
+        .split_once('[')
+        .map_or(token, |(word, _)| word)
+        .split_once('.')
+        .map_or(token, |(word, _)| word);
+    let normalized = normalize_syntax_word(token);
+    (!normalized.is_empty() && normalized != "leftwall" && normalized != "rightwall")
+        .then_some(normalized)
+}
+
+fn link_parser_word_positions(
+    line: &str,
+    original_normalized_words: &[(String, String)],
+) -> Option<Vec<(usize, usize)>> {
+    let mut positions = Vec::new();
+    let mut search_start = 0;
+    for (word_index, (_, expected)) in original_normalized_words.iter().enumerate() {
+        let Some((start, end)) = line[search_start..]
+            .split_whitespace()
+            .scan(search_start, |offset, token| {
+                let start = line[*offset..]
+                    .find(token)
+                    .map(|relative| *offset + relative)?;
+                let end = start + token.len();
+                *offset = end;
+                Some((token, start, end))
+            })
+            .find_map(|(token, start, end)| {
+                (normalize_link_parser_output_word(token).as_deref() == Some(expected.as_str()))
+                    .then_some((start, end))
+            })
+        else {
+            return None;
+        };
+        positions.push((word_index, (start + end) / 2));
+        search_start = end;
+    }
+    Some(positions)
+}
+
+fn parse_link_parser_arc_line(
+    line: &str,
+    word_positions: &[(usize, usize)],
+) -> Vec<RawLinkGrammarLink> {
+    let pluses = line
+        .char_indices()
+        .filter_map(|(index, character)| (character == '+').then_some(index))
+        .collect::<Vec<_>>();
+    let mut links = Vec::new();
+    for window in pluses.windows(2) {
+        let left_column = window[0];
+        let right_column = window[1];
+        let label = line[left_column + 1..right_column]
+            .chars()
+            .filter(|character| {
+                !matches!(character, '-' | '=' | '<' | '>' | '+' | '|' | ' ' | '\t')
+            })
+            .collect::<String>();
+        if label.is_empty() {
+            continue;
+        }
+        let Some(left) = nearest_link_parser_word_index(left_column, word_positions) else {
+            continue;
+        };
+        let Some(right) = nearest_link_parser_word_index(right_column, word_positions) else {
+            continue;
+        };
+        if left == right {
+            continue;
+        }
+        links.push(RawLinkGrammarLink {
+            left: left.min(right),
+            right: left.max(right),
+            label,
+        });
+    }
+    links
+}
+
+fn nearest_link_parser_word_index(
+    column: usize,
+    word_positions: &[(usize, usize)],
+) -> Option<usize> {
+    word_positions
+        .iter()
+        .min_by_key(|(_, word_column)| word_column.abs_diff(column))
+        .map(|(word_index, _)| *word_index)
+}
+
+fn parse_link_parser_cost_vector(line: &str) -> Option<RawLinkGrammarCost> {
+    let (_, rest) = line.split_once("cost vector =")?;
+    let vector = rest
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    Some(RawLinkGrammarCost {
+        unused: parse_cost_component(&vector, "UNUSED"),
+        disjunct: parse_cost_component(&vector, "DIS"),
+        length: parse_cost_component(&vector, "LEN"),
+    })
+}
+
+fn parse_cost_component(parts: &[&str], key: &str) -> Option<f32> {
+    parts.iter().enumerate().find_map(|(index, part)| {
+        if let Some((left, right)) = part.split_once('=') {
+            if left == key {
+                return right
+                    .parse()
+                    .ok()
+                    .or_else(|| parts.get(index + 1).and_then(|value| value.parse().ok()));
+            }
+        }
+        (part.trim_end_matches('=') == key)
+            .then(|| parts.get(index + 1).and_then(|value| value.parse().ok()))
+            .flatten()
+    })
+}
+
+fn project_raw_link_grammar_parse(
+    original_normalized_words: &[(String, String)],
+    terminal: Option<TerminalPunctuation>,
+    raw_parse: RawLinkGrammarParse,
+) -> SentenceSyntaxAnalysis {
+    let links = raw_parse
+        .links
+        .iter()
+        .filter_map(project_raw_link_grammar_link)
+        .collect::<Vec<_>>();
+    let rank = raw_parse
+        .cost
+        .as_ref()
+        .map(|cost| {
+            1.0 / (1.0
+                + cost.unused.unwrap_or_default()
+                + cost.disjunct.unwrap_or_default()
+                + cost.length.unwrap_or_default())
+        })
+        .unwrap_or(1.0);
+    let parse = SyntacticLinkParse { links, rank };
+    let tokens = original_normalized_words
+        .iter()
+        .enumerate()
+        .map(|(word_index, (surface, word))| {
+            let mut syntactic_links = parse
+                .links
+                .iter()
+                .filter_map(|link| {
+                    (link.left == word_index || link.right == word_index).then_some(link.kind)
+                })
+                .collect::<Vec<_>>();
+            syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+            syntactic_links.dedup();
+            SyntaxToken {
+                word_index,
+                text: surface.clone(),
+                pos: disambiguate_pos_from_links(word_index, base_pos(word), &parse.links),
+                prosodic_role: prosodic_role_for_word(word, &syntactic_links),
+                syntactic_links,
+            }
+        })
+        .collect();
+
+    SentenceSyntaxAnalysis {
+        tokens,
+        link_parses: vec![parse],
+        raw_link_grammar_parses: vec![raw_parse],
+        terminal,
+    }
+}
+
+fn project_raw_link_grammar_link(raw: &RawLinkGrammarLink) -> Option<SyntacticLink> {
+    let kind = project_link_grammar_label(&raw.label)?;
+    Some(SyntacticLink {
+        left: raw.left,
+        right: raw.right,
+        kind,
+        confidence: 0.95,
+        source: SyntacticLinkSource::LinkGrammarProjection,
+    })
+}
+
+fn project_link_grammar_label(label: &str) -> Option<SyntacticLinkKind> {
+    let uppercase = label.to_ascii_uppercase();
+    if uppercase.starts_with("TO") || uppercase.starts_with('I') {
+        Some(SyntacticLinkKind::InfinitivalMarker)
+    } else if uppercase.starts_with('S') || uppercase.starts_with("AF") {
+        Some(SyntacticLinkKind::Subject)
+    } else if uppercase.starts_with('O') {
+        Some(SyntacticLinkKind::Object)
+    } else if uppercase.starts_with('D') || uppercase.starts_with("YS") {
+        Some(SyntacticLinkKind::Determiner)
+    } else if uppercase.starts_with("CO")
+        || uppercase.starts_with("CP")
+        || uppercase.starts_with("CC")
+    {
+        Some(SyntacticLinkKind::Coordination)
+    } else if uppercase.starts_with('J')
+        || uppercase.starts_with('P')
+        || uppercase.starts_with("MVp")
+    {
+        Some(SyntacticLinkKind::Preposition)
+    } else if uppercase.starts_with('A')
+        || uppercase.starts_with('M')
+        || uppercase.starts_with("EA")
+        || uppercase.starts_with("PH")
+    {
+        Some(SyntacticLinkKind::Modifier)
+    } else if uppercase.starts_with('C')
+        || uppercase.starts_with("TH")
+        || uppercase.starts_with('R')
+        || uppercase.starts_with('B')
+    {
+        Some(SyntacticLinkKind::Complement)
+    } else if uppercase.starts_with('V') {
+        Some(SyntacticLinkKind::Vocative)
+    } else {
+        None
     }
 }
 
@@ -1959,6 +2438,77 @@ mod tests {
                 .any(|link| link.left == left && link.right == right && link.kind == kind)),
             "did not expect {kind:?} link {left}->{right} in {analysis:#?}"
         );
+    }
+
+    #[test]
+    fn parses_link_parser_ascii_output_into_raw_and_projected_links() {
+        let original_words = ["the", "dog", "chased", "cat"]
+            .into_iter()
+            .map(|word| (word.to_string(), word.to_string()))
+            .collect::<Vec<_>>();
+        let output = r#"
+Found 1 linkage (1 had no P.P. violations)
+        Linkage 1, cost vector = (UNUSED=0 DIS= 0.00 LEN=8)
+    +----Ds---+----Ss----+----Os----+
+    |         |          |          |
+    the       dog        chased     cat .
+"#;
+
+        let analysis = analysis_from_link_parser_output(
+            output,
+            &original_words,
+            Some(TerminalPunctuation::Period),
+        )
+        .expect("fixture should parse");
+
+        assert_eq!(analysis.raw_link_grammar_parses.len(), 1);
+        assert_eq!(
+            analysis.raw_link_grammar_parses[0].backend,
+            RawLinkGrammarBackend::LinkParserCommand
+        );
+        assert_eq!(
+            analysis.raw_link_grammar_parses[0].cost,
+            Some(RawLinkGrammarCost {
+                unused: Some(0.0),
+                disjunct: Some(0.0),
+                length: Some(8.0),
+            })
+        );
+        assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Determiner);
+        assert_link_between(&analysis, 1, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&analysis, 2, 3, SyntacticLinkKind::Object);
+        assert!(analysis.primary_parse().is_some_and(|parse| parse
+            .links
+            .iter()
+            .all(|link| link.source == SyntacticLinkSource::LinkGrammarProjection)));
+    }
+
+    #[test]
+    fn link_grammar_projection_keeps_unknown_connector_families_raw_only() {
+        let original_words = ["left", "right"]
+            .into_iter()
+            .map(|word| (word.to_string(), word.to_string()))
+            .collect::<Vec<_>>();
+        let raw_parse = RawLinkGrammarParse {
+            links: vec![RawLinkGrammarLink {
+                left: 0,
+                right: 1,
+                label: "ZZcustom".to_string(),
+            }],
+            cost: None,
+            accepted: true,
+            backend: RawLinkGrammarBackend::LinkParserCommand,
+        };
+
+        let analysis = project_raw_link_grammar_parse(&original_words, None, raw_parse);
+
+        assert_eq!(
+            analysis.raw_link_grammar_parses[0].links[0].label,
+            "ZZcustom"
+        );
+        assert!(analysis
+            .primary_parse()
+            .is_some_and(|parse| parse.links.is_empty()));
     }
 
     #[test]
