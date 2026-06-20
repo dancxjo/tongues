@@ -173,6 +173,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         postpositions: &[],
         conjunctions: &["kaj", "aŭ", "sed", "nek"],
         particles: &["ĉu", "ja"],
+        enclitic_suffixes: &[],
         complementizers: &["ke", "ĉu", "kiam", "se", "kiel"],
         adverbs: &["ne", "tre", "ankaŭ", "jam", "nun"],
         adverb_suffixes: &["e"],

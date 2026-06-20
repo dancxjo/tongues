@@ -103,6 +103,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         postpositions: &[],
         conjunctions: &["und", "oder", "aber", "denn", "sondern"],
         particles: &["ja", "doch", "mal", "wohl"],
+        enclitic_suffixes: &[],
         complementizers: &["dass", "daß", "ob", "wenn", "weil", "als"],
         adverbs: &["nicht", "sehr", "auch", "gern", "gerne"],
         adverb_suffixes: &[],
@@ -110,7 +111,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         adjective_suffixes: &["ig", "lich", "isch"],
         verbs: &[
             "sein", "haben", "werden", "machen", "sagen", "gehen", "kommen", "sehen", "wissen",
-            "geben", "nehmen", "sprechen", "lernen", "arbeiten",
+            "geben", "nehmen", "sprechen", "lernen", "arbeiten", "weiß", "weiss", "kommt",
         ],
         verb_suffixes: &["en"],
         subject_verb_suffixes: &["e", "st", "t"],

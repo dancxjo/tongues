@@ -244,6 +244,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         postpositions: &[],
         conjunctions: &["και", "ή", "η", "αλλά", "αλλα", "δέ", "δε"],
         particles: &["δέ", "δε", "γάρ", "γαρ", "μέν", "μεν", "ἄν"],
+        enclitic_suffixes: &[],
         complementizers: &["ότι", "οτι", "πως", "αν", "εάν", "εαν", "ὅτι", "ἵνα", "ὡς"],
         adverbs: &["δεν", "μη", "πολύ", "πολυ", "καλά", "καλα"],
         adverb_suffixes: &[],

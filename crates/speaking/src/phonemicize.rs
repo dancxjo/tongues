@@ -109,10 +109,16 @@ const SYNTAX_PROFILE_REGISTRY: &[SyntaxProfileRegistration] = &[
     },
 ];
 
-const LEXICON_REGISTRY: &[LexiconRegistration] = &[LexiconRegistration {
-    id: LEXICON_LEXIQUE383,
-    pronounce: lexique_pronunciation,
-}];
+const LEXICON_REGISTRY: &[LexiconRegistration] = &[
+    LexiconRegistration {
+        id: LEXICON_CMUDICT,
+        pronounce: cmudict_pronunciation,
+    },
+    LexiconRegistration {
+        id: LEXICON_LEXIQUE383,
+        pronounce: lexique_pronunciation,
+    },
+];
 
 const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration] = &[
     OrthographyPronunciationRegistration {
@@ -1595,11 +1601,8 @@ fn variety_data_pronunciation_for_word(
     variety: &LinguisticVariety,
     context: TokenPronunciationContext,
 ) -> WordPronunciation {
-    for lexicon in &variety.pronunciation_lexicons {
-        if let Some(pronunciation) = pronunciation_from_lexicon_id(lexicon, word, variety, context)
-        {
-            return pronunciation;
-        }
+    if let Some(pronunciation) = pronunciation_from_declared_lexicons(word, variety, context) {
+        return pronunciation;
     }
 
     let candidate = planned_candidate_from_orthography_profile(&word.normalized, variety, context);
@@ -1653,6 +1656,17 @@ fn pronunciation_from_lexicon_id(
         .and_then(|registration| (registration.pronounce)(word, variety, context))
 }
 
+fn pronunciation_from_declared_lexicons(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    variety
+        .pronunciation_lexicons
+        .iter()
+        .find_map(|lexicon| pronunciation_from_lexicon_id(lexicon, word, variety, context))
+}
+
 fn planned_candidate_from_orthography_profile(
     normalized: &str,
     variety: &LinguisticVariety,
@@ -1694,6 +1708,33 @@ fn lexique_pronunciation(
             method: format!("lexique383 {} lookup", status_label(entry.status)),
             version: Some(entry.source.into()),
         },
+        warnings: Vec::new(),
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    })
+}
+
+fn cmudict_pronunciation(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    let entry = cmudict::bundled().lookup_entry(&word.normalized);
+    if entry.candidates.is_empty() {
+        return None;
+    }
+
+    let selection = choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
+    Some(WordPronunciation {
+        candidates: planned_candidates_from_cmu(variety, selection.candidates),
+        status: entry.status,
+        provenance: cmudict_pronunciation_provenance(
+            entry.status,
+            entry.source,
+            context.part_of_speech,
+            selection.applied_pos,
+        ),
         warnings: Vec::new(),
         letter_break_offsets: Vec::new(),
         letter_indices: Vec::new(),
@@ -1914,24 +1955,8 @@ fn pronunciation_for_word(
         return pronunciation;
     }
 
-    let entry = cmudict::bundled().lookup_entry(&word.normalized);
-    if !entry.candidates.is_empty() {
-        let selection =
-            choose_context_sensitive_candidates(&entry.lookup, entry.candidates, context);
-        return WordPronunciation {
-            candidates: planned_candidates_from_cmu(variety, selection.candidates),
-            status: entry.status,
-            provenance: cmudict_pronunciation_provenance(
-                entry.status,
-                entry.source,
-                context.part_of_speech,
-                selection.applied_pos,
-            ),
-            warnings: Vec::new(),
-            letter_break_offsets: Vec::new(),
-            letter_indices: Vec::new(),
-            part_of_speech: context.part_of_speech,
-        };
+    if let Some(pronunciation) = pronunciation_from_declared_lexicons(word, variety, context) {
+        return pronunciation;
     }
 
     use crate::data::varieties::english::morphology;
@@ -5120,10 +5145,9 @@ mod tests {
 
             for lexicon_id in &variety.pronunciation_lexicons {
                 assert!(
-                    lexicon_id == LEXICON_CMUDICT
-                        || LEXICON_REGISTRY
-                            .iter()
-                            .any(|registration| registration.id == lexicon_id),
+                    LEXICON_REGISTRY
+                        .iter()
+                        .any(|registration| registration.id == lexicon_id),
                     "{} declares unknown pronunciation lexicon `{}`",
                     variety.id.0,
                     lexicon_id

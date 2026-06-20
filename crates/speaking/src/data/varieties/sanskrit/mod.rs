@@ -152,6 +152,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         ],
         conjunctions: &["च", "वा", "तु", "अथ"],
         particles: &["च", "हि", "एव", "नु", "चेत्", "ca", "hi", "eva", "nu", "cet"],
+        enclitic_suffixes: &[],
         complementizers: &["यत्", "यदि", "चेत्", "yat", "yadi", "cet"],
         adverbs: &["न", "मा", "सु", "एव"],
         adverb_suffixes: &[],

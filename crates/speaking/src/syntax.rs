@@ -132,6 +132,7 @@ pub struct HeuristicSyntaxProfile {
     pub postpositions: &'static [&'static str],
     pub conjunctions: &'static [&'static str],
     pub particles: &'static [&'static str],
+    pub enclitic_suffixes: &'static [&'static str],
     pub complementizers: &'static [&'static str],
     pub adverbs: &'static [&'static str],
     pub adverb_suffixes: &'static [&'static str],
@@ -155,6 +156,7 @@ impl HeuristicSyntaxProfile {
             postpositions: &[],
             conjunctions: &[],
             particles: &[],
+            enclitic_suffixes: &[],
             complementizers: &[],
             adverbs: &[],
             adverb_suffixes: &[],
@@ -316,9 +318,16 @@ fn parse_multilingual_link_grammar(
     terminal: Option<TerminalPunctuation>,
     profile: HeuristicSyntaxProfile,
 ) -> SentenceSyntaxAnalysis {
-    let normalized = words
+    let pairs = words
         .iter()
-        .map(|word| normalize_syntax_word(word))
+        .filter_map(|word| {
+            let normalized = normalize_syntax_word(word);
+            (!normalized.is_empty()).then(|| (word.clone(), normalized))
+        })
+        .collect::<Vec<_>>();
+    let normalized = pairs
+        .iter()
+        .map(|(_, normalized)| normalized.clone())
         .collect::<Vec<_>>();
     let links = build_multilingual_links(&normalized, profile);
     let parse = SyntacticLinkParse { links, rank: 0.72 };
@@ -342,7 +351,7 @@ fn parse_multilingual_link_grammar(
             let pos = multilingual_pos(profile, word, previous);
             SyntaxToken {
                 word_index,
-                text: words[word_index].clone(),
+                text: pairs[word_index].0.clone(),
                 pos,
                 prosodic_role: multilingual_prosodic_role(pos, &syntactic_links),
                 syntactic_links,
@@ -520,7 +529,7 @@ fn multilingual_subject_before(
     let start = predicate_index.saturating_sub(6);
     (start..predicate_index)
         .rev()
-        .find(|index| multilingual_is_pronoun(profile, &words[*index]))
+        .find(|index| multilingual_is_subject_pronoun(profile, &words[*index]))
         .or_else(|| {
             (start..predicate_index).find(|index| multilingual_is_subject(profile, &words[*index]))
         })
@@ -625,6 +634,34 @@ fn push_multilingual_modifier_phrase_links(
                     ),
                 );
             }
+        }
+    }
+    for complementizer_index in 0..words.len() {
+        if !multilingual_is_complementizer(profile, &words[complementizer_index]) {
+            continue;
+        }
+        if let Some(predicate_index) = words
+            .iter()
+            .enumerate()
+            .skip(complementizer_index + 1)
+            .take(5)
+            .find_map(|(index, word)| {
+                let previous = index
+                    .checked_sub(1)
+                    .and_then(|previous| words.get(previous))
+                    .map(String::as_str);
+                multilingual_is_likely_verb(profile, word, previous).then_some(index)
+            })
+        {
+            push_link(
+                links,
+                link(
+                    complementizer_index,
+                    predicate_index,
+                    SyntacticLinkKind::Complement,
+                    0.62,
+                ),
+            );
         }
     }
 }
@@ -1445,11 +1482,11 @@ fn multilingual_is_postposition(profile: HeuristicSyntaxProfile, word: &str) -> 
 }
 
 fn multilingual_is_conjunction(profile: HeuristicSyntaxProfile, word: &str) -> bool {
-    contains(word, profile.conjunctions)
+    contains(word, profile.conjunctions) || has_enclitic_suffix(word, profile.enclitic_suffixes)
 }
 
 fn multilingual_is_particle(profile: HeuristicSyntaxProfile, word: &str) -> bool {
-    contains(word, profile.particles)
+    contains(word, profile.particles) || has_enclitic_suffix(word, profile.enclitic_suffixes)
 }
 
 fn multilingual_is_complementizer(profile: HeuristicSyntaxProfile, word: &str) -> bool {
@@ -1481,11 +1518,8 @@ fn multilingual_is_likely_verb(
     }
     contains(word, profile.verbs)
         || has_suffix(word, profile.verb_suffixes)
-        || (previous.is_some_and(|previous| {
-            multilingual_is_pronoun(profile, previous)
-                && !multilingual_is_determiner(profile, previous)
-                && !multilingual_is_object_pronoun(profile, previous)
-        }) && has_suffix(word, profile.subject_verb_suffixes))
+        || (previous.is_some_and(|previous| multilingual_is_subject_pronoun(profile, previous))
+            && has_suffix(word, profile.subject_verb_suffixes))
 }
 
 fn multilingual_is_nominal(profile: HeuristicSyntaxProfile, word: &str) -> bool {
@@ -1511,13 +1545,26 @@ fn multilingual_is_object_candidate(profile: HeuristicSyntaxProfile, word: &str)
 }
 
 fn multilingual_is_subject(profile: HeuristicSyntaxProfile, word: &str) -> bool {
-    multilingual_is_pronoun(profile, word)
+    multilingual_is_subject_pronoun(profile, word)
         || (multilingual_is_nominal_head(profile, word)
             && !multilingual_is_object_pronoun(profile, word))
 }
 
+fn multilingual_is_subject_pronoun(profile: HeuristicSyntaxProfile, word: &str) -> bool {
+    multilingual_is_pronoun(profile, word)
+        && !multilingual_is_determiner(profile, word)
+        && !multilingual_is_object_pronoun(profile, word)
+        && !multilingual_is_complementizer(profile, word)
+}
+
 fn has_suffix(word: &str, suffixes: &[&str]) -> bool {
     suffixes.iter().any(|suffix| word.ends_with(suffix))
+}
+
+fn has_enclitic_suffix(word: &str, suffixes: &[&str]) -> bool {
+    suffixes
+        .iter()
+        .any(|suffix| word.len() > suffix.len() + 1 && word.ends_with(suffix))
 }
 
 fn contains(word: &str, words: &[&str]) -> bool {
@@ -1830,6 +1877,67 @@ mod tests {
         let sanskrit = SanskritLinkGrammarParser.parse(&words("अहं फलम् खादति"), None);
         assert_link_between(&sanskrit, 0, 2, SyntacticLinkKind::Subject);
         assert_link_between(&sanskrit, 1, 2, SyntacticLinkKind::Object);
+    }
+
+    #[test]
+    fn multilingual_parser_handles_punctuation_clitics_and_empty_tokens() {
+        let punctuated = FrenchLinkGrammarParser.parse(
+            &["«".into(), "ils,".into(), "parlent!".into(), "»".into()],
+            None,
+        );
+        assert_eq!(punctuated.tokens.len(), 2);
+        assert_eq!(punctuated.tokens[0].text, "ils,");
+        assert_eq!(punctuated.tokens[1].text, "parlent!");
+        assert_link_between(&punctuated, 0, 1, SyntacticLinkKind::Subject);
+
+        let latin = LatinLinkGrammarParser.parse(&words("puella puerque venit"), None);
+        assert_link(&latin, SyntacticLinkKind::Coordination);
+        assert_link_between(&latin, 0, 2, SyntacticLinkKind::Subject);
+    }
+
+    #[test]
+    fn multilingual_parser_links_complementizer_clauses() {
+        let french = FrenchLinkGrammarParser.parse(&words("je sais que tu viens"), None);
+        assert_link_between(&french, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&french, 1, 2, SyntacticLinkKind::Complement);
+        assert_link_between(&french, 2, 4, SyntacticLinkKind::Complement);
+
+        let spanish = SpanishLinkGrammarParser.parse(&words("yo digo que ella viene"), None);
+        assert_link_between(&spanish, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Complement);
+        assert_link_between(&spanish, 2, 4, SyntacticLinkKind::Complement);
+
+        let german = GermanLinkGrammarParser.parse(&words("ich weiss dass sie kommt"), None);
+        assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&german, 1, 2, SyntacticLinkKind::Complement);
+        assert_link_between(&german, 2, 4, SyntacticLinkKind::Complement);
+    }
+
+    #[test]
+    fn multilingual_parser_covers_underfit_profile_edges() {
+        let french = FrenchLinkGrammarParser.parse(&words("je le vois dans la maison"), None);
+        assert_link_between(&french, 0, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&french, 1, 2, SyntacticLinkKind::Object);
+        assert_link_between(&french, 3, 5, SyntacticLinkKind::Preposition);
+
+        let spanish = SpanishLinkGrammarParser.parse(&words("ella lo ve con el niño"), None);
+        assert_link_between(&spanish, 0, 2, SyntacticLinkKind::Subject);
+        assert_link_between(&spanish, 1, 2, SyntacticLinkKind::Object);
+        assert_link_between(&spanish, 3, 5, SyntacticLinkKind::Preposition);
+
+        let german = GermanLinkGrammarParser.parse(&words("ich bin sehr freundlich"), None);
+        assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&german, 1, 3, SyntacticLinkKind::Complement);
+        assert_link_between(&german, 3, 2, SyntacticLinkKind::Modifier);
+
+        let esperanto = EsperantoLinkGrammarParser.parse(&words("mi vidas lin kaj ŝin"), None);
+        assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);
+        assert_link_between(&esperanto, 1, 2, SyntacticLinkKind::Object);
+        assert_link(&esperanto, SyntacticLinkKind::Coordination);
+
+        let sanskrit = SanskritLinkGrammarParser.parse(&words("अहं ग्रामम् मध्ये गच्छति"), None);
+        assert_link_between(&sanskrit, 0, 3, SyntacticLinkKind::Subject);
+        assert_link_between(&sanskrit, 1, 2, SyntacticLinkKind::Preposition);
     }
 
     #[test]

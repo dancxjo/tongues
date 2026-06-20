@@ -168,6 +168,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         postpositions: &["causa", "gratia"],
         conjunctions: &["et", "aut", "sed", "atque", "nec", "neque", "vel"],
         particles: &["ne", "que", "ve"],
+        enclitic_suffixes: &["que", "ve", "ne"],
         complementizers: &["quod", "ut", "ne", "cum", "quia", "si"],
         adverbs: &["non", "ne", "bene", "male", "iam", "nunc"],
         adverb_suffixes: &[],

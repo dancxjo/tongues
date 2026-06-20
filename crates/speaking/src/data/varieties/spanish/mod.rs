@@ -313,6 +313,7 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         postpositions: &[],
         conjunctions: &["y", "e", "o", "u", "pero", "sino", "ni"],
         particles: &[],
+        enclitic_suffixes: &[],
         complementizers: &["que", "si", "cuando", "como", "porque"],
         adverbs: &["no", "muy", "bien", "mal", "ya", "tambien", "también"],
         adverb_suffixes: &["mente"],
@@ -322,7 +323,8 @@ pub fn syntax_profile() -> HeuristicSyntaxProfile {
         adjective_suffixes: &["able", "ible", "ico", "ica"],
         verbs: &[
             "ser", "estar", "haber", "tener", "hacer", "decir", "poder", "querer", "saber",
-            "venir", "ver", "dar", "hablar", "comer", "vivir",
+            "venir", "viene", "vienen", "ver", "ve", "dar", "decir", "digo", "dice", "hablar",
+            "comer", "vivir",
         ],
         verb_suffixes: &[
             "ar", "er", "ir", "amos", "emos", "imos", "ando", "iendo", "ado", "ido",

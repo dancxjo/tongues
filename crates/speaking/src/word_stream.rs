@@ -9,6 +9,8 @@ use crate::phonemicize::{
 use crate::realize::token_stress;
 use crate::spec::Spec;
 
+pub const DEFAULT_WORD_STREAM_VARIETY: &str = "en-US";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WordStreamId(pub u64);
 
@@ -180,7 +182,7 @@ pub struct TranscriptWord {
 }
 
 pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> TimedWordStream {
-    transcript_to_word_stream_for_variety(id, words, &VarietyId("en-US".into()))
+    transcript_to_word_stream_for_variety(id, words, &VarietyId(DEFAULT_WORD_STREAM_VARIETY.into()))
 }
 
 pub fn transcript_to_word_stream_for_variety(
@@ -331,8 +333,13 @@ impl WordBoundaryRefiner for HeuristicAcousticWordBoundaryRefiner {
     }
 }
 
+pub fn attach_default_pronunciations(stream: &mut TimedWordStream) {
+    attach_pronunciations_for_variety(stream, &VarietyId(DEFAULT_WORD_STREAM_VARIETY.into()));
+}
+
+#[deprecated(note = "use attach_default_pronunciations or attach_pronunciations_for_variety")]
 pub fn attach_cmudict_pronunciations(stream: &mut TimedWordStream) {
-    attach_pronunciations_for_variety(stream, &VarietyId("en-US".into()));
+    attach_default_pronunciations(stream);
 }
 
 pub fn attach_pronunciations_for_variety(stream: &mut TimedWordStream, variety: &VarietyId) {
