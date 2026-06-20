@@ -520,7 +520,7 @@ fn stress_aware_phone_id(token: &PhonemeToken) -> Option<PhoneId> {
 
 fn token_source_base_and_stress(token: &PhonemeToken) -> Option<(String, Option<String>)> {
     let source_schema = token_category_feature(&token.features, "source_schema")?;
-    if source_schema != "cmudict" && source_schema != "arpabet" {
+    if !arpabet::stress_aware_source_schema(source_schema) {
         return None;
     }
     let base = token_category_feature(&token.features, "base_symbol")?.to_string();

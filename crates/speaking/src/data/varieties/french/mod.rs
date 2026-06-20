@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::data::lexicons::LEXIQUE383_ID;
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::Orthography;
@@ -31,8 +32,8 @@ pub fn variety() -> LinguisticVariety {
         epenthesis_rules: Vec::new(),
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
-        pronunciation_lexicons: vec!["lexique383".into()],
-        syntax_profile: Some("french".into()),
+        pronunciation_lexicons: vec![LEXIQUE383_ID.into()],
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_FRENCH.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
@@ -81,7 +82,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "French Latin orthography".into(),
-            pronunciation: Some("french".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_FRENCH.into()),
             ..Default::default()
         }),
         morphology: None,

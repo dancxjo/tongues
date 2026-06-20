@@ -11,6 +11,7 @@ use crate::acoustics::{
     CueDiagnosticity, CueTarget, LandmarkAnchor, LandmarkOrderStep, NumericRange,
     RelativeTimeWindow, SegmentSamplingStrategy, SubsegmentProportion, SubsegmentRole, WeightedCue,
 };
+use crate::data::lexicons::CMUDICT_ID;
 use crate::data::lexicons::cmudict::CmuPhoneme;
 use crate::data::notation::arpabet::{self, ARPABET};
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
@@ -194,8 +195,8 @@ pub fn variety(id: &str) -> LinguisticVariety {
         epenthesis_rules: epenthesis_rules(),
         weak_forms: weak_forms(row.id),
         orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
-        pronunciation_lexicons: vec!["cmudict".into()],
-        syntax_profile: Some("english".into()),
+        pronunciation_lexicons: vec![CMUDICT_ID.into()],
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ENGLISH.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "zero",
@@ -229,7 +230,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         phonotactics: Some(phonotactics(row.singing)),
         orthography: Some(Orthography {
             name: "English Latin orthography".into(),
-            pronunciation: Some("english_cmudict".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT.into()),
             ..Default::default()
         }),
         morphology: Some(morphology::english_morphology(row.id)),

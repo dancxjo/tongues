@@ -31,7 +31,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some("sanskrit".into()),
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_SANSKRIT.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "śūnya",
@@ -65,7 +65,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "Sanskrit Devanagari and transliteration".into(),
-            pronunciation: Some("sanskrit".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_SANSKRIT.into()),
             ..Default::default()
         }),
         morphology: None,

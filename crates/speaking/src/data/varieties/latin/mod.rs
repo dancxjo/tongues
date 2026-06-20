@@ -66,7 +66,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some("latin".into()),
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_LATIN.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "nihil",
@@ -131,7 +131,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         }),
         orthography: Some(Orthography {
             name: "Latin orthography".into(),
-            pronunciation: Some("latin".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_LATIN.into()),
             ..Default::default()
         }),
         morphology: None,

@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::lexicons::LEXIQUE383_ID;
 use crate::data::lexicons::cmudict::PronunciationStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ impl LexiqueLexicon {
         };
         lexicon.extend_from_tsv(
             include_str!(concat!(env!("OUT_DIR"), "/Lexique383.tsv")),
-            "lexique383",
+            LEXIQUE383_ID,
         );
         lexicon.extend_from_tsv(GENERATED_OVERRIDES, "generated overrides");
         lexicon
@@ -60,7 +61,7 @@ impl LexiqueLexicon {
                 let mut lexicon = Self {
                     entries: HashMap::new(),
                 };
-                lexicon.extend_from_tsv(&data, "lexique383");
+                lexicon.extend_from_tsv(&data, LEXIQUE383_ID);
                 lexicon.extend_from_tsv(GENERATED_OVERRIDES, "generated overrides");
                 return Some(lexicon);
             }
@@ -73,7 +74,7 @@ impl LexiqueLexicon {
         let mut lexicon = Self {
             entries: HashMap::new(),
         };
-        lexicon.extend_from_tsv(data, "lexique383");
+        lexicon.extend_from_tsv(data, LEXIQUE383_ID);
         lexicon
     }
 

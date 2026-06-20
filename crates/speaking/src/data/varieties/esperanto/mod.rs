@@ -97,7 +97,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some("esperanto".into()),
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_ESPERANTO.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "nul", "unu", "du", "tri", "kvar", "kvin", "ses", "sep", "ok", "naŭ", "dek",
@@ -145,7 +145,7 @@ pub fn variety() -> LinguisticVariety {
         }),
         orthography: Some(Orthography {
             name: "Esperanto Latin orthography".into(),
-            pronunciation: Some("esperanto".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ESPERANTO.into()),
             ..Default::default()
         }),
         morphology: None,

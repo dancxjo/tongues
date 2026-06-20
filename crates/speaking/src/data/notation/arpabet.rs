@@ -6,6 +6,13 @@ use crate::phonology::Phoneme;
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
 
+pub const SOURCE_SCHEMA_ARPABET: &str = "arpabet";
+pub const SOURCE_SCHEMA_CMUDICT: &str = "cmudict";
+
+pub fn stress_aware_source_schema(source_schema: &str) -> bool {
+    matches!(source_schema, SOURCE_SCHEMA_CMUDICT | SOURCE_SCHEMA_ARPABET)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArpabetEntry {
     pub symbol: &'static str,
@@ -149,7 +156,7 @@ pub fn is_reduced_vowel(base: &str, stress: Option<CmuStress>) -> bool {
 
 pub fn cmu_token_features(cmu: &CmuPhoneme) -> FeatureBundle {
     let mut bundle = entry(&cmu.base).map(feature_bundle).unwrap_or_default();
-    put(&mut bundle, "source_schema", "cmudict");
+    put(&mut bundle, "source_schema", SOURCE_SCHEMA_CMUDICT);
     put(&mut bundle, "base_symbol", &cmu.base);
     if let Some(stress) = cmu.stress {
         put(&mut bundle, "stress", stress_feature_value(stress));

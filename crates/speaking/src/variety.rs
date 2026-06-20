@@ -107,7 +107,7 @@ pub struct WeakFormRule {
     pub id: String,
     pub lexical_item: String,
     pub pronunciation: Vec<PhonemeId>,
-    #[serde(default, alias = "cmudict_pronunciation")]
+    #[serde(default)]
     pub source_pronunciation: Vec<String>,
     #[serde(default)]
     pub following: WeakFormFollowingContext,
@@ -120,7 +120,7 @@ pub struct OrthographicUnitPronunciation {
     pub kind: OrthographicUnitKind,
     pub unit: String,
     pub pronunciation: Vec<PhonemeId>,
-    #[serde(default, alias = "cmudict_pronunciation")]
+    #[serde(default)]
     pub source_pronunciation: Vec<String>,
 }
 

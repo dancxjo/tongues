@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::asr::AudioFrame;
+use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::ids::VarietyId;
 use crate::phonemicize::{
     PhonemicizeRequest, PhonemicizeStyle, PronunciationWarningKind, phoneme_display_symbol,
@@ -9,7 +10,7 @@ use crate::phonemicize::{
 use crate::realize::token_stress;
 use crate::spec::Spec;
 
-pub const DEFAULT_WORD_STREAM_VARIETY: &str = "en-US";
+pub const DEFAULT_WORD_STREAM_VARIETY: &str = DEFAULT_SPEAKING_VARIETY;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WordStreamId(pub u64);

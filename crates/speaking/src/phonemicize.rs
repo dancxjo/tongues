@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::lexicons::cmudict::{self, CmuPhoneme, CmuStress, PronunciationStatus};
 use crate::data::lexicons::lexique;
+use crate::data::lexicons::{CMUDICT_ID, LEXIQUE383_ID};
 use crate::data::notation::arpabet::{self, split_stress};
 use crate::data::varieties::english::normalization as english_normalization;
 use crate::data::varieties::esperanto;
@@ -13,6 +14,13 @@ use crate::data::varieties::greek;
 use crate::data::varieties::latin;
 use crate::data::varieties::sanskrit;
 use crate::data::varieties::spanish;
+use crate::data::varieties::{
+    ORTHOGRAPHY_PROFILE_ALIAS, ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT, ORTHOGRAPHY_PROFILE_ESPERANTO,
+    ORTHOGRAPHY_PROFILE_FRENCH, ORTHOGRAPHY_PROFILE_GERMAN, ORTHOGRAPHY_PROFILE_GREEK,
+    ORTHOGRAPHY_PROFILE_LATIN, ORTHOGRAPHY_PROFILE_SANSKRIT, ORTHOGRAPHY_PROFILE_SPANISH,
+    SYNTAX_PROFILE_ENGLISH, SYNTAX_PROFILE_ESPERANTO, SYNTAX_PROFILE_FRENCH, SYNTAX_PROFILE_GERMAN,
+    SYNTAX_PROFILE_GREEK, SYNTAX_PROFILE_LATIN, SYNTAX_PROFILE_SANSKRIT, SYNTAX_PROFILE_SPANISH,
+};
 use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
@@ -41,8 +49,6 @@ use crate::variety::{
 const WORD_BOUNDARY_ID: &str = "boundary.word";
 const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
-const LEXICON_CMUDICT: &str = "cmudict";
-const LEXICON_LEXIQUE383: &str = "lexique383";
 
 type SyntaxParserFactory = fn() -> &'static dyn LinkGrammarParser;
 type LexiconPronouncer =
@@ -76,85 +82,85 @@ static SANSKRIT_SYNTAX_PARSER: SanskritLinkGrammarParser = SanskritLinkGrammarPa
 
 const SYNTAX_PROFILE_REGISTRY: &[SyntaxProfileRegistration] = &[
     SyntaxProfileRegistration {
-        id: "english",
+        id: SYNTAX_PROFILE_ENGLISH,
         parser: || &ENGLISH_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "esperanto",
+        id: SYNTAX_PROFILE_ESPERANTO,
         parser: || &ESPERANTO_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "french",
+        id: SYNTAX_PROFILE_FRENCH,
         parser: || &FRENCH_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "spanish",
+        id: SYNTAX_PROFILE_SPANISH,
         parser: || &SPANISH_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "german",
+        id: SYNTAX_PROFILE_GERMAN,
         parser: || &GERMAN_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "greek",
+        id: SYNTAX_PROFILE_GREEK,
         parser: || &GREEK_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "latin",
+        id: SYNTAX_PROFILE_LATIN,
         parser: || &LATIN_SYNTAX_PARSER,
     },
     SyntaxProfileRegistration {
-        id: "sanskrit",
+        id: SYNTAX_PROFILE_SANSKRIT,
         parser: || &SANSKRIT_SYNTAX_PARSER,
     },
 ];
 
 const LEXICON_REGISTRY: &[LexiconRegistration] = &[
     LexiconRegistration {
-        id: LEXICON_CMUDICT,
+        id: CMUDICT_ID,
         pronounce: cmudict_pronunciation,
     },
     LexiconRegistration {
-        id: LEXICON_LEXIQUE383,
+        id: LEXIQUE383_ID,
         pronounce: lexique_pronunciation,
     },
 ];
 
 const ORTHOGRAPHY_PRONUNCIATION_REGISTRY: &[OrthographyPronunciationRegistration] = &[
     OrthographyPronunciationRegistration {
-        id: "english_cmudict",
+        id: ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT,
         pronounce: planned_candidate_from_alias_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "esperanto",
+        id: ORTHOGRAPHY_PROFILE_ESPERANTO,
         pronounce: planned_candidate_from_esperanto_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "french",
+        id: ORTHOGRAPHY_PROFILE_FRENCH,
         pronounce: planned_candidate_from_french_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "german",
+        id: ORTHOGRAPHY_PROFILE_GERMAN,
         pronounce: planned_candidate_from_german_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "greek",
+        id: ORTHOGRAPHY_PROFILE_GREEK,
         pronounce: planned_candidate_from_greek_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "latin",
+        id: ORTHOGRAPHY_PROFILE_LATIN,
         pronounce: planned_candidate_from_latin_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "sanskrit",
+        id: ORTHOGRAPHY_PROFILE_SANSKRIT,
         pronounce: planned_candidate_from_sanskrit_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "spanish",
+        id: ORTHOGRAPHY_PROFILE_SPANISH,
         pronounce: planned_candidate_from_spanish_orthography,
     },
     OrthographyPronunciationRegistration {
-        id: "alias",
+        id: ORTHOGRAPHY_PROFILE_ALIAS,
         pronounce: planned_candidate_from_alias_orthography,
     },
 ];
@@ -177,7 +183,7 @@ pub fn phonemicizer_for_variety(
         variety_by_code(&canonical.0).ok_or_else(|| PhonemicizeError::UnsupportedVariety {
             variety: canonical.clone(),
         })?;
-    if has_pronunciation_lexicon(&variety_data, LEXICON_CMUDICT) {
+    if has_pronunciation_lexicon(&variety_data, CMUDICT_ID) {
         Ok(Box::new(EnglishPhonemicizer))
     } else {
         Ok(Box::new(VarietyDataPhonemicizer))
@@ -572,7 +578,7 @@ impl PronunciationPipeline for EnglishPhonemicizer {
                 variety: canonical_variety.clone(),
             }
         })?;
-        if !has_pronunciation_lexicon(&variety, LEXICON_CMUDICT) {
+        if !has_pronunciation_lexicon(&variety, CMUDICT_ID) {
             return Err(PhonemicizeError::UnsupportedVariety {
                 variety: canonical_variety.clone(),
             });

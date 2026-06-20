@@ -10,6 +10,26 @@ pub mod spanish;
 use crate::ids::VarietyId;
 use crate::variety::LinguisticVariety;
 
+pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
+pub const SYNTAX_PROFILE_ENGLISH: &str = "english";
+pub const SYNTAX_PROFILE_ESPERANTO: &str = "esperanto";
+pub const SYNTAX_PROFILE_FRENCH: &str = "french";
+pub const SYNTAX_PROFILE_GERMAN: &str = "german";
+pub const SYNTAX_PROFILE_GREEK: &str = "greek";
+pub const SYNTAX_PROFILE_LATIN: &str = "latin";
+pub const SYNTAX_PROFILE_SANSKRIT: &str = "sanskrit";
+pub const SYNTAX_PROFILE_SPANISH: &str = "spanish";
+
+pub const ORTHOGRAPHY_PROFILE_ALIAS: &str = "alias";
+pub const ORTHOGRAPHY_PROFILE_ENGLISH_CMUDICT: &str = "english_cmudict";
+pub const ORTHOGRAPHY_PROFILE_ESPERANTO: &str = "esperanto";
+pub const ORTHOGRAPHY_PROFILE_FRENCH: &str = "french";
+pub const ORTHOGRAPHY_PROFILE_GERMAN: &str = "german";
+pub const ORTHOGRAPHY_PROFILE_GREEK: &str = "greek";
+pub const ORTHOGRAPHY_PROFILE_LATIN: &str = "latin";
+pub const ORTHOGRAPHY_PROFILE_SANSKRIT: &str = "sanskrit";
+pub const ORTHOGRAPHY_PROFILE_SPANISH: &str = "spanish";
+
 struct VarietyRegistration {
     canonical_id: &'static str,
     aliases: &'static [&'static str],

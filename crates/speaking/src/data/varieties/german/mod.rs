@@ -31,7 +31,7 @@ pub fn variety() -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some("german".into()),
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_GERMAN.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "null",
@@ -65,7 +65,7 @@ pub fn variety() -> LinguisticVariety {
         phonotactics: None,
         orthography: Some(Orthography {
             name: "German Latin orthography".into(),
-            pronunciation: Some("german".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_GERMAN.into()),
             ..Default::default()
         }),
         morphology: None,

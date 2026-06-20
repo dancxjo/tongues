@@ -83,7 +83,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         weak_forms: Vec::new(),
         orthographic_unit_pronunciations: Vec::new(),
         pronunciation_lexicons: Vec::new(),
-        syntax_profile: Some("greek".into()),
+        syntax_profile: Some(crate::data::varieties::SYNTAX_PROFILE_GREEK.into()),
         number_names: Some(NumberNameSet {
             cardinal_0_to_20: [
                 "μηδέν",
@@ -145,7 +145,7 @@ pub fn variety(id: &str) -> LinguisticVariety {
         }),
         orthography: Some(Orthography {
             name: "Greek orthography".into(),
-            pronunciation: Some("greek".into()),
+            pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_GREEK.into()),
             ..Default::default()
         }),
         morphology: None,
