@@ -4407,42 +4407,112 @@ fn styletts2_plan_from_head2phones_prediction(
 }
 
 fn styletts2_phone_tokens_from_head2phones(phones: &str) -> Vec<PhoneToken> {
-    phones
-        .split_whitespace()
-        .filter_map(|phone| {
-            let id = if phone == "|" {
-                "boundary.word".to_string()
-            } else {
-                let phone = normalize_head2phones_phone_for_styletts2(phone)?;
-                format!("ipa.phone.{phone}")
-            };
-            Some(PhoneToken {
-                phone: Spec::Known(speaking::ids::PhoneId(id.into())),
-                span: None,
-                features: Default::default(),
-                acoustic_evidence: Vec::new(),
-                confidence: 1.0,
-                provenance: EvidenceProvenance {
-                    source: EvidenceSource::Inference,
-                    method: "tongues be head2phones".into(),
-                    version: Some("0.1".into()),
-                },
-            })
-        })
-        .collect()
+    let mut tokens = Vec::new();
+    let mut rest = phones;
+    while !rest.is_empty() {
+        let Some(character) = rest.chars().next() else {
+            break;
+        };
+        if character.is_whitespace()
+            || matches!(
+                character,
+                'ˈ' | 'ˌ' | '.' | ',' | ';' | ':' | '?' | '!' | '↘' | '↗' | '→'
+            )
+        {
+            rest = consume_char(rest);
+            continue;
+        }
+        if character == '|' {
+            tokens.push(styletts2_phone_token("boundary.word".to_string()));
+            rest = consume_char(rest);
+            continue;
+        }
+        if let Some((phone, remaining)) = next_styletts2_phone_from_head2phones(rest) {
+            tokens.push(styletts2_phone_token(format!("ipa.phone.{phone}")));
+            rest = remaining;
+        } else {
+            rest = consume_char(rest);
+        }
+    }
+    tokens
 }
 
-fn normalize_head2phones_phone_for_styletts2(phone: &str) -> Option<String> {
-    let phone = phone.trim_matches(|c| matches!(c, 'ˈ' | 'ˌ' | '.'));
-    if phone.is_empty() {
-        return None;
+fn styletts2_phone_token(id: String) -> PhoneToken {
+    PhoneToken {
+        phone: Spec::Known(speaking::ids::PhoneId(id.into())),
+        span: None,
+        features: Default::default(),
+        acoustic_evidence: Vec::new(),
+        confidence: 1.0,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Inference,
+            method: "tongues be head2phones".into(),
+            version: Some("0.1".into()),
+        },
     }
-    Some(
-        phone
-            .replace("t͡ʃ", "tʃ")
-            .replace("d͡ʒ", "dʒ")
-            .replace('g', "ɡ"),
-    )
+}
+
+fn next_styletts2_phone_from_head2phones(rest: &str) -> Option<(&'static str, &str)> {
+    for (input, phone) in [
+        ("t͡ʃ", "tʃ"),
+        ("d͡ʒ", "dʒ"),
+        ("aʊ", "aʊ"),
+        ("aɪ", "aɪ"),
+        ("eɪ", "eɪ"),
+        ("oʊ", "oʊ"),
+        ("ɔɪ", "ɔɪ"),
+        ("iː", "iː"),
+        ("uː", "uː"),
+        ("kʰ", "kʰ"),
+        ("pʰ", "pʰ"),
+        ("tʰ", "tʰ"),
+        ("k˭", "k˭"),
+        ("p˭", "p˭"),
+        ("t˭", "t˭"),
+        ("tʃ", "tʃ"),
+        ("dʒ", "dʒ"),
+        ("ɑ", "ɑ"),
+        ("æ", "æ"),
+        ("ʌ", "ʌ"),
+        ("ə", "ə"),
+        ("ɐ", "ɐ"),
+        ("ɔ", "ɔ"),
+        ("b", "b"),
+        ("d", "d"),
+        ("ð", "ð"),
+        ("ɛ", "ɛ"),
+        ("ɝ", "ɝ"),
+        ("ɚ", "ɚ"),
+        ("f", "f"),
+        ("ɡ", "ɡ"),
+        ("g", "ɡ"),
+        ("h", "h"),
+        ("ɪ", "ɪ"),
+        ("k", "k"),
+        ("l", "l"),
+        ("ɫ", "ɫ"),
+        ("m", "m"),
+        ("n", "n"),
+        ("ŋ", "ŋ"),
+        ("p", "p"),
+        ("ɹ", "ɹ"),
+        ("r", "ɹ"),
+        ("s", "s"),
+        ("ʃ", "ʃ"),
+        ("t", "t"),
+        ("θ", "θ"),
+        ("ʊ", "ʊ"),
+        ("v", "v"),
+        ("w", "w"),
+        ("j", "j"),
+        ("z", "z"),
+        ("ʒ", "ʒ"),
+    ] {
+        if let Some(remaining) = rest.strip_prefix(input) {
+            return Some((phone, remaining));
+        }
+    }
+    None
 }
 
 fn be_styletts2_options(max_tts_symbols: usize, no_tts_chunking: bool) -> StyleTts2PlanOptions {
@@ -12460,6 +12530,52 @@ mod tests {
 
         assert_eq!(head, "Café Luna listened.");
         assert_eq!(rest, " Then she smiled.");
+    }
+
+    #[test]
+    fn styletts2_head2phones_scanner_splits_serialized_words_into_phones() {
+        let tokens = styletts2_phone_tokens_from_head2phones("ˈwəns | ə.ˈpɑn | ə | ˈtaɪm ↘ .");
+        let ids = tokens
+            .iter()
+            .filter_map(|token| match &token.phone {
+                Spec::Known(id) => Some(id.as_str().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec![
+                "ipa.phone.w",
+                "ipa.phone.ə",
+                "ipa.phone.n",
+                "ipa.phone.s",
+                "boundary.word",
+                "ipa.phone.ə",
+                "ipa.phone.p",
+                "ipa.phone.ɑ",
+                "ipa.phone.n",
+                "boundary.word",
+                "ipa.phone.ə",
+                "boundary.word",
+                "ipa.phone.t",
+                "ipa.phone.aɪ",
+                "ipa.phone.m",
+            ]
+        );
+
+        let plan = styletts2_plan_from_head2phones_prediction(
+            "en-US",
+            "Once upon a time.",
+            "ˈwəns | ə.ˈpɑn | ə | ˈtaɪm ↘ .",
+        )
+        .expect("head2phones StyleTTS2 plan");
+        prepare_styletts2_plan(
+            &plan,
+            &styletts2_en_us_symbol_set(),
+            be_styletts2_options(DEFAULT_MAX_TTS_SYMBOLS, false),
+        )
+        .expect("StyleTTS2 backend plan");
     }
 
     #[test]
