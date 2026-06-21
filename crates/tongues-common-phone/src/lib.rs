@@ -38,8 +38,11 @@ pub const CTC_BLANK: &str = "<blank>";
 pub const UNK: &str = "<unk>";
 pub const NONE: &str = "none";
 pub const PHONE_FEATURE_UNKNOWN: &str = "<PHONE_FEATURE_UNKNOWN>";
+pub const DEFAULT_ZENODO_URL: &str =
+    "https://zenodo.org/records/5846137/files/cp-1-0.tgz?download=1";
 const ACF_MAGIC: &[u8; 4] = b"ACF0";
 const ACF_VERSION: u32 = 1;
+const DOWNLOAD_USER_AGENT: &str = "tongues-common-phone/0.1";
 
 type CpuInferBackend = NdArray<f32>;
 type CpuTrainBackend = Autodiff<CpuInferBackend>;
@@ -194,6 +197,14 @@ pub enum PrepareProgress {
         rows: usize,
         path: String,
     },
+    Download {
+        url: String,
+        path: String,
+        bytes: u64,
+    },
+    Extract {
+        path: String,
+    },
     Features {
         utterance_id: String,
         frames: usize,
@@ -246,6 +257,23 @@ pub struct GreedySample {
     pub lang: String,
     pub phone_target: Vec<String>,
     pub phone_prediction: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveFrameStats {
+    pub rms: f32,
+    pub vad: f32,
+    pub frames: usize,
+    pub frame_dim: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveDecode {
+    pub phones: Vec<String>,
+    pub feature_bundles: Vec<String>,
+    pub blank_ratio: f64,
+    pub prediction_length: usize,
+    pub stats: LiveFrameStats,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -546,6 +574,39 @@ pub fn prepare_dataset_with_progress(
     Ok(report)
 }
 
+pub fn download_common_phone_zenodo(
+    out: &Path,
+    url: &str,
+    mut progress: impl FnMut(PrepareProgress),
+) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let archive = out.join("cp-1-0.tgz");
+    if !archive.exists() {
+        download_to_part(url, &archive, &mut progress)?;
+    }
+    let marker = out.join(".common-phone-extract-complete");
+    if marker.exists() && has_common_phone_source_layout(out)? {
+        return Ok(());
+    }
+    progress(PrepareProgress::Extract {
+        path: archive.display().to_string(),
+    });
+    let part = out.join("extract.part");
+    if part.exists() {
+        fs::remove_dir_all(&part).with_context(|| format!("removing {}", part.display()))?;
+    }
+    fs::create_dir_all(&part)?;
+    let file = File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(decoder);
+    tar.unpack(&part)
+        .with_context(|| format!("extracting {}", archive.display()))?;
+    merge_extracted_tree(&part, out)?;
+    fs::remove_dir_all(&part).with_context(|| format!("removing {}", part.display()))?;
+    fs::write(marker, b"ok\n")?;
+    Ok(())
+}
+
 pub fn train(data: &Path, out: &Path, config: &CommonPhoneTrainConfig) -> Result<TrainReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let train_rows = read_examples(&data.join("train.jsonl"))?;
@@ -687,6 +748,140 @@ pub fn evaluate(
     )
 }
 
+pub fn live_frame_stats(
+    samples: &[f32],
+    source_rate: u32,
+    config: &CommonPhoneConfig,
+) -> LiveFrameStats {
+    let prepared = normalize_amplitude(&resample_linear(
+        samples,
+        source_rate,
+        config.sample_rate_hz,
+    ));
+    let features = compact_audio_features(&prepared, config);
+    frame_stats_from_features(&prepared, &features, config.feature_bins)
+}
+
+pub struct CommonPhoneLiveDecoder {
+    task: CommonPhoneTask,
+    model_config: ModelConfig,
+    model: CommonPhoneModel<CpuInferBackend>,
+    phone_vocab: Vocab,
+    phoneme_vocab: Vocab,
+    feature_bundle_vocab: Vocab,
+}
+
+impl CommonPhoneLiveDecoder {
+    pub fn load(model_dir: &Path, task: CommonPhoneTask) -> Result<Self> {
+        let phone_vocab: Vocab = read_vocab(model_dir, "phone_vocab.json", "phones.json")?;
+        let phoneme_vocab: Vocab = read_vocab(model_dir, "phoneme_vocab.json", "phonemes.json")?;
+        let feature_bundle_vocab: Vocab = read_vocab(
+            model_dir,
+            "feature_bundle_vocab.json",
+            "feature_bundles.json",
+        )?;
+        let model_config: ModelConfig = read_json(&model_dir.join("model_config.json"))?;
+        let device = NdArrayDevice::Cpu;
+        let model = load_model_cpu(&model_config, model_dir, &device)?;
+        Ok(Self {
+            task,
+            model_config,
+            model,
+            phone_vocab,
+            phoneme_vocab,
+            feature_bundle_vocab,
+        })
+    }
+
+    pub fn config(&self, sample_rate_hz: u32, window_ms: f32, hop_ms: f32) -> CommonPhoneConfig {
+        CommonPhoneConfig {
+            sample_rate_hz,
+            window_ms,
+            hop_ms,
+            frame_hz: (1000.0 / hop_ms.max(1.0)).round() as u32,
+            feature_bins: self.model_config.input_feature_bins,
+            ..CommonPhoneConfig::default()
+        }
+    }
+
+    pub fn decode_samples(
+        &self,
+        samples: &[f32],
+        source_rate: u32,
+        config: &CommonPhoneConfig,
+    ) -> Result<LiveDecode> {
+        let prepared = normalize_amplitude(&resample_linear(
+            samples,
+            source_rate,
+            config.sample_rate_hz,
+        ));
+        let features = compact_audio_features(&prepared, config);
+        let stats = frame_stats_from_features(&prepared, &features, config.feature_bins);
+        let (tokens, blank_ratio) = self.decode_features(&features)?;
+        let (phones, feature_bundles) = match self.task {
+            CommonPhoneTask::Frames2Phones | CommonPhoneTask::Multitask => {
+                let feature_bundles = feature_bundles_for_phones(&tokens);
+                (tokens, feature_bundles)
+            }
+            CommonPhoneTask::Frames2Features => (Vec::new(), tokens),
+            CommonPhoneTask::Frames2Phonemes => {
+                let feature_bundles = feature_bundles_for_phones(&tokens);
+                (tokens, feature_bundles)
+            }
+        };
+        Ok(LiveDecode {
+            prediction_length: phones.len().max(feature_bundles.len()),
+            phones,
+            feature_bundles,
+            blank_ratio,
+            stats,
+        })
+    }
+
+    fn decode_features(&self, features: &[Vec<f32>]) -> Result<(Vec<String>, f64)> {
+        let device = NdArrayDevice::Cpu;
+        let frames = features.len().max(1);
+        let bins = self.model_config.input_feature_bins.max(1);
+        let mut values = Vec::with_capacity(frames * bins);
+        for frame in features {
+            for bin in 0..bins {
+                values.push(frame.get(bin).copied().unwrap_or(0.0));
+            }
+        }
+        if values.is_empty() {
+            values.resize(bins, 0.0);
+        }
+        let input = Tensor::<CpuInferBackend, 3>::from_data(
+            TensorData::new(values, [1, frames, bins]),
+            &device,
+        );
+        let output = self.model.forward(input);
+        let (ids, vocab) = match self.task {
+            CommonPhoneTask::Frames2Phones | CommonPhoneTask::Multitask => {
+                (argmax_ids(output.phone_logits, frames), &self.phone_vocab)
+            }
+            CommonPhoneTask::Frames2Features => (
+                argmax_ids(output.feature_bundle_logits, frames),
+                &self.feature_bundle_vocab,
+            ),
+            CommonPhoneTask::Frames2Phonemes => (
+                argmax_ids(output.phoneme_logits, frames),
+                &self.phoneme_vocab,
+            ),
+        };
+        let blank_ratio = if ids.is_empty() {
+            0.0
+        } else {
+            ids.iter().filter(|&&id| id == 0).count() as f64 / ids.len() as f64
+        };
+        let tokens = ctc_greedy_decode(&ids, 0)
+            .into_iter()
+            .map(|id| vocab.get_token(id).to_string())
+            .collect();
+        Ok((tokens, blank_ratio))
+    }
+}
+
 pub fn show_row(data: &Path, index: usize) -> Result<ShowRow> {
     let rows = read_examples(&data.join("train.jsonl"))?;
     let row = rows
@@ -790,8 +985,16 @@ fn read_input_records(
     if tsv.exists() {
         return read_delimited_records(&tsv, '\t', progress);
     }
+    let common_phone = discover_common_phone_source_records(input)?;
+    if !common_phone.is_empty() {
+        progress(PrepareProgress::Parse {
+            rows: common_phone.len(),
+            path: input.display().to_string(),
+        });
+        return Ok(common_phone);
+    }
     anyhow::bail!(
-        "unsupported Common Phone layout at {}; expected metadata.jsonl, metadata.csv, or metadata.tsv",
+        "unsupported Common Phone layout at {}; expected metadata.jsonl/csv/tsv or extracted cp-1-0 language directories",
         input.display()
     );
 }
@@ -1335,9 +1538,331 @@ fn read_delimited_records(
 }
 
 fn split_delimited_line(line: &str, delimiter: char) -> Vec<String> {
-    line.split(delimiter)
-        .map(|value| value.trim().trim_matches('"').to_string())
-        .collect()
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            if quoted && chars.peek() == Some(&'"') {
+                current.push('"');
+                chars.next();
+            } else {
+                quoted = !quoted;
+            }
+        } else if ch == delimiter && !quoted {
+            out.push(current.trim().to_string());
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    out.push(current.trim().to_string());
+    out
+}
+
+fn discover_common_phone_source_records(input: &Path) -> Result<Vec<InputRecord>> {
+    let mut rows = Vec::new();
+    if !input.exists() {
+        return Ok(rows);
+    }
+    for entry in fs::read_dir(input)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let lang_dir = entry.path();
+        let Some(lang_name) = lang_dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(language) = common_phone_language_code(lang_name) else {
+            continue;
+        };
+        for split in ["train", "dev", "valid", "test"] {
+            let csv = lang_dir.join(format!("{split}.csv"));
+            if !csv.exists() {
+                continue;
+            }
+            rows.extend(read_common_phone_split_csv(
+                input, &lang_dir, &language, split, &csv,
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+fn has_common_phone_source_layout(input: &Path) -> Result<bool> {
+    Ok(!discover_common_phone_source_records(input)?.is_empty())
+}
+
+fn read_common_phone_split_csv(
+    root: &Path,
+    lang_dir: &Path,
+    language: &str,
+    split: &str,
+    csv: &Path,
+) -> Result<Vec<InputRecord>> {
+    let file = File::open(csv).with_context(|| format!("opening {}", csv.display()))?;
+    let mut lines = BufReader::new(file).lines();
+    let Some(header) = lines.next().transpose()? else {
+        return Ok(Vec::new());
+    };
+    let columns = split_delimited_line(&header, ',');
+    let has_named_header = columns.iter().any(|col| {
+        matches!(
+            normalize_header(col).as_str(),
+            "path" | "filename" | "file" | "client_id" | "sentence" | "text" | "speaker_id"
+        )
+    });
+    let mut records = Vec::new();
+    let data_lines = if has_named_header {
+        lines.collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut all = vec![header];
+        all.extend(lines.collect::<Result<Vec<_>, _>>()?);
+        all
+    };
+    for (line_index, line) in data_lines.into_iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields = split_delimited_line(&line, ',');
+        let mut by_name = BTreeMap::new();
+        if has_named_header {
+            for (name, value) in columns.iter().zip(fields.iter()) {
+                by_name.insert(normalize_header(name), value.clone());
+            }
+        }
+        let raw_path = first_field(
+            &by_name,
+            &["path", "filename", "file", "wav_path", "audio_path", "clip"],
+        )
+        .or_else(|| fields.first().cloned())
+        .unwrap_or_else(|| format!("{language}_{split}_{line_index:08}.wav"));
+        let stem = Path::new(&raw_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(raw_path.as_str())
+            .to_string();
+        let wav_path = find_common_phone_wav(root, lang_dir, &raw_path, &stem);
+        let grid_path = find_common_phone_grid(lang_dir, &stem);
+        let phones = grid_path
+            .as_ref()
+            .and_then(|path| textgrid_phone_tokens(path).ok())
+            .unwrap_or_default();
+        if phones.is_empty() {
+            continue;
+        }
+        let speaker_id = first_field(
+            &by_name,
+            &[
+                "speaker_id",
+                "speaker",
+                "client_id",
+                "speakerid",
+                "clientid",
+            ],
+        )
+        .or_else(|| fields.get(1).cloned());
+        let text = first_field(&by_name, &["sentence", "text", "transcript"])
+            .or_else(|| fields.get(2).cloned());
+        let variety = first_field(&by_name, &["accent", "variety"]);
+        let split = if split == "dev" { "valid" } else { split }.to_string();
+        records.push(InputRecord {
+            utterance_id: Some(format!("{language}_{stem}")),
+            id: None,
+            lang: Some(language.to_string()),
+            language: Some(language.to_string()),
+            variety,
+            speaker_id,
+            speaker: None,
+            audio_path: None,
+            wav_path: Some(path_relative_to(root, &wav_path)),
+            path: None,
+            wav: None,
+            split: Some(split),
+            text,
+            duration_ms: None,
+            source_dataset: Some("common-phone-zenodo".to_string()),
+            phones: Some(PhoneField::Tokens(phones.clone())),
+            phonemes: Some(PhoneField::Tokens(phones)),
+            segments: grid_path
+                .map(|path| serde_json::json!({ "textgrid_path": path.display().to_string() })),
+            extra: BTreeMap::new(),
+        });
+    }
+    Ok(records)
+}
+
+fn normalize_header(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+}
+
+fn first_field(map: &BTreeMap<String, String>, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        map.get(*name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn common_phone_language_code(name: &str) -> Option<String> {
+    match name.to_ascii_lowercase().as_str() {
+        "english" | "eng" | "en" => Some("eng".to_string()),
+        "french" | "fra" | "fre" | "fr" => Some("fra".to_string()),
+        "german" | "deu" | "ger" | "de" => Some("deu".to_string()),
+        "italian" | "ita" | "it" => Some("ita".to_string()),
+        "spanish" | "spa" | "es" => Some("spa".to_string()),
+        "russian" | "rus" | "ru" => Some("rus".to_string()),
+        _ => None,
+    }
+}
+
+fn find_common_phone_wav(root: &Path, lang_dir: &Path, raw_path: &str, stem: &str) -> PathBuf {
+    let raw = Path::new(raw_path);
+    let candidates = [
+        lang_dir.join(raw),
+        lang_dir.join("wav").join(format!("{stem}.wav")),
+        lang_dir.join("wavs").join(format!("{stem}.wav")),
+        lang_dir.join("audio").join(format!("{stem}.wav")),
+        root.join(raw),
+    ];
+    candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .unwrap_or_else(|| lang_dir.join("wav").join(format!("{stem}.wav")))
+}
+
+fn find_common_phone_grid(lang_dir: &Path, stem: &str) -> Option<PathBuf> {
+    [
+        lang_dir.join("grids").join(format!("{stem}.TextGrid")),
+        lang_dir.join("grids").join(format!("{stem}.textgrid")),
+        lang_dir.join("grid").join(format!("{stem}.TextGrid")),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn textgrid_phone_tokens(path: &Path) -> Result<Vec<String>> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut tokens = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if !line.starts_with("text") {
+            continue;
+        }
+        let Some((_, value)) = line.split_once('=') else {
+            continue;
+        };
+        let symbol = value.trim().trim_matches('"').trim();
+        if symbol.is_empty()
+            || symbol == "(...)"
+            || symbol.eq_ignore_ascii_case("sil")
+            || symbol.eq_ignore_ascii_case("sp")
+        {
+            continue;
+        }
+        tokens.extend(tokenize_phone_text(symbol));
+    }
+    Ok(tokens)
+}
+
+fn path_relative_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn download_to_part(
+    url: &str,
+    path: &Path,
+    progress: &mut impl FnMut(PrepareProgress),
+) -> Result<()> {
+    let part = path.with_extension(format!(
+        "{}.part",
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("download")
+    ));
+    if part.exists() {
+        fs::remove_file(&part).with_context(|| format!("removing {}", part.display()))?;
+    }
+    let response = ureq::get(url)
+        .header("User-Agent", DOWNLOAD_USER_AGENT)
+        .call()
+        .with_context(|| format!("downloading {url}"))?;
+    let mut reader = response.into_body().into_reader();
+    let mut writer = BufWriter::new(File::create(&part)?);
+    let mut buf = [0u8; 256 * 1024];
+    let mut bytes = 0u64;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        bytes += n as u64;
+        if bytes < 1024 * 1024 || bytes % (64 * 1024 * 1024) < buf.len() as u64 {
+            progress(PrepareProgress::Download {
+                url: url.to_string(),
+                path: part.display().to_string(),
+                bytes,
+            });
+        }
+    }
+    writer.flush()?;
+    fs::rename(&part, path)?;
+    Ok(())
+}
+
+fn merge_extracted_tree(src: &Path, dst: &Path) -> Result<()> {
+    let mut roots = fs::read_dir(src)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    if roots.len() == 1 && roots[0].is_dir() && has_language_children(&roots[0])? {
+        move_children(&roots.remove(0), dst)
+    } else {
+        move_children(src, dst)
+    }
+}
+
+fn has_language_children(path: &Path) -> Result<bool> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .and_then(common_phone_language_code)
+                .is_some()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn move_children(src: &Path, dst: &Path) -> Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if target.exists() {
+            if target.is_dir() {
+                fs::remove_dir_all(&target)?;
+            } else {
+                fs::remove_file(&target)?;
+            }
+        }
+        fs::rename(entry.path(), target)?;
+    }
+    Ok(())
 }
 
 fn resolve_input_path(input: &Path, path: &str) -> PathBuf {
@@ -2059,6 +2584,34 @@ fn frame_summary(index: usize, frame: &[f32]) -> FrameSummary {
         f0: (f0 > 0.0).then_some(f0),
         voiced: frame.get(scalar_start + 6).copied().unwrap_or(0.0),
         mel_head: frame.iter().copied().take(5).collect(),
+    }
+}
+
+fn frame_stats_from_features(
+    samples: &[f32],
+    features: &[Vec<f32>],
+    frame_dim: usize,
+) -> LiveFrameStats {
+    let rms = if samples.is_empty() {
+        0.0
+    } else {
+        (samples.iter().map(|value| value * value).sum::<f32>() / samples.len() as f32).sqrt()
+    };
+    let scalar_start = DEFAULT_MEL_BINS * 2;
+    let vad = if features.is_empty() {
+        0.0
+    } else {
+        features
+            .iter()
+            .map(|frame| frame.get(scalar_start + 1).copied().unwrap_or(0.0))
+            .sum::<f32>()
+            / features.len() as f32
+    };
+    LiveFrameStats {
+        rms,
+        vad,
+        frames: features.len(),
+        frame_dim,
     }
 }
 

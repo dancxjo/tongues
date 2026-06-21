@@ -47,6 +47,28 @@ Each row must provide an audio path and phone targets:
 `phones` and `phonemes` may be JSON arrays or whitespace-separated strings. WAV
 is the first implemented audio decoder.
 
+The family can also download and prepare the official Common Phone 1.0 archive
+from Zenodo. The archive is large, about 13 GB, and expands to the original
+language-directory layout with split CSVs, WAV files, and Praat TextGrids:
+
+```sh
+cargo run --bin tongues -- common-phone fetch \
+  --out data/common-phone/raw \
+  --source zenodo
+
+cargo run --bin tongues -- common-phone prepare \
+  --download \
+  --input data/common-phone/raw \
+  --out models/common-phone/common-phone-v0 \
+  --lang eng \
+  --max-utterances 1000
+```
+
+`prepare --download` downloads `cp-1-0.tgz` through a `.part` file, extracts it,
+then reads the extracted Common Phone layout directly. It uses each language
+directory’s `train`/`dev`/`test` CSVs, `wav/` audio, and `grids/` TextGrid phone
+annotations. The `dev` split is normalized to `valid`.
+
 Useful smoke run:
 
 ```sh
@@ -194,6 +216,62 @@ For an end-to-end generated fixture smoke test:
 ```sh
 just common-phone-smoke
 ```
+
+## Listen Demo
+
+The live demo captures microphone audio with CPAL, keeps a rolling context
+window, regenerates the same mechanical compact frames used by `prepare`, runs
+the trained CTC model, and greedily collapses frame predictions into phones.
+
+List input devices:
+
+```sh
+cargo run --bin tongues -- common-phone listen-devices
+```
+
+Dry-run the microphone and frame generator without loading a model:
+
+```sh
+cargo run --bin tongues -- common-phone listen \
+  --dry-run \
+  --debug-frames
+```
+
+Run a phone listener:
+
+```sh
+cargo run --bin tongues -- common-phone listen \
+  --model models/common-phone/common-phone-v0-phone-ctc \
+  --task frames2phones \
+  --device cpu \
+  --sample-rate 16000 \
+  --chunk-ms 100 \
+  --context-ms 1500 \
+  --show-phones
+```
+
+Add feature bundles and frame diagnostics:
+
+```sh
+cargo run --bin tongues -- common-phone listen \
+  --model models/common-phone/common-phone-v0-phone-ctc \
+  --show-phones \
+  --show-features \
+  --debug-frames
+```
+
+Select an input device by name substring:
+
+```sh
+cargo run --bin tongues -- common-phone listen \
+  --model models/common-phone/common-phone-v0-phone-ctc \
+  --input-device "Scarlett"
+```
+
+The listener recomputes the full rolling window for v0. Silence is gated with a
+simple RMS/VAD threshold so the terminal does not constantly print noise. Rough
+phones-to-orthography text is not required for v0; `--phones2orth` is accepted
+as a future hook but is not wired yet.
 
 ## Difference From Interpretation
 

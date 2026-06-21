@@ -6,10 +6,13 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 burn = { workspace = true }
+flate2 = "1"
 hound = { workspace = true }
 indicatif = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tar = "0.4"
 tongues-core = { path = "../tongues-core" }
 tongues-neural = { path = "../tongues-neural" }
+ureq = { workspace = true }

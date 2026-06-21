@@ -20,6 +20,7 @@ use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{any::Any, panic};
 
@@ -1138,14 +1139,69 @@ enum CommonPhoneCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
+    /// List available CPAL input devices
+    #[command(name = "listen-devices")]
+    ListenDevices,
+
+    /// Stream microphone audio through a Common Phone CTC model
+    Listen {
+        /// Directory containing the trained Common Phone model
+        #[arg(long)]
+        model: Option<PathBuf>,
+
+        /// Decode task: frames2phones, frames2features, frames2phonemes, multitask
+        #[arg(long, default_value = "frames2phones")]
+        task: String,
+
+        /// Device for v0 inference; currently only cpu is supported
+        #[arg(long, default_value = "cpu")]
+        device: String,
+
+        /// CPAL input device name substring
+        #[arg(long)]
+        input_device: Option<String>,
+
+        /// Target model sample rate
+        #[arg(long, default_value_t = tongues_common_phone::DEFAULT_SAMPLE_RATE_HZ)]
+        sample_rate: u32,
+
+        /// Audio chunk duration per live update
+        #[arg(long, default_value_t = 100)]
+        chunk_ms: u64,
+
+        /// Rolling context duration for repeated CTC inference
+        #[arg(long, default_value_t = 1500)]
+        context_ms: u64,
+
+        /// Show phone predictions
+        #[arg(long)]
+        show_phones: bool,
+
+        /// Show feature bundles
+        #[arg(long)]
+        show_features: bool,
+
+        /// Print compact frame/VAD/debug stats each tick
+        #[arg(long, alias = "show-frames")]
+        debug_frames: bool,
+
+        /// Capture audio and print frame stats without loading a model
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Optional future phones-to-orthography model path; accepted but not used in v0
+        #[arg(long)]
+        phones2orth: Option<PathBuf>,
+    },
+
     /// Create/document the expected local raw-data layout
     Fetch {
         /// Output raw-data directory
         #[arg(long, default_value = "data/common-phone/raw")]
         out: PathBuf,
 
-        /// Acquisition source label; v0 documents huggingface but does not download
-        #[arg(long, default_value = "huggingface")]
+        /// Acquisition source: zenodo downloads the official archive; huggingface is documented only
+        #[arg(long, default_value = "zenodo")]
         source: String,
 
         /// Comma-separated languages to acquire externally
@@ -1156,8 +1212,20 @@ enum CommonPhoneCommands {
     /// Prepare a local Common Phone export into compact acoustic frame files
     Prepare {
         /// Local Common Phone checkout/export with metadata.jsonl/csv/tsv
-        #[arg(long)]
+        #[arg(long, default_value = "data/common-phone/raw")]
         input: PathBuf,
+
+        /// Download and extract the official Common Phone archive before preparing
+        #[arg(long)]
+        download: bool,
+
+        /// Download source: zenodo is implemented; huggingface is documented only
+        #[arg(long, default_value = "zenodo")]
+        source: String,
+
+        /// Override source archive URL
+        #[arg(long)]
+        source_url: Option<String>,
 
         /// Output directory for prepared data
         #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
@@ -6691,11 +6759,73 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             DEFAULT_COMMON_PHONE_DATA_DIR,
             DEFAULT_COMMON_PHONE_MODEL_DIR,
         ),
+        CommonPhoneCommands::ListenDevices => cmd_common_phone_listen_devices(),
+        CommonPhoneCommands::Listen {
+            model,
+            task,
+            device,
+            input_device,
+            sample_rate,
+            chunk_ms,
+            context_ms,
+            show_phones,
+            show_features,
+            debug_frames,
+            dry_run,
+            phones2orth,
+        } => {
+            anyhow::ensure!(
+                device == "cpu",
+                "common-phone listen v0 currently supports --device cpu only"
+            );
+            if phones2orth.is_some() {
+                println!(
+                    "phones2orth rough text is accepted for future use but is not wired in v0"
+                );
+            }
+            let task = tongues_common_phone::CommonPhoneTask::parse(&task)?;
+            cmd_common_phone_listen(CommonPhoneListenOptions {
+                model,
+                task,
+                input_device,
+                sample_rate,
+                chunk_ms,
+                context_ms,
+                show_phones,
+                show_features,
+                debug_frames,
+                dry_run,
+            })
+        }
         CommonPhoneCommands::Fetch {
             out,
             source,
             languages,
         } => {
+            let source_lc = source.to_ascii_lowercase();
+            if source_lc == "zenodo" {
+                let pb = status_spinner(format!(
+                    "Downloading Common Phone from Zenodo into {}",
+                    out.display()
+                ));
+                let progress = {
+                    let pb = pb.clone();
+                    move |progress| pb.set_message(common_phone_prepare_progress_message(progress))
+                };
+                tongues_common_phone::download_common_phone_zenodo(
+                    &out,
+                    tongues_common_phone::DEFAULT_ZENODO_URL,
+                    progress,
+                )?;
+                finish_status(
+                    pb,
+                    format!(
+                        "Downloaded and extracted Common Phone into {}",
+                        out.display()
+                    ),
+                );
+                return Ok(());
+            }
             fs::create_dir_all(out.join("audio"))
                 .with_context(|| format!("creating {}", out.join("audio").display()))?;
             fs::write(
@@ -6714,6 +6844,9 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
         }
         CommonPhoneCommands::Prepare {
             input,
+            download,
+            source,
+            source_url,
             out,
             lang,
             max_utterances,
@@ -6730,6 +6863,29 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
                 valid_ratio + test_ratio < 1.0,
                 "--valid-ratio plus --test-ratio must be less than 1.0"
             );
+            if download {
+                let source_lc = source.to_ascii_lowercase();
+                anyhow::ensure!(
+                    source_lc == "zenodo",
+                    "common-phone prepare --download currently supports --source zenodo"
+                );
+                let url = source_url
+                    .as_deref()
+                    .unwrap_or(tongues_common_phone::DEFAULT_ZENODO_URL);
+                let pb = status_spinner(format!(
+                    "Downloading Common Phone source data into {}",
+                    input.display()
+                ));
+                let progress = {
+                    let pb = pb.clone();
+                    move |progress| pb.set_message(common_phone_prepare_progress_message(progress))
+                };
+                tongues_common_phone::download_common_phone_zenodo(&input, url, progress)?;
+                finish_status(
+                    pb,
+                    format!("Common Phone source ready at {}", input.display()),
+                );
+            }
             let config = tongues_common_phone::CommonPhoneConfig {
                 input: input.display().to_string(),
                 languages: lang
@@ -6860,6 +7016,15 @@ fn common_phone_prepare_progress_message(
                 format_count(rows)
             )
         }
+        tongues_common_phone::PrepareProgress::Download { url, path, bytes } => {
+            format!(
+                "Downloading {url} -> {path} ({} bytes)",
+                format_count(bytes)
+            )
+        }
+        tongues_common_phone::PrepareProgress::Extract { path } => {
+            format!("Extracting {path}")
+        }
         tongues_common_phone::PrepareProgress::Features {
             utterance_id,
             frames,
@@ -6880,6 +7045,247 @@ fn common_phone_prepare_progress_message(
             format!("Wrote {} rows to {path}", format_count(rows))
         }
     }
+}
+
+struct CommonPhoneListenOptions {
+    model: Option<PathBuf>,
+    task: tongues_common_phone::CommonPhoneTask,
+    input_device: Option<String>,
+    sample_rate: u32,
+    chunk_ms: u64,
+    context_ms: u64,
+    show_phones: bool,
+    show_features: bool,
+    debug_frames: bool,
+    dry_run: bool,
+}
+
+fn cmd_common_phone_listen_devices() -> Result<()> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let host = cpal::default_host();
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device.name().ok());
+    println!("CPAL input devices:");
+    for device in host.input_devices()? {
+        let name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+        let marker = if Some(name.as_str()) == default_name.as_deref() {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  {name}{marker}");
+    }
+    Ok(())
+}
+
+fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
+    use cpal::traits::{DeviceTrait, StreamTrait};
+
+    anyhow::ensure!(
+        options.dry_run || options.model.is_some(),
+        "common-phone listen requires --model unless --dry-run is set"
+    );
+    let decoder = if options.dry_run {
+        None
+    } else {
+        Some(tongues_common_phone::CommonPhoneLiveDecoder::load(
+            options.model.as_ref().expect("checked above"),
+            options.task,
+        )?)
+    };
+    let mut frame_config = if let Some(decoder) = &decoder {
+        decoder.config(options.sample_rate, 25.0, 10.0)
+    } else {
+        tongues_common_phone::CommonPhoneConfig {
+            sample_rate_hz: options.sample_rate,
+            ..tongues_common_phone::CommonPhoneConfig::default()
+        }
+    };
+    frame_config.sample_rate_hz = options.sample_rate;
+
+    let host = cpal::default_host();
+    let device = select_input_device(&host, options.input_device.as_deref())?;
+    let device_name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+    let supported = device.default_input_config()?;
+    let native_sample_rate = supported.sample_rate().0;
+    let channels = supported.channels() as usize;
+    let stream_config: cpal::StreamConfig = supported.clone().into();
+    let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let err_fn = |err| eprintln!("common-phone listen stream error: {err}");
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let callback_buffer = Arc::clone(&buffer);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[f32], _| append_mono_samples(data, channels, &callback_buffer),
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::I16 => {
+            let callback_buffer = Arc::clone(&buffer);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[i16], _| {
+                    let converted = data
+                        .iter()
+                        .map(|sample| *sample as f32 / i16::MAX as f32)
+                        .collect::<Vec<_>>();
+                    append_mono_samples(&converted, channels, &callback_buffer);
+                },
+                err_fn,
+                None,
+            )?
+        }
+        cpal::SampleFormat::U16 => {
+            let callback_buffer = Arc::clone(&buffer);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[u16], _| {
+                    let converted = data
+                        .iter()
+                        .map(|sample| (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0)
+                        .collect::<Vec<_>>();
+                    append_mono_samples(&converted, channels, &callback_buffer);
+                },
+                err_fn,
+                None,
+            )?
+        }
+        other => anyhow::bail!("unsupported CPAL input sample format: {other:?}"),
+    };
+
+    println!("listening on {device_name}...");
+    if options.debug_frames {
+        println!("input device: {device_name}");
+        println!("native sample rate: {native_sample_rate}");
+        println!("model sample rate: {}", frame_config.sample_rate_hz);
+        println!(
+            "resampler: {}",
+            if native_sample_rate == frame_config.sample_rate_hz {
+                "disabled"
+            } else {
+                "enabled"
+            }
+        );
+        println!("chunk_ms: {}", options.chunk_ms);
+        println!("context_ms: {}", options.context_ms);
+        println!("frame_dim: {}", frame_config.feature_bins);
+    }
+    stream.play()?;
+    let mut elapsed_ms = 0u64;
+    let mut in_speech = false;
+    let mut last_line = String::new();
+    let context_samples_native =
+        (native_sample_rate as usize * options.context_ms as usize / 1000).max(1);
+    loop {
+        std::thread::sleep(Duration::from_millis(options.chunk_ms.max(10)));
+        elapsed_ms += options.chunk_ms.max(10);
+        let window = {
+            let mut guard = buffer.lock().expect("common phone audio buffer poisoned");
+            if guard.len() > context_samples_native {
+                let remove = guard.len() - context_samples_native;
+                guard.drain(..remove);
+            }
+            guard.clone()
+        };
+        if window.len() < (native_sample_rate as usize * options.chunk_ms as usize / 1000).max(1) {
+            continue;
+        }
+        let stats =
+            tongues_common_phone::live_frame_stats(&window, native_sample_rate, &frame_config);
+        let speech = stats.vad > 0.15 || stats.rms > 0.01;
+        if options.dry_run {
+            print_common_phone_debug(elapsed_ms, &stats, 0.0, 0, "");
+            continue;
+        }
+        let Some(decoder) = &decoder else {
+            continue;
+        };
+        if !speech {
+            if in_speech {
+                println!("speech end");
+                in_speech = false;
+                last_line.clear();
+            } else if options.debug_frames {
+                print_common_phone_debug(elapsed_ms, &stats, 0.0, 0, "silence");
+            }
+            continue;
+        }
+        if !in_speech {
+            println!("speech start");
+            in_speech = true;
+        }
+        let decoded = decoder.decode_samples(&window, native_sample_rate, &frame_config)?;
+        let phone_line = decoded.phones.join(" ");
+        let feature_line = decoded.feature_bundles.join(" ");
+        if options.debug_frames {
+            print_common_phone_debug(
+                elapsed_ms,
+                &decoded.stats,
+                decoded.blank_ratio,
+                decoded.prediction_length,
+                &phone_line,
+            );
+        }
+        let effective_show_phones = options.show_phones || !options.show_features;
+        if effective_show_phones && !phone_line.is_empty() && phone_line != last_line {
+            println!(
+                "[{:04.1}s] phones: {phone_line}",
+                elapsed_ms as f32 / 1000.0
+            );
+            last_line = phone_line.clone();
+        }
+        if options.show_features && !feature_line.is_empty() {
+            println!("features: {feature_line}");
+        }
+    }
+}
+
+fn select_input_device(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    if let Some(name) = name {
+        let needle = name.to_lowercase();
+        for device in host.input_devices()? {
+            let device_name = device.name().unwrap_or_default();
+            if device_name.to_lowercase().contains(&needle) {
+                return Ok(device);
+            }
+        }
+        anyhow::bail!("no CPAL input device matching `{name}`");
+    }
+    host.default_input_device()
+        .ok_or_else(|| anyhow::anyhow!("no default CPAL input device available"))
+}
+
+fn append_mono_samples(samples: &[f32], channels: usize, buffer: &Arc<Mutex<Vec<f32>>>) {
+    let channels = channels.max(1);
+    let mut guard = buffer.lock().expect("common phone audio buffer poisoned");
+    for frame in samples.chunks(channels) {
+        guard.push(frame.iter().copied().sum::<f32>() / frame.len().max(1) as f32);
+    }
+}
+
+fn print_common_phone_debug(
+    elapsed_ms: u64,
+    stats: &tongues_common_phone::LiveFrameStats,
+    blank_ratio: f64,
+    pred_len: usize,
+    phones: &str,
+) {
+    println!(
+        "[{:04.1}s] rms={:.3} vad={:.2} frames={} blank={:.2} pred_len={} phones=\"{}\"",
+        elapsed_ms as f32 / 1000.0,
+        stats.rms,
+        stats.vad,
+        stats.frames,
+        blank_ratio,
+        pred_len,
+        phones
+    );
 }
 
 fn run_emotions_command(command: EmotionCommands) -> Result<()> {
