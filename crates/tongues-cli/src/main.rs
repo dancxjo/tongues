@@ -4309,6 +4309,146 @@ fn synthesize_mechanical_sentence(
     piper.synthesize_plan_streaming(&plan, sink)
 }
 
+fn synthesize_mechanical_sentence_styletts2(
+    sentence: &str,
+    variety: &str,
+    backend: &mut StyleTts2OnnxBackend,
+    sink: &mut dyn styletts2::StyleTts2AudioSink,
+    voice_ref: &Path,
+    style_ref: &Path,
+    max_tts_symbols: usize,
+    no_tts_chunking: bool,
+) -> Result<()> {
+    let variety = VarietyId(variety.to_string());
+    let phonemicizer = speaking::phonemicizer_for_variety(&variety)
+        .map_err(|error| anyhow::anyhow!("failed to load phonemicizer: {error}"))?;
+    let output = phonemicizer.phonemicize(&speaking::PhonemicizeRequest {
+        text: sentence.to_string(),
+        variety,
+        style: None,
+    })?;
+    let plan = speak::utterance_plan_from_phonemicized(&output);
+    let styletts2_plan = prepare_styletts2_plan(
+        &plan,
+        &styletts2_en_us_symbol_set(),
+        be_styletts2_options(max_tts_symbols, no_tts_chunking),
+    )
+    .context("failed to prepare mechanical StyleTTS2 plan")?;
+    let backend_symbols = styletts2_plan
+        .chunks
+        .iter()
+        .map(|chunk| styletts2_text_for_symbols(&chunk.symbols))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to format StyleTTS2 mechanical symbols")?
+        .join(" || ");
+    eprintln!(
+        "\nbe: mechanical={:?}\nbe: phones={}\nbe: styletts2={}",
+        sentence,
+        format_be_mechanical_phones(&output),
+        backend_symbols
+    );
+    synthesize_styletts2_plan(backend, sink, plan, voice_ref, style_ref, styletts2_plan)
+}
+
+fn synthesize_styletts2_plan(
+    backend: &mut StyleTts2OnnxBackend,
+    sink: &mut dyn styletts2::StyleTts2AudioSink,
+    plan: UtterancePlan,
+    voice_ref: &Path,
+    style_ref: &Path,
+    backend_plan: styletts2::BackendSynthesisPlan,
+) -> Result<()> {
+    let request = StyleTts2SynthesisRequest::from_backend_plan(
+        backend_plan,
+        plan.speaker.clone(),
+        plan.style.clone(),
+        plan.target_prosody.clone(),
+    )
+    .with_speaker_reference_audio_uri(voice_ref.display().to_string())
+    .with_style_reference_audio_uri(style_ref.display().to_string());
+    backend
+        .synthesize_streaming(&request, sink)
+        .context("native StyleTTS2 ONNX synthesis failed")?;
+    Ok(())
+}
+
+fn styletts2_plan_from_head2phones_prediction(
+    variety: &str,
+    text: &str,
+    phones: &str,
+) -> Result<UtterancePlan> {
+    let target_phones = styletts2_phone_tokens_from_head2phones(phones);
+    anyhow::ensure!(
+        !target_phones.is_empty(),
+        "head2phones output did not contain any StyleTTS2-compatible phones"
+    );
+    Ok(UtterancePlan {
+        id: UtteranceId("be.head2phones.styletts2".into()),
+        variety: VarietyId(variety.to_string()),
+        speaker: None,
+        intended_text: Some(text.to_string()),
+        intended_morphemes: Vec::new(),
+        intended_phonemes: Vec::new(),
+        target_phones,
+        target_syllables: Vec::new(),
+        boundaries: Vec::new(),
+        target_prosody: Default::default(),
+        target_acoustics: Vec::new(),
+        style: None,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::TtsPlan,
+            method: "tongues be head2phones StyleTTS2 plan".into(),
+            version: Some("0.1".into()),
+        },
+    })
+}
+
+fn styletts2_phone_tokens_from_head2phones(phones: &str) -> Vec<PhoneToken> {
+    phones
+        .split_whitespace()
+        .filter_map(|phone| {
+            let id = if phone == "|" {
+                "boundary.word".to_string()
+            } else {
+                let phone = normalize_head2phones_phone_for_styletts2(phone)?;
+                format!("ipa.phone.{phone}")
+            };
+            Some(PhoneToken {
+                phone: Spec::Known(speaking::ids::PhoneId(id.into())),
+                span: None,
+                features: Default::default(),
+                acoustic_evidence: Vec::new(),
+                confidence: 1.0,
+                provenance: EvidenceProvenance {
+                    source: EvidenceSource::Inference,
+                    method: "tongues be head2phones".into(),
+                    version: Some("0.1".into()),
+                },
+            })
+        })
+        .collect()
+}
+
+fn normalize_head2phones_phone_for_styletts2(phone: &str) -> Option<String> {
+    let phone = phone.trim_matches(|c| matches!(c, 'ˈ' | 'ˌ' | '.'));
+    if phone.is_empty() {
+        return None;
+    }
+    Some(
+        phone
+            .replace("t͡ʃ", "tʃ")
+            .replace("d͡ʒ", "dʒ")
+            .replace('g', "ɡ"),
+    )
+}
+
+fn be_styletts2_options(max_tts_symbols: usize, no_tts_chunking: bool) -> StyleTts2PlanOptions {
+    StyleTts2PlanOptions {
+        max_symbols_per_chunk: max_tts_symbols,
+        chunking_enabled: !no_tts_chunking,
+    }
+}
+
 fn format_be_mechanical_phones(output: &speaking::PhonemicizeOutput) -> String {
     output
         .phones
