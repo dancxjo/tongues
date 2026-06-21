@@ -170,6 +170,57 @@ common-phone *args:
 commonphone *args:
     cargo run --bin tongues -- common-phone "$@"
 
+common-phone-prepare:
+    cargo run --bin tongues -- common-phone prepare --input data/common-phone/raw --out models/common-phone/common-phone-v0
+
+common-phone-show:
+    cargo run --bin tongues -- common-phone show --data models/common-phone/common-phone-v0 --index 0
+
+common-phone-train:
+    cargo run --bin tongues -- common-phone train --data models/common-phone/common-phone-v0 --model models/common-phone/common-phone-v0-phone-ctc --task frames2phones
+
+common-phone-eval:
+    cargo run --bin tongues -- common-phone eval --data models/common-phone/common-phone-v0 --model models/common-phone/common-phone-v0-phone-ctc --split valid --task frames2phones
+
+common-phone-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fixture="/tmp/tongues-common-phone-fixture"
+    rm -rf "$fixture" /tmp/tongues-common-phone-mini /tmp/tongues-common-phone-mini-model
+    mkdir -p "$fixture/audio"
+    python3 - <<'PY' "$fixture"
+    import json, math, struct, sys, wave
+    root = sys.argv[1]
+    rows = [
+        ("mini_tip", "train", "tip", ["t", "ɪ", "p"], 220),
+        ("mini_pit", "train", "pit", ["p", "ɪ", "t"], 260),
+        ("mini_sip", "valid", "sip", ["s", "ɪ", "p"], 300),
+    ]
+    with open(f"{root}/metadata.jsonl", "w", encoding="utf-8") as meta:
+        for utt, split, text, phones, freq in rows:
+            wav = f"audio/{utt}.wav"
+            with wave.open(f"{root}/{wav}", "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                frames = []
+                for n in range(4800):
+                    frames.append(struct.pack("<h", int(10000 * math.sin(2 * math.pi * freq * n / 16000))))
+                w.writeframes(b"".join(frames))
+            meta.write(json.dumps({
+                "utterance_id": utt,
+                "language": "eng",
+                "split": split,
+                "wav_path": wav,
+                "text": text,
+                "phones": phones,
+            }, ensure_ascii=False) + "\n")
+    PY
+    cargo run --bin tongues -- common-phone prepare --input "$fixture" --out /tmp/tongues-common-phone-mini
+    cargo run --bin tongues -- common-phone show --data /tmp/tongues-common-phone-mini --index 0
+    cargo run --bin tongues -- common-phone train --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --task frames2phones --epochs 1 --device cpu
+    cargo run --bin tongues -- common-phone eval --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --split valid --task frames2phones
+
 # Forward a model-family command to the tongues CLI
 emotions *args:
     cargo run --bin tongues -- emotions "$@"

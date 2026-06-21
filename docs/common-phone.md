@@ -14,8 +14,8 @@ The canonical spelling is `common-phone`:
 
 ```sh
 just common-phone prepare --input /path/to/common-phone --out datasets/common-phone/v0
-just common-phone train --data datasets/common-phone/v0 --out models/common-phone/v0
-just common-phone eval --data datasets/common-phone/v0 --model models/common-phone/v0 --split valid
+just common-phone train --data datasets/common-phone/v0 --model models/common-phone/v0 --task frames2phones
+just common-phone eval --data datasets/common-phone/v0 --model models/common-phone/v0 --split valid --task frames2phones
 ```
 
 The CLI also accepts `commonphone` as an alias, but docs and recipes use
@@ -37,15 +37,15 @@ Each row must provide an audio path and phone targets:
   "utterance_id": "eng-0001",
   "lang": "eng",
   "speaker_id": "speaker-a",
-  "audio_path": "audio/eng-0001.wav",
+  "wav_path": "audio/eng-0001.wav",
   "phones": ["t", "ɪ", "p"],
   "phonemes": ["t", "ɪ", "p"]
 }
 ```
 
-`audio_path`, `path`, or `wav` may be used for the audio field. `phones` and
-`phonemes` may be JSON arrays or whitespace-separated strings. WAV is the first
-implemented audio decoder.
+`wav_path`, `audio_path`, `path`, or `wav` may be used for the audio field.
+`phones` and `phonemes` may be JSON arrays or whitespace-separated strings. WAV
+is the first implemented audio decoder.
 
 Useful smoke run:
 
@@ -59,11 +59,13 @@ just common-phone prepare \
 
 ## Compact Frames
 
-Prepared features are written to `features/*.acf.bin`. These are compact
+Prepared features are written to `frames/*.acf.bin`. These are compact
 acoustic frames, not raw audio and not learned EnCodec-style tokens. Each file
 contains a little-endian header:
 
 ```text
+magic: ACF0
+version: u32
 frames: u32
 bins: u32
 ```
@@ -109,16 +111,24 @@ Prepared output:
 
 ```text
 datasets/common-phone/v0/
+  config.json
+  manifest.jsonl
   train.jsonl
   valid.jsonl
   test.jsonl
+  stats.json
   vocab.json
   phone_vocab.json
   phoneme_vocab.json
+  feature_bundle_vocab.json
   feature_axis_vocabs.json
+  vocabs/
+    phones.json
+    phonemes.json
+    feature_bundles.json
   dataset_config.json
   README.md
-  features/*.acf.bin
+  frames/*.acf.bin
 ```
 
 Rows include `row_source`, `utterance_id`, `lang`, optional speaker/variety,
@@ -130,9 +140,12 @@ phones, phonemes, generated feature targets, and raw source metadata.
 ```sh
 just common-phone train \
   --data datasets/common-phone/v0 \
-  --out models/common-phone/v0 \
+  --model models/common-phone/v0 \
+  --task frames2phones \
   --epochs 3 \
-  --batch-size 8
+  --batch-frames 12000 \
+  --lr 0.0003 \
+  --device cpu
 ```
 
 Training prints checkpoint behavior before work starts:
@@ -143,11 +156,17 @@ model-epoch-N.bin
 model.bin
 ```
 
-The v0 artifact records architecture
-`common-phone-compact-frame-ctc-v0` and the intended CTC heads for phones,
-phonemes, and feature axes. It is a CPU-friendly scaffold while the data path is
-stabilized; a fuller Burn temporal encoder can replace the baseline artifact
-without changing the prepared data format.
+The v0 artifact records architecture `common-phone-compact-frame-ctc-v0`.
+Training uses a small Burn frame encoder:
+
+```text
+[batch, time, frame_dim]
+  -> linear + tanh + linear + tanh + dropout
+  -> CTC heads for phones, phonemes, and feature bundles
+```
+
+`frames2phones` is the primary task. `frames2features`, `frames2phonemes`, and
+`multitask` are also accepted.
 
 ## Eval And Inspect
 
@@ -155,19 +174,26 @@ without changing the prepared data format.
 just common-phone eval \
   --data datasets/common-phone/v0 \
   --model models/common-phone/v0 \
-  --split valid
+  --split valid \
+  --task frames2phones
 
-just common-phone show-row \
+just common-phone show \
   --data datasets/common-phone/v0 \
   --index 0
 ```
 
-Eval reports phone token error rate, phoneme token error rate, per-axis feature
-token error rate, aggregate feature token error rate, greedy decode samples,
-unknown phone counts, and split-level language distribution.
+Eval reports token error rate, edit distance, exact sequence accuracy, blank
+ratio, mean prediction/target length, greedy CTC samples, unknown phone counts,
+and split-level language distribution.
 
 `show-row` prints the utterance id, language, phone target, feature-axis
 targets, compact feature dimensions, first frame values, and summary stats.
+
+For an end-to-end generated fixture smoke test:
+
+```sh
+just common-phone-smoke
+```
 
 ## Difference From Interpretation
 

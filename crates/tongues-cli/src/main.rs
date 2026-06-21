@@ -1138,6 +1138,21 @@ enum CommonPhoneCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
+    /// Create/document the expected local raw-data layout
+    Fetch {
+        /// Output raw-data directory
+        #[arg(long, default_value = "data/common-phone/raw")]
+        out: PathBuf,
+
+        /// Acquisition source label; v0 documents huggingface but does not download
+        #[arg(long, default_value = "huggingface")]
+        source: String,
+
+        /// Comma-separated languages to acquire externally
+        #[arg(long)]
+        languages: Option<String>,
+    },
+
     /// Prepare a local Common Phone export into compact acoustic frame files
     Prepare {
         /// Local Common Phone checkout/export with metadata.jsonl/csv/tsv
@@ -1180,20 +1195,32 @@ enum CommonPhoneCommands {
         data: PathBuf,
 
         /// Output directory for the model
-        #[arg(long, default_value = DEFAULT_COMMON_PHONE_MODEL_DIR)]
-        out: PathBuf,
+        #[arg(long = "model", alias = "out", default_value = DEFAULT_COMMON_PHONE_MODEL_DIR)]
+        model: PathBuf,
+
+        /// Training task: frames2phones, frames2features, frames2phonemes, multitask
+        #[arg(long, default_value = "frames2phones")]
+        task: String,
 
         /// Maximum training epochs
         #[arg(long)]
         epochs: Option<usize>,
 
-        /// Mini-batch size recorded for the CTC training run
+        /// Approximate maximum acoustic frames per batch
         #[arg(long)]
-        batch_size: Option<usize>,
+        batch_frames: Option<usize>,
+
+        /// Learning rate
+        #[arg(long)]
+        lr: Option<f64>,
 
         /// Random seed
         #[arg(long)]
         seed: Option<u64>,
+
+        /// Device for v0 training; currently only cpu is supported
+        #[arg(long, default_value = "cpu")]
+        device: String,
     },
 
     /// Evaluate a Common Phone model
@@ -1206,6 +1233,10 @@ enum CommonPhoneCommands {
         #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
         data: PathBuf,
 
+        /// Eval task: frames2phones, frames2features, frames2phonemes, multitask
+        #[arg(long, default_value = "frames2phones")]
+        task: String,
+
         /// Split to evaluate: train, valid, or test
         #[arg(long, default_value = "valid")]
         split: String,
@@ -1216,7 +1247,7 @@ enum CommonPhoneCommands {
     },
 
     /// Print a prepared row and compact feature summary
-    #[command(name = "show-row")]
+    #[command(name = "show-row", alias = "show")]
     ShowRow {
         /// Prepared data directory
         #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
@@ -6660,6 +6691,27 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             DEFAULT_COMMON_PHONE_DATA_DIR,
             DEFAULT_COMMON_PHONE_MODEL_DIR,
         ),
+        CommonPhoneCommands::Fetch {
+            out,
+            source,
+            languages,
+        } => {
+            fs::create_dir_all(out.join("audio"))
+                .with_context(|| format!("creating {}", out.join("audio").display()))?;
+            fs::write(
+                out.join("README.md"),
+                format!(
+                    "# Common Phone raw data\n\nSource: `{source}`\nLanguages: `{}`\n\nPlace `metadata.jsonl` plus WAV files under `audio/` or `clips/` here. Required metadata fields: `utterance_id`, `language`, `wav_path`, `phones`.\n\nExample row:\n\n```json\n{{\"utterance_id\":\"cp_eng_000001\",\"language\":\"eng\",\"split\":\"train\",\"wav_path\":\"audio/sample_000001.wav\",\"phones\":\"t ɪ p\"}}\n```\n\nv0 does not download Hugging Face data automatically; acquire/export it externally, then run `common-phone prepare --input {}`.\n",
+                    languages.unwrap_or_else(|| "all requested externally".to_string()),
+                    out.display()
+                ),
+            )?;
+            println!(
+                "Created Common Phone raw-data layout at {}. Add metadata.jsonl and WAV files, then run prepare.",
+                out.display()
+            );
+            Ok(())
+        }
         CommonPhoneCommands::Prepare {
             input,
             out,
@@ -6725,40 +6777,54 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
         }
         CommonPhoneCommands::Train {
             data,
-            out,
+            model,
+            task,
             epochs,
-            batch_size,
+            batch_frames,
+            lr,
             seed,
+            device,
         } => {
+            anyhow::ensure!(
+                device == "cpu",
+                "common-phone v0 currently supports --device cpu only"
+            );
             let mut config = tongues_common_phone::CommonPhoneTrainConfig::default();
+            config.task = tongues_common_phone::CommonPhoneTask::parse(&task)?;
             if let Some(epochs) = epochs {
                 config.epochs = epochs;
             }
-            if let Some(batch_size) = batch_size {
-                config.batch_size = batch_size;
+            if let Some(batch_frames) = batch_frames {
+                config.batch_frames = batch_frames;
+            }
+            if let Some(lr) = lr {
+                config.learning_rate = lr;
             }
             if let Some(seed) = seed {
                 config.seed = seed;
             }
             println!("Common Phone compact-frame CTC checkpoint paths:");
-            println!("  train_state: {}", out.join("train_state.json").display());
+            println!(
+                "  train_state: {}",
+                model.join("train_state.json").display()
+            );
             println!(
                 "  epoch checkpoints: {}",
-                out.join("model-epoch-N.bin").display()
+                model.join("model-epoch-N.bin").display()
             );
-            println!("  best model: {}", out.join("model.bin").display());
+            println!("  best model: {}", model.join("model.bin").display());
             println!("  CTC heads: phones, phonemes, manner, place, voicing, syllabic, height, backness, rounding");
             println!("  Note: v0 writes epoch checkpoints after each epoch.");
             let pb = status_spinner(format!(
                 "Training Common Phone compact-frame CTC scaffold from {}",
                 data.display()
             ));
-            let report = tongues_common_phone::train(&data, &out, &config)?;
+            let report = tongues_common_phone::train(&data, &model, &config)?;
             finish_status(
                 pb,
                 format!(
-                    "Common Phone training complete: {} epochs, best valid phone TER {:.4}",
-                    report.epochs, report.best_validation_phone_ter
+                    "Common Phone training complete: {} epochs, best valid error {:.4}",
+                    report.epochs, report.best_validation_error_rate
                 ),
             );
             Ok(())
@@ -6766,10 +6832,12 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
         CommonPhoneCommands::Eval {
             model,
             data,
+            task,
             split,
             samples,
         } => {
-            let report = tongues_common_phone::evaluate(&model, &data, &split, samples)?;
+            let task = tongues_common_phone::CommonPhoneTask::parse(&task)?;
+            let report = tongues_common_phone::evaluate(&model, &data, &split, task, samples)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
