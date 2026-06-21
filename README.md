@@ -121,8 +121,20 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |
+| `just be [--mechanical]` | Stream Ollama text through sentence detection, pronunciation, Piper playback, and the local audio queue. |
 
 The model-family `just` recipes forward their arguments to the `tongues` CLI.
+
+`just be` is the end-to-end demo this project has been aiming toward: generated
+text is streamed into a speech front end, split into speakable chunks, converted
+to pronunciations, synthesized, and queued for playback. It works in both modes:
+without `--mechanical`, it uses the resident `head2phones` model; with
+`--mechanical`, it uses the deterministic sentence detector and speaking
+phonemicizer. Both paths are valid, and making that equivalence possible is the
+point of the current architecture. The honest status is that the full loop is
+very slow right now; current work is focused on improving training-data quality
+and comparing model choices until the neural path is good enough to justify the
+latency.
 
 Each model-family namespace also has a `clean` subcommand:
 

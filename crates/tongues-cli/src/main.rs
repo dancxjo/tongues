@@ -38,7 +38,15 @@ use burn::tensor::{Int, Tensor};
 use burn_cuda::{Cuda, CudaDevice};
 
 use speaking::data::notation::openepd::normalize_openepd_ipa;
-use speaking::{AudioFrame, SpeechRecognizer, WhisperSpeechRecognizer};
+use speaking::{
+    AudioFrame, EvidenceProvenance, EvidenceSource, PhoneToken, SpeechRecognizer, Spec,
+    UtteranceId, UtterancePlan, VarietyId, WhisperSpeechRecognizer,
+};
+use styletts2::{
+    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
+    StyleTts2Backend, StyleTts2DiffusionOptions, StyleTts2OnnxBackend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, DEFAULT_MAX_TTS_SYMBOLS,
+};
 use tongues_core::{Vocab, BOS_ID, EOS_ID, UNK_ID};
 use tongues_data::{Lexeme, Seq2SeqExample, Task};
 use tongues_g2p2g::{
@@ -1030,6 +1038,24 @@ struct BeCommand {
     /// Requested language/pronunciation variety for head2phones
     #[arg(long, default_value = "en-US")]
     variety: String,
+
+    /// Speech backend to use for spoken output
+    #[arg(long, value_enum, default_value_t = BeVoiceBackend::Piper)]
+    voice_backend: BeVoiceBackend,
+
+    /// Maximum symbols per StyleTTS2 chunk when --voice-backend styletts2 is used
+    #[arg(long, default_value_t = DEFAULT_MAX_TTS_SYMBOLS)]
+    max_tts_symbols: usize,
+
+    /// Disable StyleTTS2 text chunking when --voice-backend styletts2 is used
+    #[arg(long)]
+    no_tts_chunking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum BeVoiceBackend {
+    Piper,
+    Styletts2,
 }
 
 #[derive(Subcommand, Debug)]
@@ -3575,35 +3601,35 @@ fn cmd_be(command: BeCommand) -> Result<()> {
         None
     };
 
+    eprintln!(
+        "be: ollama={} model={} prompt={:?}",
+        command.ollama_url, command.ollama_model, command.prompt
+    );
+
+    match command.voice_backend {
+        BeVoiceBackend::Piper => cmd_be_with_piper(command, head2phones, seams_detector, &device),
+        BeVoiceBackend::Styletts2 => {
+            cmd_be_with_styletts2(command, head2phones, seams_detector, &device)
+        }
+    }
+}
+
+fn cmd_be_with_piper(
+    command: BeCommand,
+    head2phones: Option<(Seq2SeqModel<CpuInferBackend>, Vocab, ModelConfig)>,
+    seams_detector: Option<seams::SentenceDetectorDialog>,
+    device: &NdArrayDevice,
+) -> Result<()> {
     let piper_model = models::ensure_piper_voice_model_available()?;
     let piper_config_path = piper::piper_voice_config_path(&piper_model);
     let piper_config = piper::PiperVoiceConfig::from_json_file(&piper_config_path)?;
     let mut piper = piper::PiperOnnxBackend::load(&piper_model, piper_config)?;
     let player = speak::AudioStreamPlayer::new(piper.sample_rate_hz())
         .context("failed to start CPAL playback")?;
-
-    eprintln!(
-        "be: ollama={} model={} prompt={:?}",
-        command.ollama_url, command.ollama_model, command.prompt
-    );
-    if command.mechanical {
-        eprintln!(
-            "be: mechanical seams+phonemicizer variety={} piper={}",
-            command.variety,
-            piper_model.display()
-        );
-    } else {
-        eprintln!(
-            "be: resident head2phones CPU model={} piper={}",
-            command.head2phones_model.display(),
-            piper_model.display()
-        );
-    }
+    log_be_speech_path(&command, "piper", &piper_model);
     eprintln!("be: cpal output={}", player.description());
 
     let mut total_samples = 0usize;
-    let mut cursor = String::new();
-    let mut previous = String::new();
     let mut sink = |chunk: piper::PiperAudioChunk| -> Result<()> {
         total_samples += chunk.pcm_mono_f32.len();
         eprintln!(
@@ -3616,58 +3642,187 @@ fn cmd_be(command: BeCommand) -> Result<()> {
         Ok(())
     };
 
-    stream_ollama_generate(&command, |piece| {
+    stream_be_sentences(&command, seams_detector.as_ref(), |sentence| {
+        if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
+            speak_head2phones_sentence(
+                sentence,
+                &command.variety,
+                head2phones,
+                vocab,
+                model_config,
+                device,
+                &mut piper,
+                &mut sink,
+            )?;
+        } else {
+            synthesize_mechanical_sentence(sentence, &command.variety, &mut piper, &mut sink)?;
+        }
+        Ok(())
+    })?;
+
+    eprintln!();
+    drop(sink);
+    eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
+    player.wait_until_done(total_samples);
+    Ok(())
+}
+
+fn cmd_be_with_styletts2(
+    command: BeCommand,
+    head2phones: Option<(Seq2SeqModel<CpuInferBackend>, Vocab, ModelConfig)>,
+    seams_detector: Option<seams::SentenceDetectorDialog>,
+    device: &NdArrayDevice,
+) -> Result<()> {
+    let primary_model = models::ensure_styletts2_model_available()?;
+    let model_dir = primary_model
+        .parent()
+        .context("StyleTTS2 primary model path has no parent directory")?;
+    let default_refs = models::ensure_styletts2_default_reference_audio_available()?;
+    let diffusion_opts = StyleTts2DiffusionOptions {
+        diffusion_steps: 5,
+        alpha: 0.3,
+        beta: 0.1,
+        embedding_scale: 1.0,
+        seed: 0,
+    };
+    let mut backend = StyleTts2OnnxBackend::from_model_dir(model_dir)
+        .context("failed to load native StyleTTS2 ONNX backend")?
+        .with_diffusion_options(diffusion_opts)
+        .context("invalid StyleTTS2 diffusion options")?;
+    let player =
+        speak::AudioStreamPlayer::new(24_000).context("failed to start CPAL playback")?;
+    log_be_speech_path(&command, "styletts2", &primary_model);
+    eprintln!(
+        "be: styletts2 refs voice={} style={}",
+        default_refs.voice.display(),
+        default_refs.style.display()
+    );
+    eprintln!("be: cpal output={}", player.description());
+
+    let mut total_samples = 0usize;
+    let mut cursor = String::new();
+    let mut previous = String::new();
+    let mut sink = |chunk: styletts2::StyleTts2AudioChunk| -> std::result::Result<
+        (),
+        styletts2::StyleTts2Error,
+    > {
+        total_samples += chunk.pcm_mono_f32.len();
+        eprintln!(
+            "be: queued audio chunk samples={} total={} rate={}Hz",
+            chunk.pcm_mono_f32.len(),
+            total_samples,
+            chunk.sample_rate_hz
+        );
+        player.append(&chunk.pcm_mono_f32);
+        Ok(())
+    };
+
+    stream_be_sentences_with_buffers(
+        &command,
+        seams_detector.as_ref(),
+        &mut cursor,
+        &mut previous,
+        |sentence| {
+            if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
+                speak_head2phones_sentence_styletts2(
+                    sentence,
+                    &command.variety,
+                    head2phones,
+                    vocab,
+                    model_config,
+                    device,
+                    &mut backend,
+                    &mut sink,
+                    &default_refs.voice,
+                    &default_refs.style,
+                    command.max_tts_symbols,
+                    command.no_tts_chunking,
+                )?;
+            } else {
+                synthesize_mechanical_sentence_styletts2(
+                    sentence,
+                    &command.variety,
+                    &mut backend,
+                    &mut sink,
+                    &default_refs.voice,
+                    &default_refs.style,
+                    command.max_tts_symbols,
+                    command.no_tts_chunking,
+                )?;
+            }
+            Ok(())
+        },
+    )?;
+
+    eprintln!();
+    drop(sink);
+    eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
+    player.wait_until_done(total_samples);
+    Ok(())
+}
+
+fn log_be_speech_path(command: &BeCommand, backend_label: &str, model_path: &Path) {
+    if command.mechanical {
+        eprintln!(
+            "be: mechanical seams+phonemicizer variety={} voice_backend={} model={}",
+            command.variety,
+            backend_label,
+            model_path.display()
+        );
+    } else {
+        eprintln!(
+            "be: resident head2phones CPU model={} voice_backend={} model={}",
+            command.head2phones_model.display(),
+            backend_label,
+            model_path.display()
+        );
+    }
+}
+
+fn stream_be_sentences(
+    command: &BeCommand,
+    seams_detector: Option<&seams::SentenceDetectorDialog>,
+    mut on_sentence: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    let mut cursor = String::new();
+    let mut previous = String::new();
+    stream_be_sentences_with_buffers(
+        command,
+        seams_detector,
+        &mut cursor,
+        &mut previous,
+        &mut on_sentence,
+    )
+}
+
+fn stream_be_sentences_with_buffers(
+    command: &BeCommand,
+    seams_detector: Option<&seams::SentenceDetectorDialog>,
+    cursor: &mut String,
+    previous: &mut String,
+    mut on_sentence: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    stream_ollama_generate(command, |piece| {
         print!("{piece}");
         std::io::stdout()
             .flush()
             .context("flushing streamed text")?;
         cursor.push_str(piece);
-        let sentences = if let Some(detector) = seams_detector.as_ref() {
-            collect_completed_seams_prefixes(&mut cursor, &mut previous, detector)?
+        let sentences = if let Some(detector) = seams_detector {
+            collect_completed_seams_prefixes(cursor, previous, detector)?
         } else {
-            collect_completed_sentence_parser_prefixes(&mut cursor, &mut previous)
+            collect_completed_sentence_parser_prefixes(cursor, previous)
         };
         for sentence in sentences {
-            if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
-                speak_head2phones_sentence(
-                    &sentence,
-                    &command.variety,
-                    head2phones,
-                    vocab,
-                    model_config,
-                    &device,
-                    &mut piper,
-                    &mut sink,
-                )?;
-            } else {
-                synthesize_mechanical_sentence(&sentence, &command.variety, &mut piper, &mut sink)?;
-            }
+            on_sentence(&sentence)?;
         }
         Ok(())
     })?;
 
     let tail = cursor.split_whitespace().collect::<Vec<_>>().join(" ");
     if !tail.is_empty() {
-        if let Some((head2phones, vocab, model_config)) = head2phones.as_ref() {
-            speak_head2phones_sentence(
-                &tail,
-                &command.variety,
-                head2phones,
-                vocab,
-                model_config,
-                &device,
-                &mut piper,
-                &mut sink,
-            )?;
-        } else {
-            synthesize_mechanical_sentence(&tail, &command.variety, &mut piper, &mut sink)?;
-        }
+        on_sentence(&tail)?;
     }
-
-    eprintln!();
-    drop(sink);
-    eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
-    player.wait_until_done(total_samples);
     Ok(())
 }
 
