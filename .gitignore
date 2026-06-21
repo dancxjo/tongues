@@ -42,3 +42,4 @@ crates/speaking/src/data/lexicons/cmudict.dict
 !/datasets/
 !/datasets/*/
 !/datasets/*/.gitkeep
+models
