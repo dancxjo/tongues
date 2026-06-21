@@ -43,6 +43,8 @@ pub const DEFAULT_ZENODO_URL: &str =
 const ACF_MAGIC: &[u8; 4] = b"ACF0";
 const ACF_VERSION: u32 = 1;
 const DOWNLOAD_USER_AGENT: &str = "tongues-common-phone/0.1";
+const LATEST_MODEL_STEM: &str = "model-latest";
+const TRAIN_CHECKPOINT_BATCH_INTERVAL: usize = 100;
 
 type CpuInferBackend = NdArray<f32>;
 type CpuTrainBackend = Autodiff<CpuInferBackend>;
@@ -219,6 +221,64 @@ pub enum PrepareProgress {
         path: String,
         rows: usize,
     },
+    Select {
+        selected: usize,
+        total: usize,
+    },
+    Split {
+        train: usize,
+        valid: usize,
+        test: usize,
+    },
+    Vocab {
+        name: String,
+        tokens: usize,
+        path: String,
+    },
+    State {
+        status: String,
+        rows: usize,
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrainProgress {
+    Startup {
+        train_examples: usize,
+        valid_examples: usize,
+        epochs: usize,
+        train_state_path: String,
+        epoch_checkpoint_pattern: String,
+        best_model_path: String,
+    },
+    EpochStart {
+        epoch: usize,
+        epochs: usize,
+        train_examples: usize,
+    },
+    Batch {
+        epoch: usize,
+        examples: usize,
+        total_examples: usize,
+        loss: f32,
+    },
+    EpochComplete {
+        epoch: usize,
+        train_loss: f32,
+        valid_error: f64,
+        exact_sequence_accuracy: f64,
+        blank_ratio: f64,
+    },
+    Checkpoint {
+        epoch: usize,
+        path: String,
+        best: bool,
+    },
+    State {
+        epoch: usize,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -345,9 +405,15 @@ pub fn prepare_dataset_with_progress(
     fs::create_dir_all(out.join("frames")).context("creating common-phone frames directory")?;
     fs::create_dir_all(out.join("vocabs")).context("creating common-phone vocabs directory")?;
     write_prepare_state(out, "starting", config, 0, None)?;
+    progress(PrepareProgress::State {
+        status: "starting".to_string(),
+        rows: 0,
+        path: out.join("prepare_state.json").display().to_string(),
+    });
 
     let input = Path::new(&config.input);
     let input_rows = read_input_records(input, &mut progress)?;
+    let total_input_rows = input_rows.len();
     let allowed_langs = config
         .languages
         .iter()
@@ -368,6 +434,10 @@ pub fn prepare_dataset_with_progress(
             break;
         }
     }
+    progress(PrepareProgress::Select {
+        selected: selected.len(),
+        total: total_input_rows,
+    });
     anyhow::ensure!(
         !selected.is_empty(),
         "no Common Phone rows selected from {}",
@@ -489,9 +559,19 @@ pub fn prepare_dataset_with_progress(
     }
     writer.flush()?;
     write_prepare_state(out, "utterances", config, rows.len(), None)?;
+    progress(PrepareProgress::State {
+        status: "utterances".to_string(),
+        rows: rows.len(),
+        path: out.join("prepare_state.json").display().to_string(),
+    });
 
     let (train, valid, test) = split_rows(rows, config);
     let n = train.len() + valid.len() + test.len();
+    progress(PrepareProgress::Split {
+        train: train.len(),
+        valid: valid.len(),
+        test: test.len(),
+    });
     write_jsonl_atomic(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_atomic(&out.join("valid.jsonl"), &valid, &mut progress)?;
     write_jsonl_atomic(&out.join("test.jsonl"), &test, &mut progress)?;
@@ -506,10 +586,20 @@ pub fn prepare_dataset_with_progress(
         &out.join("vocab.json"),
         serde_json::to_string_pretty(&phone_vocab)?,
     )?;
+    progress(PrepareProgress::Vocab {
+        name: "legacy phone vocab".to_string(),
+        tokens: phone_vocab.size(),
+        path: out.join("vocab.json").display().to_string(),
+    });
     write_text_atomic(
         &out.join("phone_vocab.json"),
         serde_json::to_string_pretty(&phone_vocab)?,
     )?;
+    progress(PrepareProgress::Vocab {
+        name: "phone vocab".to_string(),
+        tokens: phone_vocab.size(),
+        path: out.join("phone_vocab.json").display().to_string(),
+    });
     write_text_atomic(
         &out.join("vocabs").join("phones.json"),
         serde_json::to_string_pretty(&phone_vocab)?,
@@ -518,6 +608,11 @@ pub fn prepare_dataset_with_progress(
         &out.join("phoneme_vocab.json"),
         serde_json::to_string_pretty(&phoneme_vocab)?,
     )?;
+    progress(PrepareProgress::Vocab {
+        name: "phoneme vocab".to_string(),
+        tokens: phoneme_vocab.size(),
+        path: out.join("phoneme_vocab.json").display().to_string(),
+    });
     write_text_atomic(
         &out.join("vocabs").join("phonemes.json"),
         serde_json::to_string_pretty(&phoneme_vocab)?,
@@ -526,6 +621,11 @@ pub fn prepare_dataset_with_progress(
         &out.join("feature_bundle_vocab.json"),
         serde_json::to_string_pretty(&feature_bundle_vocab)?,
     )?;
+    progress(PrepareProgress::Vocab {
+        name: "feature bundle vocab".to_string(),
+        tokens: feature_bundle_vocab.size(),
+        path: out.join("feature_bundle_vocab.json").display().to_string(),
+    });
     write_text_atomic(
         &out.join("vocabs").join("feature_bundles.json"),
         serde_json::to_string_pretty(&feature_bundle_vocab)?,
@@ -571,6 +671,11 @@ pub fn prepare_dataset_with_progress(
         skipped_examples: 0,
     };
     write_prepare_state(out, "complete", config, n, Some(&report))?;
+    progress(PrepareProgress::State {
+        status: "complete".to_string(),
+        rows: n,
+        path: out.join("prepare_state.json").display().to_string(),
+    });
     Ok(report)
 }
 
@@ -608,10 +713,27 @@ pub fn download_common_phone_zenodo(
 }
 
 pub fn train(data: &Path, out: &Path, config: &CommonPhoneTrainConfig) -> Result<TrainReport> {
+    train_with_progress(data, out, config, |_| {})
+}
+
+pub fn train_with_progress(
+    data: &Path,
+    out: &Path,
+    config: &CommonPhoneTrainConfig,
+    mut progress: impl FnMut(TrainProgress),
+) -> Result<TrainReport> {
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let train_rows = read_examples(&data.join("train.jsonl"))?;
     let valid_rows = read_examples(&data.join("valid.jsonl"))?;
-    train_cpu(data, out, config, &train_rows, &valid_rows)
+    progress(TrainProgress::Startup {
+        train_examples: train_rows.len(),
+        valid_examples: valid_rows.len(),
+        epochs: config.epochs,
+        train_state_path: out.join("train_state.json").display().to_string(),
+        epoch_checkpoint_pattern: out.join("model-epoch-N.bin").display().to_string(),
+        best_model_path: out.join("model.bin").display().to_string(),
+    });
+    train_cpu(data, out, config, &train_rows, &valid_rows, &mut progress)
 }
 
 fn train_cpu(
@@ -620,6 +742,7 @@ fn train_cpu(
     config: &CommonPhoneTrainConfig,
     train_rows: &[CommonPhoneRow],
     valid_rows: &[CommonPhoneRow],
+    progress: &mut impl FnMut(TrainProgress),
 ) -> Result<TrainReport> {
     let phone_vocab: Vocab = read_vocab(data, "phone_vocab.json", "phones.json")?;
     let phoneme_vocab: Vocab = read_vocab(data, "phoneme_vocab.json", "phonemes.json")?;
@@ -651,8 +774,37 @@ fn train_cpu(
         AdamWConfig::new().init::<CpuTrainBackend, CommonPhoneModel<CpuTrainBackend>>();
     let mut rng = rand::rngs::StdRng::seed_from_u64(config.seed);
     let model_path = out.join("model");
+    model
+        .valid()
+        .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
+    write_train_state(
+        out,
+        0,
+        f64::INFINITY,
+        config,
+        "initialized",
+        Some(format!("{LATEST_MODEL_STEM}.bin")),
+        None,
+    )?;
+    progress(TrainProgress::Checkpoint {
+        epoch: 0,
+        path: out
+            .join(format!("{LATEST_MODEL_STEM}.bin"))
+            .display()
+            .to_string(),
+        best: false,
+    });
+    progress(TrainProgress::State {
+        epoch: 0,
+        path: out.join("train_state.json").display().to_string(),
+    });
     let mut best = f64::INFINITY;
     for epoch in 1..=config.epochs {
+        progress(TrainProgress::EpochStart {
+            epoch,
+            epochs: config.epochs,
+            train_examples: train_rows.len(),
+        });
         let loss = train_epoch_cpu(
             &mut model,
             &mut optimizer,
@@ -664,6 +816,10 @@ fn train_cpu(
             &feature_bundle_vocab,
             &device,
             &mut rng,
+            out,
+            epoch,
+            best,
+            progress,
         )?;
         let eval_model = model.valid();
         let report = evaluate_model_cpu(
@@ -690,20 +846,42 @@ fn train_cpu(
         eval_model
             .clone()
             .save_file(&out.join(format!("model-epoch-{epoch}")), &make_recorder())?;
-        write_text_atomic(
-            &out.join("train_state.json"),
-            &serde_json::to_string_pretty(&serde_json::json!({
-                "epoch": epoch,
-                "best_validation_error_rate": best,
-                "architecture": ARCHITECTURE,
-                "task": config.task,
-                "checkpoint": format!("model-epoch-{epoch}.bin"),
-                "train_loss": loss
-            }))?,
+        progress(TrainProgress::Checkpoint {
+            epoch,
+            path: out
+                .join(format!("model-epoch-{epoch}.bin"))
+                .display()
+                .to_string(),
+            best: false,
+        });
+        write_train_state(
+            out,
+            epoch,
+            best,
+            config,
+            "epoch-complete",
+            Some(format!("model-epoch-{epoch}.bin")),
+            Some(loss),
         )?;
+        progress(TrainProgress::State {
+            epoch,
+            path: out.join("train_state.json").display().to_string(),
+        });
         if (report.token_error_rate - best).abs() < f64::EPSILON {
             eval_model.save_file(&model_path, &make_recorder())?;
+            progress(TrainProgress::Checkpoint {
+                epoch,
+                path: out.join("model.bin").display().to_string(),
+                best: true,
+            });
         }
+        progress(TrainProgress::EpochComplete {
+            epoch,
+            train_loss: loss,
+            valid_error: report.token_error_rate,
+            exact_sequence_accuracy: report.exact_sequence_accuracy,
+            blank_ratio: report.blank_ratio,
+        });
     }
     Ok(TrainReport {
         epochs: config.epochs,
@@ -1079,6 +1257,10 @@ fn train_epoch_cpu<R: rand::Rng>(
     feature_bundle_vocab: &Vocab,
     device: &NdArrayDevice,
     rng: &mut R,
+    out: &Path,
+    epoch: usize,
+    best_validation_error_rate: f64,
+    progress: &mut impl FnMut(TrainProgress),
 ) -> Result<f32> {
     let mut indices = (0..rows.len()).collect::<Vec<_>>();
     indices.shuffle(rng);
@@ -1086,11 +1268,13 @@ fn train_epoch_cpu<R: rand::Rng>(
     let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(batches.len() as u64));
     let mut total = 0.0;
     let mut n = 0usize;
+    let mut examples_seen = 0usize;
     for batch_indices in batches {
         let batch_rows = batch_indices
             .iter()
             .map(|&index| rows[index].clone())
             .collect::<Vec<_>>();
+        examples_seen += batch_rows.len();
         let batch = make_common_phone_batch::<CpuTrainBackend>(
             data_dir,
             &batch_rows,
@@ -1106,6 +1290,40 @@ fn train_epoch_cpu<R: rand::Rng>(
         *model = optimizer.step(config.learning_rate, model.clone(), grads);
         total += loss_val;
         n += 1;
+        if n <= 3 || n % 20 == 0 || examples_seen == rows.len() {
+            progress(TrainProgress::Batch {
+                epoch,
+                examples: examples_seen,
+                total_examples: rows.len(),
+                loss: total / n as f32,
+            });
+        }
+        if n % TRAIN_CHECKPOINT_BATCH_INTERVAL == 0 {
+            model
+                .valid()
+                .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
+            write_train_state(
+                out,
+                epoch,
+                best_validation_error_rate,
+                config,
+                "epoch-in-progress",
+                Some(format!("{LATEST_MODEL_STEM}.bin")),
+                Some(total / n as f32),
+            )?;
+            progress(TrainProgress::Checkpoint {
+                epoch,
+                path: out
+                    .join(format!("{LATEST_MODEL_STEM}.bin"))
+                    .display()
+                    .to_string(),
+                best: false,
+            });
+            progress(TrainProgress::State {
+                epoch,
+                path: out.join("train_state.json").display().to_string(),
+            });
+        }
         pb.set_message(format!("{:.4}", total / n as f32));
         pb.inc(1);
     }
@@ -1648,11 +1866,16 @@ fn read_common_phone_split_csv(
         let grid_path = find_common_phone_grid(lang_dir, &stem);
         let phones = grid_path
             .as_ref()
-            .and_then(|path| textgrid_phone_tokens(path).ok())
+            .and_then(|path| textgrid_tier_tokens(path, "MAU").ok())
             .unwrap_or_default();
         if phones.is_empty() {
             continue;
         }
+        let phonemes = grid_path
+            .as_ref()
+            .and_then(|path| textgrid_tier_tokens(path, "KAN-MAU").ok())
+            .filter(|tokens| !tokens.is_empty())
+            .unwrap_or_else(|| phones.clone());
         let speaker_id = first_field(
             &by_name,
             &[
@@ -1685,7 +1908,7 @@ fn read_common_phone_split_csv(
             duration_ms: None,
             source_dataset: Some("common-phone-zenodo".to_string()),
             phones: Some(PhoneField::Tokens(phones.clone())),
-            phonemes: Some(PhoneField::Tokens(phones)),
+            phonemes: Some(PhoneField::Tokens(phonemes)),
             segments: grid_path
                 .map(|path| serde_json::json!({ "textgrid_path": path.display().to_string() })),
             extra: BTreeMap::new(),
@@ -1748,26 +1971,29 @@ fn find_common_phone_grid(lang_dir: &Path, stem: &str) -> Option<PathBuf> {
     .find(|path| path.exists())
 }
 
-fn textgrid_phone_tokens(path: &Path) -> Result<Vec<String>> {
+fn textgrid_tier_tokens(path: &Path, tier_name: &str) -> Result<Vec<String>> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut tokens = Vec::new();
+    let mut active_tier: Option<String> = None;
     for line in text.lines() {
         let line = line.trim();
+        if line.starts_with("name") {
+            if let Some((_, value)) = line.split_once('=') {
+                active_tier = Some(value.trim().trim_matches('"').to_string());
+            }
+            continue;
+        }
         if !line.starts_with("text") {
+            continue;
+        }
+        if active_tier.as_deref() != Some(tier_name) {
             continue;
         }
         let Some((_, value)) = line.split_once('=') else {
             continue;
         };
         let symbol = value.trim().trim_matches('"').trim();
-        if symbol.is_empty()
-            || symbol == "(...)"
-            || symbol.eq_ignore_ascii_case("sil")
-            || symbol.eq_ignore_ascii_case("sp")
-        {
-            continue;
-        }
-        tokens.extend(tokenize_phone_text(symbol));
+        tokens.extend(tokenize_textgrid_label(symbol));
     }
     Ok(tokens)
 }
@@ -1875,10 +2101,11 @@ fn resolve_input_path(input: &Path, path: &str) -> PathBuf {
 }
 
 fn phone_field_tokens(field: &PhoneField) -> Vec<String> {
-    match field {
-        PhoneField::Tokens(tokens) => tokens.iter().filter(|s| !s.is_empty()).cloned().collect(),
+    let tokens = match field {
+        PhoneField::Tokens(tokens) => tokens.clone(),
         PhoneField::Text(text) => tokenize_phone_text(text),
-    }
+    };
+    sanitize_phone_tokens(tokens)
 }
 
 fn tokenize_phone_text(text: &str) -> Vec<String> {
@@ -1897,6 +2124,52 @@ fn tokenize_phone_text(text: &str) -> Vec<String> {
             .map(|ch| ch.to_string())
             .collect()
     }
+}
+
+fn tokenize_textgrid_label(text: &str) -> Vec<String> {
+    let tokens = text
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    sanitize_phone_tokens(tokens)
+}
+
+fn sanitize_phone_tokens(tokens: Vec<String>) -> Vec<String> {
+    tokens
+        .into_iter()
+        .filter_map(|token| normalize_phone_token(&token))
+        .collect()
+}
+
+fn normalize_phone_token(token: &str) -> Option<String> {
+    let token = token
+        .trim()
+        .trim_matches('/')
+        .trim_matches('[')
+        .trim_matches(']')
+        .trim_matches('"')
+        .trim();
+    if token.is_empty()
+        || token == "(...)"
+        || token == "."
+        || token == "|"
+        || token == "ˈ"
+        || token == "ˌ"
+        || token == CTC_BLANK
+        || token == UNK
+        || token.eq_ignore_ascii_case("sil")
+        || token.eq_ignore_ascii_case("sp")
+        || token.eq_ignore_ascii_case("silence")
+        || token.eq_ignore_ascii_case("<sil>")
+        || token.eq_ignore_ascii_case("<sp>")
+    {
+        return None;
+    }
+    let token = token
+        .trim_start_matches(|ch| ch == 'ˈ' || ch == 'ˌ')
+        .trim_end_matches(|ch| ch == 'ˈ' || ch == 'ˌ')
+        .to_string();
+    (!token.is_empty()).then_some(token)
 }
 
 fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32)> {
@@ -2174,7 +2447,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 
 fn build_token_vocab<'a>(tokens: impl Iterator<Item = &'a String>) -> Vocab {
     let mut vocab_tokens = vec![CTC_BLANK.to_string(), UNK.to_string()];
-    let mut seen = BTreeSet::new();
+    let mut seen = BTreeSet::from([CTC_BLANK.to_string(), UNK.to_string()]);
     for token in tokens {
         if seen.insert(token.clone()) {
             vocab_tokens.push(token.clone());
@@ -2270,55 +2543,75 @@ fn feature_bundles_for_phones(phones: &[String]) -> Vec<String> {
 }
 
 fn phone_feature_bundle(phone: &str) -> &'static str {
-    match phone
-        .trim_matches(|ch: char| ch == '/' || ch == '[' || ch == ']' || ch == 'ː' || ch == ':')
-        .to_lowercase()
-        .as_str()
-    {
+    match phone_feature_key(phone).as_str() {
         "p" => "<STOP:VL:BILAB>",
         "b" => "<STOP:VOICED:BILAB>",
         "t" => "<STOP:VL:ALV>",
         "d" => "<STOP:VOICED:ALV>",
+        "c" => "<STOP:VL:PALATAL>",
+        "ɟ" => "<STOP:VOICED:PALATAL>",
         "k" => "<STOP:VL:VELAR>",
         "g" => "<STOP:VOICED:VELAR>",
+        "q" => "<STOP:VL:UVULAR>",
         "m" => "<NASAL:VOICED:BILAB>",
         "n" => "<NASAL:VOICED:ALV>",
+        "ɲ" => "<NASAL:VOICED:PALATAL>",
         "ŋ" => "<NASAL:VOICED:VELAR>",
         "f" => "<FRIC:VL:LABIODENTAL>",
         "v" => "<FRIC:VOICED:LABIODENTAL>",
+        "θ" => "<FRIC:VL:DENTAL>",
+        "ð" => "<FRIC:VOICED:DENTAL>",
         "s" => "<FRIC:VL:ALV>",
         "z" => "<FRIC:VOICED:ALV>",
         "ʃ" => "<FRIC:VL:POSTALV>",
         "ʒ" => "<FRIC:VOICED:POSTALV>",
+        "ç" => "<FRIC:VL:PALATAL>",
+        "ʝ" => "<FRIC:VOICED:PALATAL>",
+        "x" => "<FRIC:VL:VELAR>",
+        "ɣ" => "<FRIC:VOICED:VELAR>",
+        "χ" => "<FRIC:VL:UVULAR>",
+        "ʁ" => "<FRIC:VOICED:UVULAR>",
+        "β" => "<FRIC:VOICED:BILAB>",
         "h" => "<FRIC:VL:GLOTTAL>",
+        "ts" => "<AFFRICATE:VL:ALV>",
+        "dz" => "<AFFRICATE:VOICED:ALV>",
+        "tʃ" => "<AFFRICATE:VL:POSTALV>",
+        "dʒ" => "<AFFRICATE:VOICED:POSTALV>",
         "l" => "<LAT:VOICED:ALV>",
-        "r" | "ɹ" => "<APPROX:VOICED:ALV>",
+        "ʎ" => "<LAT:VOICED:PALATAL>",
+        "r" | "ɹ" | "ɾ" | "ʀ" => "<APPROX:VOICED:ALV>",
         "j" => "<APPROX:VOICED:PALATAL>",
+        "ɥ" => "<APPROX:VOICED:LABIAL_PALATAL>",
         "w" => "<APPROX:VOICED:LABIAL_VELAR>",
-        "i" | "ɪ" => "<VOWEL:HIGH:FRONT:UNROUNDED>",
-        "e" | "ɛ" | "æ" => "<VOWEL:MID:FRONT:UNROUNDED>",
-        "a" | "ɑ" | "ɐ" => "<VOWEL:LOW:CENTRAL:UNROUNDED>",
+        "i" | "ɪ" | "ɨ" => "<VOWEL:HIGH:FRONT:UNROUNDED>",
+        "y" | "ʏ" => "<VOWEL:HIGH:FRONT:ROUNDED>",
+        "e" | "ɛ" | "æ" | "eɪ" | "eə" | "ɪə" => "<VOWEL:MID:FRONT:UNROUNDED>",
+        "ø" | "œ" | "ɶ" => "<VOWEL:MID:FRONT:ROUNDED>",
+        "a" | "ɑ" | "ɐ" | "ɒ" | "aɪ" | "aʊ" => "<VOWEL:LOW:CENTRAL:UNROUNDED>",
         "ə" | "ʌ" => "<VOWEL:MID:CENTRAL:UNROUNDED>",
-        "o" | "ɔ" => "<VOWEL:MID:BACK:ROUNDED>",
-        "u" | "ʊ" => "<VOWEL:HIGH:BACK:ROUNDED>",
+        "o" | "ɔ" | "ɔɪ" | "əʊ" => "<VOWEL:MID:BACK:ROUNDED>",
+        "u" | "ʊ" | "ʊə" => "<VOWEL:HIGH:BACK:ROUNDED>",
+        "ʔ" => "<STOP:VL:GLOTTAL>",
         _ => PHONE_FEATURE_UNKNOWN,
     }
 }
 
 fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
-    let p = phone
-        .trim_matches(|ch: char| ch == '/' || ch == '[' || ch == ']' || ch == 'ː' || ch == ':')
-        .to_lowercase();
+    let p = phone_feature_key(phone);
     let mut map = BTreeMap::new();
     let (manner, place, voicing, syllabic, height, backness, rounding) = match p.as_str() {
         "p" => ("stop", "bilabial", "voiceless", "no", NONE, NONE, NONE),
         "b" => ("stop", "bilabial", "voiced", "no", NONE, NONE, NONE),
         "t" => ("stop", "alveolar", "voiceless", "no", NONE, NONE, NONE),
         "d" => ("stop", "alveolar", "voiced", "no", NONE, NONE, NONE),
+        "c" => ("stop", "palatal", "voiceless", "no", NONE, NONE, NONE),
+        "ɟ" => ("stop", "palatal", "voiced", "no", NONE, NONE, NONE),
         "k" => ("stop", "velar", "voiceless", "no", NONE, NONE, NONE),
         "g" => ("stop", "velar", "voiced", "no", NONE, NONE, NONE),
+        "q" => ("stop", "uvular", "voiceless", "no", NONE, NONE, NONE),
         "m" => ("nasal", "bilabial", "voiced", "no", NONE, NONE, NONE),
         "n" => ("nasal", "alveolar", "voiced", "no", NONE, NONE, NONE),
+        "ɲ" => ("nasal", "palatal", "voiced", "no", NONE, NONE, NONE),
         "ŋ" => ("nasal", "velar", "voiced", "no", NONE, NONE, NONE),
         "f" => (
             "fricative",
@@ -2330,6 +2623,8 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             NONE,
         ),
         "v" => ("fricative", "labiodental", "voiced", "no", NONE, NONE, NONE),
+        "θ" => ("fricative", "dental", "voiceless", "no", NONE, NONE, NONE),
+        "ð" => ("fricative", "dental", "voiced", "no", NONE, NONE, NONE),
         "s" => ("fricative", "alveolar", "voiceless", "no", NONE, NONE, NONE),
         "z" => ("fricative", "alveolar", "voiced", "no", NONE, NONE, NONE),
         "ʃ" => (
@@ -2351,9 +2646,46 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             NONE,
         ),
         "h" => ("fricative", "glottal", "voiceless", "no", NONE, NONE, NONE),
+        "ç" => ("fricative", "palatal", "voiceless", "no", NONE, NONE, NONE),
+        "ʝ" => ("fricative", "palatal", "voiced", "no", NONE, NONE, NONE),
+        "x" => ("fricative", "velar", "voiceless", "no", NONE, NONE, NONE),
+        "ɣ" => ("fricative", "velar", "voiced", "no", NONE, NONE, NONE),
+        "χ" => ("fricative", "uvular", "voiceless", "no", NONE, NONE, NONE),
+        "ʁ" => ("fricative", "uvular", "voiced", "no", NONE, NONE, NONE),
+        "β" => ("fricative", "bilabial", "voiced", "no", NONE, NONE, NONE),
+        "ts" => ("affricate", "alveolar", "voiceless", "no", NONE, NONE, NONE),
+        "dz" => ("affricate", "alveolar", "voiced", "no", NONE, NONE, NONE),
+        "tʃ" => (
+            "affricate",
+            "postalveolar",
+            "voiceless",
+            "no",
+            NONE,
+            NONE,
+            NONE,
+        ),
+        "dʒ" => (
+            "affricate",
+            "postalveolar",
+            "voiced",
+            "no",
+            NONE,
+            NONE,
+            NONE,
+        ),
         "l" => ("lateral", "alveolar", "voiced", "no", NONE, NONE, NONE),
-        "r" | "ɹ" => ("approximant", "alveolar", "voiced", "no", NONE, NONE, NONE),
+        "ʎ" => ("lateral", "palatal", "voiced", "no", NONE, NONE, NONE),
+        "r" | "ɹ" | "ɾ" | "ʀ" => ("approximant", "alveolar", "voiced", "no", NONE, NONE, NONE),
         "j" => ("approximant", "palatal", "voiced", "no", NONE, NONE, NONE),
+        "ɥ" => (
+            "approximant",
+            "labial-palatal",
+            "voiced",
+            "no",
+            NONE,
+            NONE,
+            NONE,
+        ),
         "w" => (
             "approximant",
             "labial-velar",
@@ -2363,7 +2695,7 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             NONE,
             NONE,
         ),
-        "i" | "ɪ" => (
+        "i" | "ɪ" | "ɨ" => (
             "vowel",
             "vowel",
             "vowel",
@@ -2372,7 +2704,8 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "front",
             "unrounded",
         ),
-        "e" | "ɛ" | "æ" => (
+        "y" | "ʏ" => ("vowel", "vowel", "vowel", "yes", "high", "front", "rounded"),
+        "e" | "ɛ" | "æ" | "eɪ" | "eə" | "ɪə" => (
             "vowel",
             "vowel",
             "vowel",
@@ -2381,7 +2714,8 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "front",
             "unrounded",
         ),
-        "a" | "ɑ" | "ɐ" => (
+        "ø" | "œ" | "ɶ" => ("vowel", "vowel", "vowel", "yes", "mid", "front", "rounded"),
+        "a" | "ɑ" | "ɐ" | "ɒ" | "aɪ" | "aʊ" => (
             "vowel",
             "vowel",
             "vowel",
@@ -2399,8 +2733,11 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "central",
             "unrounded",
         ),
-        "o" | "ɔ" => ("vowel", "vowel", "vowel", "yes", "mid", "back", "rounded"),
-        "u" | "ʊ" => ("vowel", "vowel", "vowel", "yes", "high", "back", "rounded"),
+        "o" | "ɔ" | "ɔɪ" | "əʊ" => {
+            ("vowel", "vowel", "vowel", "yes", "mid", "back", "rounded")
+        }
+        "u" | "ʊ" | "ʊə" => ("vowel", "vowel", "vowel", "yes", "high", "back", "rounded"),
+        "ʔ" => ("stop", "glottal", "voiceless", "no", NONE, NONE, NONE),
         _ => (UNK, UNK, UNK, UNK, UNK, UNK, UNK),
     };
     map.insert("manner", manner);
@@ -2411,6 +2748,20 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
     map.insert("backness", backness);
     map.insert("rounding", rounding);
     map
+}
+
+fn phone_feature_key(phone: &str) -> String {
+    phone
+        .trim()
+        .trim_matches(|ch: char| ch == '/' || ch == '[' || ch == ']' || ch == 'ˈ' || ch == 'ˌ')
+        .chars()
+        .filter_map(|ch| match ch {
+            'ː' | ':' | 'ʲ' => None,
+            '\u{0300}'..='\u{036f}' => None,
+            'ɡ' => Some('g'),
+            other => Some(other.to_lowercase().next().unwrap_or(other)),
+        })
+        .collect()
 }
 
 fn count_unknown_phones(rows: &[CommonPhoneRow]) -> BTreeMap<String, usize> {
@@ -2514,6 +2865,33 @@ fn write_prepare_state(
             "rows": rows,
             "config": config,
             "report": report,
+        }))?,
+    )
+}
+
+fn write_train_state(
+    out: &Path,
+    epoch: usize,
+    best_validation_error_rate: f64,
+    config: &CommonPhoneTrainConfig,
+    status: &str,
+    checkpoint: Option<String>,
+    train_loss: Option<f32>,
+) -> Result<()> {
+    write_text_atomic(
+        &out.join("train_state.json"),
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "status": status,
+            "epoch": epoch,
+            "best_validation_error_rate": best_validation_error_rate,
+            "architecture": ARCHITECTURE,
+            "task": config.task,
+            "checkpoint": checkpoint,
+            "train_loss": train_loss,
+            "latest_checkpoint": format!("{LATEST_MODEL_STEM}.bin"),
+            "epoch_checkpoint_pattern": "model-epoch-N.bin",
+            "best_model": "model.bin",
+            "checkpoint_note": "model-latest.bin is written during epochs and at initialization; model-epoch-N.bin and model.bin are written after validation at epoch end."
         }))?,
     )
 }
@@ -2625,4 +3003,75 @@ fn sanitize_id(id: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "tongues-common-phone-{name}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn textgrid_tokens_are_tier_specific() {
+        let path = temp_path("tier-specific.TextGrid");
+        fs::write(
+            &path,
+            r#"File type = "ooTextFile"
+Object class = "TextGrid"
+
+item []:
+    item [1]:
+        class = "IntervalTier"
+        name = "ORT-MAU"
+        intervals: size = 1
+            intervals [1]:
+                text = "Line"
+    item [2]:
+        class = "IntervalTier"
+        name = "KAN-MAU"
+        intervals: size = 1
+            intervals [1]:
+                text = "l aɪ n"
+    item [3]:
+        class = "IntervalTier"
+        name = "MAU"
+        intervals: size = 3
+            intervals [1]:
+                text = "(...)"
+            intervals [2]:
+                text = "l"
+            intervals [3]:
+                text = "aɪ"
+"#,
+        )
+        .expect("write textgrid");
+
+        let phones = textgrid_tier_tokens(&path, "MAU").expect("phone tier");
+        let phonemes = textgrid_tier_tokens(&path, "KAN-MAU").expect("phoneme tier");
+        fs::remove_file(path).ok();
+
+        assert_eq!(phones, vec!["l", "aɪ"]);
+        assert_eq!(phonemes, vec!["l", "aɪ", "n"]);
+    }
+
+    #[test]
+    fn vocab_does_not_duplicate_reserved_tokens() {
+        let tokens = vec![
+            UNK.to_string(),
+            CTC_BLANK.to_string(),
+            "p".to_string(),
+            UNK.to_string(),
+        ];
+        let vocab = build_token_vocab(tokens.iter());
+        assert_eq!(vocab.tokens[0], CTC_BLANK);
+        assert_eq!(vocab.tokens[1], UNK);
+        assert_eq!(vocab.token_to_id[CTC_BLANK], 0);
+        assert_eq!(vocab.token_to_id[UNK], 1);
+        assert_eq!(vocab.tokens.iter().filter(|token| *token == UNK).count(), 1);
+    }
 }

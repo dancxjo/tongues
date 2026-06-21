@@ -7590,12 +7590,21 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             );
             println!("  best model: {}", model.join("model.bin").display());
             println!("  CTC heads: phones, phonemes, manner, place, voicing, syllabic, height, backness, rounding");
-            println!("  Note: v0 writes epoch checkpoints after each epoch.");
+            println!(
+                "  latest model: {}",
+                model.join("model-latest.bin").display()
+            );
+            println!("  Note: v0 writes model-latest.bin during epochs; epoch checkpoints and best model are written after validation.");
             let pb = status_spinner(format!(
                 "Training Common Phone compact-frame CTC scaffold from {}",
                 data.display()
             ));
-            let report = tongues_common_phone::train(&data, &model, &config)?;
+            let progress = {
+                let pb = pb.clone();
+                move |progress| pb.set_message(common_phone_train_progress_message(progress))
+            };
+            let report =
+                tongues_common_phone::train_with_progress(&data, &model, &config, progress)?;
             finish_status(
                 pb,
                 format!(
@@ -7663,6 +7672,84 @@ fn common_phone_prepare_progress_message(
         ),
         tongues_common_phone::PrepareProgress::Write { path, rows } => {
             format!("Wrote {} rows to {path}", format_count(rows))
+        }
+        tongues_common_phone::PrepareProgress::Select { selected, total } => {
+            format!(
+                "Selected {} of {} Common Phone rows",
+                format_count(selected),
+                format_count(total)
+            )
+        }
+        tongues_common_phone::PrepareProgress::Split { train, valid, test } => {
+            format!(
+                "Split rows: {} train / {} valid / {} test",
+                format_count(train),
+                format_count(valid),
+                format_count(test)
+            )
+        }
+        tongues_common_phone::PrepareProgress::Vocab { name, tokens, path } => {
+            format!("Wrote {name}: {} tokens -> {path}", format_count(tokens))
+        }
+        tongues_common_phone::PrepareProgress::State { status, rows, path } => {
+            format!(
+                "Updated prepare_state status={status} rows={} -> {path}",
+                format_count(rows)
+            )
+        }
+    }
+}
+
+fn common_phone_train_progress_message(progress: tongues_common_phone::TrainProgress) -> String {
+    match progress {
+        tongues_common_phone::TrainProgress::Startup {
+            train_examples,
+            valid_examples,
+            epochs,
+            train_state_path,
+            epoch_checkpoint_pattern,
+            best_model_path,
+        } => format!(
+            "Training {} train / {} valid examples for {} epochs; state={train_state_path}; checkpoints={epoch_checkpoint_pattern}; best={best_model_path}",
+            format_count(train_examples),
+            format_count(valid_examples),
+            format_count(epochs)
+        ),
+        tongues_common_phone::TrainProgress::EpochStart {
+            epoch,
+            epochs,
+            train_examples,
+        } => format!(
+            "Epoch {epoch}/{epochs}: training {} examples",
+            format_count(train_examples)
+        ),
+        tongues_common_phone::TrainProgress::Batch {
+            epoch,
+            examples,
+            total_examples,
+            loss,
+        } => format!(
+            "Epoch {epoch}: trained {}/{} examples, mean loss {:.4}",
+            format_count(examples),
+            format_count(total_examples),
+            loss
+        ),
+        tongues_common_phone::TrainProgress::EpochComplete {
+            epoch,
+            train_loss,
+            valid_error,
+            exact_sequence_accuracy,
+            blank_ratio,
+        } => format!(
+            "Epoch {epoch} complete: loss {:.4}, valid error {:.4}, exact {:.3}, blank {:.3}",
+            train_loss, valid_error, exact_sequence_accuracy, blank_ratio
+        ),
+        tongues_common_phone::TrainProgress::Checkpoint { epoch, path, best } => {
+            let kind = if best { "best model" } else { "checkpoint" };
+            format!("Epoch {epoch}: wrote {kind} -> {path}")
+        }
+        tongues_common_phone::TrainProgress::State { epoch, path } => {
+            format!("Epoch {epoch}: updated train_state -> {path}")
         }
     }
 }
