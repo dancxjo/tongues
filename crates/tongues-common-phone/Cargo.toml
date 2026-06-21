@@ -1,0 +1,13 @@
+[package]
+name = "tongues-common-phone"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+hound = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tongues-core = { path = "../tongues-core" }
+tongues-neural = { path = "../tongues-neural" }

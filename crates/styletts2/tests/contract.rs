@@ -1,8 +1,8 @@
 use speaking::{
-    BoundaryKind, EvidenceProvenance, EvidenceSource, FeatureBundle,
-    PauseKind, PhoneId, PhoneToken, PhonemeId, PhonemeToken, PhonemicizeRequest, Phonemicizer,
-    ProsodicLabel, ProsodicLabelKind, ProsodyTrack, SpeakerId, Spec, SpeechBoundaryToken, StyleRef,
-    StyleSource, TerminalPunctuation, TextSpan, TimeSpan, UtteranceId, UtterancePlan, VarietyId,
+    BoundaryKind, EvidenceProvenance, EvidenceSource, FeatureBundle, PauseKind, PhoneId,
+    PhoneToken, PhonemeId, PhonemeToken, PhonemicizeRequest, Phonemicizer, ProsodicLabel,
+    ProsodicLabelKind, ProsodyTrack, SpeakerId, Spec, SpeechBoundaryToken, StyleRef, StyleSource,
+    TerminalPunctuation, TextSpan, TimeSpan, UtteranceId, UtterancePlan, VarietyId,
 };
 use styletts2::{
     BackendSynthesisPlan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2Config,

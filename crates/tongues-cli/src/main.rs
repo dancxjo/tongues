@@ -71,6 +71,8 @@ const DEFAULT_HEAD2PHONES_MODEL_DIR: &str = "models/head2phones/v0";
 const DEFAULT_HEAD2PHONES_BATCH_SIZE: usize = 8;
 const DEFAULT_INTERPRETATION_DATA_DIR: &str = "datasets/interpretation/mini-v0";
 const DEFAULT_INTERPRETATION_MODEL_DIR: &str = "models/interpretation/mini-v0";
+const DEFAULT_COMMON_PHONE_DATA_DIR: &str = "datasets/common-phone/v0";
+const DEFAULT_COMMON_PHONE_MODEL_DIR: &str = "models/common-phone/v0";
 const DEFAULT_EMOTIONS_DATA_DIR: &str = "datasets/emotions/v0";
 const DEFAULT_EMOTIONS_MODEL_DIR: &str = "models/emotions/v0";
 const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.70;
@@ -160,6 +162,13 @@ enum Commands {
     Interpretation {
         #[command(subcommand)]
         command: InterpretationCommands,
+    },
+
+    /// Prepare, train, and evaluate Common Phone compact-frame CTC models
+    #[command(name = "common-phone", alias = "commonphone")]
+    CommonPhone {
+        #[command(subcommand)]
+        command: CommonPhoneCommands,
     },
 
     /// Prepare, train, evaluate, and run audio emotion classifiers
@@ -1125,6 +1134,101 @@ enum InterpretationCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum CommonPhoneCommands {
+    /// Archive selected default artifacts and recreate empty run directories
+    Clean(CleanArgs),
+
+    /// Prepare a local Common Phone export into compact acoustic frame files
+    Prepare {
+        /// Local Common Phone checkout/export with metadata.jsonl/csv/tsv
+        #[arg(long)]
+        input: PathBuf,
+
+        /// Output directory for prepared data
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
+        out: PathBuf,
+
+        /// Comma-separated ISO-ish language filter, for example eng,fra,spa
+        #[arg(long)]
+        lang: Option<String>,
+
+        /// Limit utterances for smoke tests
+        #[arg(long)]
+        max_utterances: Option<usize>,
+
+        /// Target sample rate for mechanical features
+        #[arg(long, default_value_t = tongues_common_phone::DEFAULT_SAMPLE_RATE_HZ)]
+        sample_rate: u32,
+
+        /// Validation split ratio
+        #[arg(long, default_value_t = 0.05)]
+        valid_ratio: f64,
+
+        /// Test split ratio
+        #[arg(long, default_value_t = 0.05)]
+        test_ratio: f64,
+
+        /// Random seed for split shuffling
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
+
+    /// Train the compact-frame phone and feature-axis CTC scaffold
+    Train {
+        /// Prepared data directory
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
+        data: PathBuf,
+
+        /// Output directory for the model
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_MODEL_DIR)]
+        out: PathBuf,
+
+        /// Maximum training epochs
+        #[arg(long)]
+        epochs: Option<usize>,
+
+        /// Mini-batch size recorded for the CTC training run
+        #[arg(long)]
+        batch_size: Option<usize>,
+
+        /// Random seed
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Evaluate a Common Phone model
+    Eval {
+        /// Directory containing the model
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_MODEL_DIR)]
+        model: PathBuf,
+
+        /// Prepared data directory
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
+        data: PathBuf,
+
+        /// Split to evaluate: train, valid, or test
+        #[arg(long, default_value = "valid")]
+        split: String,
+
+        /// Number of greedy decode samples to include
+        #[arg(long, default_value_t = 5)]
+        samples: usize,
+    },
+
+    /// Print a prepared row and compact feature summary
+    #[command(name = "show-row")]
+    ShowRow {
+        /// Prepared data directory
+        #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
+        data: PathBuf,
+
+        /// Row index in train.jsonl
+        #[arg(long, default_value_t = 0)]
+        index: usize,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum EmotionCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
@@ -1592,6 +1696,7 @@ fn main() -> Result<()> {
         Commands::Interpretation { command } => {
             run_interpretation_command(command, device_arg, output_mode)
         }
+        Commands::CommonPhone { command } => run_common_phone_command(command),
         Commands::Emotions { command } => run_emotions_command(command),
         Commands::Wiktionary { command } => {
             run_wiktionary_command(command, device_arg, output_mode)
@@ -1759,6 +1864,7 @@ fn command_needs_device(command: &Commands) -> bool {
                 | InterpretationCommands::Eval { .. }
                 | InterpretationCommands::Stream { .. }
         ),
+        Commands::CommonPhone { .. } => false,
         Commands::SentenceParser { command } => matches!(
             command,
             SentenceParserCommands::Train { .. }
@@ -3645,7 +3751,8 @@ fn split_long_sentence(
                         let conj = |w: &str| {
                             matches!(
                                 w.trim_matches(|c: char| !c.is_alphabetic()),
-                                "and" | "but"
+                                "and"
+                                    | "but"
                                     | "or"
                                     | "so"
                                     | "because"
@@ -6541,6 +6648,168 @@ fn run_interpretation_command(
         }
         InterpretationCommands::Stream { model, wav } => {
             cmd_interpretation_stream(&model, &wav, device_arg)
+        }
+    }
+}
+
+fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
+    match command {
+        CommonPhoneCommands::Clean(args) => cmd_clean_family(
+            "common-phone",
+            &args,
+            DEFAULT_COMMON_PHONE_DATA_DIR,
+            DEFAULT_COMMON_PHONE_MODEL_DIR,
+        ),
+        CommonPhoneCommands::Prepare {
+            input,
+            out,
+            lang,
+            max_utterances,
+            sample_rate,
+            valid_ratio,
+            test_ratio,
+            seed,
+        } => {
+            anyhow::ensure!(
+                (0.0..1.0).contains(&valid_ratio) && (0.0..1.0).contains(&test_ratio),
+                "--valid-ratio and --test-ratio must be between 0.0 and 1.0"
+            );
+            anyhow::ensure!(
+                valid_ratio + test_ratio < 1.0,
+                "--valid-ratio plus --test-ratio must be less than 1.0"
+            );
+            let config = tongues_common_phone::CommonPhoneConfig {
+                input: input.display().to_string(),
+                languages: lang
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                max_utterances,
+                sample_rate_hz: sample_rate,
+                valid_ratio,
+                test_ratio,
+                seed,
+                ..tongues_common_phone::CommonPhoneConfig::default()
+            };
+            let pb = status_spinner(format!(
+                "Preparing Common Phone compact-frame dataset at {}",
+                out.display()
+            ));
+            let progress = {
+                let pb = pb.clone();
+                move |progress| pb.set_message(common_phone_prepare_progress_message(progress))
+            };
+            let report =
+                tongues_common_phone::prepare_dataset_with_progress(&out, &config, progress)?;
+            finish_status(
+                pb,
+                format!(
+                    "Prepared Common Phone at {}: {} train / {} valid / {} test utterances, {} bins",
+                    out.display(),
+                    format_count(report.train_examples),
+                    format_count(report.valid_examples),
+                    format_count(report.test_examples),
+                    report.feature_bins
+                ),
+            );
+            if !report.unknown_phone_symbols.is_empty() {
+                println!(
+                    "Unknown phone mappings: {}",
+                    serde_json::to_string(&report.unknown_phone_symbols)?
+                );
+            }
+            Ok(())
+        }
+        CommonPhoneCommands::Train {
+            data,
+            out,
+            epochs,
+            batch_size,
+            seed,
+        } => {
+            let mut config = tongues_common_phone::CommonPhoneTrainConfig::default();
+            if let Some(epochs) = epochs {
+                config.epochs = epochs;
+            }
+            if let Some(batch_size) = batch_size {
+                config.batch_size = batch_size;
+            }
+            if let Some(seed) = seed {
+                config.seed = seed;
+            }
+            println!("Common Phone compact-frame CTC checkpoint paths:");
+            println!("  train_state: {}", out.join("train_state.json").display());
+            println!(
+                "  epoch checkpoints: {}",
+                out.join("model-epoch-N.bin").display()
+            );
+            println!("  best model: {}", out.join("model.bin").display());
+            println!("  CTC heads: phones, phonemes, manner, place, voicing, syllabic, height, backness, rounding");
+            println!("  Note: v0 writes epoch checkpoints after each epoch.");
+            let pb = status_spinner(format!(
+                "Training Common Phone compact-frame CTC scaffold from {}",
+                data.display()
+            ));
+            let report = tongues_common_phone::train(&data, &out, &config)?;
+            finish_status(
+                pb,
+                format!(
+                    "Common Phone training complete: {} epochs, best valid phone TER {:.4}",
+                    report.epochs, report.best_validation_phone_ter
+                ),
+            );
+            Ok(())
+        }
+        CommonPhoneCommands::Eval {
+            model,
+            data,
+            split,
+            samples,
+        } => {
+            let report = tongues_common_phone::evaluate(&model, &data, &split, samples)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        CommonPhoneCommands::ShowRow { data, index } => {
+            let row = tongues_common_phone::show_row(&data, index)?;
+            println!("{}", serde_json::to_string_pretty(&row)?);
+            Ok(())
+        }
+    }
+}
+
+fn common_phone_prepare_progress_message(
+    progress: tongues_common_phone::PrepareProgress,
+) -> String {
+    match progress {
+        tongues_common_phone::PrepareProgress::Stage { message } => message,
+        tongues_common_phone::PrepareProgress::Parse { rows, path } => {
+            format!(
+                "Parsed {} Common Phone rows from {path}",
+                format_count(rows)
+            )
+        }
+        tongues_common_phone::PrepareProgress::Features {
+            utterance_id,
+            frames,
+            path,
+        } => format!(
+            "Wrote {} compact frames for {utterance_id} -> {path}",
+            format_count(frames)
+        ),
+        tongues_common_phone::PrepareProgress::Reuse {
+            utterance_id,
+            frames,
+            path,
+        } => format!(
+            "Reusing {} compact frames for {utterance_id} from {path}",
+            format_count(frames)
+        ),
+        tongues_common_phone::PrepareProgress::Write { path, rows } => {
+            format!("Wrote {} rows to {path}", format_count(rows))
         }
     }
 }

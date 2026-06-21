@@ -70,6 +70,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Head2Phones v0 model card](docs/models/head2phones-v0.md)
 - [Interpretation](docs/interpretation.md)
+- [Common Phone](docs/common-phone.md)
 - [Emotions](docs/emotions.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)
@@ -85,6 +86,7 @@ crates/tongues-data              lexicon parsing, IPA normalization, splits, col
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
+crates/tongues-common-phone      compact acoustic frame -> phone/feature CTC scaffold
 crates/tongues-interpretation   utterance-level Mel ASR with sentence/phoneme supervision
 crates/tongues-emotions          pooled-log-mel audio emotion classifier
 crates/tongues-sentence-parser   cursor-boundary data and model-family code
@@ -139,6 +141,7 @@ just emotions clean --all
 |---|---|---|
 | `g2p2g` | spelling <-> broad IPA | active |
 | `wiktionary` | multilingual orthography/phonology | active |
+| `common-phone` | compact acoustic frames -> phones/features | experimental |
 | `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
 | `head2phones` | streaming head chunk -> phones front end | experimental |
 

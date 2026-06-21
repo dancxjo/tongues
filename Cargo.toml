@@ -5,6 +5,7 @@ members = [
     "crates/tongues-neural",
     "crates/tongues-g2p2g",
     "crates/tongues-emotions",
+    "crates/tongues-common-phone",
     "crates/tongues-interpretation",
     "crates/tongues-sentence-parser",
     "crates/tongues-wiktionary",

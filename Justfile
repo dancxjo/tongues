@@ -163,6 +163,14 @@ interpretation *args:
     cargo run --bin tongues -- interpretation "$@"
 
 # Forward a model-family command to the tongues CLI
+common-phone *args:
+    cargo run --bin tongues -- common-phone "$@"
+
+# Alias for the canonical common-phone spelling
+commonphone *args:
+    cargo run --bin tongues -- common-phone "$@"
+
+# Forward a model-family command to the tongues CLI
 emotions *args:
     cargo run --bin tongues -- emotions "$@"
 
