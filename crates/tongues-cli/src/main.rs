@@ -39,7 +39,7 @@ use burn_cuda::{Cuda, CudaDevice};
 
 use speaking::data::notation::openepd::normalize_openepd_ipa;
 use speaking::{
-    AudioFrame, EvidenceProvenance, EvidenceSource, PhoneToken, SpeechRecognizer, Spec,
+    AudioFrame, EvidenceProvenance, EvidenceSource, PhoneToken, Spec, SpeechRecognizer,
     UtteranceId, UtterancePlan, VarietyId, WhisperSpeechRecognizer,
 };
 use styletts2::{
@@ -449,7 +449,7 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
-    /// Stream an Ollama story through head2phones and Piper playback
+    /// Stream an Ollama story through head2phones and speech playback
     Be(BeCommand),
 
     /// Demonstrate the speaking library across built-in language varieties
@@ -3689,8 +3689,7 @@ fn cmd_be_with_styletts2(
         .context("failed to load native StyleTTS2 ONNX backend")?
         .with_diffusion_options(diffusion_opts)
         .context("invalid StyleTTS2 diffusion options")?;
-    let player =
-        speak::AudioStreamPlayer::new(24_000).context("failed to start CPAL playback")?;
+    let player = speak::AudioStreamPlayer::new(24_000).context("failed to start CPAL playback")?;
     log_be_speech_path(&command, "styletts2", &primary_model);
     eprintln!(
         "be: styletts2 refs voice={} style={}",
@@ -4166,7 +4165,11 @@ fn speak_head2phones_head_styletts2<B: Backend>(
         "\nbe: head={:?}\nbe: phones={}\nbe: styletts2={}",
         head, prediction.phones, backend_symbols
     );
-    if styletts2_plan.chunks.iter().all(|chunk| chunk.symbols.is_empty()) {
+    if styletts2_plan
+        .chunks
+        .iter()
+        .all(|chunk| chunk.symbols.is_empty())
+    {
         synthesize_mechanical_sentence_styletts2(
             head,
             variety,
