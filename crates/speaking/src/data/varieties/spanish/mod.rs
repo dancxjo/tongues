@@ -8,7 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -335,8 +335,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_for_variety(word, &variety.id.0)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &[
             "el", "la", "los", "las", "un", "una", "unos", "unas", "mi", "mis", "tu", "tus", "su",
             "sus", "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "estos", "estas",
@@ -385,7 +385,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         subject_verb_suffixes: &["o", "as", "es", "a", "e", "an", "en"],
         non_verbs: &[],
         infinitival_markers: &["a", "de", "para"],
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 

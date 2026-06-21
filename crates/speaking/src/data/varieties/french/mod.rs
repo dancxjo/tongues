@@ -8,7 +8,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
     ConnectedSpeechEntry, ConnectedSpeechRule, LinguisticVariety, NumberNameSet, OrdinalSuffixName,
@@ -195,8 +195,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_with_pos(word, part_of_speech)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &[
             "le", "la", "les", "l'", "un", "une", "des", "du", "de", "mon", "ma", "mes", "ton",
             "ta", "tes", "son", "sa", "ses", "notre", "nos", "votre", "vos", "leur", "leurs", "ce",
@@ -307,7 +307,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
             "seulement",
         ],
         infinitival_markers: &["à", "a", "de", "d'"],
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 

@@ -7,7 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -111,8 +111,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa(word)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &[],
         pronouns: &[
             "अहम्",
@@ -222,7 +222,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         non_verbs: &[],
         subject_suffixes: &["ः", "ā", "aḥ"],
         object_suffixes: &["म्", "ं", "m", "am", "ām"],
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 

@@ -7,7 +7,7 @@ use crate::phonetics::{Phone, PhoneInventory};
 use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::segment::{SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -111,8 +111,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa(word)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &[
             "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer",
             "eines", "mein", "meine", "dein", "deine", "sein", "seine", "ihr", "ihre", "unser",
@@ -157,7 +157,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         object_suffixes: &["en", "em"],
         infinitival_markers: &["zu"],
         allow_noun_compounds: true,
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 

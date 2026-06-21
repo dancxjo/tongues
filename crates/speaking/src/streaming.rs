@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{LinkGrammarParser, SentenceSyntaxAnalysis, VarietyLinkGrammarParser};
+use crate::syntax::{GrammarParser, SentenceSyntaxAnalysis, VarietyGrammarParser};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StableTextChunk {
@@ -19,28 +19,28 @@ pub struct UnfinishedPrefixAnalysis {
 }
 
 #[derive(Debug, Clone)]
-pub struct StableTextChunker<P = VarietyLinkGrammarParser> {
+pub struct StableTextChunker<P = VarietyGrammarParser> {
     parser: P,
     buffer: String,
 }
 
-impl Default for StableTextChunker<VarietyLinkGrammarParser> {
+impl Default for StableTextChunker<VarietyGrammarParser> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StableTextChunker<VarietyLinkGrammarParser> {
+impl StableTextChunker<VarietyGrammarParser> {
     pub fn new() -> Self {
-        Self::with_parser(VarietyLinkGrammarParser::default())
+        Self::with_parser(VarietyGrammarParser::default())
     }
 
     pub fn for_variety(variety: VarietyId) -> Self {
-        Self::with_parser(VarietyLinkGrammarParser::new(variety))
+        Self::with_parser(VarietyGrammarParser::new(variety))
     }
 }
 
-impl<P: LinkGrammarParser> StableTextChunker<P> {
+impl<P: GrammarParser> StableTextChunker<P> {
     pub fn with_parser(parser: P) -> Self {
         Self {
             parser,

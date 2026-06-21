@@ -1,12 +1,12 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    LinkGrammarRuleSet, PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost,
+    GrammarRuleSet, PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost,
     RawLinkGrammarLink, RawLinkGrammarParse, SentenceSyntaxAnalysis, SyntacticLink,
     SyntacticLinkKind, SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
 };
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: DETERMINERS,
         pronouns: PRONOUNS,
         object_pronouns: OBJECT_PRONOUNS,
@@ -38,18 +38,18 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         phrasal_particles: PHRASAL_PARTICLES,
         past_participles: PAST_PARTICIPLES,
         allow_noun_compounds: true,
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 
-pub fn parse_link_grammar(
+pub fn parse_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
-    parse_english_link_grammar(words, terminal)
+    parse_english_grammar(words, terminal)
 }
 
-pub fn parse_english_link_grammar(
+pub fn parse_english_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
 ) -> SentenceSyntaxAnalysis {
@@ -113,10 +113,24 @@ pub fn parse_english_link_grammar(
                 length: Some(length),
             }),
             accepted: true,
-            backend: RawLinkGrammarBackend::TonguesLinkGrammar,
+            backend: RawLinkGrammarBackend::TonguesRuleGrammar,
         }],
         terminal,
     }
+}
+
+pub fn parse_link_grammar(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+) -> SentenceSyntaxAnalysis {
+    parse_grammar(words, terminal)
+}
+
+pub fn parse_english_link_grammar(
+    words: &[String],
+    terminal: Option<TerminalPunctuation>,
+) -> SentenceSyntaxAnalysis {
+    parse_english_grammar(words, terminal)
 }
 
 fn build_links(words: &[String]) -> Vec<SyntacticLink> {

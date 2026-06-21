@@ -8,7 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -204,8 +204,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa_for_variety(word, &variety.id.0)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &[
             "ο", "η", "το", "οι", "τα", "του", "της", "των", "τον", "την", "τους", "τις",
         ],
@@ -324,7 +324,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         subject_verb_suffixes: &["ω", "εις", "ει", "ουμε", "ετε", "ουν"],
         non_verbs: &[],
         object_suffixes: &["ν"],
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 

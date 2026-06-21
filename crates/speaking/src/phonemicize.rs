@@ -20,7 +20,7 @@ use crate::realize::{
 use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunctuation};
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
-use crate::syntax::{PartOfSpeech, SentenceSyntaxAnalysis};
+use crate::syntax::{GrammarParser, PartOfSpeech, SentenceSyntaxAnalysis, VarietyGrammarParser};
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
     ConnectedSpeechRule, LinguisticVariety, NumberNormalizationProfile, OrthographicUnitKind,
@@ -136,12 +136,7 @@ pub trait PronunciationPipeline {
         terminal: Option<TerminalPunctuation>,
         variety: &LinguisticVariety,
     ) -> Option<SentenceSyntaxAnalysis> {
-        if let Some(analyzer) = variety.syntax_analyzer {
-            return Some(analyzer(words, terminal));
-        }
-        variety
-            .syntax_rules
-            .map(|rules| crate::syntax::parse_link_grammar_with_rules(words, terminal, rules))
+        Some(VarietyGrammarParser::new(variety.id.clone()).parse(words, terminal))
     }
 
     fn annotate_boundaries(
@@ -1547,11 +1542,29 @@ fn weak_form_rule_applies(
     if rule.style == WeakFormStyleContext::CasualOnly && context.careful_style {
         return false;
     }
+    if !weak_form_pos_allows(context.part_of_speech) {
+        return false;
+    }
     match rule.following {
         WeakFormFollowingContext::Any => true,
         WeakFormFollowingContext::BeforeVowelish => context.next_starts_with_vowelish,
         WeakFormFollowingContext::BeforeConsonantish => !context.next_starts_with_vowelish,
     }
+}
+
+fn weak_form_pos_allows(part_of_speech: Option<PartOfSpeech>) -> bool {
+    part_of_speech.is_none_or(|part_of_speech| {
+        matches!(
+            part_of_speech,
+            PartOfSpeech::Auxiliary
+                | PartOfSpeech::Determiner
+                | PartOfSpeech::Preposition
+                | PartOfSpeech::Pronoun
+                | PartOfSpeech::Conjunction
+                | PartOfSpeech::Particle
+                | PartOfSpeech::Unknown
+        )
+    })
 }
 
 fn data_driven_weak_form_pronunciation(
@@ -2130,7 +2143,7 @@ fn pronunciation_lookup_method(
     if applied_pos {
         if let Some(part_of_speech) = part_of_speech {
             method = format!(
-                "{} + link-grammar POS {}",
+                "{} + grammar POS {}",
                 method,
                 part_of_speech_feature_value(part_of_speech)
             );
@@ -3078,13 +3091,7 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
     let syntax = if let Some(analyzer) = variety.syntax_analyzer {
         analyzer(&words_str, None)
     } else {
-        crate::syntax::parse_link_grammar_with_rules(
-            &words_str,
-            None,
-            variety
-                .syntax_rules
-                .unwrap_or_else(crate::syntax::LinkGrammarRuleSet::empty),
-        )
+        VarietyGrammarParser::new(variety.id.clone()).parse(&words_str, None)
     };
 
     let char_vec: Vec<char> = text.chars().collect();
@@ -4115,7 +4122,7 @@ mod tests {
     }
 
     #[test]
-    fn link_grammar_pos_disambiguates_cmudict_heteronyms() {
+    fn grammar_pos_disambiguates_cmudict_heteronyms() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("I record the permit.", "en-US"))
             .expect("heteronyms should phonemicize");
@@ -4138,12 +4145,12 @@ mod tests {
             output.phonemes[1]
                 .provenance
                 .method
-                .contains("link-grammar POS verb")
+                .contains("grammar POS verb")
         );
     }
 
     #[test]
-    fn link_grammar_pos_can_select_noun_then_verb_for_same_spelling() {
+    fn grammar_pos_can_select_noun_then_verb_for_same_spelling() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("The object will object.", "en-US"))
             .expect("heteronyms should phonemicize");
@@ -5584,7 +5591,7 @@ mod tests {
     }
 
     #[test]
-    fn phonemicize_output_exposes_link_grammar_parse_for_rule_matching() {
+    fn phonemicize_output_exposes_grammar_parse_for_rule_matching() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("Do you want either tea or coffee?", "en-US"))
             .expect("sentence should phonemicize");

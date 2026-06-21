@@ -69,7 +69,7 @@ cargo run --release -- sentence-parser eval --model models/sentence-parser/v0
 cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
 ```
 
-The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. Syntax analysis is produced by the in-tree link grammar engine: each variety owns its rule set, and the shared engine emits typed links plus raw connector-style metadata. The cursor-time boundary model is still separate from the syntax backend.
+The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
 
 ## Rule-Based Speech Helpers
 

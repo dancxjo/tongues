@@ -32,8 +32,7 @@ use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{
-    LinkGrammarParser, PartOfSpeech, SentenceSyntaxAnalysis, SyntacticLinkKind,
-    VarietyLinkGrammarParser,
+    GrammarParser, PartOfSpeech, SentenceSyntaxAnalysis, SyntacticLinkKind, VarietyGrammarParser,
 };
 use speaking::{
     phonemicizer_for_variety, syllables_to_ipa, PhonemicizeRequest, ProsodyTrack,
@@ -2213,7 +2212,7 @@ fn sentence_supervision(
         .context("detecting transcript sentences")?;
     let variety = VarietyId(config.variety.clone());
     let phonemicizer = phonemicizer_for_variety(&variety)?;
-    let syntax_parser = VarietyLinkGrammarParser::default();
+    let syntax_parser = VarietyGrammarParser::default();
     let mut offset = 0usize;
     let mut out = Vec::new();
     for sentence in detected {
@@ -2282,7 +2281,7 @@ fn sentence_supervision(
 }
 
 fn syntax_supervision(
-    parser: &impl LinkGrammarParser,
+    parser: &impl GrammarParser,
     sentence: &str,
     terminal: Option<char>,
 ) -> SyntaxSupervision {

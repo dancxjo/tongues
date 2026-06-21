@@ -8,7 +8,7 @@ use crate::phonology::{Phoneme, PhonemeInventory};
 use crate::rules::{PhonotacticConstraint, Phonotactics, RuleStatus, SyllableShape};
 use crate::segment::{Environment, SegmentMatcher, SegmentStatus, SymbolAlias};
 use crate::spec::Spec;
-use crate::syntax::LinkGrammarRuleSet;
+use crate::syntax::GrammarRuleSet;
 use crate::variety::{
     LinguisticVariety, NumberNameSet, OrthographyPronunciationRules, VarietyImplementationStatus,
     VarietyStatus,
@@ -191,8 +191,8 @@ fn synthesize_ipa_for_orthography(
     synthesize_ipa(word)
 }
 
-pub fn syntax_profile() -> LinkGrammarRuleSet {
-    LinkGrammarRuleSet {
+pub fn syntax_profile() -> GrammarRuleSet {
+    GrammarRuleSet {
         determiners: &["la", "tiu", "tiuj", "ĉi", "ci"],
         pronouns: &[
             "mi", "vi", "li", "ŝi", "ĝi", "ni", "ili", "oni", "si", "min", "vin", "lin", "ŝin",
@@ -219,7 +219,7 @@ pub fn syntax_profile() -> LinkGrammarRuleSet {
         subject_verb_suffixes: &[],
         non_verbs: &[],
         object_suffixes: &["n"],
-        ..LinkGrammarRuleSet::empty()
+        ..GrammarRuleSet::empty()
     }
 }
 
