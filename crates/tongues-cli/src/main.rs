@@ -4019,6 +4019,170 @@ fn speak_head2phones_head<B: Backend>(
     Ok(nonempty_remainder(rest))
 }
 
+fn speak_head2phones_sentence_styletts2<B: Backend>(
+    sentence: &str,
+    variety: &str,
+    head2phones: &Seq2SeqModel<B>,
+    vocab: &Vocab,
+    model_config: &ModelConfig,
+    device: &B::Device,
+    backend: &mut StyleTts2OnnxBackend,
+    sink: &mut dyn styletts2::StyleTts2AudioSink,
+    voice_ref: &Path,
+    style_ref: &Path,
+    max_tts_symbols: usize,
+    no_tts_chunking: bool,
+) -> Result<()> {
+    let mut remaining = sentence.trim().to_string();
+    let mut iterations = 0usize;
+    while !remaining.is_empty() {
+        iterations += 1;
+        anyhow::ensure!(
+            iterations <= 256,
+            "head2phones did not consume sentence after {iterations} heads: {:?}",
+            sentence
+        );
+
+        let next = speak_head2phones_head_styletts2(
+            &remaining,
+            variety,
+            head2phones,
+            vocab,
+            model_config,
+            device,
+            backend,
+            sink,
+            voice_ref,
+            style_ref,
+            max_tts_symbols,
+            no_tts_chunking,
+        )?;
+        match next {
+            Some(rest) => {
+                let rest = rest.trim_start();
+                if rest.is_empty() {
+                    break;
+                }
+                anyhow::ensure!(
+                    rest.len() < remaining.len(),
+                    "head2phones split did not advance for {:?}",
+                    remaining
+                );
+                remaining = rest.to_string();
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn speak_head2phones_head_styletts2<B: Backend>(
+    sentence: &str,
+    variety: &str,
+    head2phones: &Seq2SeqModel<B>,
+    vocab: &Vocab,
+    model_config: &ModelConfig,
+    device: &B::Device,
+    backend: &mut StyleTts2OnnxBackend,
+    sink: &mut dyn styletts2::StyleTts2AudioSink,
+    voice_ref: &Path,
+    style_ref: &Path,
+    max_tts_symbols: usize,
+    no_tts_chunking: bool,
+) -> Result<Option<String>> {
+    let input = tongues_head2phones::format_input_for_variety(variety, sentence);
+    let input_len = vocab.encode_string(&input).len();
+    if input_len > model_config.max_seq_len {
+        let chunks = split_long_sentence(sentence, variety, vocab, model_config.max_seq_len)?;
+        if chunks.len() > 1 || (chunks.len() == 1 && chunks[0] != sentence) {
+            for chunk in chunks {
+                speak_head2phones_sentence_styletts2(
+                    &chunk,
+                    variety,
+                    head2phones,
+                    vocab,
+                    model_config,
+                    device,
+                    backend,
+                    sink,
+                    voice_ref,
+                    style_ref,
+                    max_tts_symbols,
+                    no_tts_chunking,
+                )?;
+            }
+            return Ok(None);
+        }
+    }
+
+    anyhow::ensure!(
+        input_len <= model_config.max_seq_len,
+        "head2phones input encodes to {} tokens, exceeding model max_seq_len={}",
+        input_len,
+        model_config.max_seq_len
+    );
+    let output = predict_sentence_boundary(head2phones, &input, vocab, device);
+    let Some(prediction) = extract_head2phones_prediction(&output) else {
+        let fallback = clean_be_sentence_for_fallback(sentence);
+        eprintln!(
+            "\nbe: head={:?}\nbe: head2phones={} ; using fallback={:?}",
+            sentence,
+            compact_display(&output, 160),
+            fallback
+        );
+        if !fallback.is_empty() {
+            synthesize_mechanical_sentence_styletts2(
+                &fallback,
+                variety,
+                backend,
+                sink,
+                voice_ref,
+                style_ref,
+                max_tts_symbols,
+                no_tts_chunking,
+            )?;
+        }
+        return Ok(None);
+    };
+
+    let (head, rest) = head2phones_head_and_rest(sentence, prediction.split_after);
+    let head = head.trim();
+    let rest = rest.to_string();
+    let plan = styletts2_plan_from_head2phones_prediction(variety, head, &prediction.phones)?;
+    let styletts2_plan = prepare_styletts2_plan(
+        &plan,
+        &styletts2_en_us_symbol_set(),
+        be_styletts2_options(max_tts_symbols, no_tts_chunking),
+    )
+    .context("failed to prepare StyleTTS2 plan from head2phones output")?;
+    let backend_symbols = styletts2_plan
+        .chunks
+        .iter()
+        .map(|chunk| styletts2_text_for_symbols(&chunk.symbols))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to format StyleTTS2 symbols")?
+        .join(" || ");
+    eprintln!(
+        "\nbe: head={:?}\nbe: phones={}\nbe: styletts2={}",
+        head, prediction.phones, backend_symbols
+    );
+    if styletts2_plan.chunks.iter().all(|chunk| chunk.symbols.is_empty()) {
+        synthesize_mechanical_sentence_styletts2(
+            head,
+            variety,
+            backend,
+            sink,
+            voice_ref,
+            style_ref,
+            max_tts_symbols,
+            no_tts_chunking,
+        )?;
+        return Ok(nonempty_remainder(rest));
+    }
+    synthesize_styletts2_plan(backend, sink, plan, voice_ref, style_ref, styletts2_plan)?;
+    Ok(nonempty_remainder(rest))
+}
+
 fn split_long_sentence(
     sentence: &str,
     variety: &str,
