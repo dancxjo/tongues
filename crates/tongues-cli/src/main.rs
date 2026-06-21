@@ -3740,6 +3740,55 @@ fn speak_head2phones_sentence<B: Backend>(
     piper: &mut piper::PiperOnnxBackend,
     sink: &mut dyn piper::PiperAudioSink,
 ) -> Result<()> {
+    let mut remaining = sentence.trim().to_string();
+    let mut iterations = 0usize;
+    while !remaining.is_empty() {
+        iterations += 1;
+        anyhow::ensure!(
+            iterations <= 256,
+            "head2phones did not consume sentence after {iterations} heads: {:?}",
+            sentence
+        );
+
+        let next = speak_head2phones_head(
+            &remaining,
+            variety,
+            head2phones,
+            vocab,
+            model_config,
+            device,
+            piper,
+            sink,
+        )?;
+        match next {
+            Some(rest) => {
+                let rest = rest.trim_start();
+                if rest.is_empty() {
+                    break;
+                }
+                anyhow::ensure!(
+                    rest.len() < remaining.len(),
+                    "head2phones split did not advance for {:?}",
+                    remaining
+                );
+                remaining = rest.to_string();
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn speak_head2phones_head<B: Backend>(
+    sentence: &str,
+    variety: &str,
+    head2phones: &Seq2SeqModel<B>,
+    vocab: &Vocab,
+    model_config: &ModelConfig,
+    device: &B::Device,
+    piper: &mut piper::PiperOnnxBackend,
+    sink: &mut dyn piper::PiperAudioSink,
+) -> Result<Option<String>> {
     let input = tongues_head2phones::format_input_for_variety(variety, sentence);
     let input_len = vocab.encode_string(&input).len();
     if input_len > model_config.max_seq_len {
@@ -3757,7 +3806,7 @@ fn speak_head2phones_sentence<B: Backend>(
                     sink,
                 )?;
             }
-            return Ok(());
+            return Ok(None);
         }
     }
 
@@ -3768,7 +3817,7 @@ fn speak_head2phones_sentence<B: Backend>(
         model_config.max_seq_len
     );
     let output = predict_sentence_boundary(head2phones, &input, vocab, device);
-    let Some(phones) = extract_head2phones_phones(&output) else {
+    let Some(prediction) = extract_head2phones_prediction(&output) else {
         let fallback = clean_be_sentence_for_fallback(sentence);
         eprintln!(
             "\nbe: head={:?}\nbe: head2phones={} ; using fallback={:?}",
@@ -3779,18 +3828,21 @@ fn speak_head2phones_sentence<B: Backend>(
         if !fallback.is_empty() {
             synthesize_rule_based_fallback(&fallback, variety, piper, sink)?;
         }
-        return Ok(());
+        return Ok(None);
     };
-    let sequence = piper_sequence_from_head2phones_phones(&phones);
+    let (head, rest) = head2phones_head_and_rest(sentence, prediction.split_after);
+    let head = head.trim();
+    let rest = rest.to_string();
+    let sequence = piper_sequence_from_head2phones_phones(&prediction.phones);
     eprintln!(
         "\nbe: head={:?}\nbe: phones={}\nbe: piper={}",
-        sentence,
-        phones,
+        head,
+        prediction.phones,
         sequence.symbols.join(" ")
     );
     if sequence.symbols.is_empty() {
-        synthesize_rule_based_fallback(sentence, variety, piper, sink)?;
-        return Ok(());
+        synthesize_rule_based_fallback(head, variety, piper, sink)?;
+        return Ok(nonempty_remainder(rest));
     }
     for chunk in piper::piper_synthesis_chunks_from_sequence(sequence) {
         let ids = chunk
@@ -3809,7 +3861,7 @@ fn speak_head2phones_sentence<B: Backend>(
             pcm_mono_f32: audio,
         })?;
     }
-    Ok(())
+    Ok(nonempty_remainder(rest))
 }
 
 fn split_long_sentence(
@@ -3968,11 +4020,47 @@ fn clean_be_sentence_for_fallback(sentence: &str) -> String {
     stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Head2PhonesPrediction {
+    phones: String,
+    split_after: Option<usize>,
+}
+
+fn extract_head2phones_prediction(output: &str) -> Option<Head2PhonesPrediction> {
+    Some(Head2PhonesPrediction {
+        phones: extract_head2phones_phones(output)?,
+        split_after: extract_head2phones_split_after(output),
+    })
+}
+
 fn extract_head2phones_phones(output: &str) -> Option<String> {
     let start =
         output.find(tongues_head2phones::PHONES_OPEN)? + tongues_head2phones::PHONES_OPEN.len();
     let end = output[start..].find(tongues_head2phones::PHONES_CLOSE)? + start;
     Some(output[start..end].trim().to_string())
+}
+
+fn extract_head2phones_split_after(output: &str) -> Option<usize> {
+    let marker = tongues_head2phones::SPLIT_AFTER;
+    let start = output.find(marker)? + marker.len();
+    output[start..].split_whitespace().next()?.parse().ok()
+}
+
+fn head2phones_head_and_rest(sentence: &str, split_after: Option<usize>) -> (&str, &str) {
+    match split_after {
+        Some(split_after) if split_after > 0 => {
+            tongues_head2phones::grapheme_split(sentence, split_after)
+        }
+        _ => (sentence, ""),
+    }
+}
+
+fn nonempty_remainder(rest: String) -> Option<String> {
+    if rest.trim().is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
 }
 
 fn piper_sequence_from_head2phones_phones(phones: &str) -> piper::PiperPhonemeSequence {
@@ -11874,6 +11962,42 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0], "It was not a gift that was taught;");
         assert!(chunks[1].starts_with("it was a gift"));
+    }
+
+    #[test]
+    fn head2phones_prediction_extracts_phones_and_split_after() {
+        let prediction = extract_head2phones_prediction(
+            "<HEAD_FOUND>\n<HEAD_LENGTH> 20\n<PHONES> ˈluː.nə | ˈlɪvd </PHONES>\n<SPLIT_AFTER> 26",
+        )
+        .expect("head2phones prediction");
+
+        assert_eq!(
+            prediction,
+            Head2PhonesPrediction {
+                phones: "ˈluː.nə | ˈlɪvd".to_string(),
+                split_after: Some(26),
+            }
+        );
+    }
+
+    #[test]
+    fn head2phones_head_and_rest_uses_grapheme_split_after() {
+        let sentence = "Luna lived with her grandmother, Nonna Rosa.";
+        let split_after = "Luna lived with her grandmother,".chars().count();
+        let (head, rest) = head2phones_head_and_rest(sentence, Some(split_after));
+
+        assert_eq!(head, "Luna lived with her grandmother,");
+        assert_eq!(rest, " Nonna Rosa.");
+    }
+
+    #[test]
+    fn head2phones_head_and_rest_preserves_utf8_boundaries() {
+        let sentence = "Café Luna listened. Then she smiled.";
+        let split_after = "Café Luna listened.".chars().count();
+        let (head, rest) = head2phones_head_and_rest(sentence, Some(split_after));
+
+        assert_eq!(head, "Café Luna listened.");
+        assert_eq!(rest, " Then she smiled.");
     }
 
     #[test]
