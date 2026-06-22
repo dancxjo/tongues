@@ -2620,11 +2620,11 @@ fn phone_feature_bundle(phone: &str) -> &'static str {
         "w" => "<APPROX:VOICED:LABIAL_VELAR>",
         "i" | "ɪ" | "ɨ" => "<VOWEL:HIGH:FRONT:UNROUNDED>",
         "y" | "ʏ" => "<VOWEL:HIGH:FRONT:ROUNDED>",
-        "e" | "ɛ" | "æ" | "eɪ" | "eə" | "ɪə" => "<VOWEL:MID:FRONT:UNROUNDED>",
+        "e" | "ɛ" | "æ" | "eɪ" | "ei" | "eə" | "ɪə" => "<VOWEL:MID:FRONT:UNROUNDED>",
         "ø" | "œ" | "ɶ" => "<VOWEL:MID:FRONT:ROUNDED>",
         "a" | "ɑ" | "ɐ" | "ɒ" | "aɪ" | "aʊ" => "<VOWEL:LOW:CENTRAL:UNROUNDED>",
-        "ə" | "ʌ" => "<VOWEL:MID:CENTRAL:UNROUNDED>",
-        "o" | "ɔ" | "ɔɪ" | "əʊ" => "<VOWEL:MID:BACK:ROUNDED>",
+        "ə" | "ʌ" | "ë" => "<VOWEL:MID:CENTRAL:UNROUNDED>",
+        "o" | "ɔ" | "ɔɪ" | "ɔʏ" | "əʊ" => "<VOWEL:MID:BACK:ROUNDED>",
         "u" | "ʊ" | "ʊə" => "<VOWEL:HIGH:BACK:ROUNDED>",
         "ʔ" => "<STOP:VL:GLOTTAL>",
         _ => PHONE_FEATURE_UNKNOWN,
@@ -2740,7 +2740,7 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "unrounded",
         ),
         "y" | "ʏ" => ("vowel", "vowel", "vowel", "yes", "high", "front", "rounded"),
-        "e" | "ɛ" | "æ" | "eɪ" | "eə" | "ɪə" => (
+        "e" | "ɛ" | "æ" | "eɪ" | "ei" | "eə" | "ɪə" => (
             "vowel",
             "vowel",
             "vowel",
@@ -2759,7 +2759,7 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "central",
             "unrounded",
         ),
-        "ə" | "ʌ" => (
+        "ə" | "ʌ" | "ë" => (
             "vowel",
             "vowel",
             "vowel",
@@ -2768,7 +2768,7 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
             "central",
             "unrounded",
         ),
-        "o" | "ɔ" | "ɔɪ" | "əʊ" => {
+        "o" | "ɔ" | "ɔɪ" | "ɔʏ" | "əʊ" => {
             ("vowel", "vowel", "vowel", "yes", "mid", "back", "rounded")
         }
         "u" | "ʊ" | "ʊə" => ("vowel", "vowel", "vowel", "yes", "high", "back", "rounded"),
@@ -2788,12 +2788,21 @@ fn phone_features(phone: &str) -> BTreeMap<&'static str, &'static str> {
 fn phone_feature_key(phone: &str) -> String {
     phone
         .trim()
-        .trim_matches(|ch: char| ch == '/' || ch == '[' || ch == ']' || ch == 'ˈ' || ch == 'ˌ')
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '/' | '[' | ']' | 'ˈ' | 'ˌ' | '.' | ',' | ';' | '"' | '\''
+            )
+        })
         .chars()
         .filter_map(|ch| match ch {
             'ː' | ':' | 'ʲ' => None,
             '\u{0300}'..='\u{036f}' => None,
             'ɡ' => Some('g'),
+            'ṃ' => Some('m'),
+            'ṅ' => Some('ŋ'),
+            'ñ' => Some('ɲ'),
+            'Y' => Some('ʏ'),
             other => Some(other.to_lowercase().next().unwrap_or(other)),
         })
         .collect()
@@ -3201,6 +3210,18 @@ item []:
         assert_eq!(vocab.token_to_id[CTC_BLANK], 0);
         assert_eq!(vocab.token_to_id[UNK], 1);
         assert_eq!(vocab.tokens.iter().filter(|token| *token == UNK).count(), 1);
+    }
+
+    #[test]
+    fn common_phone_source_labels_map_to_feature_targets() {
+        for phone in ["ei", "ɔY", "ʒ.", "ṃ", "ë"] {
+            let features = phone_features(phone);
+            assert!(
+                features.values().all(|value| *value != UNK),
+                "{phone} should not map to unknown features: {features:?}"
+            );
+            assert_ne!(phone_feature_bundle(phone), PHONE_FEATURE_UNKNOWN);
+        }
     }
 
     #[test]
