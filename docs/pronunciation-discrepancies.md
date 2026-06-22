@@ -1,6 +1,6 @@
 # Pronunciation Discrepancies
 
-Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pronouncers. Found 212 substantive discrepancies after comparison-key normalization.
+Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pronouncers. Found 213 substantive discrepancies after comparison-key normalization.
 
 | Word | Max edit | cmudict | openepd | speaking-rules | g2p2g | wiktionary | Compare keys |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
@@ -15,6 +15,7 @@ Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pro
 | a-life | 6 | missing | ˈeɪˌlaɪf | ə | ˈeɪˌlaɪf | əˈlaɪ̯f | eɪlaɪf<br>ə<br>əlaɪ̯f |
 | all-in-one | 6 | missing | ˌɔ.lənˈwʌn | ˈɔl | ˌɔ.ləˈnoʊn | ˌɔːɫ.ɪnˈwʌn | ɔl<br>ɔlənoʊn<br>ɔlənwʌn<br>ɔɫɪnwʌn |
 | all-time | 6 | ˌɔˈltaɪm | ˈɔlˌtaɪm | ˈɔɫ | ˈɔlˌtaɪm | ɔːlˈtaɪ̯m | ɔltaɪm<br>ɔltaɪ̯m<br>ɔɫ |
+| at-home | 6 | missing | ətˈhoʊm | ət | ˈætˈhoʊm | æʔˈhɐʊm | æthoʊm<br>æʔhɐʊm<br>ət<br>əthoʊm |
 | can-do | 6 | missing | ˈkænˌdu | ˈkʰæn | ˈkænˌdu | ˈkʰɛə̯ndu̟ | kændu<br>kʰæn<br>kʰɛə̯ndu̟ |
 | do-good | 6 | missing | ˈduˌɡʊd | ˈduː | ˈduˌɡʊd | ˈdʊʔ.ɡʊd̚ | du<br>duɡʊd<br>dʊʔɡʊd̚ |
 | good-time | 6 | missing | ˈɡʊdˌtaɪm | ˈɡʊd | ˈɡʊdˌtaɪm | ˈɡʊd̚ˌtaɪ̯m | ɡʊd<br>ɡʊdtaɪm<br>ɡʊd̚taɪ̯m |
@@ -27,7 +28,6 @@ Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pro
 | one-year | 6 | ˈwʌˌnjɪɹ | ˈwʌnˌjɪɹ | ˈwʌn | ˌwʌnˈjɪɹ | wʌnˈjɪə(ɹ) | wʌn<br>wʌnjɪə(ɹ)<br>wʌnjɪɹ |
 | our | 6 | ˈ.aʊɚ | ˌaʊ.əɹ | ˈaʊ.ɚ | ˌaʊ.əɹ | ˈɐʋə(r) | aʊɚ<br>ɐʋə(r) |
 | well-to-do | 6 | missing | ˌwɛl.təˈdu | ˈwɛɫ | ˈwɛl.təˌdoʊ | ˈwɛltəˌduː | wɛltədoʊ<br>wɛltədu<br>wɛɫ |
-| at-home | 5 | missing | ətˈhoʊm | ˈæt | ˈætˈhoʊm | æʔˈhɐʊm | æt<br>æthoʊm<br>æʔhɐʊm<br>əthoʊm |
 | do-over | 5 | missing | ˈduˌoʊ.vəɹ | ˈduː | ˈduˌoʊ.vəɹ | ˈduːˌoʊ̯vɚ | du<br>duoʊvɚ<br>duoʊ̯vɚ |
 | down-and-out | 5 | missing | ˌdaʊ.nəˈnaʊt | ˈdaʊn | ˌdaʊ.nəˈnaʊt | ˈdaʊn n̩ ˈaʊt | daʊn<br>daʊnn̩aʊt<br>daʊnənaʊt |
 | get-go | 5 | missing | ˈɡɛtˌɡoʊ | ˈɡɛt | ˈɡɛtˌɡoʊ | ɡɛt˨ ɡoː˨˦ | ɡɛt<br>ɡɛtɡoʊ<br>ɡɛt˨ɡo˨˦ |
@@ -73,6 +73,7 @@ Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pro
 | come-on | 3 | ˈkʌˈmɑn | ˈkʌˌmɑn | ˈkʰʌm | ˈkʌˈmɑn | ˈkʰɐm ˌɒn | kʌmɑn<br>kʰɐmɒn<br>kʰʌm |
 | does | 3 | ˈdʌz | ˈdʌz | ˈdʌz | ˈdʌz | dʊ(z) | dʊ(z)<br>dʌz |
 | even | 3 | ˈiː.vɪn | ˈi.vən | ˈiː.vɪn | ˈi.vən | ˈɛvn̩ | ivən<br>ivɪn<br>ɛvn̩ |
+| for | 3 | ˈfɔɹ | fɔɹ | fɚ | ˈfɔɹ | fo̞ɹ | fo̞ɹ<br>fɔɹ<br>fɚ |
 | going | 3 | ˈɡ.oʊɪŋ | ˈɡoʊ.ɪŋ | ˈɡoʊ.ɪŋ | ˈɡoʊ.ɪŋ | ˈɡʌo̞ŋ | ɡoʊɪŋ<br>ɡʌo̞ŋ |
 | great | 3 | ˈɡɹeɪt | ˈɡɹeɪt | ˈɡɹeɪt | ˈɡɹeɪt | ɡɹʷɪi̯t | ɡɹeɪt<br>ɡɹʷɪi̯t |
 | have | 3 | ˈhæv | hæv | ˈhæv | hæv | ˈ(h)əv | (h)əv<br>hæv |
@@ -115,7 +116,6 @@ Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pro
 | down | 2 | ˈdaʊn | ˌdaʊn | ˈdaʊn | ˈdaʊn | ˈduːn | daʊn<br>dun |
 | find | 2 | ˈfaɪnd | ˈfaɪnd | ˈfaɪnd | ˈfaɪnd | ˈfaɪ̯n | faɪnd<br>faɪ̯n |
 | first | 2 | ˈfɝst | missing | ˈfɝst˭ | ˈfɝst | feːst | fest<br>fɚst<br>fɚst˭ |
-| for | 2 | ˈfɔɹ | fɔɹ | ˈfɔɹ | ˈfɔɹ | fo̞ɹ | fo̞ɹ<br>fɔɹ |
 | from | 2 | ˈfɹʌm | fɹʌm | ˈfɹʌm | ˈfɹɑm | ˈfɹʷm̩ | fɹɑm<br>fɹʌm<br>fɹʷm̩ |
 | go | 2 | ˈɡoʊ | ˌɡoʊ | ˈɡoʊ | ˈɡoʊ | ɡə | ɡoʊ<br>ɡə |
 | has | 2 | ˈhæz | hæz | ˈhæz | hæz | hæ̝s | hæz<br>hæ̝s |
@@ -168,6 +168,7 @@ Checked 244 words across cmudict, openepd, speaking-rules, g2p2g, wiktionary pro
 | am | 1 | ˈæm | æm | ˈæm | æm | ɛm | æm<br>ɛm |
 | an | 1 | ˈæn | æn | ən | æn | ˈən | æn<br>ən |
 | and | 1 | ənd | ænd | ənd | ænd | ˈənd | ænd<br>ənd |
+| at | 1 | ˈæt | æt | ət | æt | æt | æt<br>ət |
 | best | 1 | ˈbɛst | ˈbɛst | ˈbɛst˭ | ˈbɛst | ˈbɛst | bɛst<br>bɛst˭ |
 | both | 1 | ˈboʊθ | ˈboʊθ | ˈboʊθ | ˈboʊθ | boʊɫθ | boʊɫθ<br>boʊθ |
 | by | 1 | ˈbaɪ | baɪ | ˈbaɪ | baɪ | ˈbaɪ̯ | baɪ<br>baɪ̯ |

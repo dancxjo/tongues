@@ -6,7 +6,7 @@
 //! metadata and a frequency baseline while the durable data path settles.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -445,17 +445,13 @@ pub fn prepare_dataset_with_progress(
     );
 
     let manifest_path = out.join("manifest.jsonl");
-    let mut rows = recover_rows(&manifest_path)?;
-    let mut row_by_id = rows
-        .iter()
-        .map(|row| (row.utterance_id.clone(), row.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let mut writer = BufWriter::new(
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&manifest_path)?,
-    );
+    let manifest_part_path = manifest_path.with_extension("jsonl.part");
+    if manifest_part_path.exists() {
+        fs::remove_file(&manifest_part_path)
+            .with_context(|| format!("removing {}", manifest_part_path.display()))?;
+    }
+    let mut writer = BufWriter::new(File::create(&manifest_part_path)?);
+    let mut rows = Vec::new();
 
     for (index, record) in selected {
         let utterance_id = record
@@ -463,18 +459,8 @@ pub fn prepare_dataset_with_progress(
             .clone()
             .or(record.id.clone())
             .unwrap_or_else(|| format!("common-phone-{index:08}"));
-        if let Some(existing) = row_by_id.get(&utterance_id) {
-            if let Some((frames, _bins)) =
-                feature_file_shape(&out.join(&existing.feature_path)).ok()
-            {
-                progress(PrepareProgress::Reuse {
-                    utterance_id,
-                    frames,
-                    path: out.join(&existing.feature_path).display().to_string(),
-                });
-                continue;
-            }
-        }
+        let rel_feature =
+            PathBuf::from("frames").join(format!("{}.acf.bin", sanitize_id(&utterance_id)));
         let audio_rel = record
             .audio_path
             .clone()
@@ -499,21 +485,43 @@ pub fn prepare_dataset_with_progress(
             .as_ref()
             .map(phone_field_tokens)
             .unwrap_or_else(|| phone_tokens.clone());
-        let (samples, source_rate) = read_wav_mono(&audio_path)?;
-        let samples = normalize_amplitude(&resample_linear(
-            &samples,
-            source_rate,
-            config.sample_rate_hz,
-        ));
-        let features = compact_audio_features(&samples, config);
-        let rel_feature =
-            PathBuf::from("frames").join(format!("{}.acf.bin", sanitize_id(&utterance_id)));
-        write_feature_file(&out.join(&rel_feature), &features, config.feature_bins)?;
-        progress(PrepareProgress::Features {
-            utterance_id: utterance_id.clone(),
-            frames: features.len(),
-            path: out.join(&rel_feature).display().to_string(),
-        });
+        let feature_abs = out.join(&rel_feature);
+        let reused_shape = feature_file_shape(&feature_abs)
+            .ok()
+            .filter(|(_, bins)| *bins == config.feature_bins);
+        let (frame_count, duration_sec, duration_ms) = if let Some((frames, _bins)) = reused_shape {
+            progress(PrepareProgress::Reuse {
+                utterance_id: utterance_id.clone(),
+                frames,
+                path: feature_abs.display().to_string(),
+            });
+            let duration_ms = record
+                .duration_ms
+                .unwrap_or_else(|| ((frames as f64 / config.frame_hz as f64) * 1000.0) as u64);
+            (frames, duration_ms as f32 / 1000.0, duration_ms)
+        } else {
+            let (samples, source_rate) = read_wav_mono(&audio_path)?;
+            let samples = normalize_amplitude(&resample_linear(
+                &samples,
+                source_rate,
+                config.sample_rate_hz,
+            ));
+            let features = compact_audio_features(&samples, config);
+            write_feature_file(&feature_abs, &features, config.feature_bins)?;
+            progress(PrepareProgress::Features {
+                utterance_id: utterance_id.clone(),
+                frames: features.len(),
+                path: feature_abs.display().to_string(),
+            });
+            let duration_ms = record
+                .duration_ms
+                .unwrap_or_else(|| (samples.len() as u64 * 1000) / config.sample_rate_hz as u64);
+            (
+                features.len(),
+                samples.len() as f32 / config.sample_rate_hz as f32,
+                duration_ms,
+            )
+        };
 
         let feature_targets = feature_targets_for_phones(&phone_tokens);
         let feature_bundles = feature_bundles_for_phones(&phone_tokens);
@@ -521,9 +529,6 @@ pub fn prepare_dataset_with_progress(
             "common_phone_record": record,
             "segments": record.segments,
         });
-        let duration_ms = record
-            .duration_ms
-            .unwrap_or_else(|| (samples.len() as u64 * 1000) / config.sample_rate_hz as u64);
         let row = CommonPhoneRow {
             row_source: FAMILY.to_string(),
             utterance_id: utterance_id.clone(),
@@ -542,9 +547,9 @@ pub fn prepare_dataset_with_progress(
             frame_hz: config.frame_hz,
             hop_ms: config.hop_ms,
             window_ms: config.window_ms,
-            frame_count: features.len(),
+            frame_count,
             frame_dim: config.feature_bins,
-            duration_sec: samples.len() as f32 / config.sample_rate_hz as f32,
+            duration_sec,
             duration_ms,
             phones: phone_tokens,
             phonemes: phoneme_tokens,
@@ -554,10 +559,14 @@ pub fn prepare_dataset_with_progress(
         };
         writeln!(writer, "{}", serde_json::to_string(&row)?)?;
         writer.flush()?;
-        row_by_id.insert(row.utterance_id.clone(), row.clone());
         rows.push(row);
     }
     writer.flush()?;
+    fs::rename(&manifest_part_path, &manifest_path)?;
+    progress(PrepareProgress::Write {
+        path: manifest_path.display().to_string(),
+        rows: rows.len(),
+    });
     write_prepare_state(out, "utterances", config, rows.len(), None)?;
     progress(PrepareProgress::State {
         status: "utterances".to_string(),
@@ -2399,13 +2408,6 @@ fn read_feature_file(path: &Path) -> Result<(usize, usize, Vec<f32>)> {
     Ok((rows, bins, values))
 }
 
-fn recover_rows(path: &Path) -> Result<Vec<CommonPhoneRow>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    read_examples(path)
-}
-
 fn write_jsonl_atomic(
     path: &Path,
     rows: &[CommonPhoneRow],
@@ -3016,6 +3018,24 @@ mod tests {
         ))
     }
 
+    fn write_test_wav(path: &Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: DEFAULT_SAMPLE_RATE_HZ,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).expect("create wav");
+        for i in 0..DEFAULT_SAMPLE_RATE_HZ {
+            let phase = i as f32 / DEFAULT_SAMPLE_RATE_HZ as f32;
+            let sample = (phase * 440.0 * std::f32::consts::TAU).sin() * 0.2;
+            writer
+                .write_sample((sample * i16::MAX as f32) as i16)
+                .expect("write wav sample");
+        }
+        writer.finalize().expect("finalize wav");
+    }
+
     #[test]
     fn textgrid_tokens_are_tier_specific() {
         let path = temp_path("tier-specific.TextGrid");
@@ -3073,5 +3093,71 @@ item []:
         assert_eq!(vocab.token_to_id[CTC_BLANK], 0);
         assert_eq!(vocab.token_to_id[UNK], 1);
         assert_eq!(vocab.tokens.iter().filter(|token| *token == UNK).count(), 1);
+    }
+
+    #[test]
+    fn prepare_reuses_existing_frames_without_manifest() {
+        let root = temp_path("reuse-frames");
+        let input = root.join("input");
+        let out = root.join("out");
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir_all(&input).expect("create input");
+        write_test_wav(&input.join("one.wav"));
+
+        let metadata = input.join("metadata.jsonl");
+        fs::write(
+            &metadata,
+            r#"{"utterance_id":"one","lang":"eng","audio_path":"one.wav","phones":["p"],"phonemes":["p"],"text":"one"}"#,
+        )
+        .expect("write metadata");
+        let config = CommonPhoneConfig {
+            input: input.display().to_string(),
+            max_utterances: Some(1),
+            ..CommonPhoneConfig::default()
+        };
+        prepare_dataset(&out, &config).expect("initial prepare");
+        let frame_path = out.join("frames/one.acf.bin");
+        let first_modified = fs::metadata(&frame_path)
+            .expect("first frame metadata")
+            .modified()
+            .expect("first modified");
+
+        for name in [
+            "manifest.jsonl",
+            "train.jsonl",
+            "valid.jsonl",
+            "test.jsonl",
+            "phone_vocab.json",
+            "phoneme_vocab.json",
+            "feature_bundle_vocab.json",
+            "feature_axis_vocabs.json",
+            "stats.json",
+            "prepare_state.json",
+        ] {
+            fs::remove_file(out.join(name)).ok();
+        }
+        fs::write(
+            &metadata,
+            r#"{"utterance_id":"one","lang":"eng","audio_path":"one.wav","phones":["b"],"phonemes":["b"],"text":"one"}"#,
+        )
+        .expect("rewrite metadata");
+        let mut reused = 0usize;
+        prepare_dataset_with_progress(&out, &config, |progress| {
+            if matches!(progress, PrepareProgress::Reuse { .. }) {
+                reused += 1;
+            }
+        })
+        .expect("second prepare");
+
+        let second_modified = fs::metadata(&frame_path)
+            .expect("second frame metadata")
+            .modified()
+            .expect("second modified");
+        let rows = read_examples(&out.join("train.jsonl")).expect("read regenerated train");
+        fs::remove_dir_all(root).ok();
+
+        assert_eq!(reused, 1);
+        assert_eq!(first_modified, second_modified);
+        assert_eq!(rows[0].phones, vec!["b"]);
     }
 }
