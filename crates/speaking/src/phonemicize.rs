@@ -583,6 +583,12 @@ fn is_apostrophe(character: char) -> bool {
 }
 
 fn push_word_chunk(text: &str, start_byte: usize, end_byte: usize, words: &mut Vec<WordToken>) {
+    let surface = &text[start_byte..end_byte];
+    if should_preserve_hyphenated_word_chunk(surface) {
+        push_word(text, start_byte, end_byte, words);
+        return;
+    }
+
     let mut part_start = None;
     for (offset, character) in text[start_byte..end_byte].char_indices() {
         let byte_index = start_byte + offset;
@@ -668,6 +674,17 @@ fn should_split_mixed_surface_into_units(surface: &str) -> bool {
             .chars()
             .filter(|character| character.is_alphabetic())
             .all(|character| character.is_uppercase())
+}
+
+fn should_preserve_hyphenated_word_chunk(surface: &str) -> bool {
+    let parts = split_hyphenated_surface(surface);
+    parts.len() > 1
+        && parts.iter().all(|part| {
+            part.chars().any(char::is_alphabetic)
+                && part
+                    .chars()
+                    .all(|character| character.is_alphabetic() || is_apostrophe(character))
+        })
 }
 
 fn push_orthographic_unit_words(
@@ -1071,13 +1088,34 @@ fn classify_surface_word(surface: &str) -> OrthographicTokenKind {
     let has_alpha = surface.chars().any(char::is_alphabetic);
     let has_digit = surface.chars().any(|character| character.is_ascii_digit());
     if surface.contains('-') {
-        return OrthographicTokenKind::Hyphenated(Vec::new());
+        return OrthographicTokenKind::Hyphenated(
+            split_hyphenated_surface(surface)
+                .into_iter()
+                .filter_map(|part| {
+                    let normalized = normalize_surface_word(part);
+                    (!normalized.is_empty()).then(|| OrthographicToken {
+                        text: part.to_string(),
+                        kind: Box::new(classify_non_hyphenated_surface_word(part)),
+                    })
+                })
+                .collect(),
+        );
     }
+    classify_non_hyphenated_surface_word(surface)
+}
+
+fn classify_non_hyphenated_surface_word(surface: &str) -> OrthographicTokenKind {
+    let has_alpha = surface.chars().any(char::is_alphabetic);
+    let has_digit = surface.chars().any(|character| character.is_ascii_digit());
     if has_alpha && has_digit {
         OrthographicTokenKind::MixedAlphaNumeric
     } else {
         OrthographicTokenKind::Word
     }
+}
+
+fn split_hyphenated_surface(surface: &str) -> Vec<&str> {
+    surface.split('-').filter(|part| !part.is_empty()).collect()
 }
 
 fn mark_spaced_letter_name_runs(words: &mut [WordToken]) {
@@ -1391,6 +1429,13 @@ fn pronunciation_for_word(
         return pronunciation;
     }
 
+    if let OrthographicTokenKind::Hyphenated(parts) = &word.kind
+        && let Some(pronunciation) =
+            hyphenated_pronunciation_from_parts(pipeline, word, parts, variety, context)
+    {
+        return pronunciation;
+    }
+
     if pipeline.uses_generic_orthography_before_unknown() {
         let candidate =
             planned_candidate_from_orthography_profile(&word.normalized, variety, context);
@@ -1412,6 +1457,111 @@ fn pronunciation_for_word(
     }
 
     pipeline.unknown_word_pronunciation(word, variety, context)
+}
+
+fn hyphenated_pronunciation_from_parts(
+    pipeline: &(impl PronunciationPipeline + ?Sized),
+    word: &WordToken,
+    parts: &[OrthographicToken],
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let mut candidate = Vec::new();
+    let mut break_offsets = Vec::new();
+    let mut warnings = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        let normalized = normalize_surface_word(&part.text);
+        if normalized.is_empty() {
+            return None;
+        }
+        let part_word = WordToken {
+            text: part.text.clone(),
+            normalized,
+            kind: (*part.kind).clone(),
+            span: word.span,
+        };
+        let mut part_context = context;
+        part_context.part_of_speech = None;
+        part_context.next_part_of_speech = None;
+        part_context.next_starts_with_vowelish = parts
+            .get(index + 1)
+            .is_some_and(|next| hyphenated_part_starts_with_vowelish(next, variety));
+        let part_pronunciation =
+            pronunciation_for_word(pipeline, &part_word, variety, part_context);
+        let part_candidate = part_pronunciation.candidates.first()?;
+        if part_candidate.is_empty() {
+            return None;
+        }
+        candidate.extend(part_candidate.clone());
+        warnings.extend(part_pronunciation.warnings);
+        if index + 1 < parts.len() {
+            break_offsets.push(candidate.len());
+        }
+    }
+
+    Some(WordPronunciation {
+        candidates: vec![candidate],
+        status: PronunciationStatus::Guessed,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Rule,
+            method: "hyphenated compound pronunciation from segment pronunciations".into(),
+            version: Some("0.1".into()),
+        },
+        warnings,
+        letter_break_offsets: break_offsets,
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    })
+}
+
+fn hyphenated_part_starts_with_vowelish(
+    part: &OrthographicToken,
+    variety: &LinguisticVariety,
+) -> bool {
+    let normalized = normalize_surface_word(&part.text);
+    if normalized.is_empty() {
+        return false;
+    }
+    let word = WordToken {
+        text: part.text.clone(),
+        normalized,
+        kind: (*part.kind).clone(),
+        span: TextSpan {
+            start_char: 0,
+            end_char: part.text.chars().count(),
+        },
+    };
+    let context = TokenPronunciationContext {
+        next_starts_with_vowelish: false,
+        careful_style: true,
+        part_of_speech: None,
+        next_part_of_speech: None,
+    };
+    pronunciation_from_declared_lexicons(&word, variety, context)
+        .or_else(|| {
+            let candidate =
+                planned_candidate_from_orthography_profile(&word.normalized, variety, context);
+            (!candidate.is_empty()).then(|| WordPronunciation {
+                candidates: vec![candidate],
+                status: PronunciationStatus::Guessed,
+                provenance: EvidenceProvenance {
+                    source: EvidenceSource::Rule,
+                    method: "orthography profile pronunciation".into(),
+                    version: Some("0.1".into()),
+                },
+                warnings: Vec::new(),
+                letter_break_offsets: Vec::new(),
+                letter_indices: Vec::new(),
+                part_of_speech: None,
+            })
+        })
+        .and_then(|pronunciation| pronunciation.candidates.first().cloned())
+        .and_then(|candidate| candidate.first().cloned())
+        .is_some_and(|phoneme| planned_phoneme_is_vowel(variety, &phoneme))
 }
 
 fn missing_pronunciation(
@@ -4118,6 +4268,32 @@ mod tests {
         assert_eq!(
             cmudict_symbols_for_word(&output, 2),
             ["R", "IY0", "OW1", "P", "AH0", "N", "D"]
+        );
+    }
+
+    #[test]
+    fn hyphenated_compounds_compose_as_one_word_for_discrepancy_reports() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request("just-in-time", "en-US"))
+            .expect("hyphenated compound should phonemicize");
+
+        assert_eq!(
+            output
+                .graphemes
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["just-in-time"]
+        );
+        assert_eq!(
+            cmudict_symbols_for_word(&output, 0),
+            ["JH", "AH1", "S", "T", "IH0", "N", "T", "AY1", "M"]
+        );
+        assert!(
+            output
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != PronunciationWarningKind::UnknownPronunciation)
         );
     }
 

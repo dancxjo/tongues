@@ -262,6 +262,10 @@ enum Commands {
             default_value = "models/wiktionary/enwiktionary-2026-06-01-v0-phones"
         )]
         wiktionary_model: PathBuf,
+
+        /// Wiktionary variety tag used for the model pronouncer
+        #[arg(long, default_value = "en-US.GenAm")]
+        wiktionary_variety: String,
     },
 
     /// Parse OpenEPD, build vocabulary, and create train/valid/test splits
@@ -1843,6 +1847,7 @@ fn main() -> Result<()> {
             no_wiktionary,
             g2p2g_model,
             wiktionary_model,
+            wiktionary_variety,
         } => cmd_discrepancies(
             &out,
             limit,
@@ -1853,6 +1858,7 @@ fn main() -> Result<()> {
             !no_wiktionary,
             &g2p2g_model,
             &wiktionary_model,
+            &wiktionary_variety,
             device_arg,
             output_mode,
         ),
@@ -9744,6 +9750,7 @@ fn cmd_discrepancies(
     include_wiktionary: bool,
     g2p2g_model: &Path,
     wiktionary_model: &Path,
+    wiktionary_variety: &str,
     device_arg: DeviceArg,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -9759,6 +9766,7 @@ fn cmd_discrepancies(
             include_wiktionary,
             g2p2g_model,
             wiktionary_model,
+            wiktionary_variety,
             output_mode,
         ),
         DeviceArg::Cuda => cmd_discrepancies_backend::<CudaInferBackend>(
@@ -9772,6 +9780,7 @@ fn cmd_discrepancies(
             include_wiktionary,
             g2p2g_model,
             wiktionary_model,
+            wiktionary_variety,
             output_mode,
         ),
     }
@@ -9788,6 +9797,7 @@ fn cmd_discrepancies_backend<B: Backend>(
     include_wiktionary: bool,
     g2p2g_model: &Path,
     wiktionary_model: &Path,
+    wiktionary_variety: &str,
     output_mode: OutputMode,
 ) -> Result<()>
 where
@@ -9821,7 +9831,11 @@ where
         None
     };
     let mut wiktionary = if include_wiktionary {
-        match Seq2SeqPronouncer::<B>::load_wiktionary(wiktionary_model, device.clone()) {
+        match Seq2SeqPronouncer::<B>::load_wiktionary(
+            wiktionary_model,
+            wiktionary_variety,
+            device.clone(),
+        ) {
             Ok(provider) => Some(provider),
             Err(err) => {
                 println!(
@@ -10057,6 +10071,7 @@ enum Seq2SeqPronouncerKind {
 struct Seq2SeqPronouncer<B: Backend> {
     name: &'static str,
     kind: Seq2SeqPronouncerKind,
+    wiktionary_variety: Option<String>,
     model: Seq2SeqModel<B>,
     vocab: Vocab,
     device: B::Device,
@@ -10068,17 +10083,19 @@ impl<B: Backend> Seq2SeqPronouncer<B> {
         Ok(Self {
             name: "g2p2g",
             kind: Seq2SeqPronouncerKind::G2p2g,
+            wiktionary_variety: None,
             model,
             vocab,
             device,
         })
     }
 
-    fn load_wiktionary(model_dir: &Path, device: B::Device) -> Result<Self> {
+    fn load_wiktionary(model_dir: &Path, variety: &str, device: B::Device) -> Result<Self> {
         let (model, vocab) = load_seq2seq_model_and_vocab::<B>(model_dir, &device)?;
         Ok(Self {
             name: "wiktionary",
             kind: Seq2SeqPronouncerKind::Wiktionary,
+            wiktionary_variety: (!variety.trim().is_empty()).then(|| variety.trim().to_string()),
             model,
             vocab,
             device,
@@ -10101,7 +10118,7 @@ impl<B: Backend> speaking::PronunciationProvider for Seq2SeqPronouncer<B> {
                     "orthography-to-phones",
                     "eng",
                     WiktionaryNotationArg::Phones,
-                    None,
+                    self.wiktionary_variety.as_deref(),
                     word,
                 ) {
                     Ok(source) => {
@@ -13106,6 +13123,19 @@ mod tests {
                 }
             })
         ));
+    }
+
+    #[test]
+    fn discrepancies_default_to_general_american_wiktionary_variety() {
+        let cli = Cli::try_parse_from(["tongues", "discrepencies"])
+            .expect("misspelled discrepancies alias should parse");
+
+        match cli.command {
+            Some(Commands::Discrepancies {
+                wiktionary_variety, ..
+            }) => assert_eq!(wiktionary_variety, "en-US.GenAm"),
+            other => panic!("expected discrepancies command, got {other:?}"),
+        }
     }
 
     #[test]

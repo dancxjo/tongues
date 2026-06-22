@@ -758,6 +758,49 @@ button {
     white-space: pre-wrap;
 }
 
+.pronunciation-panel {
+    display: grid;
+    gap: 1.25rem;
+}
+
+.pronunciation-options {
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.pronunciation-result {
+    border-top: 1px solid var(--panel-border);
+    display: grid;
+    gap: 1rem;
+    padding-top: 1.25rem;
+}
+
+.prediction-output {
+    background: #f7fbfb;
+    border: 1px solid #d6ebe8;
+    border-radius: 8px;
+    color: var(--ink);
+    font-size: 1.45rem;
+    font-weight: 600;
+    line-height: 1.35;
+    min-height: 4rem;
+    overflow-wrap: anywhere;
+    padding: 1rem;
+}
+
+.source-preview {
+    background: #17232b;
+    border-radius: 8px;
+    color: #d9f3ef;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    overflow: auto;
+    padding: 0.85rem;
+    white-space: pre-wrap;
+}
+
 @keyframes progress-shift {
     to {
         background-position: 180% 0;

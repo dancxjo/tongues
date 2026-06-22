@@ -1984,27 +1984,60 @@ fn textgrid_tier_tokens(path: &Path, tier_name: &str) -> Result<Vec<String>> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut tokens = Vec::new();
     let mut active_tier: Option<String> = None;
+    let mut next_short_tier_name = false;
     for line in text.lines() {
         let line = line.trim();
+        if line.starts_with("item [") {
+            active_tier = None;
+            next_short_tier_name = false;
+            continue;
+        }
+        if matches!(
+            unquoted_textgrid_line(line).as_deref(),
+            Some("IntervalTier" | "TextTier")
+        ) {
+            next_short_tier_name = true;
+            continue;
+        }
+        if next_short_tier_name {
+            if let Some(name) = unquoted_textgrid_line(line) {
+                active_tier = Some(name);
+                next_short_tier_name = false;
+            }
+            continue;
+        }
         if line.starts_with("name") {
             if let Some((_, value)) = line.split_once('=') {
                 active_tier = Some(value.trim().trim_matches('"').to_string());
             }
             continue;
         }
-        if !line.starts_with("text") {
-            continue;
-        }
         if active_tier.as_deref() != Some(tier_name) {
             continue;
         }
-        let Some((_, value)) = line.split_once('=') else {
+        if line.starts_with("text") || line.starts_with("mark") {
+            let Some((_, value)) = line.split_once('=') else {
+                continue;
+            };
+            let symbol = value.trim().trim_matches('"').trim();
+            tokens.extend(tokenize_textgrid_label(symbol));
             continue;
-        };
-        let symbol = value.trim().trim_matches('"').trim();
-        tokens.extend(tokenize_textgrid_label(symbol));
+        }
+        if let Some(symbol) = unquoted_textgrid_line(line) {
+            tokens.extend(tokenize_textgrid_label(&symbol));
+            continue;
+        }
     }
     Ok(tokens)
+}
+
+fn unquoted_textgrid_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.len() >= 2 && line.starts_with('"') && line.ends_with('"') {
+        Some(line.trim_matches('"').trim().to_string())
+    } else {
+        None
+    }
 }
 
 fn path_relative_to(root: &Path, path: &Path) -> String {
@@ -3077,6 +3110,81 @@ item []:
 
         assert_eq!(phones, vec!["l", "aɪ"]);
         assert_eq!(phonemes, vec!["l", "aɪ", "n"]);
+    }
+
+    #[test]
+    fn textgrid_tokens_read_short_format_tiers() {
+        let path = temp_path("short-format.TextGrid");
+        fs::write(
+            &path,
+            r#""ooTextFile"
+"TextGrid"
+
+0
+0.3
+<exists>
+2
+"IntervalTier"
+"KAN-MAU"
+0
+0.3
+1
+0
+0.3
+"l aɪ n"
+"IntervalTier"
+"MAU"
+0
+0.3
+3
+0
+0.1
+"l"
+0.1
+0.2
+"aɪ"
+0.2
+0.3
+"n"
+"#,
+        )
+        .expect("write textgrid");
+
+        let phones = textgrid_tier_tokens(&path, "MAU").expect("phone tier");
+        let phonemes = textgrid_tier_tokens(&path, "KAN-MAU").expect("phoneme tier");
+        fs::remove_file(path).ok();
+
+        assert_eq!(phones, vec!["l", "aɪ", "n"]);
+        assert_eq!(phonemes, vec!["l", "aɪ", "n"]);
+    }
+
+    #[test]
+    fn textgrid_tokens_read_point_tier_marks() {
+        let path = temp_path("point-tier.TextGrid");
+        fs::write(
+            &path,
+            r#"File type = "ooTextFile"
+Object class = "TextGrid"
+
+item []:
+    item [1]:
+        class = "TextTier"
+        name = "MAU"
+        points: size = 2
+            points [1]:
+                number = 0.1
+                mark = "p"
+            points [2]:
+                number = 0.2
+                mark = "tʃ"
+"#,
+        )
+        .expect("write textgrid");
+
+        let phones = textgrid_tier_tokens(&path, "MAU").expect("phone tier");
+        fs::remove_file(path).ok();
+
+        assert_eq!(phones, vec!["p", "tʃ"]);
     }
 
     #[test]

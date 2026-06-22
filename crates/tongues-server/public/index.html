@@ -95,6 +95,85 @@
                     </div>
                 </section>
 
+                <section id="pronunciation-demo-page" class="page-view hidden">
+                    <main class="glass-panel pronunciation-panel">
+                        <form id="pronunciation-form">
+                            <div class="controls-grid">
+                                <div class="form-group">
+                                    <label for="pronunciation-family">Model Family</label>
+                                    <select id="pronunciation-family">
+                                        <option value="g2p2g">G2P2G</option>
+                                        <option value="wiktionary">Wiktionary</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="pronunciation-model">Model</label>
+                                    <select id="pronunciation-model"></select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="pronunciation-task">Task</label>
+                                    <select id="pronunciation-task"></select>
+                                </div>
+
+                                <div class="form-group wiktionary-only">
+                                    <label for="pronunciation-lang">Language</label>
+                                    <select id="pronunciation-lang"></select>
+                                </div>
+
+                                <div class="form-group wiktionary-only">
+                                    <label for="pronunciation-variety">Variety</label>
+                                    <select id="pronunciation-variety"></select>
+                                </div>
+
+                                <div class="form-group wiktionary-only">
+                                    <label for="pronunciation-notation">Notation</label>
+                                    <select id="pronunciation-notation"></select>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="pronunciation-input">Input</label>
+                                <textarea id="pronunciation-input" placeholder="example" required>example</textarea>
+                            </div>
+
+                            <div class="pronunciation-options">
+                                <label class="checkbox-row wiktionary-only">
+                                    <input type="checkbox" id="pronunciation-raw">
+                                    <span>Raw Wiktionary source<small>Send exact task/control tags instead of building them from the controls.</small></span>
+                                </label>
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="pronunciation-cpu" checked>
+                                    <span>Use CPU<small>Passes the global `--cpu` flag.</small></span>
+                                </label>
+                            </div>
+
+                            <div class="action-bar">
+                                <button type="submit" id="pronunciation-submit">
+                                    <span class="btn-text">Run Inference</span>
+                                    <div class="spinner"></div>
+                                </button>
+                            </div>
+                        </form>
+
+                        <div id="pronunciation-result" class="pronunciation-result hidden">
+                            <div>
+                                <p class="result-label">Prediction</p>
+                                <div id="pronunciation-output" class="prediction-output"></div>
+                            </div>
+                            <div>
+                                <p class="result-label">Command</p>
+                                <pre id="pronunciation-command" class="source-preview"></pre>
+                            </div>
+                            <div id="pronunciation-source-block">
+                                <p class="result-label">Wiktionary Source</p>
+                                <pre id="pronunciation-source" class="source-preview"></pre>
+                            </div>
+                        </div>
+                    </main>
+                </section>
+
                 <section id="styletts2-page" class="page-view hidden">
                     <main class="glass-panel">
                         <form id="synth-form">

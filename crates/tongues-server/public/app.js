@@ -375,6 +375,15 @@ const commandPages = [
         implemented: true,
     },
     {
+        title: 'Pronunciation Demo',
+        path: '/pronunciation-demo',
+        command: 'tongues g2p2g infer / tongues wiktionary infer',
+        group: 'Speech',
+        summary: 'Try spelling-to-pronunciation, pronunciation-to-spelling, and Wiktionary pronunciation tasks.',
+        implemented: true,
+        page: 'pronunciation-demo',
+    },
+    {
         title: 'Speak',
         path: '/cli/speak',
         command: 'tongues speak',
@@ -853,6 +862,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderRoute();
     window.addEventListener('popstate', renderRoute);
     initJobs();
+    await initPronunciationDemo();
     await initStyleTts2();
 });
 
@@ -908,8 +918,10 @@ function renderRoute() {
     const jobsRoute = path === '/jobs';
     const page = commandPages.find((candidate) => path === candidate.path)
         || commandPages.find((candidate) => path.startsWith(candidate.path + '/'));
+    const pronunciationRoute = page?.page === 'pronunciation-demo';
 
-    byId('styletts2-page').classList.toggle('hidden', jobsRoute || !page?.implemented);
+    byId('styletts2-page').classList.toggle('hidden', jobsRoute || !page?.implemented || pronunciationRoute);
+    byId('pronunciation-demo-page').classList.toggle('hidden', !pronunciationRoute);
     byId('dashboard-page').classList.toggle('hidden', jobsRoute || Boolean(page));
     byId('skeleton-page').classList.toggle('hidden', jobsRoute || !page || page.implemented);
     byId('jobs-page').classList.toggle('hidden', !jobsRoute);
@@ -1520,6 +1532,138 @@ function escapeHtml(value) {
 function normalizePath(path) {
     if (path.length > 1 && path.endsWith('/')) return path.slice(0, -1);
     return path;
+}
+
+async function initPronunciationDemo() {
+    const form = byId('pronunciation-form');
+    if (!form) return;
+
+    const familySelect = byId('pronunciation-family');
+    const modelSelect = byId('pronunciation-model');
+    const taskSelect = byId('pronunciation-task');
+    const langSelect = byId('pronunciation-lang');
+    const varietySelect = byId('pronunciation-variety');
+    const notationSelect = byId('pronunciation-notation');
+    const input = byId('pronunciation-input');
+    const rawInput = byId('pronunciation-raw');
+    const cpuInput = byId('pronunciation-cpu');
+    const submit = byId('pronunciation-submit');
+    const result = byId('pronunciation-result');
+    const output = byId('pronunciation-output');
+    const command = byId('pronunciation-command');
+    const source = byId('pronunciation-source');
+    const sourceBlock = byId('pronunciation-source-block');
+
+    let metadata = {
+        models: [],
+        languages: [],
+        varieties: [],
+        wiktionary_tasks: [],
+        g2p2g_tasks: [],
+        notations: [],
+    };
+
+    const fillOptions = (select, options, selectedValue) => {
+        select.innerHTML = options.map((option) => {
+            const disabled = option.available === false ? ' disabled' : '';
+            const suffix = option.available === false ? ' (missing files)' : '';
+            const selected = option.value === selectedValue || option.path === selectedValue ? ' selected' : '';
+            return `<option value="${escapeHtml(option.value || option.path)}"${selected}${disabled}>${escapeHtml(option.label + suffix)}</option>`;
+        }).join('');
+    };
+
+    const syncFamilyControls = () => {
+        const family = familySelect.value;
+        const wiktionary = family === 'wiktionary';
+        document.querySelectorAll('.wiktionary-only').forEach((node) => {
+            node.classList.toggle('hidden', !wiktionary);
+        });
+
+        const models = metadata.models
+            .filter((model) => model.family === family)
+            .map((model) => ({ ...model, value: model.path }));
+        fillOptions(modelSelect, models, models.find((model) => model.available)?.path || models[0]?.path || '');
+        fillOptions(taskSelect, wiktionary ? metadata.wiktionary_tasks : metadata.g2p2g_tasks);
+        if (wiktionary) {
+            fillOptions(langSelect, metadata.languages, 'eng');
+            fillOptions(varietySelect, metadata.varieties, '');
+            fillOptions(notationSelect, metadata.notations, 'phones');
+        }
+        input.placeholder = wiktionary ? 'example, kæt, <SEGMENT> water-bottle, or raw tagged input' : 'example or ˈfɑɹ.kəl';
+    };
+
+    try {
+        const response = await fetch('/api/pronunciation-demo/models');
+        if (!response.ok) throw new Error(await response.text());
+        metadata = await response.json();
+        syncFamilyControls();
+    } catch (error) {
+        modelSelect.innerHTML = `<option>${escapeHtml(error.message)}</option>`;
+        submit.disabled = true;
+    }
+
+    familySelect.addEventListener('change', syncFamilyControls);
+    taskSelect.addEventListener('change', () => {
+        const task = taskSelect.value;
+        if (familySelect.value === 'g2p2g') {
+            input.value = task === 'p2g' ? 'ˈfɑɹ.kəl' : 'example';
+        } else if (task.includes('to-orthography') || task.includes('phonology')) {
+            input.value = task.startsWith('phonemes') ? 'wʌn' : 'wʌn';
+        } else if (task === 'phonetic-realization') {
+            input.value = 'wʌn';
+        } else if (task === 'segment-compound') {
+            input.value = 'water-bottle';
+        } else if (task === 'pronounce-segments') {
+            input.value = 'water + bottle';
+        } else if (task === 'verify-pronunciation') {
+            input.value = 'one => wʌn';
+        } else {
+            input.value = 'example';
+        }
+    });
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!input.value.trim()) return;
+        submit.classList.add('loading');
+        submit.disabled = true;
+        result.classList.add('hidden');
+
+        try {
+            const payload = {
+                family: familySelect.value,
+                model: modelSelect.value,
+                input: input.value,
+                task: taskSelect.value,
+                lang: langSelect.value,
+                variety: varietySelect.value,
+                notation: notationSelect.value,
+                raw: rawInput.checked,
+                cpu: cpuInput.checked,
+            };
+            const response = await fetch('/api/pronunciation-demo/infer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error(await response.text());
+            const data = await response.json();
+            output.textContent = data.output || '(empty output)';
+            command.textContent = ['cargo', ...data.command].map(quoteArg).join(' ');
+            source.textContent = data.source || '';
+            sourceBlock.classList.toggle('hidden', !data.source);
+            result.classList.remove('hidden');
+        } catch (error) {
+            output.textContent = error.message;
+            command.textContent = '';
+            source.textContent = '';
+            sourceBlock.classList.add('hidden');
+            result.classList.remove('hidden');
+        } finally {
+            submit.classList.remove('loading');
+            submit.disabled = false;
+        }
+    });
 }
 
 async function initStyleTts2() {

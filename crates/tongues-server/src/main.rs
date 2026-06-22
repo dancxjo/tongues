@@ -113,6 +113,11 @@ fn build_app(state: AppState) -> Router {
         .route("/api/jobs/{job_id}", get(get_job))
         .route("/api/jobs/{job_id}/cancel", post(cancel_job))
         .route("/api/jobs/{job_id}/events", get(job_events))
+        .route(
+            "/api/pronunciation-demo/models",
+            get(get_pronunciation_models),
+        )
+        .route("/api/pronunciation-demo/infer", post(pronunciation_infer))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
         .route(
             "/api/styletts2-reference-audio/{*sample_id}",
@@ -124,6 +129,8 @@ fn build_app(state: AppState) -> Router {
         .route("/styletts2/", get(serve_app_index))
         .route("/jobs", get(serve_app_index))
         .route("/jobs/", get(serve_app_index))
+        .route("/pronunciation-demo", get(serve_app_index))
+        .route("/pronunciation-demo/", get(serve_app_index))
         .route("/g2p2g/{*path}", get(serve_app_index))
         .route("/sentence-parser/{*path}", get(serve_app_index))
         .route("/head2phones/{*path}", get(serve_app_index))
@@ -374,6 +381,52 @@ struct StartJobResponse {
     summary: JobSummary,
 }
 
+#[derive(Serialize, Clone)]
+struct PronunciationModelOption {
+    id: String,
+    label: String,
+    family: String,
+    path: String,
+    available: bool,
+}
+
+#[derive(Serialize)]
+struct PronunciationModelsResponse {
+    models: Vec<PronunciationModelOption>,
+    languages: Vec<CodeLabel>,
+    varieties: Vec<CodeLabel>,
+    wiktionary_tasks: Vec<CodeLabel>,
+    g2p2g_tasks: Vec<CodeLabel>,
+    notations: Vec<CodeLabel>,
+}
+
+#[derive(Serialize)]
+struct CodeLabel {
+    value: &'static str,
+    label: &'static str,
+}
+
+#[derive(Deserialize)]
+struct PronunciationInferRequest {
+    family: String,
+    model: String,
+    input: String,
+    task: String,
+    lang: Option<String>,
+    variety: Option<String>,
+    notation: Option<String>,
+    raw: Option<bool>,
+    cpu: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct PronunciationInferResponse {
+    output: String,
+    command: Vec<String>,
+    source: Option<String>,
+    stderr: String,
+}
+
 async fn get_emotions(State(state): State<AppState>) -> impl IntoResponse {
     match load_or_create_emotion_signatures(&state) {
         Ok(response) => Json(response).into_response(),
@@ -532,6 +585,219 @@ async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> i
     }
 }
 
+async fn get_pronunciation_models(State(state): State<AppState>) -> impl IntoResponse {
+    Json(PronunciationModelsResponse {
+        models: pronunciation_model_options(&state.workspace_root),
+        languages: vec![
+            CodeLabel {
+                value: "eng",
+                label: "English",
+            },
+            CodeLabel {
+                value: "fra",
+                label: "French",
+            },
+            CodeLabel {
+                value: "deu",
+                label: "German",
+            },
+            CodeLabel {
+                value: "spa",
+                label: "Spanish",
+            },
+            CodeLabel {
+                value: "lat",
+                label: "Latin",
+            },
+            CodeLabel {
+                value: "ell",
+                label: "Greek",
+            },
+            CodeLabel {
+                value: "grc",
+                label: "Ancient Greek",
+            },
+            CodeLabel {
+                value: "san",
+                label: "Sanskrit",
+            },
+        ],
+        varieties: vec![
+            CodeLabel {
+                value: "",
+                label: "Default",
+            },
+            CodeLabel {
+                value: "en-US.GenAm",
+                label: "English, General American",
+            },
+            CodeLabel {
+                value: "en-GB.RP",
+                label: "English, RP",
+            },
+            CodeLabel {
+                value: "spa-ES",
+                label: "Spanish, Spain",
+            },
+            CodeLabel {
+                value: "spa-LatAm",
+                label: "Spanish, Latin America",
+            },
+            CodeLabel {
+                value: "la-ecclesiastical",
+                label: "Latin, Ecclesiastical",
+            },
+            CodeLabel {
+                value: "la-Classical",
+                label: "Latin, Classical",
+            },
+        ],
+        wiktionary_tasks: vec![
+            CodeLabel {
+                value: "orthography-to-phones",
+                label: "Spelling to phones",
+            },
+            CodeLabel {
+                value: "orthography-to-phonemes",
+                label: "Spelling to phonemes",
+            },
+            CodeLabel {
+                value: "phones-to-orthography",
+                label: "Phones to spelling",
+            },
+            CodeLabel {
+                value: "phonemes-to-orthography",
+                label: "Phonemes to spelling",
+            },
+            CodeLabel {
+                value: "phonetic-realization",
+                label: "Phonemes to phones",
+            },
+            CodeLabel {
+                value: "segment-compound",
+                label: "Segment compound",
+            },
+            CodeLabel {
+                value: "pronounce-segments",
+                label: "Pronounce segments",
+            },
+            CodeLabel {
+                value: "verify-pronunciation",
+                label: "Verify pronunciation",
+            },
+            CodeLabel {
+                value: "normalize-phonology",
+                label: "Normalize phonology",
+            },
+            CodeLabel {
+                value: "find-etymology",
+                label: "Find etymology",
+            },
+            CodeLabel {
+                value: "normalize",
+                label: "Normalize text",
+            },
+            CodeLabel {
+                value: "guess-lang-from-orthography",
+                label: "Guess language from spelling",
+            },
+            CodeLabel {
+                value: "guess-lang-from-phonology",
+                label: "Guess language from phonology",
+            },
+            CodeLabel {
+                value: "guess-lang-from-orthography-and-phonology",
+                label: "Guess language from both",
+            },
+        ],
+        g2p2g_tasks: vec![
+            CodeLabel {
+                value: "auto",
+                label: "Auto",
+            },
+            CodeLabel {
+                value: "g2p",
+                label: "Spelling to pronunciation",
+            },
+            CodeLabel {
+                value: "p2g",
+                label: "Pronunciation to spelling",
+            },
+        ],
+        notations: vec![
+            CodeLabel {
+                value: "phones",
+                label: "Phones",
+            },
+            CodeLabel {
+                value: "phonemes",
+                label: "Phonemes",
+            },
+        ],
+    })
+}
+
+async fn pronunciation_infer(
+    State(state): State<AppState>,
+    Json(payload): Json<PronunciationInferRequest>,
+) -> impl IntoResponse {
+    let request = match build_pronunciation_command(&state, &payload) {
+        Ok(request) => request,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+
+    let command_for_response = request.args.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("cargo")
+            .args(&request.args)
+            .current_dir(request.workspace_root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+    })
+    .await;
+
+    let output = match output {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to run inference: {error}"),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("inference task failed: {error}"),
+            )
+                .into_response();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "inference failed with status {}:\n{}",
+                output.status.code().unwrap_or(-1),
+                if stderr.is_empty() { &stdout } else { &stderr }
+            ),
+        )
+            .into_response();
+    }
+
+    Json(PronunciationInferResponse {
+        output: stdout,
+        command: command_for_response,
+        source: wiktionary_demo_source(&payload),
+        stderr,
+    })
+    .into_response()
+}
+
 async fn start_job(
     State(state): State<AppState>,
     Json(payload): Json<StartJobRequest>,
@@ -659,6 +925,266 @@ fn validate_job_request(payload: &StartJobRequest) -> Result<(), String> {
         return Err("job args contain invalid data".into());
     }
     Ok(())
+}
+
+struct PronunciationCommandRequest {
+    workspace_root: PathBuf,
+    args: Vec<String>,
+}
+
+fn build_pronunciation_command(
+    state: &AppState,
+    payload: &PronunciationInferRequest,
+) -> Result<PronunciationCommandRequest, String> {
+    let family = payload.family.trim();
+    if !matches!(family, "g2p2g" | "wiktionary") {
+        return Err("family must be g2p2g or wiktionary".into());
+    }
+    if payload.input.trim().is_empty() {
+        return Err("input is required".into());
+    }
+    let model = safe_relative_path(&payload.model)?;
+    let model_path = state.workspace_root.join(&model);
+    if !model_path.exists() {
+        return Err(format!(
+            "model path does not exist: {}",
+            path_to_web(&model)
+        ));
+    }
+
+    let mut args = vec![
+        "run".to_string(),
+        "--bin".to_string(),
+        "tongues".to_string(),
+        "--".to_string(),
+    ];
+    if payload.cpu.unwrap_or(true) {
+        args.push("--cpu".to_string());
+    }
+    args.push(family.to_string());
+    args.push("infer".to_string());
+    args.push("--model".to_string());
+    args.push(path_to_web(&model));
+    args.push("--task".to_string());
+    args.push(payload.task.trim().to_string());
+
+    if family == "wiktionary" {
+        args.push("--lang".to_string());
+        args.push(
+            payload
+                .lang
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("eng")
+                .trim()
+                .to_string(),
+        );
+        args.push("--notation".to_string());
+        args.push(
+            payload
+                .notation
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("phones")
+                .trim()
+                .to_string(),
+        );
+        if let Some(variety) = payload
+            .variety
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            args.push("--variety".to_string());
+            args.push(variety.to_string());
+        }
+        if payload.raw.unwrap_or(false) {
+            args.push("--raw".to_string());
+        }
+    }
+
+    args.push(payload.input.trim().to_string());
+    Ok(PronunciationCommandRequest {
+        workspace_root: state.workspace_root.clone(),
+        args,
+    })
+}
+
+fn wiktionary_demo_source(payload: &PronunciationInferRequest) -> Option<String> {
+    if payload.family.trim() != "wiktionary" {
+        return None;
+    }
+    if payload.raw.unwrap_or(false) {
+        return Some(payload.input.trim().to_string());
+    }
+    let lang = payload
+        .lang
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("eng")
+        .trim();
+    let notation = payload
+        .notation
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("phones")
+        .trim();
+    let repr = match notation {
+        "phonemes" => "<repr:phonemes>",
+        _ => "<repr:phones>",
+    };
+    let variety = payload
+        .variety
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" <variety:{value}>"))
+        .unwrap_or_default();
+    let input = payload.input.trim();
+    let source = match payload.task.trim() {
+        "orthography-to-phonemes" => {
+            format!(
+                "<task:orthography_to_phonology> <lang:{lang}>{variety} <repr:phonemes> {input}"
+            )
+        }
+        "orthography-to-phones" | "orthography-to-phonology" => {
+            format!("<task:orthography_to_phonology> <lang:{lang}>{variety} {repr} {input}")
+        }
+        "phonemes-to-orthography" => {
+            format!(
+                "<task:phonology_to_orthography> <lang:{lang}>{variety} <repr:phonemes> {input}"
+            )
+        }
+        "phones-to-orthography" | "phonology-to-orthography" => {
+            format!("<task:phonology_to_orthography> <lang:{lang}>{variety} {repr} {input}")
+        }
+        "phonetic-realization" => {
+            format!("<task:phonetic_realization> <lang:{lang}>{variety} <repr:phonemes> {input}")
+        }
+        "segment-compound" | "segment" | "compound-segmentation" => {
+            format!("<task:segment_compound> <lang:{lang}> <SEGMENT> {input}")
+        }
+        "pronounce-segments" | "segments-to-phonology" | "segments-to-phones" => {
+            format!(
+                "<task:pronounce_segments> <lang:{lang}> <PRONOUNCE_SEGMENTS> <repr:phones> {input}"
+            )
+        }
+        "verify-pronunciation" | "verify" | "verifier" => {
+            format!("<task:verify_pronunciation> <lang:{lang}> <VERIFY> {input}")
+        }
+        "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
+            format!("<task:normalize_phonology> <lang:{lang}> <BROAD_EQUIV> <repr:phones> {input}")
+        }
+        "find-etymology" | "etymology-from-word" | "word-etymology" => {
+            format!("<task:find_etymology> <lang:{lang}> {input}")
+        }
+        "normalize" | "normalise" => format!("<task:normalize> <lang:{lang}> {input}"),
+        "guess-lang-from-orthography" | "lang-from-orthography" => {
+            format!("<task:guess_lang_from_orthography> {repr} {input}")
+        }
+        "guess-lang-from-phonology" | "lang-from-phonology" => {
+            format!("<task:guess_lang_from_phonology> {repr} {input}")
+        }
+        "guess-lang-from-orthography-and-phonology" | "lang" | "language" | "language-guessing" => {
+            format!("<task:guess_lang_from_orthography_and_phonology> {repr} {input}")
+        }
+        _ => return None,
+    };
+    Some(source)
+}
+
+fn pronunciation_model_options(workspace_root: &FsPath) -> Vec<PronunciationModelOption> {
+    let mut models = Vec::new();
+    add_pronunciation_model_option(
+        workspace_root,
+        &mut models,
+        "g2p2g:default",
+        "G2P2G default",
+        "g2p2g",
+        "models/g2p2g/openepd-v0",
+    );
+    add_pronunciation_model_option(
+        workspace_root,
+        &mut models,
+        "wiktionary:default",
+        "Wiktionary default phones",
+        "wiktionary",
+        "models/wiktionary/enwiktionary-2026-06-01-v0-phones",
+    );
+    scan_pronunciation_model_dir(workspace_root, &mut models, "g2p2g", "models/g2p2g");
+    scan_pronunciation_model_dir(
+        workspace_root,
+        &mut models,
+        "wiktionary",
+        "models/wiktionary",
+    );
+    models.sort_by(|left, right| {
+        left.family
+            .cmp(&right.family)
+            .then_with(|| right.available.cmp(&left.available))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    models.dedup_by(|left, right| left.family == right.family && left.path == right.path);
+    models
+}
+
+fn scan_pronunciation_model_dir(
+    workspace_root: &FsPath,
+    models: &mut Vec<PronunciationModelOption>,
+    family: &str,
+    relative_dir: &str,
+) {
+    let dir = workspace_root.join(relative_dir);
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let path = FsPath::new(relative_dir).join(entry.file_name());
+        let path_web = path_to_web(&path);
+        let label = format!(
+            "{} {}",
+            if family == "g2p2g" {
+                "G2P2G"
+            } else {
+                "Wiktionary"
+            },
+            entry.file_name().to_string_lossy()
+        );
+        add_pronunciation_model_option(
+            workspace_root,
+            models,
+            &format!("{family}:{path_web}"),
+            &label,
+            family,
+            &path_web,
+        );
+    }
+}
+
+fn add_pronunciation_model_option(
+    workspace_root: &FsPath,
+    models: &mut Vec<PronunciationModelOption>,
+    id: &str,
+    label: &str,
+    family: &str,
+    path: &str,
+) {
+    let full_path = workspace_root.join(path);
+    let available =
+        full_path.join("model_config.json").exists() && full_path.join("vocab.json").exists();
+    models.push(PronunciationModelOption {
+        id: id.to_string(),
+        label: label.to_string(),
+        family: family.to_string(),
+        path: path.to_string(),
+        available,
+    });
 }
 
 fn job_detail(state: &AppState, job_id: &str) -> Option<JobDetail> {
