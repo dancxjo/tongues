@@ -10115,9 +10115,9 @@ impl<B: Backend> speaking::PronunciationProvider for Seq2SeqPronouncer<B> {
             }
             Seq2SeqPronouncerKind::Wiktionary => {
                 match wiktionary_infer_source(
-                    "orthography-to-phones",
+                    "orthography-to-phonemes",
                     "eng",
-                    WiktionaryNotationArg::Phones,
+                    WiktionaryNotationArg::Phonemes,
                     self.wiktionary_variety.as_deref(),
                     word,
                 ) {
