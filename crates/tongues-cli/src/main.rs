@@ -7600,7 +7600,8 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
                 "  latest model: {}",
                 model.join("model-latest.bin").display()
             );
-            println!("  Note: v0 writes model-latest.bin during epochs; epoch checkpoints and best model are written after validation.");
+            println!("  minibatch checkpoint cadence: every 2,000 minibatches -> {}", model.join("model-latest.bin").display());
+            println!("  Note: v0 writes model-latest.bin at initialization and every 2,000 minibatches during epochs; epoch checkpoints and best model are written after validation.");
             let pb = status_spinner(format!(
                 "Training Common Phone compact-frame CTC scaffold from {}",
                 data.display()
@@ -7714,12 +7715,15 @@ fn common_phone_train_progress_message(progress: tongues_common_phone::TrainProg
             epochs,
             train_state_path,
             epoch_checkpoint_pattern,
+            latest_checkpoint_path,
+            minibatch_checkpoint_interval,
             best_model_path,
         } => format!(
-            "Training {} train / {} valid examples for {} epochs; state={train_state_path}; checkpoints={epoch_checkpoint_pattern}; best={best_model_path}",
+            "Training {} train / {} valid examples for {} epochs; state={train_state_path}; epoch checkpoints={epoch_checkpoint_pattern}; minibatch checkpoints every {} -> {latest_checkpoint_path}; best={best_model_path}",
             format_count(train_examples),
             format_count(valid_examples),
-            format_count(epochs)
+            format_count(epochs),
+            format_count(minibatch_checkpoint_interval)
         ),
         tongues_common_phone::TrainProgress::EpochStart {
             epoch,

@@ -44,7 +44,7 @@ const ACF_MAGIC: &[u8; 4] = b"ACF0";
 const ACF_VERSION: u32 = 1;
 const DOWNLOAD_USER_AGENT: &str = "tongues-common-phone/0.1";
 const LATEST_MODEL_STEM: &str = "model-latest";
-const TRAIN_CHECKPOINT_BATCH_INTERVAL: usize = 100;
+const TRAIN_CHECKPOINT_BATCH_INTERVAL: usize = 2_000;
 
 type CpuInferBackend = NdArray<f32>;
 type CpuTrainBackend = Autodiff<CpuInferBackend>;
@@ -250,6 +250,8 @@ pub enum TrainProgress {
         epochs: usize,
         train_state_path: String,
         epoch_checkpoint_pattern: String,
+        latest_checkpoint_path: String,
+        minibatch_checkpoint_interval: usize,
         best_model_path: String,
     },
     EpochStart {
@@ -740,6 +742,8 @@ pub fn train_with_progress(
         epochs: config.epochs,
         train_state_path: out.join("train_state.json").display().to_string(),
         epoch_checkpoint_pattern: out.join("model-epoch-N.bin").display().to_string(),
+        latest_checkpoint_path: out.join(format!("{LATEST_MODEL_STEM}.bin")).display().to_string(),
+        minibatch_checkpoint_interval: TRAIN_CHECKPOINT_BATCH_INTERVAL,
         best_model_path: out.join("model.bin").display().to_string(),
     });
     train_cpu(data, out, config, &train_rows, &valid_rows, &mut progress)
@@ -2933,9 +2937,10 @@ fn write_train_state(
             "checkpoint": checkpoint,
             "train_loss": train_loss,
             "latest_checkpoint": format!("{LATEST_MODEL_STEM}.bin"),
+            "minibatch_checkpoint_interval": TRAIN_CHECKPOINT_BATCH_INTERVAL,
             "epoch_checkpoint_pattern": "model-epoch-N.bin",
             "best_model": "model.bin",
-            "checkpoint_note": "model-latest.bin is written during epochs and at initialization; model-epoch-N.bin and model.bin are written after validation at epoch end."
+            "checkpoint_note": "model-latest.bin is written at initialization and every 2000 minibatches during epochs; model-epoch-N.bin and model.bin are written after validation at epoch end."
         }))?,
     )
 }
