@@ -742,7 +742,10 @@ pub fn train_with_progress(
         epochs: config.epochs,
         train_state_path: out.join("train_state.json").display().to_string(),
         epoch_checkpoint_pattern: out.join("model-epoch-N.bin").display().to_string(),
-        latest_checkpoint_path: out.join(format!("{LATEST_MODEL_STEM}.bin")).display().to_string(),
+        latest_checkpoint_path: out
+            .join(format!("{LATEST_MODEL_STEM}.bin"))
+            .display()
+            .to_string(),
         minibatch_checkpoint_interval: TRAIN_CHECKPOINT_BATCH_INTERVAL,
         best_model_path: out.join("model.bin").display().to_string(),
     });

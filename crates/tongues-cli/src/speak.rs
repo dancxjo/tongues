@@ -13,6 +13,7 @@ use styletts2::{
     validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
     StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
 };
+use tongues_tts as piper;
 
 #[cfg(feature = "styletts2-onnx")]
 use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
@@ -207,7 +208,7 @@ enum BackendInstance {
     #[cfg(not(feature = "styletts2-onnx"))]
     StyleTts2,
     #[cfg(feature = "piper-onnx")]
-    Piper(crate::piper::PiperOnnxBackend),
+    Piper(piper::PiperOnnxBackend),
     #[cfg(not(feature = "piper-onnx"))]
     Piper,
 }
@@ -339,16 +340,13 @@ impl BackendInstance {
             #[cfg(feature = "piper-onnx")]
             Self::Piper(ref mut backend) => {
                 let mut pcm_mono_f32 = Vec::new();
-                backend.synthesize_plan_streaming(
-                    plan,
-                    &mut |chunk: crate::piper::PiperAudioChunk| {
-                        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-                        if let Some(ref mut cb) = on_audio {
-                            cb(&chunk.pcm_mono_f32);
-                        }
-                        Ok(())
-                    },
-                )?;
+                backend.synthesize_plan_streaming(plan, &mut |chunk: piper::PiperAudioChunk| {
+                    pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                    if let Some(ref mut cb) = on_audio {
+                        cb(&chunk.pcm_mono_f32);
+                    }
+                    Ok(())
+                })?;
 
                 Ok(SpeechSynthesisArtifact {
                     sample_rate_hz: backend.sample_rate_hz(),
@@ -454,7 +452,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         SpeakBackend::Piper => {
             #[cfg(feature = "piper-onnx")]
             {
-                use crate::piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
+                use piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
                 let primary_model = crate::models::ensure_piper_voice_model_available()?;
                 let config_path = piper_voice_config_path(&primary_model);
                 let config = PiperVoiceConfig::from_json_file(&config_path)?;
@@ -559,7 +557,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                     .join(" || ")
             }
             SpeakBackend::Piper => {
-                let sequence = crate::piper::piper_sequence_from_plan(&plan)?;
+                let sequence = piper::piper_sequence_from_plan(&plan)?;
                 sequence.symbols.join(" ")
             }
         };
@@ -616,7 +614,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 }
             }
             SpeakBackend::Piper => {
-                let chunks = crate::piper::piper_synthesis_chunks_from_plan(&plan)?;
+                let chunks = piper::piper_synthesis_chunks_from_plan(&plan)?;
                 for (index, chunk) in chunks.iter().enumerate() {
                     println!(
                         "  {}: {} (pause_after: {}ms)",

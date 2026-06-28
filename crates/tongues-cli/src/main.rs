@@ -12,7 +12,6 @@
 
 mod fetch_corpora;
 pub mod models;
-mod piper;
 mod speak;
 mod styletts2_cmds;
 
@@ -57,6 +56,7 @@ use tongues_interpretation::{
     InterpretationConfig, InterpretationTrainConfig, LibriSpeechSubset, TranscriptRefinement,
 };
 use tongues_neural::{write_manifest, ModelArtifactManifest};
+use tongues_tts as piper;
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -7600,7 +7600,10 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
                 "  latest model: {}",
                 model.join("model-latest.bin").display()
             );
-            println!("  minibatch checkpoint cadence: every 2,000 minibatches -> {}", model.join("model-latest.bin").display());
+            println!(
+                "  minibatch checkpoint cadence: every 2,000 minibatches -> {}",
+                model.join("model-latest.bin").display()
+            );
             println!("  Note: v0 writes model-latest.bin at initialization and every 2,000 minibatches during epochs; epoch checkpoints and best model are written after validation.");
             let pb = status_spinner(format!(
                 "Training Common Phone compact-frame CTC scaffold from {}",

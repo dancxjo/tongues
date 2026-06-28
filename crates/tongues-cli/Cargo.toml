@@ -17,6 +17,7 @@ tongues-head2phones = { path = "../tongues-head2phones" }
 tongues-interpretation = { path = "../tongues-interpretation" }
 tongues-neural = { path = "../tongues-neural" }
 tongues-sentence-parser = { path = "../tongues-sentence-parser" }
+tongues-tts = { path = "../tongues-tts", default-features = false }
 tongues-wiktionary = { path = "../tongues-wiktionary" }
 burn = { workspace = true }
 burn-cuda = { workspace = true }
@@ -41,13 +42,7 @@ walkdir = { workspace = true }
 open-english-pronouncing-dictionary = "0.1.0"
 seams = "0.1.2"
 
-[dependencies.ort]
-version = "=2.0.0-rc.12"
-optional = true
-default-features = false
-features = ["load-dynamic", "api-23"]
-
 [features]
 default = ["styletts2-onnx", "piper-onnx"]
 styletts2-onnx = ["styletts2/styletts2-onnx"]
-piper-onnx = ["dep:ort"]
+piper-onnx = ["tongues-tts/piper-onnx"]

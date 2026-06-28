@@ -9,6 +9,7 @@ members = [
     "crates/tongues-interpretation",
     "crates/tongues-sentence-parser",
     "crates/tongues-wiktionary",
+    "crates/tongues-tts",
     "crates/tongues-head2phones",
     "crates/tongues-cli",
     "crates/speaking",

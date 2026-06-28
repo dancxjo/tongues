@@ -8,9 +8,43 @@ use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 use serde_json::Value;
 use speaking::{
-    FeatureId, FeatureValue, PauseKind, PhoneToken, PhonemeToken, ProsodicLabelKind, Spec,
-    SpeechBoundaryToken, TerminalPunctuation, UtterancePlan,
+    phonemicizer_for_variety, EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue,
+    PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput, PhonemicizeRequest, ProsodicLabelKind,
+    Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
+
+pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
+pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";
+pub const AMY_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx";
+pub const AMY_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json";
+pub const LJSPEECH_HIGH_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx";
+pub const LJSPEECH_HIGH_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeechRequest {
+    pub text: String,
+    pub variety: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechAudio {
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub pcm_mono_f32: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PiperVoice {
+    RyanMedium,
+    AmyMedium,
+    LjspeechHigh,
+    Path { model: PathBuf, config: PathBuf },
+}
+
+#[derive(Debug)]
+pub struct PiperOnnxSpeech {
+    backend: PiperOnnxBackend,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PiperVoiceConfig {
@@ -23,22 +57,26 @@ pub struct PiperVoiceConfig {
     pub noise_w: Option<f32>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperPhonemeSequence {
     pub symbols: Vec<String>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperSynthesisChunk {
     pub sequence: PiperPhonemeSequence,
     pub pause_after_ms: u32,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperIdSequence {
     pub ids: Vec<i64>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PiperSynthesisOutput {
     pub sample_rate_hz: u32,
@@ -164,6 +202,143 @@ pub fn piper_voice_config_path(model_path: &Path) -> PathBuf {
     model_path.with_extension("onnx.json")
 }
 
+pub fn default_voice_model_path(voice: PiperVoice) -> PathBuf {
+    match voice {
+        PiperVoice::RyanMedium => default_piper_voice_dir().join("en_US-ryan-medium.onnx"),
+        PiperVoice::AmyMedium => default_piper_voice_dir().join("en_US-amy-medium.onnx"),
+        PiperVoice::LjspeechHigh => default_piper_voice_dir().join("en_US-ljspeech-high.onnx"),
+        PiperVoice::Path { model, .. } => model,
+    }
+}
+
+pub fn default_voice_config_path(voice: PiperVoice) -> PathBuf {
+    match voice {
+        PiperVoice::RyanMedium => default_piper_voice_dir().join("en_US-ryan-medium.onnx.json"),
+        PiperVoice::AmyMedium => default_piper_voice_dir().join("en_US-amy-medium.onnx.json"),
+        PiperVoice::LjspeechHigh => default_piper_voice_dir().join("en_US-ljspeech-high.onnx.json"),
+        PiperVoice::Path { config, .. } => config,
+    }
+}
+
+fn default_piper_voice_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("tongues")
+        .join("models")
+        .join("piper")
+}
+
+impl PiperOnnxSpeech {
+    pub fn load(voice: PiperVoice) -> Result<Self> {
+        let model_path = default_voice_model_path(voice.clone());
+        let config_path = default_voice_config_path(voice);
+        ensure!(
+            config_path.is_file(),
+            "Piper voice config file not found at {}",
+            config_path.display()
+        );
+        let config = PiperVoiceConfig::from_json_file(&config_path)?;
+        let backend = PiperOnnxBackend::load(&model_path, config)
+            .context("failed to load Piper ONNX speech backend")?;
+        Ok(Self { backend })
+    }
+
+    pub fn synthesize(&mut self, request: SpeechRequest) -> Result<SpeechAudio> {
+        let plan = utterance_plan_from_text(request)?;
+        self.synthesize_plan(&plan)
+    }
+
+    pub fn synthesize_plan(&mut self, plan: &UtterancePlan) -> Result<SpeechAudio> {
+        let mut pcm_mono_f32 = Vec::new();
+        let mut sample_rate_hz = self.backend.sample_rate_hz();
+        self.synthesize_plan_streaming(plan, &mut |audio| {
+            sample_rate_hz = audio.sample_rate_hz;
+            pcm_mono_f32.extend(audio.pcm_mono_f32);
+            Ok(())
+        })?;
+        Ok(SpeechAudio {
+            sample_rate_hz,
+            channels: 1,
+            pcm_mono_f32,
+        })
+    }
+
+    pub fn synthesize_streaming(
+        &mut self,
+        request: SpeechRequest,
+        sink: &mut dyn FnMut(SpeechAudio) -> Result<()>,
+    ) -> Result<()> {
+        let plan = utterance_plan_from_text(request)?;
+        self.synthesize_plan_streaming(&plan, sink)
+    }
+
+    pub fn synthesize_plan_streaming(
+        &mut self,
+        plan: &UtterancePlan,
+        sink: &mut dyn FnMut(SpeechAudio) -> Result<()>,
+    ) -> Result<()> {
+        self.backend
+            .synthesize_plan_streaming(plan, &mut |chunk: PiperAudioChunk| {
+                sink(SpeechAudio {
+                    sample_rate_hz: chunk.sample_rate_hz,
+                    channels: 1,
+                    pcm_mono_f32: chunk.pcm_mono_f32,
+                })
+            })
+    }
+}
+
+#[doc(hidden)]
+pub fn piper_ids_from_text(
+    text: &str,
+    variety: &str,
+    config: &PiperVoiceConfig,
+) -> Result<PiperIdSequence> {
+    let plan = utterance_plan_from_text(SpeechRequest {
+        text: text.to_string(),
+        variety: variety.to_string(),
+    })?;
+    piper_sequence_from_plan(&plan)?.to_text_ids_compatible(config)
+}
+
+pub fn utterance_plan_from_text(request: SpeechRequest) -> Result<UtterancePlan> {
+    let variety = VarietyId(request.variety);
+    let phonemicizer = phonemicizer_for_variety(&variety)
+        .map_err(|error| anyhow::anyhow!("failed to load phonemicizer: {error}"))?;
+    let phonemicized = phonemicizer
+        .phonemicize(&PhonemicizeRequest {
+            text: request.text,
+            variety,
+            style: None,
+        })
+        .context("failed to phonemicize text into a speech plan")?;
+    Ok(utterance_plan_from_phonemicized(&phonemicized))
+}
+
+pub fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
+    UtterancePlan {
+        id: UtteranceId("tongues-tts.piper.utterance".into()),
+        variety: output.variety.clone(),
+        speaker: None,
+        intended_text: Some(output.text.clone()),
+        intended_morphemes: Vec::new(),
+        intended_phonemes: output.phonemes.clone(),
+        target_phones: output.phones.clone(),
+        target_syllables: output.syllables.clone(),
+        boundaries: output.boundaries.clone(),
+        target_prosody: output.prosody.clone(),
+        target_acoustics: Vec::new(),
+        style: None,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::TtsPlan,
+            method: "tongues-tts phonemicized Piper ONNX plan".into(),
+            version: Some("0.1".into()),
+        },
+    }
+}
+
+#[doc(hidden)]
 pub fn piper_sequence_from_plan(plan: &UtterancePlan) -> Result<PiperPhonemeSequence> {
     let mut symbols = Vec::new();
     if !plan.target_phones.is_empty() {
@@ -229,10 +404,12 @@ pub fn piper_sequence_from_plan(plan: &UtterancePlan) -> Result<PiperPhonemeSequ
     Ok(PiperPhonemeSequence { symbols })
 }
 
+#[doc(hidden)]
 pub fn piper_synthesis_chunks_from_plan(plan: &UtterancePlan) -> Result<Vec<PiperSynthesisChunk>> {
     piper_sequence_from_plan(plan).map(piper_synthesis_chunks_from_sequence)
 }
 
+#[doc(hidden)]
 pub fn piper_synthesis_chunks_from_sequence(
     sequence: PiperPhonemeSequence,
 ) -> Vec<PiperSynthesisChunk> {
@@ -545,6 +722,7 @@ fn punctuation_symbol(text: &str) -> Option<&'static str> {
 
 impl PiperPhonemeSequence {
     #[allow(dead_code)]
+    #[doc(hidden)]
     pub fn to_symbols_compatible(&self, config: &PiperVoiceConfig) -> Result<Self> {
         let text_sequence = self.with_utterance_termination(config);
         validate_piper_plan_sequence(&text_sequence)?;
@@ -559,6 +737,7 @@ impl PiperPhonemeSequence {
         text_sequence.to_espeak_compatible(config)
     }
 
+    #[doc(hidden)]
     pub fn to_text_ids_compatible(&self, config: &PiperVoiceConfig) -> Result<PiperIdSequence> {
         let text_sequence = self.with_utterance_termination(config);
         validate_piper_plan_sequence(&text_sequence)?;
@@ -1560,4 +1739,83 @@ fn find_onnxruntime_dylib() -> Option<PathBuf> {
     }
     candidates.sort();
     candidates.pop()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RYAN_LIKE_CONFIG_JSON: &str = r#"
+    {
+      "audio": { "sample_rate": 22050 },
+      "phoneme_id_map": {
+        "^": [1], "_": [0], "$": [2],
+        " ": [3], ".": [4], "?": [5], "!": [6], ",": [7],
+        "AA": [10], "AE": [11], "AH0": [12], "AH1": [13], "AO": [14],
+        "AW": [15], "AY": [16], "B": [17], "CH": [18], "D": [19],
+        "DH": [20], "EH": [21], "ER0": [22], "ER1": [23], "EY": [24],
+        "F": [25], "G": [26], "HH": [27], "IH": [28], "IY": [29],
+        "JH": [30], "K": [31], "L": [32], "M": [33], "N": [34],
+        "NG": [35], "OW": [36], "OY": [37], "P": [38], "R": [39],
+        "S": [40], "SH": [41], "T": [42], "TH": [43], "UH": [44],
+        "UW": [45], "V": [46], "W": [47], "Y": [48], "Z": [49],
+        "ZH": [50]
+      },
+      "inference": { "noise_scale": 0.667, "length_scale": 1.0, "noise_w": 0.8 }
+    }
+    "#;
+
+    #[test]
+    fn plain_text_lowers_to_non_empty_id_sequence() {
+        let config = PiperVoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
+        let ids = piper_ids_from_text("hello world", "en-US", &config).expect("ids");
+        assert!(!ids.ids.is_empty());
+    }
+
+    #[test]
+    fn piper_voice_config_loads_ryan_config_json_shape() {
+        let config = PiperVoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
+        assert_eq!(config.sample_rate_hz, 22_050);
+        assert!(config.phoneme_id_map.contains_key("HH"));
+        assert_eq!(config.noise_scale, Some(0.667));
+    }
+
+    #[test]
+    fn piper_onnx_speech_path_voice_errors_clearly_when_files_are_missing() {
+        let missing_dir =
+            std::env::temp_dir().join(format!("tongues-tts-missing-{}", std::process::id()));
+        let error = PiperOnnxSpeech::load(PiperVoice::Path {
+            model: missing_dir.join("missing.onnx"),
+            config: missing_dir.join("missing.onnx.json"),
+        })
+        .expect_err("missing files should fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("Piper voice config file not found")
+                || message.contains("Piper ONNX model file not found"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn piper_onnx_synthesis_is_env_gated() -> Result<()> {
+        let Some(model) = std::env::var_os("TONGUES_TTS_PIPER_MODEL").map(PathBuf::from) else {
+            eprintln!("skipping Piper ONNX synthesis: set TONGUES_TTS_PIPER_MODEL and TONGUES_TTS_PIPER_CONFIG");
+            return Ok(());
+        };
+        let Some(config) = std::env::var_os("TONGUES_TTS_PIPER_CONFIG").map(PathBuf::from) else {
+            eprintln!("skipping Piper ONNX synthesis: set TONGUES_TTS_PIPER_MODEL and TONGUES_TTS_PIPER_CONFIG");
+            return Ok(());
+        };
+
+        let mut speech = PiperOnnxSpeech::load(PiperVoice::Path { model, config })?;
+        let audio = speech.synthesize(SpeechRequest {
+            text: "hello world".to_string(),
+            variety: "en-US".to_string(),
+        })?;
+        assert_eq!(audio.channels, 1);
+        assert!(audio.sample_rate_hz > 0);
+        assert!(!audio.pcm_mono_f32.is_empty());
+        Ok(())
+    }
 }
