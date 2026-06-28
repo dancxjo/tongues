@@ -259,6 +259,11 @@ pub enum TrainProgress {
         epochs: usize,
         train_examples: usize,
     },
+    Resume {
+        epoch: usize,
+        checkpoint_path: String,
+        status: String,
+    },
     Batch {
         epoch: usize,
         examples: usize,
@@ -281,6 +286,26 @@ pub enum TrainProgress {
         epoch: usize,
         path: String,
     },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommonPhoneTrainState {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    epoch: usize,
+    #[serde(default)]
+    best_validation_error_rate: Option<f64>,
+    checkpoint: Option<String>,
+    latest_checkpoint: Option<String>,
+}
+
+struct CommonPhoneTrainingResume {
+    model: CommonPhoneModel<CpuTrainBackend>,
+    start_epoch: usize,
+    best_validation_error_rate: f64,
+    checkpoint_path: PathBuf,
+    status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -785,37 +810,61 @@ fn train_cpu(
     };
     save_artifact_files(out, data, &model_config, config)?;
     let device = NdArrayDevice::Cpu;
-    let mut model = model_config.init::<CpuTrainBackend>(&device);
+    let fresh_model = model_config.init::<CpuTrainBackend>(&device);
     let mut optimizer =
         AdamWConfig::new().init::<CpuTrainBackend, CommonPhoneModel<CpuTrainBackend>>();
     let mut rng = rand::rngs::StdRng::seed_from_u64(config.seed);
     let model_path = out.join("model");
-    model
-        .valid()
-        .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
-    write_train_state(
-        out,
-        0,
-        f64::INFINITY,
-        config,
-        "initialized",
-        Some(format!("{LATEST_MODEL_STEM}.bin")),
-        None,
-    )?;
-    progress(TrainProgress::Checkpoint {
-        epoch: 0,
-        path: out
-            .join(format!("{LATEST_MODEL_STEM}.bin"))
-            .display()
-            .to_string(),
-        best: false,
-    });
-    progress(TrainProgress::State {
-        epoch: 0,
-        path: out.join("train_state.json").display().to_string(),
-    });
-    let mut best = f64::INFINITY;
-    for epoch in 1..=config.epochs {
+    let CommonPhoneTrainingResume {
+        mut model,
+        start_epoch,
+        best_validation_error_rate,
+        ..
+    } = match load_common_phone_training_resume(out, &model_config, &device)? {
+        Some(resume) => {
+            progress(TrainProgress::Resume {
+                epoch: resume.start_epoch,
+                checkpoint_path: resume.checkpoint_path.display().to_string(),
+                status: resume.status.clone(),
+            });
+            resume
+        }
+        None => {
+            fresh_model
+                .valid()
+                .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
+            write_train_state(
+                out,
+                0,
+                f64::INFINITY,
+                config,
+                "initialized",
+                Some(format!("{LATEST_MODEL_STEM}.bin")),
+                None,
+            )?;
+            progress(TrainProgress::Checkpoint {
+                epoch: 0,
+                path: out
+                    .join(format!("{LATEST_MODEL_STEM}.bin"))
+                    .display()
+                    .to_string(),
+                best: false,
+            });
+            progress(TrainProgress::State {
+                epoch: 0,
+                path: out.join("train_state.json").display().to_string(),
+            });
+            CommonPhoneTrainingResume {
+                model: fresh_model,
+                start_epoch: 1,
+                best_validation_error_rate: f64::INFINITY,
+                checkpoint_path: out.join(format!("{LATEST_MODEL_STEM}.bin")),
+                status: "initialized".to_string(),
+            }
+        }
+    };
+    let mut best = best_validation_error_rate;
+    for epoch in start_epoch..=config.epochs {
         progress(TrainProgress::EpochStart {
             epoch,
             epochs: config.epochs,
@@ -2847,6 +2896,80 @@ fn first_feature_bins(data: &Path, rows: &[CommonPhoneRow]) -> Result<usize> {
     Ok(bins)
 }
 
+fn load_common_phone_training_resume(
+    out: &Path,
+    model_config: &ModelConfig,
+    device: &NdArrayDevice,
+) -> Result<Option<CommonPhoneTrainingResume>> {
+    let Some(state) = read_common_phone_train_state(out)? else {
+        return Ok(None);
+    };
+    let Some((checkpoint_stem, checkpoint_path)) = common_phone_resume_checkpoint(out, &state)
+    else {
+        return Ok(None);
+    };
+    let model = model_config
+        .init::<CpuTrainBackend>(device)
+        .load_file(&checkpoint_stem, &make_recorder(), device)
+        .with_context(|| {
+            format!(
+                "loading Common Phone checkpoint {}",
+                checkpoint_path.display()
+            )
+        })?;
+    let start_epoch = match state.status.as_str() {
+        "epoch-complete" => state.epoch.saturating_add(1),
+        _ => state.epoch.max(1),
+    };
+    Ok(Some(CommonPhoneTrainingResume {
+        model,
+        start_epoch,
+        best_validation_error_rate: state.best_validation_error_rate.unwrap_or(f64::INFINITY),
+        checkpoint_path,
+        status: state.status,
+    }))
+}
+
+fn read_common_phone_train_state(out: &Path) -> Result<Option<CommonPhoneTrainState>> {
+    let path = out.join("train_state.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let state = serde_json::from_str(&fs::read_to_string(&path)?)
+        .with_context(|| format!("reading {}", path.display()))?;
+    Ok(Some(state))
+}
+
+fn common_phone_resume_checkpoint(
+    out: &Path,
+    state: &CommonPhoneTrainState,
+) -> Option<(PathBuf, PathBuf)> {
+    let mut candidates = Vec::new();
+    if let Some(checkpoint) = &state.checkpoint {
+        candidates.push(checkpoint.as_str());
+    }
+    if let Some(checkpoint) = &state.latest_checkpoint {
+        candidates.push(checkpoint.as_str());
+    }
+    candidates.push("model-latest.bin");
+    if state.epoch > 0 {
+        candidates.push("");
+    }
+
+    for candidate in candidates {
+        let path = if candidate.is_empty() {
+            out.join(format!("model-epoch-{}.bin", state.epoch))
+        } else {
+            out.join(candidate)
+        };
+        if path.exists() {
+            let stem = path.with_extension("");
+            return Some((stem, path));
+        }
+    }
+    None
+}
+
 fn save_artifact_files(
     out: &Path,
     data: &Path,
@@ -3296,5 +3419,54 @@ item []:
         assert_eq!(reused, 1);
         assert_eq!(first_modified, second_modified);
         assert_eq!(rows[0].phones, vec!["b"]);
+    }
+
+    #[test]
+    fn resume_checkpoint_prefers_state_checkpoint_before_epoch_checkpoint() {
+        let root = temp_path("resume-checkpoint");
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("model-latest.bin"), b"latest").expect("write latest");
+        fs::write(root.join("model-epoch-2.bin"), b"epoch").expect("write epoch");
+
+        let state = CommonPhoneTrainState {
+            status: "epoch-in-progress".to_string(),
+            epoch: 2,
+            best_validation_error_rate: Some(3.0),
+            checkpoint: Some("model-latest.bin".to_string()),
+            latest_checkpoint: Some("model-latest.bin".to_string()),
+        };
+        let (_, path) = common_phone_resume_checkpoint(&root, &state).expect("resolve checkpoint");
+        fs::remove_dir_all(root).ok();
+
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("model-latest.bin")
+        );
+    }
+
+    #[test]
+    fn train_state_reader_accepts_null_best_validation_error_rate() {
+        let root = temp_path("resume-null-best");
+        fs::remove_dir_all(&root).ok();
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(
+            root.join("train_state.json"),
+            r#"{
+  "status": "initialized",
+  "epoch": 0,
+  "best_validation_error_rate": null,
+  "checkpoint": "model-latest.bin",
+  "latest_checkpoint": "model-latest.bin"
+}"#,
+        )
+        .expect("write state");
+
+        let state = read_common_phone_train_state(&root)
+            .expect("read state")
+            .expect("state exists");
+        fs::remove_dir_all(root).ok();
+
+        assert_eq!(state.best_validation_error_rate, None);
     }
 }

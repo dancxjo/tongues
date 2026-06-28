@@ -7736,6 +7736,13 @@ fn common_phone_train_progress_message(progress: tongues_common_phone::TrainProg
             "Epoch {epoch}/{epochs}: training {} examples",
             format_count(train_examples)
         ),
+        tongues_common_phone::TrainProgress::Resume {
+            epoch,
+            checkpoint_path,
+            status,
+        } => format!(
+            "Resuming Common Phone training at epoch {epoch} from {checkpoint_path} ({status})"
+        ),
         tongues_common_phone::TrainProgress::Batch {
             epoch,
             examples,
