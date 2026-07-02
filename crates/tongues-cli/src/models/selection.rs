@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -106,11 +106,14 @@ pub fn resolve_mortar_home() -> Result<PathBuf> {
         if home.as_os_str().is_empty() {
             bail!("MORTAR_SEA_HOME is set but empty");
         }
+        ensure_not_vendor_home(&home)?;
         return Ok(home);
     }
 
     let base = dirs::data_local_dir().context("failed to resolve local data directory")?;
-    Ok(base.join("mortar-sea"))
+    let home = base.join("mortar-sea");
+    ensure_not_vendor_home(&home)?;
+    Ok(home)
 }
 
 pub fn model_selection_path() -> Result<PathBuf> {
@@ -157,6 +160,21 @@ fn model_kind_name(kind: ModelKind) -> &'static str {
     }
 }
 
+fn ensure_not_vendor_home(path: &Path) -> Result<()> {
+    if path_has_vendor_component(path) {
+        bail!(
+            "refusing to use {} as a model home because Tongues does not create or manage .vendor directories",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn path_has_vendor_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::Normal(name) if name == ".vendor"))
+}
+
 fn read_selection() -> Result<ModelSelection> {
     let path = model_selection_path()?;
     if !path.exists() {
@@ -164,4 +182,17 @@ fn read_selection() -> Result<ModelSelection> {
     }
     let bytes = fs::read(&path)?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vendor_paths_are_rejected_as_model_home() {
+        assert!(ensure_not_vendor_home(Path::new(".vendor")).is_err());
+        assert!(ensure_not_vendor_home(Path::new("/tmp/tongues/.vendor/models")).is_err());
+        assert!(ensure_not_vendor_home(Path::new("/tmp/tongues/vendor/models")).is_ok());
+        assert!(ensure_not_vendor_home(Path::new("/tmp/tongues/models")).is_ok());
+    }
 }

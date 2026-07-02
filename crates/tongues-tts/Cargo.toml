@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 dirs = { workspace = true }
-ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["load-dynamic", "api-23"] }
+ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "api-23"] }
 serde_json = { workspace = true }
 speaking = { path = "../speaking" }
 

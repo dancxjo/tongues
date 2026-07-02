@@ -1096,39 +1096,10 @@ fn initialize_ort_runtime() -> Result<(), StyleTts2Error> {
 }
 
 fn initialize_ort_runtime_inner() -> Result<(), String> {
-    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH").filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(path);
-        if !path.is_file() {
-            return Err(format!(
-                "ORT_DYLIB_PATH points to {}, but that file does not exist",
-                path.display()
-            ));
-        }
-        return initialize_ort_runtime_from(&path);
-    }
-
-    let Some(path) = find_onnxruntime_dylib() else {
-        return Err(
-            "StyleTTS2 ONNX requires an ONNX Runtime shared library. Install ONNX Runtime or set ORT_DYLIB_PATH to libonnxruntime.so.".into(),
-        );
-    };
-    initialize_ort_runtime_from(&path)
-}
-
-fn initialize_ort_runtime_from(path: &Path) -> Result<(), String> {
-    ort::init_from(path)
-        .map_err(|error| {
-            format!(
-                "failed to load ONNX Runtime dynamic library from {}: {error}",
-                path.display()
-            )
-        })?
+    ort::init()
+        .map_err(|error| format!("failed to initialize ONNX Runtime: {error}"))?
         .commit();
     Ok(())
-}
-
-fn find_onnxruntime_dylib() -> Option<PathBuf> {
-    find_home_onnxruntime_dylib().or_else(find_linker_onnxruntime_dylib)
 }
 
 fn read_thread_count_env(name: &'static str) -> Result<Option<usize>, StyleTts2Error> {
@@ -1179,79 +1150,6 @@ fn prefix_timing(prefix: &str, timing: StyleTts2Timing) -> StyleTts2Timing {
         stage: format!("{prefix}.{}", timing.stage),
         elapsed_ms: timing.elapsed_ms,
     }
-}
-
-fn find_home_onnxruntime_dylib() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let mut dirs = Vec::new();
-    let local_lib = home.join(".local/lib");
-    if let Ok(entries) = std::fs::read_dir(local_lib) {
-        dirs.extend(entries.flatten().filter_map(|entry| {
-            let file_name = entry.file_name();
-            file_name
-                .to_string_lossy()
-                .starts_with("python")
-                .then(|| entry.path().join("site-packages/onnxruntime/capi"))
-        }));
-    }
-    for extensions_dir in [
-        home.join(".vscode/extensions"),
-        home.join(".vscode-server/extensions"),
-    ] {
-        if let Ok(entries) = std::fs::read_dir(extensions_dir) {
-            dirs.extend(
-                entries
-                    .flatten()
-                    .filter_map(|entry| {
-                        let file_name = entry.file_name();
-                        if file_name.to_string_lossy().contains("windows-ai-studio") {
-                            Some(vec![
-                                entry.path().join("bin"),
-                                entry.path().join("ai-mlstudio/bin"),
-                                entry.path().join("ai-foundry/bin"),
-                            ])
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten(),
-            );
-        }
-    }
-    find_onnxruntime_dylib_in_dirs(dirs)
-}
-
-fn find_linker_onnxruntime_dylib() -> Option<PathBuf> {
-    let mut search_dirs = Vec::new();
-    if let Some(paths) = std::env::var_os("LD_LIBRARY_PATH") {
-        search_dirs.extend(std::env::split_paths(&paths));
-    }
-    search_dirs.extend([
-        PathBuf::from("/usr/local/lib"),
-        PathBuf::from("/usr/local/lib64"),
-        PathBuf::from("/usr/lib"),
-        PathBuf::from("/usr/lib64"),
-        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
-        PathBuf::from("/lib/x86_64-linux-gnu"),
-    ]);
-    find_onnxruntime_dylib_in_dirs(search_dirs)
-}
-
-fn find_onnxruntime_dylib_in_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        candidates.extend(entries.flatten().filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            (name == "libonnxruntime.so" || name.starts_with("libonnxruntime.so."))
-                .then(|| entry.path())
-        }));
-    }
-    candidates.sort();
-    candidates.pop()
 }
 
 fn load_session(

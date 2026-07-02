@@ -1640,105 +1640,10 @@ fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
 
 #[cfg(feature = "piper-onnx")]
 fn initialize_ort_runtime() -> Result<()> {
-    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH").filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(path);
-        ensure!(
-            path.is_file(),
-            "ORT_DYLIB_PATH points to {}, but that file does not exist",
-            path.display()
-        );
-        ort::init_from(&path)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to load ONNX Runtime dynamic library from {}: {error}",
-                    path.display()
-                )
-            })?
-            .commit();
-        return Ok(());
-    }
-
-    if let Some(path) = find_onnxruntime_dylib() {
-        ort::init_from(&path)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to load ONNX Runtime dynamic library from {}: {error}",
-                    path.display()
-                )
-            })?
-            .commit();
-        Ok(())
-    } else {
-        bail!(
-            "Piper ONNX requires an ONNX Runtime shared library. Install ONNX Runtime or set ORT_DYLIB_PATH to libonnxruntime.so."
-        )
-    }
-}
-
-#[cfg(feature = "piper-onnx")]
-fn find_onnxruntime_dylib() -> Option<PathBuf> {
-    let mut search_dirs = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if let Ok(entries) = std::fs::read_dir(home.join(".local/lib")) {
-            search_dirs.extend(entries.flatten().filter_map(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("python")
-                    .then(|| entry.path().join("site-packages/onnxruntime/capi"))
-            }));
-        }
-        for extensions_dir in [
-            home.join(".vscode/extensions"),
-            home.join(".vscode-server/extensions"),
-        ] {
-            if let Ok(entries) = std::fs::read_dir(extensions_dir) {
-                search_dirs.extend(
-                    entries
-                        .flatten()
-                        .filter_map(|entry| {
-                            let file_name = entry.file_name();
-                            if file_name.to_string_lossy().contains("windows-ai-studio") {
-                                Some(vec![
-                                    entry.path().join("bin"),
-                                    entry.path().join("ai-mlstudio/bin"),
-                                    entry.path().join("ai-foundry/bin"),
-                                ])
-                            } else {
-                                None
-                            }
-                        })
-                        .flatten(),
-                );
-            }
-        }
-    }
-    if let Some(paths) = std::env::var_os("LD_LIBRARY_PATH") {
-        search_dirs.extend(std::env::split_paths(&paths));
-    }
-    search_dirs.extend([
-        PathBuf::from("/usr/local/lib"),
-        PathBuf::from("/usr/local/lib64"),
-        PathBuf::from("/usr/lib"),
-        PathBuf::from("/usr/lib64"),
-        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
-        PathBuf::from("/lib/x86_64-linux-gnu"),
-    ]);
-
-    let mut candidates = Vec::new();
-    for dir in search_dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        candidates.extend(entries.flatten().filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            (name == "libonnxruntime.so" || name.starts_with("libonnxruntime.so."))
-                .then(|| entry.path())
-        }));
-    }
-    candidates.sort();
-    candidates.pop()
+    ort::init()
+        .map_err(|error| anyhow::anyhow!("failed to initialize ONNX Runtime: {error}"))?
+        .commit();
+    Ok(())
 }
 
 #[cfg(test)]
