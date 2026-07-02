@@ -1640,9 +1640,7 @@ fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
 
 #[cfg(feature = "piper-onnx")]
 fn initialize_ort_runtime() -> Result<()> {
-    ort::init()
-        .map_err(|error| anyhow::anyhow!("failed to initialize ONNX Runtime: {error}"))?
-        .commit();
+    ort::init().commit();
     Ok(())
 }
 

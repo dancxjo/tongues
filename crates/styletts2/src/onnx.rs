@@ -1096,9 +1096,7 @@ fn initialize_ort_runtime() -> Result<(), StyleTts2Error> {
 }
 
 fn initialize_ort_runtime_inner() -> Result<(), String> {
-    ort::init()
-        .map_err(|error| format!("failed to initialize ONNX Runtime: {error}"))?
-        .commit();
+    ort::init().commit();
     Ok(())
 }
 
