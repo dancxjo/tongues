@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,23 @@ const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
 
 type PhonemicizerFactory = fn() -> Box<dyn Phonemicizer>;
+pub type UnknownPronunciationFallback = fn(word: &str, variety: &str) -> Option<String>;
+
+static UNKNOWN_PRONUNCIATION_FALLBACK: OnceLock<RwLock<Option<UnknownPronunciationFallback>>> =
+    OnceLock::new();
+
+pub fn set_unknown_pronunciation_fallback(fallback: Option<UnknownPronunciationFallback>) {
+    let lock = UNKNOWN_PRONUNCIATION_FALLBACK.get_or_init(|| RwLock::new(None));
+    if let Ok(mut configured) = lock.write() {
+        *configured = fallback;
+    }
+}
+
+fn unknown_pronunciation_fallback() -> Option<UnknownPronunciationFallback> {
+    UNKNOWN_PRONUNCIATION_FALLBACK
+        .get()
+        .and_then(|lock| lock.read().ok().and_then(|configured| *configured))
+}
 
 struct PronunciationPipelineRegistration {
     id: &'static str,
@@ -124,9 +142,12 @@ pub trait PronunciationPipeline {
     fn unknown_word_pronunciation(
         &self,
         word: &WordToken,
-        _variety: &LinguisticVariety,
+        variety: &LinguisticVariety,
         context: TokenPronunciationContext,
     ) -> WordPronunciation {
+        if let Some(pronunciation) = fallback_pronunciation(word, variety, context) {
+            return pronunciation;
+        }
         missing_pronunciation(word, context, "missing variety-data pronunciation")
     }
 
@@ -1261,6 +1282,38 @@ fn planned_candidate_from_source_pronunciation(
         return Vec::new();
     };
     planned_candidate_from_notation(variety, symbols.to_vec(), notation)
+}
+
+fn fallback_pronunciation(
+    word: &WordToken,
+    variety: &LinguisticVariety,
+    context: TokenPronunciationContext,
+) -> Option<WordPronunciation> {
+    let fallback = unknown_pronunciation_fallback()?;
+    let prediction = fallback(&word.normalized, &variety.id.0)?;
+    let candidate =
+        planned_candidate_from_notation(variety, vec![prediction], PronunciationNotation::Ipa);
+    if candidate.is_empty() {
+        return None;
+    }
+
+    Some(WordPronunciation {
+        candidates: vec![candidate],
+        status: PronunciationStatus::Guessed,
+        provenance: EvidenceProvenance {
+            source: EvidenceSource::Inference,
+            method: "unknown-word pronunciation fallback".into(),
+            version: Some("0.1".into()),
+        },
+        warnings: vec![PronunciationWarning {
+            token: word.text.clone(),
+            kind: PronunciationWarningKind::GuessedWord,
+            message: format!("guessed pronunciation: {}", word.text),
+        }],
+        letter_break_offsets: Vec::new(),
+        letter_indices: Vec::new(),
+        part_of_speech: context.part_of_speech,
+    })
 }
 
 fn planned_phoneme_is_vowel(variety: &LinguisticVariety, planned: &PlannedPhoneme) -> bool {

@@ -38,6 +38,127 @@ const EXPANDED_METADATA_SCHEMA: &str = "metadata-controls-etymology-v3";
 const PARSE_CHECKPOINT_PAGE_INTERVAL: usize = 1_000;
 const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WiktionaryInferNotation {
+    Phones,
+    Phonemes,
+}
+
+impl WiktionaryInferNotation {
+    pub fn representation_token(self) -> &'static str {
+        match self {
+            Self::Phones => "<repr:phones>",
+            Self::Phonemes => "<repr:phonemes>",
+        }
+    }
+}
+
+pub fn wiktionary_infer_source(
+    task: &str,
+    lang: &str,
+    notation: WiktionaryInferNotation,
+    variety: Option<&str>,
+    input: &str,
+) -> Result<String> {
+    let normalized = task.to_ascii_lowercase();
+    let source = match normalized.as_str() {
+        "orthography-to-phonemes" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phonemes>");
+            format!("{controls} {input}")
+        }
+        "orthography-to-phones" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phones>");
+            format!("{controls} {input}")
+        }
+        "orthography-to-phonology" => {
+            let mut controls = format!("<task:orthography_to_phonology> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(&format!(" {}", notation.representation_token()));
+            format!("{controls} {input}")
+        }
+        "phonemes-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phonemes>");
+            format!("{controls} {input}")
+        }
+        "phones-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phones>");
+            format!("{controls} {input}")
+        }
+        "phonology-to-orthography" => {
+            let mut controls = format!("<task:phonology_to_orthography> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(&format!(" {}", notation.representation_token()));
+            format!("{controls} {input}")
+        }
+        "phonetic-realization" => {
+            let mut controls = format!("<task:phonetic_realization> <lang:{lang}>");
+            if let Some(variety) = variety.filter(|variety| !variety.is_empty()) {
+                controls.push_str(&format!(" <variety:{variety}>"));
+            }
+            controls.push_str(" <repr:phonemes>");
+            format!("{controls} {input}")
+        }
+        "segment" | "segment-compound" | "compound-segmentation" => {
+            format!("<task:segment_compound> <lang:{lang}> <SEGMENT> {input}")
+        }
+        "pronounce-segments" | "segments-to-phonology" | "segments-to-phones" => {
+            format!(
+                "<task:pronounce_segments> <lang:{lang}> <PRONOUNCE_SEGMENTS> <repr:phones> {input}"
+            )
+        }
+        "verify" | "verify-pronunciation" | "verifier" => {
+            format!("<task:verify_pronunciation> <lang:{lang}> <VERIFY> {input}")
+        }
+        "normalize-phonology" | "normalise-phonology" | "broad-equivalence" => {
+            format!("<task:normalize_phonology> <lang:{lang}> <BROAD_EQUIV> <repr:phones> {input}")
+        }
+        "find-etymology" | "etymology-from-word" | "word-etymology" => {
+            format!("<task:find_etymology> <lang:{lang}> {input}")
+        }
+        "normalize" | "normalise" => {
+            format!("<task:normalize> <lang:{lang}> {input}")
+        }
+        "guess-lang-from-orthography" | "lang-from-orthography" => {
+            let representation_token = notation.representation_token();
+            format!("<task:guess_lang_from_orthography> {representation_token} {input}")
+        }
+        "guess-lang-from-phonology" | "lang-from-phonology" => {
+            let representation_token = notation.representation_token();
+            format!("<task:guess_lang_from_phonology> {representation_token} {input}")
+        }
+        "guess-lang-from-orthography-and-phonology" | "lang" | "language" | "language-guessing" => {
+            let representation_token = notation.representation_token();
+            format!(
+                "<task:guess_lang_from_orthography_and_phonology> {representation_token} {input}"
+            )
+        }
+        _ => anyhow::bail!(
+            "Invalid Wiktionary inference task. Supported: orthography-to-phonemes, orthography-to-phones, phonemes-to-orthography, phones-to-orthography, phonetic-realization, find-etymology, segment-compound, pronounce-segments, verify-pronunciation, normalize-phonology, normalize, guess-lang-from-orthography, guess-lang-from-phonology, guess-lang-from-orthography-and-phonology"
+        ),
+    };
+    Ok(normalize_wiktionary_control_tokens(&source))
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiktionaryConfig {
     #[serde(default)]

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, Once, OnceLock};
 
 use anyhow::{bail, ensure, Context, Result};
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::tensor::{Int, Tensor as BurnTensor, TensorData};
 #[cfg(feature = "piper-onnx")]
 use ort::session::{builder::GraphOptimizationLevel, Session};
 #[cfg(feature = "piper-onnx")]
@@ -12,6 +15,9 @@ use speaking::{
     PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput, PhonemicizeRequest, ProsodicLabelKind,
     Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
+use tongues_core::Vocab;
+use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
+use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";
@@ -19,6 +25,10 @@ pub const AMY_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voi
 pub const AMY_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json";
 pub const LJSPEECH_HIGH_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx";
 pub const LJSPEECH_HIGH_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json";
+pub const DEFAULT_WIKTIONARY_FALLBACK_MODEL_DIR: &str =
+    "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
+
+type CpuInferBackend = NdArray<f32>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechRequest {
@@ -229,6 +239,109 @@ fn default_piper_voice_dir() -> PathBuf {
         .join("piper")
 }
 
+fn repo_relative_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join(path)
+}
+
+fn default_wiktionary_fallback_model_dir() -> PathBuf {
+    std::env::var_os("TONGUES_TTS_WIKTIONARY_MODEL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_relative_path(DEFAULT_WIKTIONARY_FALLBACK_MODEL_DIR))
+}
+
+struct WiktionaryFallbackPredictor {
+    model: Seq2SeqModel<CpuInferBackend>,
+    vocab: Vocab,
+    device: NdArrayDevice,
+}
+
+impl WiktionaryFallbackPredictor {
+    fn load(model_dir: &Path) -> Result<Self> {
+        let device = NdArrayDevice::Cpu;
+        let model_config: ModelConfig = serde_json::from_str(
+            &std::fs::read_to_string(model_dir.join("model_config.json")).with_context(|| {
+                format!("reading {}", model_dir.join("model_config.json").display())
+            })?,
+        )?;
+        let vocab: Vocab = serde_json::from_str(
+            &std::fs::read_to_string(model_dir.join("vocab.json"))
+                .with_context(|| format!("reading {}", model_dir.join("vocab.json").display()))?,
+        )?;
+        let model =
+            load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
+        Ok(Self {
+            model,
+            vocab,
+            device,
+        })
+    }
+
+    fn predict(&self, word: &str, variety: &str) -> Result<String> {
+        let source = wiktionary_infer_source(
+            "orthography-to-phonemes",
+            wiktionary_language_for_variety(variety),
+            WiktionaryInferNotation::Phonemes,
+            wiktionary_variety_for_speaking_variety(variety),
+            word,
+        )?;
+        let src_ids = self.vocab.encode_string(&source);
+        let src_len = src_ids.len();
+        let src_tensor = BurnTensor::<CpuInferBackend, 2, Int>::from_data(
+            TensorData::new(
+                src_ids.iter().map(|&id| id as i32).collect::<Vec<_>>(),
+                [1, src_len],
+            ),
+            &self.device,
+        );
+        let pred_ids = self.model.generate(src_tensor, 128);
+        Ok(self.vocab.decode_ids(&pred_ids))
+    }
+}
+
+fn wiktionary_language_for_variety(variety: &str) -> &'static str {
+    if variety.starts_with("en") {
+        "eng"
+    } else {
+        "eng"
+    }
+}
+
+fn wiktionary_variety_for_speaking_variety(variety: &str) -> Option<&'static str> {
+    match variety {
+        "en-US" | "en-US-GA" | "en-US.GenAm" => Some("en-US.GenAm"),
+        _ if variety.starts_with("en-US") => Some("en-US.GenAm"),
+        _ => None,
+    }
+}
+
+fn install_default_unknown_pronunciation_fallback() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        speaking::set_unknown_pronunciation_fallback(Some(wiktionary_unknown_pronunciation));
+    });
+}
+
+fn wiktionary_unknown_pronunciation(word: &str, variety: &str) -> Option<String> {
+    static PREDICTOR: OnceLock<Mutex<Option<WiktionaryFallbackPredictor>>> = OnceLock::new();
+    let predictor = PREDICTOR.get_or_init(|| {
+        let loaded =
+            WiktionaryFallbackPredictor::load(&default_wiktionary_fallback_model_dir()).ok();
+        Mutex::new(loaded)
+    });
+    predictor
+        .lock()
+        .ok()
+        .and_then(|predictor| {
+            predictor
+                .as_ref()
+                .and_then(|predictor| predictor.predict(word, variety).ok())
+        })
+        .filter(|prediction| !prediction.trim().is_empty())
+}
+
 impl PiperOnnxSpeech {
     pub fn load(voice: PiperVoice) -> Result<Self> {
         let model_path = default_voice_model_path(voice.clone());
@@ -303,6 +416,7 @@ pub fn piper_ids_from_text(
 }
 
 pub fn utterance_plan_from_text(request: SpeechRequest) -> Result<UtterancePlan> {
+    install_default_unknown_pronunciation_fallback();
     let variety = VarietyId(request.variety);
     let phonemicizer = phonemicizer_for_variety(&variety)
         .map_err(|error| anyhow::anyhow!("failed to load phonemicizer: {error}"))?;
@@ -1021,6 +1135,7 @@ impl PiperOnnxBackend {
 }
 
 #[cfg(not(feature = "piper-onnx"))]
+#[derive(Debug)]
 pub struct PiperOnnxBackend;
 
 #[cfg(not(feature = "piper-onnx"))]
@@ -1673,6 +1788,34 @@ mod tests {
         let config = PiperVoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
         let ids = piper_ids_from_text("hello world", "en-US", &config).expect("ids");
         assert!(!ids.ids.is_empty());
+    }
+
+    #[test]
+    fn wiktionary_default_fallback_pronounces_netherwick() -> Result<()> {
+        let model_dir = default_wiktionary_fallback_model_dir();
+        if !model_dir.join("model.bin").is_file() {
+            eprintln!(
+                "skipping Wiktionary fallback smoke test: missing {}",
+                model_dir.display()
+            );
+            return Ok(());
+        }
+
+        let plan = utterance_plan_from_text(SpeechRequest {
+            text: "Netherwick".to_string(),
+            variety: "en-US".to_string(),
+        })?;
+        assert!(
+            !plan.intended_phonemes.is_empty(),
+            "Netherwick should receive a fallback pronunciation"
+        );
+        assert!(
+            plan.intended_phonemes
+                .iter()
+                .any(|token| token.provenance.source == EvidenceSource::Inference),
+            "Netherwick should be pronounced by the Wiktionary inference fallback"
+        );
+        Ok(())
     }
 
     #[test]
