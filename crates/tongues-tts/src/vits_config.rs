@@ -180,7 +180,8 @@ impl ImportedVitsConfig {
             "VITS text encoder dimensions must be positive"
         );
         ensure!(
-            args.hidden_channels % args.num_heads_text_encoder == 0,
+            args.hidden_channels
+                .is_multiple_of(args.num_heads_text_encoder),
             "VITS hidden channels must divide evenly across attention heads"
         );
         ensure!(
@@ -299,7 +300,8 @@ impl VitsInferenceConfig {
             "VITS text encoder dimensions must be positive"
         );
         ensure!(
-            args.hidden_channels % args.num_heads_text_encoder == 0,
+            args.hidden_channels
+                .is_multiple_of(args.num_heads_text_encoder),
             "VITS hidden channels must divide evenly across attention heads"
         );
         ensure!(
