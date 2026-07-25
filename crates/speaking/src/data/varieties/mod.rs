@@ -7,7 +7,7 @@ pub mod latin;
 pub mod sanskrit;
 pub mod spanish;
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
@@ -466,13 +466,15 @@ pub fn variety_by_code(code: &str) -> Option<LinguisticVariety> {
 }
 
 pub fn language_tag_for_variety(code: &str) -> Option<&'static str> {
-    let registration = find_variety_registration(code)?;
+    let canonical = canonical_variety_id(code)?;
+    let registration = find_variety_registration(&canonical.0)?;
     LangTag::new(registration.language_tag).ok()?;
     Some(registration.language_tag)
 }
 
 pub fn wiktionary_language_for_variety(code: &str) -> Option<&'static str> {
-    let registration = find_variety_registration(code)?;
+    let canonical = canonical_variety_id(code)?;
+    let registration = find_variety_registration(&canonical.0)?;
     let language = (registration.load)(registration.canonical_id).language;
     let parsed =
         IsoLanguage::from_639_1(&language.0).or_else(|| IsoLanguage::from_639_3(&language.0))?;
@@ -486,23 +488,22 @@ pub fn builtin_varieties() -> Vec<LinguisticVariety> {
 }
 
 pub fn builtin_languages() -> Vec<Language> {
+    let mut seen = BTreeSet::new();
     builtin_variety_registrations()
         .filter_map(|registration| {
             let language = (registration.load)(registration.canonical_id).language;
+            if !seen.insert(language.0.clone()) {
+                return None;
+            }
             let parsed = IsoLanguage::from_639_1(&language.0)
                 .or_else(|| IsoLanguage::from_639_3(&language.0))?;
-            Some((
-                language.0.clone(),
-                Language {
-                    id: language,
-                    name: parsed.to_name().into(),
-                    endonym: None,
-                    iso_639: Some(parsed.to_639_3().into()),
-                },
-            ))
+            Some(Language {
+                id: language,
+                name: parsed.to_name().into(),
+                endonym: None,
+                iso_639: Some(parsed.to_639_3().into()),
+            })
         })
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
         .collect()
 }
 

@@ -123,6 +123,13 @@ mod tests {
             .map(|variety| variety.language.0.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         let published_languages = builtin_languages();
+        assert_eq!(
+            published_languages
+                .iter()
+                .map(|language| language.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
+        );
         let published_language_ids = published_languages
             .iter()
             .map(|language| language.id.0.as_str())
