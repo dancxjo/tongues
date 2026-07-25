@@ -321,7 +321,7 @@ speech-demo:
         local sentence="${shuffled[$index]}"
         index=$((index + 1))
         printf '\n== %s ==\n%s\n' "$label" "$sentence"
-        cargo run -q --bin tongues -- speak --backend "$backend" "$@" "$sentence"
+        cargo run -q --release --bin tongues -- speak --backend "$backend" "$@" "$sentence"
     }
 
     play "Burn components: SpeedySpeech + HiFi-GAN" burn
