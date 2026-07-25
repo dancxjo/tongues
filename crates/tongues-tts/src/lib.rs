@@ -15,9 +15,10 @@ use serde_json::Value;
 #[cfg(any(feature = "onnx-tts", test))]
 use speaking::SpeakerId;
 use speaking::{
-    phonemicizer_for_variety, EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue,
-    PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput, PhonemicizeRequest, ProsodicLabelKind,
-    Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
+    canonical_variety_id, phonemicizer_for_variety, EvidenceProvenance, EvidenceSource, FeatureId,
+    FeatureValue, PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput, PhonemicizeRequest,
+    ProsodicLabelKind, Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan,
+    VarietyId,
 };
 use tongues_core::Vocab;
 use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
@@ -435,9 +436,11 @@ impl WiktionaryFallbackPredictor {
     }
 
     fn predict(&self, word: &str, variety: &str) -> Result<String> {
+        let language = wiktionary_language_for_variety(variety)
+            .with_context(|| format!("no Wiktionary language mapping for variety `{variety}`"))?;
         let source = wiktionary_infer_source(
             "orthography-to-phonemes",
-            wiktionary_language_for_variety(variety),
+            language,
             WiktionaryInferNotation::Phonemes,
             wiktionary_variety_for_speaking_variety(variety),
             word,
@@ -456,9 +459,23 @@ impl WiktionaryFallbackPredictor {
     }
 }
 
-fn wiktionary_language_for_variety(variety: &str) -> &'static str {
-    let _ = variety;
-    "eng"
+fn wiktionary_language_for_variety(variety: &str) -> Option<&'static str> {
+    if variety == "en-US.GenAm" {
+        return Some("eng");
+    }
+    let canonical = canonical_variety_id(variety)?;
+    match canonical.0.as_str() {
+        "en-US-GA" | "en-US-singing" | "en-US-AAE" | "en-GB-RP" | "en-GB-ScotE" => Some("eng"),
+        "fr-FR-Standard" => Some("fra"),
+        "de-DE-Standard" => Some("deu"),
+        "es-ES-Castilian" | "es-419-Standard" => Some("spa"),
+        "el-GR-Standard" => Some("ell"),
+        "grc-Attic" | "grc-Koine" => Some("grc"),
+        "la-Classical" | "la-Ecclesiastical" => Some("lat"),
+        "sa-Deva-Standard" => Some("san"),
+        "eo" => Some("epo"),
+        _ => None,
+    }
 }
 
 fn wiktionary_variety_for_speaking_variety(variety: &str) -> Option<&'static str> {
@@ -2211,6 +2228,35 @@ mod tests {
         let config = VoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
         let ids = phoneme_ids_from_text("hello world", "en-US", &config).expect("ids");
         assert!(!ids.ids.is_empty());
+    }
+
+    #[test]
+    fn wiktionary_fallback_maps_supported_varieties_to_languages() {
+        for (variety, expected_language) in [
+            ("en-US", "eng"),
+            ("en-US.GenAm", "eng"),
+            ("en-GB-RP", "eng"),
+            ("fr-FR-Standard", "fra"),
+            ("fra", "fra"),
+            ("de-DE-Standard", "deu"),
+            ("es-ES-Castilian", "spa"),
+            ("es-419", "spa"),
+            ("el-GR-Standard", "ell"),
+            ("grc-Attic", "grc"),
+            ("grc-Koine", "grc"),
+            ("la-Classical", "lat"),
+            ("la-Ecclesiastical", "lat"),
+            ("sa-Deva-Standard", "san"),
+            ("eo", "epo"),
+            ("epo", "epo"),
+        ] {
+            assert_eq!(
+                wiktionary_language_for_variety(variety),
+                Some(expected_language),
+                "{variety}"
+            );
+        }
+        assert_eq!(wiktionary_language_for_variety("not-a-variety"), None);
     }
 
     #[test]
