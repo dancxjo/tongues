@@ -7,6 +7,7 @@ pub enum ModelKind {
     VoiceModel,
     AcousticModel,
     NeuralVocoder,
+    EndToEndSpeech,
     Lexicon,
     Phonemicizer,
 }
@@ -339,6 +340,17 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
         notes: Some("Published Coqui HiFi-GAN v2 neural-vocoder release archive."),
     },
+    ModelAsset {
+        id: "coqui-vits-vctk-release",
+        filename: "tts_models--en--vctk--vits.zip",
+        relative_path: "models/speech/coqui/en/vctk/vits/tts_models--en--vctk--vits.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--vctk--vits.zip",
+        sha256: Some("ad753e5200614907627495b6177a08d755df1dbbde30eb6e31264caa2a3f3eaa"),
+        size_bytes: Some(147_691_678),
+        license: Some("Apache-2.0"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
+        notes: Some("Published Coqui VCTK VITS release with 109 learned speaker embeddings."),
+    },
 ];
 
 pub const MODEL_ARCHIVES: &[ModelArchive] = &[
@@ -367,6 +379,24 @@ pub const MODEL_ARCHIVES: &[ModelArchive] = &[
             ArchiveMember {
                 member_path: "vocoder_models--en--ljspeech--hifigan_v2/config.json",
                 relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/config.json",
+            },
+        ],
+    },
+    ModelArchive {
+        asset_id: "coqui-vits-vctk-release",
+        primary_member_path: "models/speech/coqui/en/vctk/vits/model_file.pth",
+        members: &[
+            ArchiveMember {
+                member_path: "tts_models--en--vctk--vits/model_file.pth",
+                relative_path: "models/speech/coqui/en/vctk/vits/model_file.pth",
+            },
+            ArchiveMember {
+                member_path: "tts_models--en--vctk--vits/config.json",
+                relative_path: "models/speech/coqui/en/vctk/vits/config.json",
+            },
+            ArchiveMember {
+                member_path: "tts_models--en--vctk--vits/speaker_ids.json",
+                relative_path: "models/speech/coqui/en/vctk/vits/speaker_ids.json",
             },
         ],
     },
@@ -496,6 +526,14 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         primary_asset_id: "coqui-hifigan-v2-ljspeech-release",
         required_asset_ids: &["coqui-hifigan-v2-ljspeech-release"],
         aliases: &["hifigan-v2", "hifigan", "coqui-hifigan"],
+    },
+    ModelBundle {
+        id: "coqui-vits-vctk",
+        display_name: "Coqui VITS VCTK",
+        kind: ModelKind::EndToEndSpeech,
+        primary_asset_id: "coqui-vits-vctk-release",
+        required_asset_ids: &["coqui-vits-vctk-release"],
+        aliases: &["vctk-vits", "vits-vctk", "coqui-vctk"],
     },
 ];
 
@@ -630,11 +668,19 @@ mod tests {
             find_bundle("hifigan").unwrap().kind,
             ModelKind::NeuralVocoder
         );
+        assert_eq!(
+            find_bundle("vctk-vits").unwrap().kind,
+            ModelKind::EndToEndSpeech
+        );
     }
 
     #[test]
     fn coqui_archives_have_integrity_and_registered_entrypoints() {
-        for bundle_id in ["coqui-speedy-speech-ljspeech", "coqui-hifigan-v2-ljspeech"] {
+        for (bundle_id, member_count) in [
+            ("coqui-speedy-speech-ljspeech", 2),
+            ("coqui-hifigan-v2-ljspeech", 2),
+            ("coqui-vits-vctk", 3),
+        ] {
             let bundle = find_bundle(bundle_id).expect("bundle");
             let asset = bundle_primary_asset(bundle).expect("asset");
             let sha256 = asset.sha256.expect("pinned SHA-256");
@@ -643,7 +689,7 @@ mod tests {
             assert!(bundle_entrypoint_relative_path(bundle)
                 .expect("entrypoint")
                 .ends_with("model_file.pth"));
-            assert_eq!(bundle_archive_members(bundle).unwrap().len(), 2);
+            assert_eq!(bundle_archive_members(bundle).unwrap().len(), member_count);
         }
     }
 }

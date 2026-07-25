@@ -162,6 +162,7 @@ fn model_kind_name(kind: ModelKind) -> &'static str {
         ModelKind::VoiceModel => "Voice model",
         ModelKind::AcousticModel => "acoustic model",
         ModelKind::NeuralVocoder => "neural vocoder",
+        ModelKind::EndToEndSpeech => "end-to-end speech model",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

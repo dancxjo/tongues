@@ -28,6 +28,7 @@ pub mod burn_vocoder;
 pub mod components;
 pub mod coqui;
 pub mod coqui_projector;
+pub mod speakers;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_speedy_speech::{
@@ -47,6 +48,7 @@ pub use coqui::{CoquiAudioConfig, CoquiHifiGanConfig, CoquiHifiGanGeneratorConfi
 pub use coqui_projector::{
     CoquiCharactersConfig, CoquiLinguisticProjector, CoquiTokenIds, CoquiTokenizerConfig,
 };
+pub use speakers::SpeakerCatalog;
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";

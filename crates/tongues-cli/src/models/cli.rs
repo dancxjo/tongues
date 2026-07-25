@@ -281,6 +281,7 @@ fn print_status() -> Result<()> {
                 | ModelKind::VoiceModel
                 | ModelKind::AcousticModel
                 | ModelKind::NeuralVocoder
+                | ModelKind::EndToEndSpeech
                 | ModelKind::Lexicon
                 | ModelKind::Phonemicizer
         )
@@ -350,6 +351,7 @@ fn model_kind_label(kind: ModelKind) -> &'static str {
         ModelKind::VoiceModel => "voice-model",
         ModelKind::AcousticModel => "acoustic-model",
         ModelKind::NeuralVocoder => "neural-vocoder",
+        ModelKind::EndToEndSpeech => "end-to-end-speech",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }
