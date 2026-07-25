@@ -7,6 +7,8 @@ pub mod latin;
 pub mod sanskrit;
 pub mod spanish;
 
+use std::collections::BTreeMap;
+
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
 use crate::variety::{
@@ -436,6 +438,7 @@ pub fn sanskrit_question_contour_profile() -> QuestionContourProfile {
 pub struct VarietyRegistration {
     pub canonical_id: &'static str,
     pub aliases: &'static [&'static str],
+    pub language_tag: &'static str,
     pub load: fn(&str) -> LinguisticVariety,
 }
 
@@ -463,23 +466,17 @@ pub fn variety_by_code(code: &str) -> Option<LinguisticVariety> {
 }
 
 pub fn language_tag_for_variety(code: &str) -> Option<&'static str> {
-    let canonical = canonical_variety_id(code)?;
-    let tag = match canonical.0.as_str() {
-        "fr-FR-Standard" => "fr-FR",
-        "de-DE-Standard" => "de-DE",
-        "es-ES-Castilian" => "es-ES",
-        "es-419-Standard" => "es-419",
-        "el-GR-Standard" => "el-GR",
-        "sa-Deva-Standard" => "sa-Deva",
-        "la-Classical" | "la-Ecclesiastical" => "la",
-        "grc-Attic" | "grc-Koine" => "grc",
-        "en-US-GA" | "en-US-singing" | "en-US-AAE" => "en-US",
-        "en-GB-RP" | "en-GB-ScotE" => "en-GB",
-        "eo" => "eo",
-        _ => return None,
-    };
-    LangTag::new(tag).ok()?;
-    Some(tag)
+    let registration = find_variety_registration(code)?;
+    LangTag::new(registration.language_tag).ok()?;
+    Some(registration.language_tag)
+}
+
+pub fn wiktionary_language_for_variety(code: &str) -> Option<&'static str> {
+    let registration = find_variety_registration(code)?;
+    let language = (registration.load)(registration.canonical_id).language;
+    let parsed =
+        IsoLanguage::from_639_1(&language.0).or_else(|| IsoLanguage::from_639_3(&language.0))?;
+    Some(parsed.to_639_3())
 }
 
 pub fn builtin_varieties() -> Vec<LinguisticVariety> {
@@ -489,17 +486,23 @@ pub fn builtin_varieties() -> Vec<LinguisticVariety> {
 }
 
 pub fn builtin_languages() -> Vec<Language> {
-    ["en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
-        .into_iter()
-        .filter_map(|id| {
-            let parsed = IsoLanguage::from_639_1(id).or_else(|| IsoLanguage::from_639_3(id))?;
-            Some(Language {
-                id: crate::ids::LanguageId(id.into()),
-                name: parsed.to_name().into(),
-                endonym: None,
-                iso_639: Some(parsed.to_639_3().into()),
-            })
+    builtin_variety_registrations()
+        .filter_map(|registration| {
+            let language = (registration.load)(registration.canonical_id).language;
+            let parsed = IsoLanguage::from_639_1(&language.0)
+                .or_else(|| IsoLanguage::from_639_3(&language.0))?;
+            Some((
+                language.0.clone(),
+                Language {
+                    id: language,
+                    name: parsed.to_name().into(),
+                    endonym: None,
+                    iso_639: Some(parsed.to_639_3().into()),
+                },
+            ))
         })
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
         .collect()
 }
 

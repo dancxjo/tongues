@@ -18,11 +18,13 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
     crate::data::varieties::VarietyRegistration {
         canonical_id: "la-Classical",
         aliases: &["la"],
+        language_tag: "la",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "la-Ecclesiastical",
         aliases: &["la-Church"],
+        language_tag: "la",
         load: variety,
     },
 ];

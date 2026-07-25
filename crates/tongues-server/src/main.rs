@@ -441,7 +441,29 @@ struct OwnedCodeLabel {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct LinguisticVarietiesResponse {
     default: String,
-    varieties: Vec<OwnedCodeLabel>,
+    varieties: Vec<LinguisticVarietyMetadata>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct LinguisticVarietyMetadata {
+    value: String,
+    label: String,
+    language: String,
+    language_tag: Option<String>,
+    pronunciation_fallback: PronunciationFallbackMetadata,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum PronunciationFallbackMetadata {
+    Mapped {
+        provider: &'static str,
+        language: String,
+    },
+    Unsupported {
+        provider: &'static str,
+        reason: &'static str,
+    },
 }
 
 #[derive(Deserialize)]
@@ -720,7 +742,7 @@ async fn get_linguistic_varieties() -> impl IntoResponse {
         .unwrap_or_else(|| configured_default.into());
     Json(LinguisticVarietiesResponse {
         default,
-        varieties: linguistic_variety_options(false),
+        varieties: linguistic_variety_metadata(),
     })
 }
 
@@ -751,6 +773,32 @@ fn linguistic_variety_options(include_default: bool) -> Vec<OwnedCodeLabel> {
             }),
     );
     options
+}
+
+fn linguistic_variety_metadata() -> Vec<LinguisticVarietyMetadata> {
+    speaking::builtin_varieties()
+        .into_iter()
+        .map(|variety| {
+            let fallback_language =
+                speaking::wiktionary_language_for_variety(&variety.id.0).map(str::to_string);
+            LinguisticVarietyMetadata {
+                language_tag: speaking::language_tag_for_variety(&variety.id.0).map(str::to_string),
+                pronunciation_fallback: fallback_language.map_or(
+                    PronunciationFallbackMetadata::Unsupported {
+                        provider: "wiktionary",
+                        reason: "registered language has no Wiktionary language code",
+                    },
+                    |language| PronunciationFallbackMetadata::Mapped {
+                        provider: "wiktionary",
+                        language,
+                    },
+                ),
+                value: variety.id.0,
+                label: variety.name,
+                language: variety.language.0,
+            }
+        })
+        .collect()
 }
 
 async fn pronunciation_infer(
@@ -2560,5 +2608,21 @@ mod tests {
             assert_eq!(option.value, language.iso_639.unwrap_or(language.id.0));
             assert_eq!(option.label, language.name);
         }
+
+        let metadata = linguistic_variety_metadata();
+        assert_eq!(metadata.len(), speaking::builtin_varieties().len());
+        let french = metadata
+            .iter()
+            .find(|variety| variety.value == "fr-FR-Standard")
+            .expect("French metadata");
+        assert_eq!(french.language, "fr");
+        assert_eq!(french.language_tag.as_deref(), Some("fr-FR"));
+        assert_eq!(
+            french.pronunciation_fallback,
+            PronunciationFallbackMetadata::Mapped {
+                provider: "wiktionary",
+                language: "fra".into(),
+            }
+        );
     }
 }

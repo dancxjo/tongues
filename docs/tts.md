@@ -70,8 +70,13 @@ Run every built-in backend:
 just speech-demo
 ```
 
-The demo uses optimized inference and assigns a shuffled sentence to each
-backend.
+The demo uses optimized inference, selects CUDA automatically when it is
+available, and assigns a shuffled sentence to each backend. Pass `--cpu` to
+force the CPU path for backends that support both:
+
+```sh
+just speech-demo --cpu
+```
 
 For a repeatable five-case synthesis probe, measured output fields, and the
 latest recorded run, see [Speech synthesis smoke measurements](speech-smoke.md).

@@ -15,12 +15,12 @@ use serde_json::Value;
 #[cfg(any(feature = "onnx-tts", test))]
 use speaking::SpeakerId;
 use speaking::{
-    canonical_variety_id, phonemicizer_for_variety, EvidenceProvenance, EvidenceSource, FeatureId,
-    FeatureValue, PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput, PhonemicizeRequest,
-    ProsodicLabelKind, Spec, SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan,
-    VarietyId,
+    phonemicizer_for_variety, wiktionary_language_for_variety, EvidenceProvenance, EvidenceSource,
+    FeatureId, FeatureValue, PauseKind, PhoneToken, PhonemeToken, PhonemicizeOutput,
+    PhonemicizeRequest, ProsodicLabelKind, Spec, SpeechBoundaryToken, TerminalPunctuation,
+    UtteranceId, UtterancePlan, VarietyId,
 };
-use tongues_core::Vocab;
+use tongues_core::{Vocab, UNK_ID};
 use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
@@ -439,15 +439,15 @@ impl WiktionaryFallbackPredictor {
     }
 
     fn predict(&self, word: &str, variety: &str) -> Result<String> {
-        let language = wiktionary_language_for_variety(variety)
-            .with_context(|| format!("no Wiktionary language mapping for variety `{variety}`"))?;
-        let source = wiktionary_infer_source(
-            "orthography-to-phonemes",
-            language,
-            WiktionaryInferNotation::Phonemes,
-            wiktionary_variety_for_speaking_variety(variety),
-            word,
-        )?;
+        let language = wiktionary_language_for_variety(variety).with_context(|| {
+            format!("registered variety `{variety}` has no Wiktionary fallback language")
+        })?;
+        let language_token = format!("<lang:{language}>");
+        anyhow::ensure!(
+            self.vocab.get_id(&language_token) != UNK_ID,
+            "Wiktionary fallback checkpoint does not support language `{language}` for variety `{variety}`"
+        );
+        let source = wiktionary_fallback_source(word, variety)?;
         let src_ids = self.vocab.encode_string(&source);
         let src_len = src_ids.len();
         let src_tensor = BurnTensor::<CpuInferBackend, 2, Int>::from_data(
@@ -462,23 +462,16 @@ impl WiktionaryFallbackPredictor {
     }
 }
 
-fn wiktionary_language_for_variety(variety: &str) -> Option<&'static str> {
-    if variety == "en-US.GenAm" {
-        return Some("eng");
-    }
-    let canonical = canonical_variety_id(variety)?;
-    match canonical.0.as_str() {
-        "en-US-GA" | "en-US-singing" | "en-US-AAE" | "en-GB-RP" | "en-GB-ScotE" => Some("eng"),
-        "fr-FR-Standard" => Some("fra"),
-        "de-DE-Standard" => Some("deu"),
-        "es-ES-Castilian" | "es-419-Standard" => Some("spa"),
-        "el-GR-Standard" => Some("ell"),
-        "grc-Attic" | "grc-Koine" => Some("grc"),
-        "la-Classical" | "la-Ecclesiastical" => Some("lat"),
-        "sa-Deva-Standard" => Some("san"),
-        "eo" => Some("epo"),
-        _ => None,
-    }
+fn wiktionary_fallback_source(word: &str, variety: &str) -> Result<String> {
+    let language = wiktionary_language_for_variety(variety)
+        .with_context(|| format!("no Wiktionary language mapping for variety `{variety}`"))?;
+    wiktionary_infer_source(
+        "orthography-to-phonemes",
+        language,
+        WiktionaryInferNotation::Phonemes,
+        wiktionary_variety_for_speaking_variety(variety),
+        word,
+    )
 }
 
 fn wiktionary_variety_for_speaking_variety(variety: &str) -> Option<&'static str> {
@@ -2205,6 +2198,7 @@ fn initialize_ort_runtime() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     const RYAN_LIKE_CONFIG_JSON: &str = r#"
     {
@@ -2260,6 +2254,53 @@ mod tests {
             );
         }
         assert_eq!(wiktionary_language_for_variety("not-a-variety"), None);
+    }
+
+    #[test]
+    fn unknown_french_word_reaches_french_wiktionary_model_input() -> Result<()> {
+        static RECORDED_SOURCE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+        fn recording_fallback(word: &str, variety: &str) -> Option<String> {
+            let source = wiktionary_fallback_source(word, variety).ok()?;
+            if variety == "fr-FR-Standard" {
+                if let Ok(mut recorded) = RECORDED_SOURCE.get_or_init(|| Mutex::new(None)).lock() {
+                    *recorded = Some(source);
+                }
+            }
+            Some("bɔ̃ʒuʁ".into())
+        }
+
+        struct RestoreDefaultFallback;
+        impl Drop for RestoreDefaultFallback {
+            fn drop(&mut self) {
+                speaking::set_unknown_pronunciation_fallback(Some(
+                    wiktionary_unknown_pronunciation,
+                ));
+            }
+        }
+
+        install_default_unknown_pronunciation_fallback();
+        let _restore = RestoreDefaultFallback;
+        speaking::set_unknown_pronunciation_fallback(Some(recording_fallback));
+
+        let plan = utterance_plan_from_text(SpeechRequest {
+            text: "zzézz".into(),
+            variety: "fr-FR-Standard".into(),
+        })?;
+
+        let source = RECORDED_SOURCE
+            .get()
+            .and_then(|source| source.lock().ok().and_then(|source| source.clone()))
+            .expect("French fallback should receive the unknown word");
+        assert!(source.contains("<lang:fra>"), "{source}");
+        assert!(source.ends_with("zzézz"), "{source}");
+        assert!(
+            plan.intended_phonemes
+                .iter()
+                .any(|token| token.provenance.source == EvidenceSource::Inference),
+            "the plan should preserve inference provenance"
+        );
+        Ok(())
     }
 
     #[test]

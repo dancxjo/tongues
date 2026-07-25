@@ -18,11 +18,13 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
     crate::data::varieties::VarietyRegistration {
         canonical_id: "es-ES-Castilian",
         aliases: &["es", "es-ES"],
+        language_tag: "es-ES",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "es-419-Standard",
         aliases: &["es-419", "es-LatAm"],
+        language_tag: "es-419",
         load: variety,
     },
 ];

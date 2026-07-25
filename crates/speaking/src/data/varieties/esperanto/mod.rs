@@ -18,6 +18,7 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
     &[crate::data::varieties::VarietyRegistration {
         canonical_id: "eo",
         aliases: &[],
+        language_tag: "eo",
         load: |_| variety(),
     }];
 

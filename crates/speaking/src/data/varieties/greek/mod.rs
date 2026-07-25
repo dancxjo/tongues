@@ -18,16 +18,19 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
     crate::data::varieties::VarietyRegistration {
         canonical_id: "el-GR-Standard",
         aliases: &["el", "el-GR"],
+        language_tag: "el-GR",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "grc-Attic",
         aliases: &["grc", "grc-Ancient"],
+        language_tag: "grc",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "grc-Koine",
         aliases: &["el-Koine"],
+        language_tag: "grc",
         load: variety,
     },
 ];

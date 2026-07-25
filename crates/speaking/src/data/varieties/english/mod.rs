@@ -36,27 +36,32 @@ use crate::variety::{
 pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-US-GA",
-        aliases: &["en-US"],
+        aliases: &["en-US", "en-US.GenAm"],
+        language_tag: "en-US",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-US-singing",
         aliases: &[],
+        language_tag: "en-US",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-GB-RP",
         aliases: &[],
+        language_tag: "en-GB",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-GB-ScotE",
         aliases: &[],
+        language_tag: "en-GB",
         load: variety,
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-US-AAE",
         aliases: &[],
+        language_tag: "en-US",
         load: variety,
     },
 ];

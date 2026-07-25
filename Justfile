@@ -296,11 +296,12 @@ archive:
 speak *args:
     cargo run --bin tongues -- speak "$@"
 
-# Play a shuffled sentence through every built-in speech backend
-speech-demo:
+# Play a shuffled sentence through every built-in speech backend, preferring CUDA
+speech-demo *global_args:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    global_args=("$@")
     sentences=(
         "Morning light rested on the cedar trees while the kettle began to sing."
         "A clear river curved through the valley beneath a patient summer sky."
@@ -321,7 +322,7 @@ speech-demo:
         local sentence="${shuffled[$index]}"
         index=$((index + 1))
         printf '\n== %s ==\n%s\n' "$label" "$sentence"
-        cargo run -q --release --bin tongues -- speak --backend "$backend" "$@" "$sentence"
+        cargo run -q --release --bin tongues -- "${global_args[@]}" speak --backend "$backend" "$@" "$sentence"
     }
 
     play "Burn components: SpeedySpeech + HiFi-GAN" burn

@@ -20,6 +20,7 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
     &[crate::data::varieties::VarietyRegistration {
         canonical_id: "fr-FR-Standard",
         aliases: &["fr", "fra", "fr-FR"],
+        language_tag: "fr-FR",
         load: |_| variety(),
     }];
 

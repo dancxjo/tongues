@@ -6,7 +6,7 @@ pub use lexicons::cmudict;
 pub use notation::arpabet;
 pub use varieties::{
     builtin_languages, builtin_varieties, canonical_variety_id, language_tag_for_variety,
-    variety_by_code,
+    variety_by_code, wiktionary_language_for_variety,
 };
 pub use varieties::{english, esperanto, french, german, greek, latin, sanskrit, spanish};
 
@@ -19,6 +19,7 @@ mod tests {
     #[test]
     fn codes_select_varieties_without_variety_specific_api() {
         assert_eq!(canonical_variety_id("en-US").unwrap().0, "en-US-GA");
+        assert_eq!(canonical_variety_id("en-US.GenAm").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("EN-us").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("eng").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("en-US-GA").unwrap().0, "en-US-GA");
@@ -112,5 +113,39 @@ mod tests {
                 variety.id.0
             );
         }
+    }
+
+    #[test]
+    fn published_language_and_fallback_metadata_are_registry_derived() {
+        let registered_varieties = builtin_varieties();
+        let registered_language_ids = registered_varieties
+            .iter()
+            .map(|variety| variety.language.0.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let published_languages = builtin_languages();
+        let published_language_ids = published_languages
+            .iter()
+            .map(|language| language.id.0.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(published_language_ids, registered_language_ids);
+
+        for variety in registered_varieties {
+            assert!(
+                language_tag_for_variety(&variety.id.0).is_some(),
+                "{} should have a registration-owned language tag",
+                variety.id.0
+            );
+            assert!(
+                wiktionary_language_for_variety(&variety.id.0).is_some(),
+                "{} should derive a Wiktionary language from its registered language",
+                variety.id.0
+            );
+        }
+
+        assert_eq!(
+            wiktionary_language_for_variety("fr-FR-Standard"),
+            Some("fra")
+        );
+        assert_eq!(wiktionary_language_for_variety("not-a-variety"), None);
     }
 }

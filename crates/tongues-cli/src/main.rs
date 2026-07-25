@@ -12832,6 +12832,26 @@ mod tests {
     }
 
     #[test]
+    fn speech_accelerator_backends_probe_cuda_by_default() {
+        for backend in ["burn", "vits", "onnx"] {
+            let cli = Cli::try_parse_from([
+                "tongues",
+                "speak",
+                "--backend",
+                backend,
+                "CUDA routing test.",
+            ])
+            .expect("speak command should parse");
+
+            assert!(!cli.cpu, "{backend} should not force CPU by default");
+            assert!(
+                command_needs_device(cli.command.as_ref().expect("speak command")),
+                "{backend} should probe CUDA before falling back to CPU"
+            );
+        }
+    }
+
+    #[test]
     fn frequency_repeat_count_uses_bounded_linear_rarity() {
         assert_eq!(frequency_repeat_count(0.0, 8, 50_000.0), 8);
         assert_eq!(frequency_repeat_count(23.0, 8, 50_000.0), 8);
