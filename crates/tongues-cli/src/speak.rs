@@ -13,6 +13,7 @@ use speaking::{
     SpeakerReference, SpeakerReferenceSource, Spec, SpeechBoundaryToken, StyleRef, StyleSource,
     TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
+use speech::LinguisticProjector as _;
 use styletts2::{
     prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
     validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
@@ -112,6 +113,12 @@ pub struct SpeakCommand {
     pub style_seed: u64,
     #[arg(long, default_value_t = DEFAULT_SPEED, help = "StyleTTS2 decoder speed multiplier")]
     pub speed: f64,
+    #[arg(long, help = "Latent noise scale for stochastic speech backends")]
+    pub noise_scale: Option<f32>,
+    #[arg(long, help = "Duration noise scale for stochastic speech backends")]
+    pub duration_noise_scale: Option<f32>,
+    #[arg(long, help = "RNG seed for repeatable stochastic speech inference")]
+    pub seed: Option<u64>,
     #[arg(long, help = "Print pronunciation planning diagnostics")]
     pub debug_pronunciation: bool,
     #[arg(long, help = "Emit word and audio timing metadata")]
@@ -182,6 +189,7 @@ fn onnx_synthesis_options(options: &SpeechSynthesisOptions) -> Result<speech::Sy
         length_scale: None,
         noise_scale: None,
         noise_w: None,
+        seed: None,
     })
 }
 
@@ -205,6 +213,9 @@ pub struct SpeechSynthesisOptions {
     pub embedding_scale: f64,
     pub style_seed: u64,
     pub speed: f64,
+    pub noise_scale: Option<f32>,
+    pub duration_noise_scale: Option<f32>,
+    pub seed: Option<u64>,
     pub max_tts_symbols: usize,
     pub no_tts_chunking: bool,
     pub emotion_signatures: Option<PathBuf>,
@@ -226,6 +237,9 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
             embedding_scale: command.embedding_scale,
             style_seed: command.style_seed,
             speed: command.speed,
+            noise_scale: command.noise_scale,
+            duration_noise_scale: command.duration_noise_scale,
+            seed: command.seed,
             max_tts_symbols: command.max_tts_symbols,
             no_tts_chunking: command.no_tts_chunking,
             emotion_signatures: command.emotion_signatures.clone(),
@@ -443,6 +457,36 @@ impl BackendInstance {
             }
         }
     }
+
+    fn projected_input(&self, plan: &UtterancePlan) -> Result<Option<speech::PhonemeTokenIds>> {
+        match self {
+            Self::BurnCpu(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project SpeedySpeech checkpoint input")?,
+            )),
+            Self::BurnCuda(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project SpeedySpeech checkpoint input")?,
+            )),
+            Self::VitsCpu(backend) => Ok(Some(
+                backend
+                    .projected_input(plan)
+                    .context("failed to project VITS checkpoint input")?,
+            )),
+            Self::VitsCuda(backend) => Ok(Some(
+                backend
+                    .projected_input(plan)
+                    .context("failed to project VITS checkpoint input")?,
+            )),
+            Self::Mock(_) | Self::StyleTts2 { .. } | Self::Onnx { .. } => Ok(None),
+        }
+    }
 }
 
 fn synthesize_burn_engine(
@@ -461,8 +505,9 @@ fn synthesize_burn_engine(
             speaker_id: options.speaker_id,
             split_sentences: true,
             length_scale: Some((1.0 / options.speed) as f32),
-            noise_scale: None,
-            noise_w: None,
+            noise_scale: options.noise_scale,
+            noise_w: options.duration_noise_scale,
+            seed: options.seed,
         },
     };
     let sample_rate_hz = backend.sample_rate_hz();
@@ -732,11 +777,17 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         };
         let cb_arg: AudioCallback<'_> = Some(&mut audio_callback);
 
+        let checkpoint_input = backend.projected_input(&plan)?;
         let artifact = backend.synthesize(&plan, &options, cb_arg, &command)?;
 
-        let backend_symbols = match command.backend {
-            SpeakBackend::Burn | SpeakBackend::Vits => format_phones(&phonemicized),
-            SpeakBackend::Mock | SpeakBackend::Styletts2 => {
+        let backend_symbols = match (&checkpoint_input, command.backend) {
+            (Some(projected), SpeakBackend::Burn | SpeakBackend::Vits) => {
+                projected.projected_symbols.clone()
+            }
+            (None, SpeakBackend::Burn | SpeakBackend::Vits) => {
+                anyhow::bail!("native Burn backend did not expose its checkpoint projection")
+            }
+            (_, SpeakBackend::Mock | SpeakBackend::Styletts2) => {
                 let styletts2_plan = prepare_styletts2_plan(
                     &plan,
                     &styletts2_en_us_symbol_set(),
@@ -754,7 +805,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
                     .context("failed to format StyleTTS2 backend symbols")?
                     .join(" || ")
             }
-            SpeakBackend::Onnx => {
+            (_, SpeakBackend::Onnx) => {
                 let sequence = speech::phoneme_sequence_from_plan(&plan)?;
                 sequence.symbols.join(" ")
             }
@@ -772,7 +823,41 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
             );
         }
         println!("phones: {}", format_phones(&phonemicized));
-        println!("backend_symbols: {backend_symbols}");
+        println!("checkpoint_symbols: {backend_symbols}");
+        if let Some(projected) = &checkpoint_input {
+            println!(
+                "checkpoint_token_ids: {}",
+                projected
+                    .ids
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        if matches!(command.backend, SpeakBackend::Vits) {
+            println!(
+                "inference_seed: {}",
+                options
+                    .seed
+                    .map(|seed| seed.to_string())
+                    .unwrap_or_else(|| "<random>".into())
+            );
+            println!(
+                "latent_noise_scale: {}",
+                options
+                    .noise_scale
+                    .map(|scale| scale.to_string())
+                    .unwrap_or_else(|| "<checkpoint default>".into())
+            );
+            println!(
+                "duration_noise_scale: {}",
+                options
+                    .duration_noise_scale
+                    .map(|scale| scale.to_string())
+                    .unwrap_or_else(|| "<checkpoint default>".into())
+            );
+        }
 
         if matches!(command.backend, SpeakBackend::Styletts2) {
             println!("styletts2_controls:");
@@ -795,7 +880,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         println!("chunks:");
         match command.backend {
             SpeakBackend::Burn | SpeakBackend::Vits => {
-                println!("  1: {}", format_phones(&phonemicized));
+                println!("  1: {backend_symbols}");
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
                 let styletts2_plan = prepare_styletts2_plan(

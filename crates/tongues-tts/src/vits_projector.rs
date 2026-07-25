@@ -1,18 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{ensure, Context, Result};
-use speaking::{PauseKind, Spec, TerminalPunctuation, UtterancePlan};
+use anyhow::{Context, Result};
+use speaking::UtterancePlan;
 
 use crate::{
-    vits_config::ImportedVitsConfig, LinguisticInputKind, LinguisticIntent, LinguisticProjector,
-    ModelInputContract,
+    phoneme_projector::project_plan_symbols, vits_config::ImportedVitsConfig, LinguisticInputKind,
+    LinguisticIntent, LinguisticProjector, ModelInputContract, PhonemeTokenIds,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VitsTokenIds {
-    pub(crate) ids: Vec<i64>,
-    pub(crate) projected_symbols: String,
-}
 
 /// Terminal projection from Tongues' linguistic IR into the vocabulary
 /// embedded in a VITS checkpoint.
@@ -84,66 +78,7 @@ impl VitsLinguisticProjector {
 
     fn project_symbols(&self, plan: &UtterancePlan) -> Result<String> {
         self.contract.ensure_supports(plan)?;
-        let mut output = String::new();
-
-        if !plan.target_phones.is_empty() {
-            for token in &plan.target_phones {
-                let Spec::Known(phone) = &token.phone else {
-                    continue;
-                };
-                match phone.as_str() {
-                    "boundary.word" => push_space(&mut output),
-                    "boundary.letter" => {}
-                    id => {
-                        let ipa = id.strip_prefix("ipa.phone.").with_context(|| {
-                            format!("VITS projection requires an IPA phone, got `{id}`")
-                        })?;
-                        self.push_phone(&mut output, ipa);
-                    }
-                }
-            }
-        } else {
-            for token in &plan.intended_phonemes {
-                let realized = token.realized_as.iter().find_map(|phone| {
-                    let Spec::Known(id) = &phone.phone else {
-                        return None;
-                    };
-                    id.as_str().strip_prefix("ipa.phone.")
-                });
-                let realized = realized.with_context(|| {
-                    let id = match &token.phoneme {
-                        Spec::Known(id) => id.0.as_ref(),
-                        _ => "<unknown>",
-                    };
-                    format!("phoneme `{id}` has no IPA realization for VITS projection")
-                })?;
-                self.push_phone(&mut output, realized);
-            }
-        }
-
-        while output.ends_with(' ') {
-            output.pop();
-        }
-        if let Some(terminal) = plan
-            .boundaries
-            .iter()
-            .rev()
-            .find_map(|token| token.terminal)
-        {
-            output.push(match terminal {
-                TerminalPunctuation::Period => '.',
-                TerminalPunctuation::Question => '?',
-                TerminalPunctuation::Exclamation => '!',
-            });
-        } else if plan
-            .boundaries
-            .iter()
-            .any(|token| token.pause == Some(PauseKind::Comma))
-        {
-            output.push(',');
-        }
-        ensure!(!output.is_empty(), "VITS projection produced no symbols");
-        Ok(output)
+        project_plan_symbols(plan, |output, ipa| self.push_phone(output, ipa), "VITS")
     }
 
     fn push_phone(&self, output: &mut String, ipa: &str) {
@@ -183,7 +118,7 @@ impl VitsLinguisticProjector {
 }
 
 impl LinguisticProjector for VitsLinguisticProjector {
-    type ModelInput = VitsTokenIds;
+    type ModelInput = PhonemeTokenIds;
 
     fn contract(&self) -> &ModelInputContract {
         &self.contract
@@ -192,16 +127,10 @@ impl LinguisticProjector for VitsLinguisticProjector {
     fn project(&self, plan: &UtterancePlan) -> Result<Self::ModelInput> {
         let projected_symbols = self.project_symbols(plan)?;
         let ids = self.encode_symbols(&projected_symbols)?;
-        Ok(VitsTokenIds {
+        Ok(PhonemeTokenIds {
             ids,
             projected_symbols,
         })
-    }
-}
-
-fn push_space(output: &mut String) {
-    if !output.is_empty() && !output.ends_with(' ') {
-        output.push(' ');
     }
 }
 
@@ -263,7 +192,7 @@ mod tests {
             VitsLinguisticProjector::from_config(crate::vits_config::test_imported_vits_config())
                 .expect("VITS projector");
 
-        assert_eq!(projector.symbol_id("'"), Some(3));
+        assert_eq!(projector.symbol_id("'"), Some(5));
         assert_eq!(projector.blank_id(), 9);
         let projected = projector.project(&plan()).expect("native IPA projection");
         assert_eq!(projected.projected_symbols, "tʰɝ ʃ");
@@ -287,7 +216,12 @@ mod tests {
         let projector = VitsLinguisticProjector::from_json5_str(&source).expect("VITS projector");
 
         assert_eq!(projector.vocabulary().len(), 179);
-        assert_eq!(projector.symbol_id("'"), Some(18));
+        assert_eq!(projector.symbol_id("'"), Some(176));
+        assert_eq!(projector.symbol_id("A"), Some(17));
+        assert_eq!(projector.symbol_id("a"), Some(43));
+        assert_eq!(projector.symbol_id("ɑ"), Some(69));
+        assert_eq!(projector.symbol_id("ɝ"), Some(88));
+        assert_eq!(projector.symbol_id("ˈ"), Some(156));
         assert_eq!(projector.blank_id(), 178);
 
         let projected = projector.project(&plan()).expect("native IPA projection");
@@ -301,6 +235,12 @@ mod tests {
             .iter()
             .step_by(2)
             .all(|id| *id == projector.blank_id()));
+        // Golden output from Coqui 0.6.1 TTSTokenizer for the same normalized
+        // phoneme input, including its leading/trailing blank interspersion.
+        assert_eq!(
+            projected.ids,
+            vec![178, 62, 178, 162, 178, 88, 178, 16, 178, 131, 178]
+        );
         assert_eq!(
             projected.ids[1],
             projector.symbol_id("t").expect("t embedding")

@@ -13,6 +13,7 @@ use burn::nn::{Embedding, EmbeddingConfig};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use burn_store::{ModuleSnapshot, PytorchStore};
+use speaking::UtterancePlan;
 
 use crate::vits_config::ImportedVitsConfig;
 use crate::vits_projector::VitsLinguisticProjector;
@@ -181,6 +182,10 @@ impl<B: Backend> BurnVitsSpeech<B> {
         &self.speakers
     }
 
+    pub fn projected_input(&self, plan: &UtterancePlan) -> Result<crate::PhonemeTokenIds> {
+        self.projector.project(plan)
+    }
+
     pub fn synthesize(&mut self, request: &SpeechSynthesisRequest) -> Result<Waveform> {
         let mut samples = Vec::new();
         self.synthesize_streaming(request, &mut |chunk: AudioChunk| {
@@ -228,15 +233,26 @@ impl<B: Backend> BurnVitsSpeech<B> {
             duration_noise.is_finite() && duration_noise >= 0.0,
             "duration noise scale must be finite and non-negative"
         );
-        let log_durations = self.duration_predictor.reverse(
-            prior.encoded,
-            prior.mask.clone(),
-            self.config
-                .network
-                .condition_dp_on_speaker
-                .then(|| conditioning.clone()),
-            f64::from(duration_noise),
-        )?;
+        let duration_conditioning = self
+            .config
+            .network
+            .condition_dp_on_speaker
+            .then(|| conditioning.clone());
+        let log_durations = match request.options.seed {
+            Some(seed) => self.duration_predictor.reverse_seeded(
+                prior.encoded,
+                prior.mask.clone(),
+                duration_conditioning,
+                f64::from(duration_noise),
+                seed,
+            )?,
+            None => self.duration_predictor.reverse(
+                prior.encoded,
+                prior.mask.clone(),
+                duration_conditioning,
+                f64::from(duration_noise),
+            )?,
+        };
         let length_scale = request
             .options
             .length_scale
@@ -262,6 +278,9 @@ impl<B: Backend> BurnVitsSpeech<B> {
             latent_noise.is_finite() && latent_noise >= 0.0,
             "latent noise scale must be finite and non-negative"
         );
+        if let Some(seed) = request.options.seed {
+            B::seed(&self.device, seed.wrapping_add(1));
+        }
         let noise = Tensor::random(
             expanded.mean.dims(),
             Distribution::Normal(0.0, 1.0),
@@ -383,9 +402,12 @@ mod tests {
             BurnVitsSpeech::<TestBackend>::load(config, checkpoint, speakers, NdArrayDevice::Cpu)
                 .expect("published VITS engine");
 
-        for name in ["p225", "p226"] {
+        for (name, text) in [
+            ("p225", "Morning light rested on cedar trees."),
+            ("p226", "Rain polished the streets, and lamps glowed."),
+        ] {
             let mut plan = utterance_plan_from_text(SpeechRequest {
-                text: "Tea.".into(),
+                text: text.into(),
                 variety: "en-US".into(),
             })
             .expect("native linguistic plan");
@@ -393,31 +415,22 @@ mod tests {
             let request = SpeechSynthesisRequest {
                 plan,
                 options: SynthesisOptions {
-                    noise_scale: Some(0.0),
-                    noise_w: Some(0.0),
+                    seed: Some(27),
                     ..SynthesisOptions::default()
                 },
             };
-            let mut chunks = Vec::new();
-            engine
-                .synthesize_plan_streaming(&request, &mut |chunk: AudioChunk| {
-                    chunks.push(chunk);
-                    Ok(())
-                })
+            let first = engine
+                .synthesize(&request)
                 .expect("named-speaker synthesis");
+            let second = engine
+                .synthesize(&request)
+                .expect("repeatable named-speaker synthesis");
 
-            assert!(!chunks.is_empty());
-            assert!(chunks.last().is_some_and(|chunk| chunk.is_final));
-            assert!(chunks
-                .iter()
-                .flat_map(|chunk| &chunk.pcm_mono_f32)
-                .all(|sample| sample.is_finite()));
-            assert!(
-                chunks
-                    .iter()
-                    .map(|chunk| chunk.pcm_mono_f32.len())
-                    .sum::<usize>()
-                    > 0
+            assert!(!first.samples.is_empty());
+            assert!(first.samples.iter().all(|sample| sample.is_finite()));
+            assert_eq!(
+                first.samples, second.samples,
+                "seeded VITS inference must be repeatable for {name}"
             );
         }
     }

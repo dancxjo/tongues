@@ -103,12 +103,12 @@ impl ImportedVitsConfig {
     }
 
     pub(crate) fn vocabulary(&self) -> Vec<String> {
+        // `TTS.tts.models.vits.VitsCharacters` overrides BaseCharacters'
+        // normal sorting path. Released checkpoints therefore use the exact
+        // serialized grapheme/IPA order, including duplicate symbols.
         let mut model_characters = self.characters.characters.chars().collect::<Vec<_>>();
         if let Some(phonemes) = &self.characters.phonemes {
             model_characters.extend(phonemes.chars());
-        }
-        if self.characters.is_sorted {
-            model_characters.sort_unstable();
         }
 
         let mut vocabulary = Vec::with_capacity(
@@ -468,7 +468,7 @@ mod tests {
         config.validate().expect("valid VITS config");
         assert_eq!(
             config.vocabulary(),
-            vec!["_", " ", "'", "'", "A", "t", "ɝ", "ʃ", "ʰ", "<BLNK>"]
+            vec!["_", " ", "A", "t", "'", "'", "ʰ", "ɝ", "ʃ", "<BLNK>"]
         );
     }
 

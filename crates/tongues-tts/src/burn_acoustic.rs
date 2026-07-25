@@ -146,54 +146,21 @@ impl<B: Backend> AcousticModel for BurnSpeedySpeechAcoustic<B> {
 #[cfg(test)]
 mod tests {
     use burn::backend::ndarray::{NdArray, NdArrayDevice};
-    use speaking::{
-        EvidenceProvenance, EvidenceSource, FeatureBundle, PhoneId, PhoneToken, Spec, UtteranceId,
-        UtterancePlan, VarietyId,
-    };
 
     use super::*;
     use crate::{
-        BurnHifiganVocoder, SpeechPipeline, SynthesisOptions, VocoderDecoder, WaveformContract,
+        utterance_plan_from_text, BurnHifiganVocoder, SpeechPipeline, SpeechRequest,
+        SynthesisOptions, VocoderDecoder, WaveformContract,
     };
 
     type TestBackend = NdArray<f32>;
 
-    fn phone(id: &str) -> PhoneToken {
-        PhoneToken {
-            phone: Spec::Known(PhoneId(id.to_string().into())),
-            span: None,
-            features: FeatureBundle::default(),
-            acoustic_evidence: vec![],
-            confidence: 1.0,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::Rule,
-                method: "burn-pipeline-test".into(),
-                version: None,
-            },
-        }
-    }
-
-    fn plan() -> UtterancePlan {
-        UtterancePlan {
-            id: UtteranceId("burn-pipeline-test".into()),
-            variety: VarietyId("en-US".into()),
-            speaker: None,
-            intended_text: Some("test test test".into()),
-            intended_morphemes: vec![],
-            intended_phonemes: vec![],
-            target_phones: (0..13).map(|_| phone("ipa.phone.t")).collect(),
-            target_syllables: vec![],
-            boundaries: vec![],
-            target_prosody: Default::default(),
-            target_acoustics: vec![],
-            speaker_reference: None,
-            style: None,
-            provenance: EvidenceProvenance {
-                source: EvidenceSource::TtsPlan,
-                method: "burn-pipeline-test".into(),
-                version: None,
-            },
-        }
+    fn plan() -> speaking::UtterancePlan {
+        utterance_plan_from_text(SpeechRequest {
+            text: "Morning light rested on cedar trees.".into(),
+            variety: "en-US".into(),
+        })
+        .expect("native multi-word linguistic plan")
     }
 
     #[test]

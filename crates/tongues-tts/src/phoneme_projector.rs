@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
-use speaking::{PauseKind, Spec, TerminalPunctuation, UtterancePlan};
+use speaking::{
+    phoneme_default_phone_display_symbol, FeatureBundle, FeatureId, FeatureValue, PauseKind, Spec,
+    TerminalPunctuation, UtterancePlan,
+};
 
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};
 
@@ -131,66 +134,7 @@ impl PhonemeVocabularyProjector {
 
     fn project_symbols(&self, plan: &UtterancePlan) -> Result<String> {
         self.contract.ensure_supports(plan)?;
-        let mut output = String::new();
-
-        if !plan.target_phones.is_empty() {
-            for token in &plan.target_phones {
-                let Spec::Known(phone) = &token.phone else {
-                    continue;
-                };
-                match phone.as_str() {
-                    "boundary.word" => push_space(&mut output),
-                    "boundary.letter" => {}
-                    id => {
-                        let ipa = id.strip_prefix("ipa.phone.").with_context(|| {
-                            format!("phoneme projection requires an IPA phone, got `{id}`")
-                        })?;
-                        push_model_phoneme(&mut output, ipa);
-                    }
-                }
-            }
-        } else {
-            for token in &plan.intended_phonemes {
-                let realized = token.realized_as.iter().find_map(|phone| {
-                    let Spec::Known(id) = &phone.phone else {
-                        return None;
-                    };
-                    id.as_str().strip_prefix("ipa.phone.")
-                });
-                let realized = realized.with_context(|| {
-                    let id = match &token.phoneme {
-                        Spec::Known(id) => id.0.as_ref(),
-                        _ => "<unknown>",
-                    };
-                    format!("phoneme `{id}` has no IPA realization for model projection")
-                })?;
-                push_model_phoneme(&mut output, realized);
-            }
-        }
-
-        while output.ends_with(' ') {
-            output.pop();
-        }
-        if let Some(terminal) = plan
-            .boundaries
-            .iter()
-            .rev()
-            .find_map(|token| token.terminal)
-        {
-            output.push(match terminal {
-                TerminalPunctuation::Period => '.',
-                TerminalPunctuation::Question => '?',
-                TerminalPunctuation::Exclamation => '!',
-            });
-        } else if plan
-            .boundaries
-            .iter()
-            .any(|token| token.pause == Some(PauseKind::Comma))
-        {
-            output.push(',');
-        }
-        ensure!(!output.is_empty(), "model projection produced no symbols");
-        Ok(output)
+        project_plan_symbols(plan, push_model_phoneme, "phoneme")
     }
 
     fn encode_symbols(&self, symbols: &str) -> Result<Vec<i64>> {
@@ -279,11 +223,133 @@ fn push_model_phoneme(output: &mut String, ipa: &str) {
         match symbol {
             // These are realization details absent from the released model's
             // phoneme inventory. They are discarded only at this model edge.
-            'ʰ' | '˭' => {}
+            'ʰ' | '˭' | 'ˈ' | 'ˌ' | 'ː' | 'ˑ' => {}
             // The old LJSpeech inventory has one rhotic-vowel symbol.
             'ɝ' => output.push('ɚ'),
             symbol => output.push(symbol),
         }
+    }
+}
+
+pub(crate) fn project_plan_symbols(
+    plan: &UtterancePlan,
+    mut push_phoneme: impl FnMut(&mut String, &str),
+    model_label: &str,
+) -> Result<String> {
+    let mut output = String::new();
+
+    if !plan.intended_phonemes.is_empty() {
+        let mut previous_word = None;
+        let mut saw_indexed_word = false;
+        for token in &plan.intended_phonemes {
+            let word_index = token_word_index(&token.features);
+            if let (Some(previous), Some(current)) = (previous_word, word_index) {
+                if previous != current {
+                    push_boundary_punctuation(&mut output, plan, previous);
+                    push_space(&mut output);
+                }
+            }
+            let Spec::Known(id) = &token.phoneme else {
+                continue;
+            };
+            let ipa = phoneme_default_phone_display_symbol(id, &plan.variety);
+            push_phoneme(&mut output, &ipa);
+            if word_index.is_some() {
+                saw_indexed_word = true;
+                previous_word = word_index;
+            }
+        }
+        if let Some(word_index) = previous_word {
+            push_boundary_punctuation(&mut output, plan, word_index);
+        } else if !saw_indexed_word {
+            push_trailing_punctuation(&mut output, plan);
+        }
+    } else {
+        let mut word_index = 0;
+        for token in &plan.target_phones {
+            let Spec::Known(phone) = &token.phone else {
+                continue;
+            };
+            match phone.as_str() {
+                "boundary.word" => {
+                    push_boundary_punctuation(&mut output, plan, word_index);
+                    push_space(&mut output);
+                    word_index += 1;
+                }
+                "boundary.letter" => {}
+                id => {
+                    let ipa = id.strip_prefix("ipa.phone.").with_context(|| {
+                        format!("{model_label} projection requires an IPA phone, got `{id}`")
+                    })?;
+                    push_phoneme(&mut output, ipa);
+                }
+            }
+        }
+        push_boundary_punctuation(&mut output, plan, word_index);
+    }
+
+    while output.ends_with(' ') {
+        output.pop();
+    }
+    ensure!(
+        !output.is_empty(),
+        "{model_label} projection produced no symbols"
+    );
+    Ok(output)
+}
+
+fn token_word_index(features: &FeatureBundle) -> Option<usize> {
+    match features
+        .values
+        .get(&FeatureId("orthography.word_index".into()))?
+    {
+        Spec::Known(FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+            Some(*value as usize)
+        }
+        _ => None,
+    }
+}
+
+fn push_boundary_punctuation(output: &mut String, plan: &UtterancePlan, word_index: usize) {
+    for boundary in plan
+        .boundaries
+        .iter()
+        .filter(|boundary| boundary.after_grapheme_index == word_index)
+    {
+        if boundary.pause == Some(PauseKind::Comma) && !output.ends_with(',') {
+            output.push(',');
+        }
+        if let Some(terminal) = boundary.terminal {
+            let punctuation = terminal_punctuation(terminal);
+            if !output.ends_with(punctuation) {
+                output.push(punctuation);
+            }
+        }
+    }
+}
+
+fn push_trailing_punctuation(output: &mut String, plan: &UtterancePlan) {
+    if let Some(terminal) = plan
+        .boundaries
+        .iter()
+        .rev()
+        .find_map(|boundary| boundary.terminal)
+    {
+        output.push(terminal_punctuation(terminal));
+    } else if plan
+        .boundaries
+        .iter()
+        .any(|boundary| boundary.pause == Some(PauseKind::Comma))
+    {
+        output.push(',');
+    }
+}
+
+fn terminal_punctuation(terminal: TerminalPunctuation) -> char {
+    match terminal {
+        TerminalPunctuation::Period => '.',
+        TerminalPunctuation::Question => '?',
+        TerminalPunctuation::Exclamation => '!',
     }
 }
 
@@ -294,8 +360,9 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use speaking::{
-        EvidenceProvenance, EvidenceSource, FeatureBundle, PhoneId, PhoneToken, Spec, UtteranceId,
-        VarietyId,
+        BoundaryKind, EvidenceProvenance, EvidenceSource, FeatureBundle, FeatureId, FeatureValue,
+        PhoneId, PhoneToken, PhonemeId, PhonemeToken, Spec, SpeechBoundaryToken, TextSpan,
+        UtteranceId, VarietyId,
     };
 
     use super::*;
@@ -311,7 +378,7 @@ mod tests {
         "bos": "^",
         "blank": null,
         "characters": "abc",
-        "punctuations": "!? ",
+        "punctuations": "!?., ",
         "phonemes": "tkɚʃ"
       }
     }"#;
@@ -322,6 +389,26 @@ mod tests {
             span: None,
             features: FeatureBundle::default(),
             acoustic_evidence: vec![],
+            confidence: 1.0,
+            provenance: EvidenceProvenance {
+                source: EvidenceSource::Rule,
+                method: "test".into(),
+                version: None,
+            },
+        }
+    }
+
+    fn phoneme(id: &str, word_index: usize) -> PhonemeToken {
+        let mut features = FeatureBundle::default();
+        features.values.insert(
+            FeatureId("orthography.word_index".into()),
+            Spec::Known(FeatureValue::Number(word_index as f64)),
+        );
+        PhonemeToken {
+            phoneme: Spec::Known(PhonemeId(format!("en-US.phoneme.{id}").into())),
+            span: None,
+            features,
+            realized_as: vec![],
             confidence: 1.0,
             provenance: EvidenceProvenance {
                 source: EvidenceSource::Rule,
@@ -365,7 +452,7 @@ mod tests {
 
         assert_eq!(
             projector.vocabulary().iter().collect::<String>(),
-            "_~^ktɚʃ!? "
+            "_~^ktɚʃ!?., "
         );
         assert_eq!(projector.symbol_id('_'), Some(0));
         assert_eq!(projector.symbol_id('k'), Some(3));
@@ -377,6 +464,52 @@ mod tests {
         let projected = projector.project(&plan()).expect("projection");
 
         assert_eq!(projected.projected_symbols, "tɚ ʃ");
+        assert_eq!(
+            projected.ids,
+            projected
+                .projected_symbols
+                .chars()
+                .map(|symbol| projector.symbol_id(symbol).unwrap())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn checkpoint_projection_prefers_phonemes_and_keeps_punctuation_in_place() {
+        let projector = PhonemeVocabularyProjector::from_json5_str(CONFIG).expect("projector");
+        let mut plan = plan();
+        plan.intended_phonemes = vec![phoneme("t", 0), phoneme("ɝ", 0), phoneme("ʃ", 1)];
+        plan.target_phones = vec![
+            phone("ipa.phone.tʰ"),
+            phone("ipa.phone.ɝ"),
+            phone("ipa.phone.ʃ"),
+        ];
+        plan.boundaries = vec![
+            SpeechBoundaryToken {
+                kind: BoundaryKind::Word,
+                after_grapheme_index: 0,
+                span: Some(TextSpan {
+                    start_char: 2,
+                    end_char: 3,
+                }),
+                terminal: None,
+                pause: Some(PauseKind::Comma),
+            },
+            SpeechBoundaryToken {
+                kind: BoundaryKind::Phrase,
+                after_grapheme_index: 1,
+                span: Some(TextSpan {
+                    start_char: 5,
+                    end_char: 6,
+                }),
+                terminal: Some(TerminalPunctuation::Period),
+                pause: None,
+            },
+        ];
+
+        let projected = projector.project(&plan).expect("checkpoint projection");
+
+        assert_eq!(projected.projected_symbols, "tɚ, ʃ.");
         assert_eq!(
             projected.ids,
             projected
@@ -412,6 +545,28 @@ mod tests {
         assert_eq!(
             projector.contract().supported_varieties,
             vec!["en-US".to_string()]
+        );
+
+        // Golden output from Coqui 0.6.1 TTSTokenizer using this config and
+        // Gruut's normalized phoneme string for the same sentence.
+        let sentence = crate::utterance_plan_from_text(crate::SpeechRequest {
+            text: "Morning light while the kettle began to sing.".into(),
+            variety: "en-US".into(),
+        })
+        .expect("native sentence plan");
+        let projected = projector
+            .project(&sentence)
+            .expect("published-compatible sentence projection");
+        assert_eq!(
+            projected.projected_symbols,
+            "mɔɹnɪŋ laɪt waɪl ðə kɛtəl bɪɡæn tə sɪŋ."
+        );
+        assert_eq!(
+            projected.ids,
+            vec![
+                14, 43, 77, 15, 63, 33, 129, 13, 3, 63, 21, 129, 24, 3, 63, 13, 129, 30, 48, 129,
+                12, 50, 21, 48, 13, 129, 4, 63, 55, 28, 15, 129, 21, 48, 129, 20, 63, 33, 125,
+            ]
         );
     }
 }

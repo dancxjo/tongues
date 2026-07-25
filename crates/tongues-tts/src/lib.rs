@@ -193,6 +193,8 @@ pub struct SynthesisOptions {
     pub length_scale: Option<f32>,
     pub noise_scale: Option<f32>,
     pub noise_w: Option<f32>,
+    /// Backend RNG seed for repeatable stochastic inference.
+    pub seed: Option<u64>,
 }
 
 impl Default for SynthesisOptions {
@@ -203,6 +205,7 @@ impl Default for SynthesisOptions {
             length_scale: None,
             noise_scale: None,
             noise_w: None,
+            seed: None,
         }
     }
 }

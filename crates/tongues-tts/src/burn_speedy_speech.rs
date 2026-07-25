@@ -1289,4 +1289,78 @@ mod tests {
             .iter()
             .all(|sample| sample.is_finite()));
     }
+
+    #[test]
+    fn published_checkpoint_stage_parity_when_available() {
+        let Some(model_path) = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_MODEL") else {
+            return;
+        };
+        let config_path = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_CONFIG")
+            .expect("TONGUES_TEST_COQUI_SPEEDY_CONFIG must accompany the model");
+        let source = std::fs::read_to_string(config_path).expect("config");
+        let value: Value = serde_json::from_str(&source).expect("JSON config");
+        let config = SpeedySpeechConfig::from_json_value(&value).expect("model config");
+        let device = Default::default();
+        let model = config
+            .init::<TestBackend>(&device)
+            .expect("model")
+            .load_checkpoint(model_path)
+            .expect("checkpoint");
+        let ids = [
+            14, 43, 77, 15, 63, 33, 129, 13, 3, 63, 21, 129, 77, 50, 20, 21, 63, 6, 129, 43, 15,
+            129, 30, 48, 129, 20, 10, 6, 49, 129, 21, 77, 10, 27, 129, 24, 3, 63, 13, 129, 30, 48,
+            129, 12, 50, 21, 48, 13, 129, 4, 63, 55, 28, 15, 129, 21, 48, 129, 20, 63, 33, 125,
+        ];
+        let token_ids = Tensor::<TestBackend, 1, Int>::from_ints(ids, &device).reshape([1, 62]);
+        let x_mask = Tensor::<TestBackend, 3>::ones([1, 1, 62], &device);
+
+        let embedded = model.emb.forward(token_ids).swap_dims(1, 2);
+        let encoded = model.encoder.forward(embedded, x_mask.clone());
+        let duration_log = model
+            .duration_predictor
+            .forward(encoded.clone(), x_mask.clone());
+        let durations = ((duration_log.exp() - 1.0) * x_mask * model.length_scale)
+            .clamp_min(1.0)
+            .round()
+            .reshape([1, 62]);
+        let (expanded, output_mask) =
+            expand_by_durations(encoded, durations.clone(), model.max_output_frames)
+                .expect("duration expansion");
+        let positioned = model
+            .pos_encoder
+            .as_ref()
+            .expect("published positional encoder")
+            .forward(expanded, output_mask.clone())
+            .expect("positional encoding");
+        let mel = model
+            .decoder
+            .forward(positioned, output_mask)
+            .swap_dims(1, 2);
+
+        let actual_durations = durations
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 durations");
+        assert_eq!(
+            actual_durations,
+            vec![
+                3.0, 7.0, 6.0, 5.0, 3.0, 8.0, 5.0, 2.0, 6.0, 7.0, 12.0, 5.0, 3.0, 6.0, 11.0, 3.0,
+                6.0, 3.0, 9.0, 4.0, 5.0, 2.0, 1.0, 2.0, 12.0, 4.0, 5.0, 5.0, 9.0, 7.0, 8.0, 4.0,
+                9.0, 7.0, 7.0, 2.0, 4.0, 13.0, 4.0, 3.0, 1.0, 2.0, 7.0, 5.0, 5.0, 7.0, 4.0, 6.0,
+                4.0, 1.0, 4.0, 6.0, 6.0, 10.0, 3.0, 3.0, 2.0, 12.0, 3.0, 6.0, 11.0, 4.0,
+            ]
+        );
+        assert_eq!(mel.dims(), [1, 339, 80]);
+        let mel_data = mel.into_data().to_vec::<f32>().expect("f32 mel");
+        let reference = [
+            -7.4673758, -6.7190876, -6.0384293, -5.8300047, -5.931164, -5.858857, -5.4986215,
+            -5.5024877,
+        ];
+        for (actual, expected) in mel_data.iter().zip(reference) {
+            assert!(
+                (actual - expected).abs() <= 2e-4,
+                "mel parity mismatch: actual={actual}, expected={expected}"
+            );
+        }
+    }
 }
