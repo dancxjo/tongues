@@ -1887,27 +1887,12 @@ fn representative_variety_for_language(config: &Head2PhonesConfig, language: &st
 }
 
 fn variety_matches_language(variety: &VarietyId, language: &str) -> bool {
-    variety_language(&variety.0) == language
-}
-
-fn variety_language(variety: &str) -> &str {
-    variety
-        .split_once('-')
-        .map_or(variety, |(language, _)| language)
+    speaking::variety_by_code(&variety.0)
+        .is_some_and(|registered| registered.language.0 == language)
 }
 
 fn universal_lang_code_for_variety(variety: &str) -> &str {
-    match variety {
-        "fr-FR-Standard" => "fr-FR",
-        "de-DE-Standard" => "de-DE",
-        "es-ES-Castilian" => "es-ES",
-        "es-419-Standard" => "es-419",
-        "el-GR-Standard" => "el-GR",
-        "sa-Deva-Standard" => "sa-Deva",
-        "la-Classical" | "la-Ecclesiastical" => "la",
-        "grc-Attic" | "grc-Koine" => "grc",
-        other => other,
-    }
+    speaking::language_tag_for_variety(variety).unwrap_or(variety)
 }
 
 fn speech_symbols_for_text(text: &str, variety: &VarietyId) -> Option<String> {

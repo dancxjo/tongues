@@ -41,5 +41,7 @@ toml = "0.8"
 bzip2 = "0.4"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
+isolang = { version = "2.4", features = ["english_names"] }
+langtag = "1.1"
 walkdir = "2"
 whisper-cpp-plus = { version = "0.1.4", default-features = false }

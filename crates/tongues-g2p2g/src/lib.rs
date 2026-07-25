@@ -224,55 +224,63 @@ impl<B: Backend> Seq2SeqModel<B> {
         let memory = self.encoder.forward(encoder_input);
 
         // 2. Autoregressive loop
-        let mut generated = vec![BOS_ID];
+        let decode_capacity = max_tgt_len.saturating_add(1);
+        let all_tgt_positions =
+            Tensor::arange(0..decode_capacity as i64, &device).unsqueeze_dim::<2>(0);
+        let all_tgt_position_embeddings = self.pos_embedding.forward(all_tgt_positions);
+        let position_width = all_tgt_position_embeddings.dims()[2];
+        let all_tgt_attn_mask =
+            burn::nn::attention::generate_autoregressive_mask(1, decode_capacity, &device);
+        let mut generated = Vec::with_capacity(decode_capacity);
+        generated.push(BOS_ID as i32);
 
         for _ in 0..max_tgt_len {
             let tgt_len = generated.len();
-
             let tgt_in_ids = Tensor::<B, 2, Int>::from_data(
-                TensorData::new(
-                    generated.iter().map(|&x| x as i32).collect::<Vec<_>>(),
-                    [1, tgt_len],
-                ),
+                TensorData::new(generated.clone(), [1, tgt_len]),
                 &device,
             );
-
-            let tgt_pos = Tensor::arange(0..tgt_len as i64, &device).unsqueeze_dim::<2>(0);
-            let tgt_emb =
-                self.embedding.forward(tgt_in_ids.clone()) + self.pos_embedding.forward(tgt_pos);
-
-            let tgt_pad_mask = tgt_in_ids.equal_elem(PAD_ID as i32);
-            let tgt_attn_mask =
-                burn::nn::attention::generate_autoregressive_mask(1, tgt_len, &device);
+            let tgt_pos_emb =
+                all_tgt_position_embeddings
+                    .clone()
+                    .slice([0..1, 0..tgt_len, 0..position_width]);
+            let tgt_emb = self.embedding.forward(tgt_in_ids) + tgt_pos_emb;
+            let tgt_attn_mask = all_tgt_attn_mask
+                .clone()
+                .slice([0..1, 0..tgt_len, 0..tgt_len]);
 
             let decoder_input = TransformerDecoderInput::new(tgt_emb, memory.clone())
-                .target_mask_pad(tgt_pad_mask)
                 .memory_mask_pad(src_pad_mask.clone())
                 .target_mask_attn(tgt_attn_mask);
 
             let out = self.decoder.forward(decoder_input);
 
             // Get logits for the LAST token
-            let classifier_device = self.classifier.clone().to_device(&device);
             let d_out = out.dims()[2];
             let last_out = out.slice([0..1, (tgt_len - 1)..tgt_len, 0..d_out]);
-            let logits = classifier_device.forward(last_out).squeeze_dim::<2>(1);
+            let logits = self.classifier.forward(last_out).squeeze_dim::<2>(1);
 
             let scores: Vec<f32> = logits.into_data().to_vec().unwrap();
             let next_token = scores
                 .iter()
                 .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, _)| i as u32)
-                .unwrap_or(EOS_ID);
+                .max_by(|(_, left), (_, right)| {
+                    left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(index, _)| index as i32)
+                .unwrap_or(EOS_ID as i32);
 
-            if next_token == EOS_ID {
+            if next_token == EOS_ID as i32 {
                 break;
             }
             generated.push(next_token);
         }
 
-        generated.into_iter().skip(1).collect()
+        generated
+            .into_iter()
+            .skip(1)
+            .map(|token| token as u32)
+            .collect()
     }
 }
 

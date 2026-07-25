@@ -11,7 +11,7 @@ const controlDescriptions = {
     model: 'Model bundle id or model selector value.',
     '--all': 'Apply the clean operation to both prepared data and model artifacts.',
     '--archive-dir': 'Root directory where cleaned artifacts are archived.',
-    '--backend': 'Speech backend: StyleTTS2 for neural synthesis, mock for tests, or ONNX voice models when configured.',
+    '--backend': 'Speech backend: Burn SpeedySpeech, Burn VITS, StyleTTS2, ONNX voice models, or mock output.',
     '--batch-size': 'Mini-batch size used during training.',
     '--cache-dir': 'Directory used for downloaded or cached source data.',
     '--config': 'TOML configuration file for this module.',
@@ -102,7 +102,7 @@ const controlDescriptions = {
     '--training-set': 'Prepared sentence-parser row source used for training.',
     '--subset': 'Dataset subset to prepare, such as mini or train-clean-100.',
     '--valid-frac': 'Fraction of base words assigned to validation during prepare.',
-    '--variety': 'Language or pronunciation variety tag, such as en-US.',
+    '--variety': 'Language or pronunciation variety tag from the linguistic variety registry.',
     '--verbose': 'Show status bars and diagnostic progress output.',
     '--verify-ollama': 'Ask Ollama to passively scan prepared training rows.',
     '--voice-wav': 'Reference WAV for speaker timbre.',
@@ -126,7 +126,7 @@ const controlDescriptions = {
 };
 
 const controlOptions = {
-    '--backend': ['styletts2', 'mock', 'onnx'],
+    '--backend': ['burn', 'vits', 'styletts2', 'onnx', 'mock'],
     '--corpus': ['ravdess', 'crema-d', 'tess', 'savee', 'emodb', 'iemocap'],
     '--mask-policy': ['variable', 'single'],
     '--method': ['speaker-neutral-delta'],
@@ -137,7 +137,6 @@ const controlOptions = {
     '--split': ['test', 'valid', 'train'],
     '--subset': ['mini', 'train-clean-100'],
     '--training-set': ['all', 'seams', 'naive-discrepancy'],
-    '--variety': ['en-US', 'en-GB'],
     'model category': ['LLM', 'Voice model'],
 };
 
@@ -188,7 +187,7 @@ const pathDefaults = {
 const commonDefaults = {
     '--archive-dir': 'archive',
     '--batch-size': '64',
-    '--backend': 'styletts2',
+    '--backend': 'burn',
     '--corpus': 'ravdess',
     '--cuts-per-wav': '8',
     '--diffusion-steps': '5',
@@ -240,7 +239,6 @@ const commonDefaults = {
     '--train-frac': '0.8',
     '--training-set': 'all',
     '--valid-frac': '0.1',
-    '--variety': 'en-US',
     '--weight-decay': '0.0001',
     model: 'gemma4',
     refs: 'models/styletts2/en-us/reference_audio',
@@ -393,8 +391,8 @@ const commandPages = [
         fields: [
             { name: 'text', description: 'Text to synthesize; stdin is used in the CLI when omitted.' },
             { name: '--output', description: 'WAV file path written by the CLI.' },
-            { name: '--backend', options: ['styletts2', 'mock', 'onnx'], default: 'styletts2' },
-            { name: '--variety', default: 'en-US' },
+            { name: '--backend', options: ['burn', 'vits', 'onnx', 'styletts2', 'mock'], default: 'burn' },
+            { name: '--variety' },
         ],
         advanced: ['--sample-rate-hz', '--speaker', '--voice-wav', '--style-wav', '--quality', '--diffusion-steps', '--speaker-reference-strength', '--style-reference-strength', '--style-alpha', '--style-beta', '--emotion-signatures', '--emotion', '--emotion-strength', '--embedding-scale', '--style-seed', '--speed', { name: '--debug-pronunciation', type: 'flag' }, { name: '--timings', type: 'flag' }, '--max-tts-symbols', { name: '--no-tts-chunking', type: 'flag' }, { name: '--fail-on-guessed-pronunciation', type: 'flag' }],
     },
@@ -1586,7 +1584,7 @@ async function initPronunciationDemo() {
         fillOptions(modelSelect, models, models.find((model) => model.available)?.path || models[0]?.path || '');
         fillOptions(taskSelect, wiktionary ? metadata.wiktionary_tasks : metadata.g2p2g_tasks);
         if (wiktionary) {
-            fillOptions(langSelect, metadata.languages, 'eng');
+            fillOptions(langSelect, metadata.languages, metadata.languages[0]?.value || '');
             fillOptions(varietySelect, metadata.varieties, '');
             fillOptions(notationSelect, metadata.notations, 'phones');
         }
@@ -1840,6 +1838,52 @@ async function initStyleTts2() {
         updatePreview(styleSelect, stylePreview);
     };
 
+    const loadSpeakers = async () => {
+        const backend = byId('backend').value || 'styletts2';
+        const speakerSelect = byId('speaker');
+        const speakerDetail = byId('speaker-detail');
+        speakerSelect.innerHTML = '<option value="">No named speaker</option>';
+        speakerSelect.disabled = true;
+        speakerDetail.textContent = 'This backend does not require a named speaker.';
+
+        const res = await fetch(`/api/speech/speakers?backend=${encodeURIComponent(backend)}`);
+        const data = await res.json();
+        if (data.error) {
+            speakerDetail.textContent = data.error;
+            return;
+        }
+        if (!data.requires_selection) return;
+
+        (data.speakers || []).forEach((speaker) => {
+            const option = document.createElement('option');
+            option.value = speaker.name;
+            option.textContent = `${speaker.label} · embedding ${speaker.id}`;
+            speakerSelect.appendChild(option);
+        });
+        speakerSelect.disabled = false;
+        if ((data.speakers || []).some((speaker) => speaker.name === 'p225')) {
+            speakerSelect.value = 'p225';
+        }
+        speakerDetail.textContent = `${data.speakers.length} speakers from ${data.model}`;
+    };
+
+    const loadVarieties = async () => {
+        const varietySelect = byId('variety');
+        const res = await fetch('/api/linguistic/varieties');
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        varietySelect.innerHTML = '';
+        (data.varieties || []).forEach((variety) => {
+            const option = document.createElement('option');
+            option.value = variety.value;
+            option.textContent = variety.label;
+            varietySelect.appendChild(option);
+        });
+        if ((data.varieties || []).some((variety) => variety.value === data.default)) {
+            varietySelect.value = data.default;
+        }
+    };
+
     await Promise.all([
         loadEmotions().catch((err) => {
             console.error('Failed to load emotions', err);
@@ -1848,7 +1892,22 @@ async function initStyleTts2() {
         loadSamples().catch((err) => {
             console.error('Failed to load StyleTTS2 samples', err);
         }),
+        loadSpeakers().catch((err) => {
+            console.error('Failed to load speech speakers', err);
+            byId('speaker-detail').textContent = 'Failed to load named speakers';
+        }),
+        loadVarieties().catch((err) => {
+            console.error('Failed to load linguistic varieties', err);
+            byId('variety').innerHTML = '<option value="">Variety registry unavailable</option>';
+        }),
     ]);
+
+    byId('backend').addEventListener('change', () => {
+        loadSpeakers().catch((err) => {
+            console.error('Failed to load speech speakers', err);
+            byId('speaker-detail').textContent = 'Failed to load named speakers';
+        });
+    });
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -1870,9 +1929,9 @@ async function initStyleTts2() {
                 cpu: byId('cpu').checked,
                 quiet: quietInput.checked,
                 verbose: verboseInput.checked,
-                variety: byId('variety').value || 'en-US',
+                variety: byId('variety').value || null,
                 backend: byId('backend').value || 'styletts2',
-                speaker: byId('speaker').value.trim() || null,
+                speaker: byId('speaker').value || null,
                 voice_sample: voiceSelect.value || null,
                 style_sample: styleSelect.value || null,
                 emotion: emotion || null,

@@ -10,9 +10,11 @@ pub mod spanish;
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
 use crate::variety::{
-    LinguisticVariety, NumberName, NumberNormalizationProfile, PunctuationProfile,
+    Language, LinguisticVariety, NumberName, NumberNormalizationProfile, PunctuationProfile,
     QuestionContourProfile, ScaleName, TextNormalizationProfile, TextRewrite, UnitName,
 };
+use isolang::Language as IsoLanguage;
+use langtag::LangTag;
 
 pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
 pub const PRONUNCIATION_PIPELINE_VARIETY_DATA: &str = "variety_data";
@@ -438,7 +440,20 @@ pub struct VarietyRegistration {
 }
 
 pub fn canonical_variety_id(code: &str) -> Option<VarietyId> {
-    find_variety_registration(code).map(|registration| VarietyId(registration.canonical_id.into()))
+    if let Some(registration) = find_variety_registration(code) {
+        return Some(VarietyId(registration.canonical_id.into()));
+    }
+    if code.contains('-') {
+        return None;
+    }
+    let code = code.to_ascii_lowercase();
+    let language = IsoLanguage::from_639_1(&code).or_else(|| IsoLanguage::from_639_3(&code))?;
+    let language_id = language.to_639_1().unwrap_or_else(|| language.to_639_3());
+    builtin_variety_registrations()
+        .find(|registration| {
+            (registration.load)(registration.canonical_id).language.0 == language_id
+        })
+        .map(|registration| VarietyId(registration.canonical_id.into()))
 }
 
 pub fn variety_by_code(code: &str) -> Option<LinguisticVariety> {
@@ -447,15 +462,53 @@ pub fn variety_by_code(code: &str) -> Option<LinguisticVariety> {
     Some((registration.load)(registration.canonical_id))
 }
 
+pub fn language_tag_for_variety(code: &str) -> Option<&'static str> {
+    let canonical = canonical_variety_id(code)?;
+    let tag = match canonical.0.as_str() {
+        "fr-FR-Standard" => "fr-FR",
+        "de-DE-Standard" => "de-DE",
+        "es-ES-Castilian" => "es-ES",
+        "es-419-Standard" => "es-419",
+        "el-GR-Standard" => "el-GR",
+        "sa-Deva-Standard" => "sa-Deva",
+        "la-Classical" | "la-Ecclesiastical" => "la",
+        "grc-Attic" | "grc-Koine" => "grc",
+        "en-US-GA" | "en-US-singing" | "en-US-AAE" => "en-US",
+        "en-GB-RP" | "en-GB-ScotE" => "en-GB",
+        "eo" => "eo",
+        _ => return None,
+    };
+    LangTag::new(tag).ok()?;
+    Some(tag)
+}
+
 pub fn builtin_varieties() -> Vec<LinguisticVariety> {
     builtin_variety_registrations()
         .map(|registration| (registration.load)(registration.canonical_id))
         .collect()
 }
 
+pub fn builtin_languages() -> Vec<Language> {
+    ["en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
+        .into_iter()
+        .filter_map(|id| {
+            let parsed = IsoLanguage::from_639_1(id).or_else(|| IsoLanguage::from_639_3(id))?;
+            Some(Language {
+                id: crate::ids::LanguageId(id.into()),
+                name: parsed.to_name().into(),
+                endonym: None,
+                iso_639: Some(parsed.to_639_3().into()),
+            })
+        })
+        .collect()
+}
+
 fn find_variety_registration(code: &str) -> Option<&'static VarietyRegistration> {
     builtin_variety_registrations().find(|registration| {
-        registration.canonical_id == code || registration.aliases.contains(&code)
+        registration.canonical_id == code
+            || registration.aliases.iter().any(|alias| {
+                *alias == code || LangTag::new(alias).is_ok_and(|candidate| candidate == code)
+            })
     })
 }
 

@@ -4,7 +4,10 @@ pub mod varieties;
 
 pub use lexicons::cmudict;
 pub use notation::arpabet;
-pub use varieties::{builtin_varieties, canonical_variety_id, variety_by_code};
+pub use varieties::{
+    builtin_languages, builtin_varieties, canonical_variety_id, language_tag_for_variety,
+    variety_by_code,
+};
 pub use varieties::{english, esperanto, french, german, greek, latin, sanskrit, spanish};
 
 #[cfg(test)]
@@ -16,10 +19,13 @@ mod tests {
     #[test]
     fn codes_select_varieties_without_variety_specific_api() {
         assert_eq!(canonical_variety_id("en-US").unwrap().0, "en-US-GA");
+        assert_eq!(canonical_variety_id("EN-us").unwrap().0, "en-US-GA");
+        assert_eq!(canonical_variety_id("eng").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("en-US-GA").unwrap().0, "en-US-GA");
         assert!(variety_by_code("en-US").is_some());
         assert!(variety_by_code("eo").is_some());
         assert_eq!(canonical_variety_id("fra").unwrap().0, "fr-FR-Standard");
+        assert_eq!(canonical_variety_id("Fr-fr").unwrap().0, "fr-FR-Standard");
         assert_eq!(canonical_variety_id("deu").unwrap().0, "de-DE-Standard");
         assert_eq!(canonical_variety_id("el").unwrap().0, "el-GR-Standard");
         assert_eq!(canonical_variety_id("grc").unwrap().0, "grc-Attic");
@@ -98,6 +104,11 @@ mod tests {
                         && profile.default_rate_syllables_per_second.is_some()
                 }),
                 "{} should declare a prosody profile",
+                variety.id.0
+            );
+            assert!(
+                language_tag_for_variety(&variety.id.0).is_some(),
+                "{} should declare its external language tag in variety data",
                 variety.id.0
             );
         }

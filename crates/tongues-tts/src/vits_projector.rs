@@ -98,7 +98,7 @@ impl VitsLinguisticProjector {
                         let ipa = id.strip_prefix("ipa.phone.").with_context(|| {
                             format!("VITS projection requires an IPA phone, got `{id}`")
                         })?;
-                        output.push_str(ipa);
+                        self.push_phone(&mut output, ipa);
                     }
                 }
             }
@@ -117,7 +117,7 @@ impl VitsLinguisticProjector {
                     };
                     format!("phoneme `{id}` has no IPA realization for VITS projection")
                 })?;
-                output.push_str(realized);
+                self.push_phone(&mut output, realized);
             }
         }
 
@@ -144,6 +144,19 @@ impl VitsLinguisticProjector {
         }
         ensure!(!output.is_empty(), "VITS projection produced no symbols");
         Ok(output)
+    }
+
+    fn push_phone(&self, output: &mut String, ipa: &str) {
+        for symbol in ipa.chars() {
+            // Tongues distinguishes unaspirated stops with the IPA extension
+            // `˭`. The released VCTK VITS inventory does not, so lower that
+            // detail to the base stop at this checkpoint boundary. Preserve it
+            // for any future checkpoint whose private vocabulary supports it.
+            if symbol == '˭' && self.symbol_id("˭").is_none() {
+                continue;
+            }
+            output.push(symbol);
+        }
     }
 
     fn encode_symbols(&self, symbols: &str) -> Result<Vec<i64>> {
@@ -296,17 +309,43 @@ mod tests {
             projected.ids[3],
             projector.symbol_id("ʰ").expect("aspiration embedding")
         );
+
+        let sentence = crate::utterance_plan_from_text(crate::SpeechRequest {
+            text: "Morning light rested on the cedar trees while the kettle began to sing.".into(),
+            variety: "en-US".into(),
+        })
+        .expect("native sentence plan");
+        let projected = projector
+            .project(&sentence)
+            .expect("published-compatible sentence projection");
+        assert!(!projected.projected_symbols.contains('˭'));
+        assert!(projected.projected_symbols.contains("ɹɛstəd"));
     }
 
     #[test]
-    fn unknown_distal_symbol_fails_at_the_model_boundary_when_available() {
-        let Some(path) = std::env::var_os("TONGUES_TEST_COQUI_VITS_CONFIG") else {
-            return;
-        };
-        let source = std::fs::read_to_string(path).expect("published VITS config");
-        let projector = VitsLinguisticProjector::from_json5_str(&source).expect("VITS projector");
+    fn lowers_unaspirated_stops_when_the_model_has_no_extension_symbol() {
+        let projector =
+            VitsLinguisticProjector::from_config(crate::vits_config::test_imported_vits_config())
+                .expect("VITS projector");
         let mut plan = plan();
-        plan.target_phones = vec![phone("ipa.phone.˭")];
+        plan.target_phones = vec![phone("ipa.phone.t˭")];
+
+        let projected = projector.project(&plan).expect("compatible projection");
+
+        assert_eq!(projected.projected_symbols, "t");
+        assert_eq!(
+            projected.ids[1],
+            projector.symbol_id("t").expect("t embedding")
+        );
+    }
+
+    #[test]
+    fn unknown_distal_symbol_fails_at_the_model_boundary() {
+        let projector =
+            VitsLinguisticProjector::from_config(crate::vits_config::test_imported_vits_config())
+                .expect("VITS projector");
+        let mut plan = plan();
+        plan.target_phones = vec![phone("ipa.phone.θ")];
 
         let error = projector.project(&plan).expect_err("unsupported symbol");
         assert!(error.to_string().contains("not in the VITS vocabulary"));

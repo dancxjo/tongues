@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  workspace:
+    name: Workspace checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Check repository scripts
+        run: bash -n scripts/check-feature-matrix.sh scripts/speech-smoke.sh
+      - name: Check default, no-default, and all-feature workspaces
+        run: scripts/check-feature-matrix.sh workspace
+      - name: Test workspace
+        run: cargo test --workspace --no-fail-fast
+      - name: Check server UI JavaScript
+        run: node --check crates/tongues-server/public/app.js
+
+  feature-powerset:
+    name: Package feature powerset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Check every declared package feature combination
+        run: scripts/check-feature-matrix.sh powerset

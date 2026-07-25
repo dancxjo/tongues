@@ -1,39 +1,44 @@
 # tongues
 
-Tongues is a Rust toolkit for neural lexical and speech-front-end models.
+Tongues is a Rust speech-systems workspace. It spans written and spoken
+language: pronunciation modeling, phonemic and phonetic realization, streaming
+text segmentation, acoustic interpretation, text-to-speech synthesis, and
+runtime playback.
 
-The project currently focuses on reversible mappings between written forms and pronunciation:
+Reversible mappings between written forms and pronunciation remain one active
+model family:
 
 ```text
 farkle     -> ˈfɑɹ.kəl
 ˈfɑɹ.kəl  -> farkel
 ```
 
-Unlike a static dictionary lookup, Tongues learns from pronunciation lexicons and generalizes to unseen words.
+Unlike a static dictionary lookup, the G2P2G models learn from pronunciation
+lexicons and generalize to unseen words.
 
 ```text
 pneumocryptology -> ˌnuː.məˈkɹɪp.təˌloʊ.dʒiː
 ˈzwɪ.kɚ.bɚɡ     -> zwickerberg
 ```
 
-Tongues is also evolving into a broader speech research toolkit containing model families for:
-
-- grapheme <-> phonology translation;
-- multilingual pronunciation modeling;
-- sentence parsing;
-- future TTS and ASR front-end work.
-
+The same workspace now also runs speech synthesis end to end. The native Burn
+paths include a SpeedySpeech acoustic model paired with HiFi-GAN and a
+speaker-conditioned VCTK VITS model. ONNX voice compatibility, StyleTTS2,
+streaming front ends, ASR-oriented interpretation, common-phone decoding, and
+emotion modeling share the same linguistic and artifact infrastructure.
 
 ## Features
 
 - Rust workspace using Burn 0.21.
 - Shared neural artifact metadata and vocabulary tooling.
-- OpenEPD-based pronunciation data preparation.
-- Spelling-to-phoneme and phoneme-to-spelling inference.
+- OpenEPD and Wiktionary pronunciation-data preparation.
+- Spelling-to-phoneme, phoneme-to-spelling, and multilingual pronunciation inference.
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
 - Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
-- Experimental StyleTTS2/ONNX voice speech plumbing.
+- Native Burn TTS using SpeedySpeech + HiFi-GAN or end-to-end multi-speaker VITS.
+- ONNX-compatible voices, StyleTTS2 synthesis and style controls, and a deterministic mock backend.
+- Streaming sentence/head detection, LibriSpeech interpretation, common-phone CTC, and emotion-model scaffolds.
 
 ## Quick Start
 
@@ -56,10 +61,21 @@ Start the interactive REPL:
 just g2p2g repl
 ```
 
+Synthesize speech. Missing registered model bundles are downloaded and verified
+on first use:
+
+```sh
+just speak --backend burn --output /tmp/tongues-burn.wav "Hello from Tongues."
+just speak --backend vits --speaker p225 --output /tmp/tongues-vits.wav "Hello from Tongues."
+just speech-demo
+```
+
 Run tests:
 
 ```sh
 cargo test
+scripts/check-feature-matrix.sh all
+scripts/speech-smoke.sh
 ```
 
 For detailed training, data preparation, and model-family documentation, see:
@@ -72,6 +88,8 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Interpretation](docs/interpretation.md)
 - [Common Phone](docs/common-phone.md)
 - [Emotions](docs/emotions.md)
+- [Text to speech](docs/tts.md)
+- [Speech synthesis smoke measurements](docs/speech-smoke.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)
 - [Architecture](docs/architecture.md)
@@ -85,14 +103,18 @@ crates/tongues-core              shared vocabulary and special token IDs
 crates/tongues-data              lexicon parsing, IPA normalization, splits, collation
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
-crates/tongues-wiktionary        Wiktionary pronunciation data and model-family scaffold
+crates/tongues-wiktionary        Wiktionary pronunciation data, training, and inference
+crates/tongues-sentence-parser   cursor-time sentence boundary, continuation, and repair
+crates/tongues-head2phones       streaming head-chunk-to-phone model family
 crates/tongues-common-phone      compact acoustic frame -> phone/feature CTC scaffold
-crates/tongues-interpretation   utterance-level Mel ASR with sentence/phoneme supervision
+crates/tongues-interpretation    utterance-level Mel ASR with sentence/phoneme supervision
 crates/tongues-emotions          pooled-log-mel audio emotion classifier
-crates/tongues-sentence-parser   cursor-boundary data and model-family code
+crates/tongues-tts               native Burn and ONNX-compatible speech synthesis
+crates/speaking                  linguistic varieties, phonemicization, realization, and ASR runtime
+crates/styletts2                 StyleTTS2 planning, ONNX inference, and style controls
 crates/tongues-cli               command-line routing and model/data wiring
-crates/speaking                  rule-based phonemicization, realization, and ASR runtime pipeline
-crates/styletts2                 StyleTTS2 symbol lowering and backend experiments
+crates/tongues-server            local HTTP/UI server
+xtask/                           repository maintenance tasks
 
 configs/                         default family config files
 datasets/                        prepared local datasets
@@ -101,7 +123,13 @@ models/                          trained local model artifacts
 docs/                            reference documentation
 ```
 
-The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/autodiff plus optional CUDA support.
+The authoritative workspace is defined in `Cargo.toml`. Maintained Rust source
+lives under `crates/` and `xtask/`; historical top-level `pronlex-*` and
+`speech` source trees have been removed from the checkout and remain available
+through Git history. Their language data was not discarded:
+`crates/speaking/src/data/varieties/` is the sole active variety registry and
+contains the maintained, expanded implementations. Burn workloads use
+ndarray/autodiff with CUDA where the selected command and machine support it.
 
 ## Core Commands
 
@@ -120,21 +148,23 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just sight-words` | Fine-tune on built-in Dolch sight words. |
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
+| `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |
+| `just speak --backend vits --speaker p225 "hello world"` | Synthesize with native Burn multi-speaker VITS. |
+| `just speech-demo` | Run a shuffled sentence through every built-in speech backend. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |
 | `just be [--mechanical]` | Stream Ollama text through sentence detection, pronunciation, ONNX speech playback, and the local audio queue. |
 
 The model-family `just` recipes forward their arguments to the `tongues` CLI.
 
-`just be` is the end-to-end demo this project has been aiming toward: generated
+`just be` is an end-to-end streaming demo: generated
 text is streamed into a speech front end, split into speakable chunks, converted
 to pronunciations, synthesized, and queued for playback. It works in both modes:
 without `--mechanical`, it uses the resident `head2phones` model; with
 `--mechanical`, it uses the deterministic sentence detector and speaking
 phonemicizer. Both paths are valid, and making that equivalence possible is the
-point of the current architecture. The honest status is that the full loop is
-very slow right now; current work is focused on improving training-data quality
-and comparing model choices until the neural path is good enough to justify the
-latency.
+point of the current architecture. The neural front-end loop remains slow and
+experimental, but speech synthesis itself is implemented and runnable through
+the `speak` command.
 
 Each model-family namespace also has a `clean` subcommand:
 
@@ -147,32 +177,41 @@ just emotions clean --all
 
 `clean` moves selected default artifacts under `archive/<run-id>/...` and recreates empty default directories for the next prepare/train run. With no selection flags it behaves like `--all`; pass `--no-create` to archive without recreating directories.
 
-## Current Model Families
+## Current Systems
 
 | Family | Purpose | Status |
 |---|---|---|
 | `g2p2g` | spelling <-> broad IPA | active |
 | `wiktionary` | multilingual orthography/phonology | active |
+| `tts` | native Burn acoustic/vocoder and end-to-end synthesis plus ONNX compatibility | active inference |
+| `speaking` | linguistic IR, lexicons, phonemicization, realization, and ASR runtime | active |
 | `common-phone` | compact acoustic frames -> phones/features | experimental |
 | `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
 | `head2phones` | streaming head chunk -> phones front end | experimental |
+| `interpretation` | utterance-level ASR and multi-head acoustic interpretation | experimental |
+| `emotions` | pooled-log-mel audio emotion classification | experimental |
+| `styletts2` | reference/style-conditioned ONNX synthesis | experimental |
 
-Legacy verb-first commands still work for now, but the active CLI shape is model-family first: `tongues g2p2g ...`, `tongues wiktionary ...`, and so on.
+Legacy verb-first commands still work for now, but trainable model-family
+commands use the family-first shape: `tongues g2p2g ...`,
+`tongues wiktionary ...`, and so on. Runtime systems such as synthesis use
+direct commands such as `tongues speak ...`.
 
 Current focus:
 
 - pronunciation modeling;
 - multilingual pronunciation data;
 - lexical refinement;
-- phonology and realization plumbing.
+- phonology and realization plumbing;
+- native speech-model compatibility and inference performance;
+- streaming speech input and output.
 
 Planned work:
 
-- phonetic realization models;
-- sentence boundary detection;
-- streaming text chunk repair;
-- prosody prediction;
-- ASR/TTS integration.
+- improve neural sentence/head quality and latency;
+- deepen learned prosody and phonetic realization;
+- mature the interpretation and common-phone families into stronger ASR paths;
+- tighten streaming playback, repair, and barge-in behavior.
 
 ## Why This Exists
 
@@ -189,13 +228,13 @@ incoming text stream
   -> playback queue / barge-in control
 ```
 
-Tongues currently focuses on the lexical and phonological layer:
-
-```text
-orthography <-> phonology
-```
-
-Future sibling models may handle segmentation, lexical repair, phonetic realization, prosody, and ASR-adjacent phone/phoneme representations.
+Tongues contains implementations or research scaffolds for each layer in that
+path. Its shared `UtterancePlan`-style linguistic representation keeps
+phonology and phonetics independent of a checkpoint's private vocabulary, and
+`tongues-tts` performs the final model-specific projection and waveform
+synthesis. In the other direction, `interpretation`, `common-phone`, and the
+`speaking` ASR runtime connect audio back to text, phones, phonemes, and related
+features.
 
 ## License
 

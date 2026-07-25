@@ -54,11 +54,15 @@ impl SpeakerCatalog {
     }
 
     pub fn available_names(&self) -> Vec<&str> {
+        self.entries().into_iter().map(|(name, _)| name).collect()
+    }
+
+    pub fn entries(&self) -> Vec<(&str, u32)> {
         let mut speakers = self.name_to_id.iter().collect::<Vec<_>>();
         speakers.sort_by_key(|(name, id)| (**id, name.as_str()));
         speakers
             .into_iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, id)| (name.as_str(), *id))
             .collect()
     }
 
@@ -109,6 +113,10 @@ mod tests {
         let catalog = SpeakerCatalog::from_json_str(VCTK_FRAGMENT, 3).unwrap();
 
         assert_eq!(catalog.id_for_name("p225"), Some(1));
+        assert_eq!(
+            catalog.entries(),
+            vec![("ED\n", 0), ("p225", 1), ("p226", 2)]
+        );
         assert_eq!(
             catalog
                 .resolve(Some(&SpeakerId("p226".into())), None)

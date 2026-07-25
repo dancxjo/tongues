@@ -1,12 +1,12 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
-    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use serde::{Deserialize, Serialize};
@@ -19,11 +19,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
+const VITS_SPEAKER_RELATIVE_PATH: &str = "models/speech/coqui/en/vctk/vits/speaker_ids.json";
+const VITS_SPEAKER_COUNT: u32 = 109;
 const JOB_OUTPUT_LIMIT: usize = 1_000;
 const DEFAULT_HTTP_PORT: u16 = 3000;
 const DEFAULT_HTTPS_PORT: u16 = 8443;
@@ -118,7 +120,9 @@ fn build_app(state: AppState) -> Router {
             get(get_pronunciation_models),
         )
         .route("/api/pronunciation-demo/infer", post(pronunciation_infer))
+        .route("/api/linguistic/varieties", get(get_linguistic_varieties))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
+        .route("/api/speech/speakers", get(get_speech_speakers))
         .route(
             "/api/styletts2-reference-audio/{*sample_id}",
             get(get_styletts2_reference_audio),
@@ -249,6 +253,28 @@ struct StyleTts2Sample {
 struct StyleTts2SampleDefaults {
     voice: String,
     style: String,
+}
+
+#[derive(Deserialize)]
+struct SpeechSpeakersQuery {
+    backend: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct SpeechSpeakerOption {
+    name: String,
+    label: String,
+    id: u32,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct SpeechSpeakersResponse {
+    backend: String,
+    model: Option<String>,
+    installed: bool,
+    requires_selection: bool,
+    speakers: Vec<SpeechSpeakerOption>,
+    error: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -393,8 +419,8 @@ struct PronunciationModelOption {
 #[derive(Serialize)]
 struct PronunciationModelsResponse {
     models: Vec<PronunciationModelOption>,
-    languages: Vec<CodeLabel>,
-    varieties: Vec<CodeLabel>,
+    languages: Vec<OwnedCodeLabel>,
+    varieties: Vec<OwnedCodeLabel>,
     wiktionary_tasks: Vec<CodeLabel>,
     g2p2g_tasks: Vec<CodeLabel>,
     notations: Vec<CodeLabel>,
@@ -404,6 +430,18 @@ struct PronunciationModelsResponse {
 struct CodeLabel {
     value: &'static str,
     label: &'static str,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct OwnedCodeLabel {
+    value: String,
+    label: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct LinguisticVarietiesResponse {
+    default: String,
+    varieties: Vec<OwnedCodeLabel>,
 }
 
 #[derive(Deserialize)]
@@ -588,70 +626,8 @@ async fn get_job(State(state): State<AppState>, Path(job_id): Path<String>) -> i
 async fn get_pronunciation_models(State(state): State<AppState>) -> impl IntoResponse {
     Json(PronunciationModelsResponse {
         models: pronunciation_model_options(&state.workspace_root),
-        languages: vec![
-            CodeLabel {
-                value: "eng",
-                label: "English",
-            },
-            CodeLabel {
-                value: "fra",
-                label: "French",
-            },
-            CodeLabel {
-                value: "deu",
-                label: "German",
-            },
-            CodeLabel {
-                value: "spa",
-                label: "Spanish",
-            },
-            CodeLabel {
-                value: "lat",
-                label: "Latin",
-            },
-            CodeLabel {
-                value: "ell",
-                label: "Greek",
-            },
-            CodeLabel {
-                value: "grc",
-                label: "Ancient Greek",
-            },
-            CodeLabel {
-                value: "san",
-                label: "Sanskrit",
-            },
-        ],
-        varieties: vec![
-            CodeLabel {
-                value: "",
-                label: "Default",
-            },
-            CodeLabel {
-                value: "en-US.GenAm",
-                label: "English, General American",
-            },
-            CodeLabel {
-                value: "en-GB.RP",
-                label: "English, RP",
-            },
-            CodeLabel {
-                value: "spa-ES",
-                label: "Spanish, Spain",
-            },
-            CodeLabel {
-                value: "spa-LatAm",
-                label: "Spanish, Latin America",
-            },
-            CodeLabel {
-                value: "la-ecclesiastical",
-                label: "Latin, Ecclesiastical",
-            },
-            CodeLabel {
-                value: "la-Classical",
-                label: "Latin, Classical",
-            },
-        ],
+        languages: linguistic_language_options(),
+        varieties: linguistic_variety_options(true),
         wiktionary_tasks: vec![
             CodeLabel {
                 value: "orthography-to-phones",
@@ -735,6 +711,46 @@ async fn get_pronunciation_models(State(state): State<AppState>) -> impl IntoRes
             },
         ],
     })
+}
+
+async fn get_linguistic_varieties() -> impl IntoResponse {
+    let configured_default = speaking::data::varieties::DEFAULT_SPEAKING_VARIETY;
+    let default = speaking::canonical_variety_id(configured_default)
+        .map(|id| id.0)
+        .unwrap_or_else(|| configured_default.into());
+    Json(LinguisticVarietiesResponse {
+        default,
+        varieties: linguistic_variety_options(false),
+    })
+}
+
+fn linguistic_language_options() -> Vec<OwnedCodeLabel> {
+    speaking::builtin_languages()
+        .into_iter()
+        .map(|language| OwnedCodeLabel {
+            value: language.iso_639.unwrap_or(language.id.0),
+            label: language.name,
+        })
+        .collect()
+}
+
+fn linguistic_variety_options(include_default: bool) -> Vec<OwnedCodeLabel> {
+    let mut options = Vec::new();
+    if include_default {
+        options.push(OwnedCodeLabel {
+            value: String::new(),
+            label: "Default".into(),
+        });
+    }
+    options.extend(
+        speaking::builtin_varieties()
+            .into_iter()
+            .map(|variety| OwnedCodeLabel {
+                value: variety.id.0,
+                label: variety.name,
+            }),
+    );
+    options
 }
 
 async fn pronunciation_infer(
@@ -1823,6 +1839,58 @@ async fn get_styletts2_samples(State(state): State<AppState>) -> impl IntoRespon
     Json(response)
 }
 
+async fn get_speech_speakers(Query(query): Query<SpeechSpeakersQuery>) -> impl IntoResponse {
+    let backend = query.backend.as_deref().unwrap_or("vits").trim();
+    Json(speech_speakers_response(&resolve_mortar_home(), backend))
+}
+
+fn speech_speakers_response(mortar_home: &FsPath, backend: &str) -> SpeechSpeakersResponse {
+    if backend != "vits" {
+        return SpeechSpeakersResponse {
+            backend: backend.to_string(),
+            model: None,
+            installed: true,
+            requires_selection: false,
+            speakers: Vec::new(),
+            error: None,
+        };
+    }
+
+    let path = mortar_home.join(VITS_SPEAKER_RELATIVE_PATH);
+    let catalog = match tongues_tts::SpeakerCatalog::from_file(&path, VITS_SPEAKER_COUNT) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return SpeechSpeakersResponse {
+                backend: backend.to_string(),
+                model: Some("vits-vctk".into()),
+                installed: false,
+                requires_selection: true,
+                speakers: Vec::new(),
+                error: Some(format!(
+                    "{error}. Run `cargo run --bin tongues -- models fetch vits-vctk` or synthesize with the VITS backend once."
+                )),
+            };
+        }
+    };
+    let speakers = catalog
+        .entries()
+        .into_iter()
+        .map(|(name, id)| SpeechSpeakerOption {
+            name: name.to_string(),
+            label: name.trim().to_string(),
+            id,
+        })
+        .collect();
+    SpeechSpeakersResponse {
+        backend: backend.to_string(),
+        model: Some("vits-vctk".into()),
+        installed: true,
+        requires_selection: true,
+        speakers,
+        error: None,
+    }
+}
+
 async fn get_styletts2_reference_audio(
     State(state): State<AppState>,
     Path(sample_id): Path<String>,
@@ -1861,8 +1929,10 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
         return Err("quiet and verbose cannot both be enabled".into());
     }
     if let Some(backend) = payload.backend.as_deref() {
-        if !backend.is_empty() && backend != "mock" && backend != "styletts2" && backend != "onnx" {
-            return Err("backend must be `mock`, `styletts2`, or `onnx`".into());
+        if !backend.is_empty()
+            && !matches!(backend, "burn" | "vits" | "mock" | "styletts2" | "onnx")
+        {
+            return Err("backend must be `burn`, `vits`, `mock`, `styletts2`, or `onnx`".into());
         }
     }
     if payload
@@ -2424,4 +2494,71 @@ fn write_request_emotion_signatures(
     serde_json::to_writer(file, &signature)
         .map_err(|error| format!("Failed to write {}: {error}", path.display()))?;
     Ok(Some(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vits_speaker_enumeration_preserves_model_names_and_embedding_ids() {
+        let mortar_home =
+            std::env::temp_dir().join(format!("tongues-server-speakers-{}", uuid::Uuid::new_v4()));
+        let speaker_path = mortar_home.join(VITS_SPEAKER_RELATIVE_PATH);
+        std::fs::create_dir_all(speaker_path.parent().expect("speaker parent"))
+            .expect("create speaker directory");
+        std::fs::write(&speaker_path, r#"{"ED\n":0,"p225":1,"p330":90,"p376":108}"#)
+            .expect("write speaker map");
+
+        let response = speech_speakers_response(&mortar_home, "vits");
+
+        assert!(response.installed);
+        assert!(response.requires_selection);
+        assert_eq!(response.model.as_deref(), Some("vits-vctk"));
+        assert_eq!(
+            response
+                .speakers
+                .iter()
+                .find(|speaker| speaker.name == "p330"),
+            Some(&SpeechSpeakerOption {
+                name: "p330".into(),
+                label: "p330".into(),
+                id: 90,
+            })
+        );
+        assert_eq!(response.speakers[0].label, "ED");
+
+        std::fs::remove_dir_all(&mortar_home).expect("remove speaker fixture");
+    }
+
+    #[test]
+    fn single_speaker_backends_return_an_empty_optional_catalog() {
+        for backend in ["burn", "onnx", "styletts2", "mock"] {
+            let response = speech_speakers_response(FsPath::new("."), backend);
+            assert_eq!(response.backend, backend);
+            assert!(response.installed);
+            assert!(!response.requires_selection);
+            assert!(response.speakers.is_empty());
+            assert!(response.error.is_none());
+        }
+    }
+
+    #[test]
+    fn server_variety_options_are_projected_from_the_linguistic_data_registry() {
+        let registered = speaking::builtin_varieties();
+        let options = linguistic_variety_options(false);
+        assert_eq!(options.len(), registered.len());
+        for (option, variety) in options.iter().zip(registered) {
+            assert_eq!(option.value, variety.id.0);
+            assert_eq!(option.label, variety.name);
+        }
+
+        let registered = speaking::builtin_languages();
+        let options = linguistic_language_options();
+        assert_eq!(options.len(), registered.len());
+        for (option, language) in options.iter().zip(registered) {
+            assert_eq!(option.value, language.iso_639.unwrap_or(language.id.0));
+            assert_eq!(option.label, language.name);
+        }
+    }
 }

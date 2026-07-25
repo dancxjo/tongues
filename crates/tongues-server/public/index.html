@@ -231,10 +231,7 @@
 
                                 <div class="form-group">
                                     <label for="variety">Variety</label>
-                                    <select id="variety">
-                                        <option value="en-US">English, US</option>
-                                        <option value="en-GB">English, UK</option>
-                                    </select>
+                                    <select id="variety"></select>
                                     <small>Language or pronunciation variety tag passed as `--variety`.</small>
                                 </div>
 
@@ -242,6 +239,8 @@
                                     <label for="backend">Backend</label>
                                     <select id="backend">
                                         <option value="styletts2">StyleTTS2</option>
+                                        <option value="burn">Burn SpeedySpeech + HiFi-GAN</option>
+                                        <option value="vits">Burn VITS</option>
                                         <option value="mock">Mock</option>
                                         <option value="onnx">ONNX voice</option>
                                     </select>
@@ -250,8 +249,10 @@
 
                                 <div class="form-group">
                                     <label for="speaker">Speaker</label>
-                                    <input id="speaker" type="text" placeholder="p225">
-                                    <small>Named speaker declared by the selected voice model.</small>
+                                    <select id="speaker">
+                                        <option value="">No named speaker</option>
+                                    </select>
+                                    <small id="speaker-detail">Named speakers are loaded from the selected model.</small>
                                 </div>
                             </div>
 
