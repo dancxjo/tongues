@@ -90,7 +90,7 @@ impl ModelInputContract {
         ensure!(
             self.supported_varieties
                 .iter()
-                .any(|variety| variety == "*" || variety == &plan.variety.0),
+                .any(|variety| variety_matches(variety, &plan.variety.0)),
             "model input does not support variety `{}`; supported varieties: {}",
             plan.variety.0,
             self.supported_varieties.join(", ")
@@ -104,6 +104,15 @@ impl ModelInputContract {
             .copied()
             .collect()
     }
+}
+
+fn variety_matches(supported: &str, requested: &str) -> bool {
+    supported == "*"
+        || supported.eq_ignore_ascii_case(requested)
+        || (!supported.contains('-')
+            && requested
+                .split_once('-')
+                .is_some_and(|(language, _)| supported.eq_ignore_ascii_case(language)))
 }
 
 /// Terminal, model-owned lowering from Tongues' linguistic IR.
@@ -950,6 +959,20 @@ mod tests {
             supported_varieties: vec!["en-US".into()],
             consumes: BTreeSet::from([LinguisticIntent::Phones]),
         }
+    }
+
+    #[test]
+    fn base_language_contract_accepts_regional_varieties_only() {
+        let mut contract = input_contract();
+        contract.supported_varieties = vec!["en".into()];
+        let mut regional = request().plan;
+        regional.variety = VarietyId("en-GB".into());
+
+        contract
+            .ensure_supports(&regional)
+            .expect("regional English");
+        regional.variety = VarietyId("fr-FR".into());
+        assert!(contract.ensure_supports(&regional).is_err());
     }
 
     struct MockAcousticModel {

@@ -7,11 +7,10 @@ use burn::tensor::{Int, Tensor, TensorData};
 use serde_json::Value;
 
 use crate::{
-    AcousticArtifact, AcousticModel, AcousticOutputContract, CoquiAudioConfig,
-    CoquiLinguisticProjector, EmbeddingContract, InferenceRuntime, LinguisticProjector,
-    ModelInputContract, Spectrogram, SpectrogramContract, SpectrogramLayout,
-    SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisRequest, SpeedySpeech,
-    SpeedySpeechConfig,
+    AcousticArtifact, AcousticModel, AcousticOutputContract, AudioFeatureConfig, EmbeddingContract,
+    InferenceRuntime, LinguisticProjector, ModelInputContract, PhonemeVocabularyProjector,
+    Spectrogram, SpectrogramContract, SpectrogramLayout, SpeechModelCapabilities,
+    SpeechModelFamily, SpeechSynthesisRequest, SpeedySpeech, SpeedySpeechConfig,
 };
 
 /// Burn-native adapter for the released Coqui SpeedySpeech acoustic checkpoint.
@@ -20,7 +19,7 @@ use crate::{
 /// character IDs exist only between this adapter's projector and model.
 pub struct BurnSpeedySpeechAcoustic<B: Backend> {
     model: SpeedySpeech<B>,
-    projector: CoquiLinguisticProjector,
+    projector: PhonemeVocabularyProjector,
     output_contract: SpectrogramContract,
     device: B::Device,
 }
@@ -38,21 +37,21 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
             .with_context(|| format!("invalid Coqui config {}", config_path.display()))?;
         let model_config =
             SpeedySpeechConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
-        let projector = CoquiLinguisticProjector::from_json5_str(&source)?;
+        let projector = PhonemeVocabularyProjector::from_json5_str(&source)?;
         ensure!(
             projector.vocabulary().len() == model_config.num_chars,
-            "Coqui vocabulary has {} entries but SpeedySpeech expects {}",
+            "phoneme vocabulary has {} entries but SpeedySpeech expects {}",
             projector.vocabulary().len(),
             model_config.num_chars
         );
-        let output_contract = CoquiAudioConfig::from_json5_str(&source)?.mel_contract()?;
+        let output_contract = AudioFeatureConfig::from_json5_str(&source)?.mel_contract()?;
         ensure!(
             output_contract.layout == SpectrogramLayout::FramesByBins,
             "Burn SpeedySpeech adapter requires frame-major shared spectrograms"
         );
         ensure!(
             output_contract.bins == model_config.out_channels,
-            "Coqui audio config declares {} mel bins but SpeedySpeech emits {}",
+            "audio feature config declares {} mel bins but SpeedySpeech emits {}",
             output_contract.bins,
             model_config.out_channels
         );
@@ -70,7 +69,7 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
         })
     }
 
-    pub fn projector(&self) -> &CoquiLinguisticProjector {
+    pub fn projector(&self) -> &PhonemeVocabularyProjector {
         &self.projector
     }
 

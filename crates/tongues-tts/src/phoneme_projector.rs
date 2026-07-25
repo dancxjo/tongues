@@ -7,7 +7,7 @@ use speaking::{PauseKind, Spec, TerminalPunctuation, UtterancePlan};
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CoquiCharactersConfig {
+pub struct PhonemeCharactersConfig {
     pub pad: Option<String>,
     pub eos: Option<String>,
     pub bos: Option<String>,
@@ -22,7 +22,7 @@ pub struct CoquiCharactersConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CoquiTokenizerConfig {
+pub struct PhonemeTokenizerConfig {
     #[serde(default)]
     pub use_phonemes: bool,
     pub phoneme_language: Option<String>,
@@ -30,36 +30,36 @@ pub struct CoquiTokenizerConfig {
     pub add_blank: bool,
     #[serde(default)]
     pub enable_eos_bos_chars: bool,
-    pub characters: CoquiCharactersConfig,
+    pub characters: PhonemeCharactersConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoquiTokenIds {
+pub struct PhonemeTokenIds {
     pub ids: Vec<i64>,
     pub projected_symbols: String,
 }
 
-/// Terminal projection from Tongues' linguistic IR into one Coqui checkpoint's
+/// Terminal projection from Tongues' linguistic IR into one checkpoint's
 /// private symbol table.
 #[derive(Debug, Clone)]
-pub struct CoquiLinguisticProjector {
-    config: CoquiTokenizerConfig,
+pub struct PhonemeVocabularyProjector {
+    config: PhonemeTokenizerConfig,
     vocabulary: Vec<char>,
     symbol_to_id: BTreeMap<char, i64>,
     contract: ModelInputContract,
 }
 
-impl CoquiLinguisticProjector {
+impl PhonemeVocabularyProjector {
     pub fn from_json5_str(source: &str) -> Result<Self> {
-        let config: CoquiTokenizerConfig =
-            json5::from_str(source).context("failed to parse Coqui tokenizer config")?;
+        let config: PhonemeTokenizerConfig =
+            json5::from_str(source).context("failed to parse phoneme tokenizer config")?;
         Self::from_config(config)
     }
 
-    pub fn from_config(config: CoquiTokenizerConfig) -> Result<Self> {
+    pub fn from_config(config: PhonemeTokenizerConfig) -> Result<Self> {
         ensure!(
             config.use_phonemes,
-            "Coqui linguistic projector currently requires a phoneme-input model"
+            "phoneme vocabulary projector currently requires a phoneme-input model"
         );
         let mut symbols = config
             .characters
@@ -83,13 +83,13 @@ impl CoquiLinguisticProjector {
 
         let mut symbol_to_id = BTreeMap::new();
         for (id, symbol) in symbols.iter().copied().enumerate() {
-            let id = i64::try_from(id).context("Coqui vocabulary is too large")?;
+            let id = i64::try_from(id).context("phoneme vocabulary is too large")?;
             ensure!(
                 symbol_to_id.insert(symbol, id).is_none(),
-                "Coqui vocabulary contains duplicate symbol {symbol:?}"
+                "phoneme vocabulary contains duplicate symbol {symbol:?}"
             );
         }
-        ensure!(!symbols.is_empty(), "Coqui vocabulary must not be empty");
+        ensure!(!symbols.is_empty(), "phoneme vocabulary must not be empty");
 
         let variety = config
             .phoneme_language
@@ -97,7 +97,7 @@ impl CoquiLinguisticProjector {
             .map(normalize_variety)
             .unwrap_or_else(|| "*".to_string());
         let vocabulary_fingerprint = format!(
-            "coqui-phonemes-v1:{}",
+            "phoneme-vocabulary-v1:{}",
             symbols.iter().collect::<String>().escape_unicode()
         );
         let contract = ModelInputContract {
@@ -143,7 +143,7 @@ impl CoquiLinguisticProjector {
                     "boundary.letter" => {}
                     id => {
                         let ipa = id.strip_prefix("ipa.phone.").with_context(|| {
-                            format!("Coqui phoneme projection requires an IPA phone, got `{id}`")
+                            format!("phoneme projection requires an IPA phone, got `{id}`")
                         })?;
                         push_model_phoneme(&mut output, ipa);
                     }
@@ -162,7 +162,7 @@ impl CoquiLinguisticProjector {
                         Spec::Known(id) => id.0.as_ref(),
                         _ => "<unknown>",
                     };
-                    format!("phoneme `{id}` has no IPA realization for Coqui projection")
+                    format!("phoneme `{id}` has no IPA realization for model projection")
                 })?;
                 push_model_phoneme(&mut output, realized);
             }
@@ -189,7 +189,7 @@ impl CoquiLinguisticProjector {
         {
             output.push(',');
         }
-        ensure!(!output.is_empty(), "Coqui projection produced no symbols");
+        ensure!(!output.is_empty(), "model projection produced no symbols");
         Ok(output)
     }
 
@@ -199,7 +199,7 @@ impl CoquiLinguisticProjector {
             .map(|symbol| {
                 self.symbol_id(symbol).with_context(|| {
                     format!(
-                        "symbol {symbol:?} is not in the Coqui model vocabulary; projected sequence: {symbols:?}"
+                        "symbol {symbol:?} is not in the model vocabulary; projected sequence: {symbols:?}"
                     )
                 })
             })
@@ -208,10 +208,10 @@ impl CoquiLinguisticProjector {
         if self.config.add_blank {
             let blank = special_char(self.config.characters.blank.as_deref())
                 .or_else(|| special_char(self.config.characters.pad.as_deref()))
-                .context("Coqui add_blank requires a blank or pad symbol")?;
+                .context("add_blank requires a blank or pad symbol")?;
             let blank_id = self
                 .symbol_id(blank)
-                .context("Coqui blank symbol is absent from the vocabulary")?;
+                .context("model blank symbol is absent from the vocabulary")?;
             let mut interspersed = vec![blank_id; ids.len() * 2 + 1];
             for (slot, id) in interspersed.iter_mut().skip(1).step_by(2).zip(ids) {
                 *slot = id;
@@ -220,9 +220,9 @@ impl CoquiLinguisticProjector {
         }
         if self.config.enable_eos_bos_chars {
             let bos = special_char(self.config.characters.bos.as_deref())
-                .context("Coqui BOS/EOS mode requires a BOS symbol")?;
+                .context("BOS/EOS mode requires a BOS symbol")?;
             let eos = special_char(self.config.characters.eos.as_deref())
-                .context("Coqui BOS/EOS mode requires an EOS symbol")?;
+                .context("BOS/EOS mode requires an EOS symbol")?;
             ids.insert(0, self.symbol_id(bos).context("BOS symbol is absent")?);
             ids.push(self.symbol_id(eos).context("EOS symbol is absent")?);
         }
@@ -230,8 +230,8 @@ impl CoquiLinguisticProjector {
     }
 }
 
-impl LinguisticProjector for CoquiLinguisticProjector {
-    type ModelInput = CoquiTokenIds;
+impl LinguisticProjector for PhonemeVocabularyProjector {
+    type ModelInput = PhonemeTokenIds;
 
     fn contract(&self) -> &ModelInputContract {
         &self.contract
@@ -240,7 +240,7 @@ impl LinguisticProjector for CoquiLinguisticProjector {
     fn project(&self, plan: &UtterancePlan) -> Result<Self::ModelInput> {
         let projected_symbols = self.project_symbols(plan)?;
         let ids = self.encode_symbols(&projected_symbols)?;
-        Ok(CoquiTokenIds {
+        Ok(PhonemeTokenIds {
             ids,
             projected_symbols,
         })
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn vocabulary_matches_coqui_special_and_sorted_order() {
-        let projector = CoquiLinguisticProjector::from_json5_str(CONFIG).expect("projector");
+        let projector = PhonemeVocabularyProjector::from_json5_str(CONFIG).expect("projector");
 
         assert_eq!(
             projector.vocabulary().iter().collect::<String>(),
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn projects_native_ipa_phones_only_at_the_model_boundary() {
-        let projector = CoquiLinguisticProjector::from_json5_str(CONFIG).expect("projector");
+        let projector = PhonemeVocabularyProjector::from_json5_str(CONFIG).expect("projector");
         let projected = projector.project(&plan()).expect("projection");
 
         assert_eq!(projected.projected_symbols, "tɚ ʃ");
@@ -389,15 +389,13 @@ mod tests {
 
     #[test]
     fn rejects_symbols_the_checkpoint_does_not_know() {
-        let projector = CoquiLinguisticProjector::from_json5_str(CONFIG).expect("projector");
+        let projector = PhonemeVocabularyProjector::from_json5_str(CONFIG).expect("projector");
         let mut plan = plan();
         plan.target_phones = vec![phone("ipa.phone.θ")];
 
         let error = projector.project(&plan).expect_err("unknown symbol");
 
-        assert!(error
-            .to_string()
-            .contains("not in the Coqui model vocabulary"));
+        assert!(error.to_string().contains("not in the model vocabulary"));
     }
 
     #[test]
@@ -407,7 +405,7 @@ mod tests {
         };
         let source = std::fs::read_to_string(path).expect("published config");
         let projector =
-            CoquiLinguisticProjector::from_json5_str(&source).expect("published vocabulary");
+            PhonemeVocabularyProjector::from_json5_str(&source).expect("published vocabulary");
 
         assert_eq!(projector.vocabulary().len(), 130);
         assert_eq!(projector.symbol_id('_'), Some(0));

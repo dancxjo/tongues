@@ -5,7 +5,7 @@ use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
 
 use crate::{
-    CoquiHifiGanConfig, HifiganGenerator, InferenceRuntime, NeuralVocoder, Spectrogram,
+    HifiganBundleConfig, HifiganGenerator, InferenceRuntime, NeuralVocoder, Spectrogram,
     SpectrogramContract, SpectrogramLayout, Waveform, WaveformContract,
 };
 
@@ -23,7 +23,7 @@ impl<B: Backend> BurnHifiganVocoder<B> {
         checkpoint_path: impl AsRef<Path>,
         device: B::Device,
     ) -> Result<Self> {
-        let config = CoquiHifiGanConfig::from_file(config_path)?;
+        let config = HifiganBundleConfig::from_file(config_path)?;
         let input_contract = config.input_contract()?;
         ensure!(
             input_contract.layout == SpectrogramLayout::FramesByBins,

@@ -26,9 +26,11 @@ pub mod burn_hifigan;
 pub mod burn_speedy_speech;
 pub mod burn_vocoder;
 pub mod components;
-pub mod coqui;
-pub mod coqui_projector;
+pub mod model_config;
+pub mod phoneme_projector;
 pub mod speakers;
+pub mod vits_config;
+pub mod vits_projector;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_speedy_speech::{
@@ -44,11 +46,13 @@ pub use components::{
     SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode, SpectrogramScale,
     SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
 };
-pub use coqui::{CoquiAudioConfig, CoquiHifiGanConfig, CoquiHifiGanGeneratorConfig};
-pub use coqui_projector::{
-    CoquiCharactersConfig, CoquiLinguisticProjector, CoquiTokenIds, CoquiTokenizerConfig,
+pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
+pub use phoneme_projector::{
+    PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
 };
 pub use speakers::SpeakerCatalog;
+pub use vits_config::{VitsCharactersConfig, VitsModelArgs, VitsModelConfig, VITS_BLANK_TOKEN};
+pub use vits_projector::{VitsLinguisticProjector, VitsTokenIds};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";

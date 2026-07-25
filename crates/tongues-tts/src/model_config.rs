@@ -13,7 +13,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CoquiAudioConfig {
+pub struct AudioFeatureConfig {
     pub fft_size: usize,
     pub win_length: usize,
     pub hop_length: usize,
@@ -45,15 +45,15 @@ pub struct CoquiAudioConfig {
     pub stft_pad_mode: String,
 }
 
-impl CoquiAudioConfig {
+impl AudioFeatureConfig {
     pub fn from_json5_str(source: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct Config {
-            audio: CoquiAudioConfig,
+            audio: AudioFeatureConfig,
         }
 
         let config: Config =
-            json5::from_str(source).context("failed to parse Coqui audio config")?;
+            json5::from_str(source).context("failed to parse audio feature config")?;
         config.audio.mel_contract()?;
         Ok(config.audio)
     }
@@ -61,21 +61,21 @@ impl CoquiAudioConfig {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let source = fs::read_to_string(path)
-            .with_context(|| format!("failed to read Coqui config {}", path.display()))?;
+            .with_context(|| format!("failed to read model bundle config {}", path.display()))?;
         Self::from_json5_str(&source)
-            .with_context(|| format!("invalid Coqui audio config {}", path.display()))
+            .with_context(|| format!("invalid audio feature config {}", path.display()))
     }
 
     pub fn mel_contract(&self) -> Result<SpectrogramContract> {
         ensure!(
             self.preemphasis.is_finite() && (0.0..1.0).contains(&self.preemphasis),
-            "Coqui audio preemphasis must be finite and in 0..1"
+            "audio feature preemphasis must be finite and in 0..1"
         );
         let normalization = if !self.signal_norm {
             SpectrogramNormalization::None
         } else if let Some(stats_path) = &self.stats_path {
             bail!(
-                "Coqui mean/variance spectrogram normalization requires loading stats from `{stats_path}`"
+                "mean/variance spectrogram normalization requires loading stats from `{stats_path}`"
             )
         } else {
             SpectrogramNormalization::Range {
@@ -95,7 +95,7 @@ impl CoquiAudioConfig {
                 "np.log10" | "log10" => SpectrogramScale::Log10 {
                     gain: self.spec_gain,
                 },
-                other => bail!("unsupported Coqui audio log function `{other}`"),
+                other => bail!("unsupported audio feature log function `{other}`"),
             }
         };
         let pad_mode = match self.stft_pad_mode.as_str() {
@@ -128,7 +128,7 @@ impl CoquiAudioConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CoquiHifiGanGeneratorConfig {
+pub struct HifiganGeneratorParams {
     pub resblock_type: String,
     pub upsample_factors: Vec<usize>,
     pub upsample_kernel_sizes: Vec<usize>,
@@ -137,7 +137,7 @@ pub struct CoquiHifiGanGeneratorConfig {
     pub resblock_dilation_sizes: Vec<Vec<usize>>,
 }
 
-impl CoquiHifiGanGeneratorConfig {
+impl HifiganGeneratorParams {
     pub fn validate(&self, hop_size: usize) -> Result<()> {
         ensure!(
             matches!(self.resblock_type.as_str(), "1" | "2"),
@@ -177,18 +177,19 @@ impl CoquiHifiGanGeneratorConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct CoquiHifiGanConfig {
-    pub audio: CoquiAudioConfig,
+pub struct HifiganBundleConfig {
+    pub audio: AudioFeatureConfig,
     pub generator_model: String,
-    pub generator_model_params: CoquiHifiGanGeneratorConfig,
+    pub generator_model_params: HifiganGeneratorParams,
 }
 
-impl CoquiHifiGanConfig {
+impl HifiganBundleConfig {
     pub fn from_json5_str(source: &str) -> Result<Self> {
-        let config: Self = json5::from_str(source).context("failed to parse Coqui config")?;
+        let config: Self =
+            json5::from_str(source).context("failed to parse model bundle config")?;
         ensure!(
             config.generator_model == "hifigan_generator",
-            "expected Coqui `hifigan_generator`, found `{}`",
+            "expected `hifigan_generator`, found `{}`",
             config.generator_model
         );
         config
@@ -201,9 +202,9 @@ impl CoquiHifiGanConfig {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let source = fs::read_to_string(path)
-            .with_context(|| format!("failed to read Coqui config {}", path.display()))?;
+            .with_context(|| format!("failed to read model bundle config {}", path.display()))?;
         Self::from_json5_str(&source)
-            .with_context(|| format!("invalid Coqui config {}", path.display()))
+            .with_context(|| format!("invalid model bundle config {}", path.display()))
     }
 
     pub fn input_contract(&self) -> Result<SpectrogramContract> {
@@ -246,13 +247,13 @@ impl CoquiHifiGanConfig {
             .map_indices_contiguous(false);
         let result = generator.load_from(&mut store).with_context(|| {
             format!(
-                "failed to load Coqui HiFi-GAN checkpoint {}",
+                "failed to load HiFi-GAN checkpoint {}",
                 checkpoint_path.display()
             )
         })?;
         ensure!(
             result.unused.is_empty(),
-            "Coqui HiFi-GAN checkpoint contains tensors not consumed by the Burn generator: {}",
+            "HiFi-GAN checkpoint contains tensors not consumed by the Burn generator: {}",
             result.unused.join(", ")
         );
         Ok(generator)
@@ -322,7 +323,7 @@ mod tests {
 
     #[test]
     fn parses_commented_coqui_hifigan_config_into_exact_mel_contract() {
-        let config = CoquiHifiGanConfig::from_json5_str(HIFIGAN_CONFIG).expect("config");
+        let config = HifiganBundleConfig::from_json5_str(HIFIGAN_CONFIG).expect("config");
         let contract = config.input_contract().expect("contract");
 
         assert_eq!(contract.sample_rate_hz, 22_050);
@@ -336,7 +337,7 @@ mod tests {
     #[test]
     fn rejects_hifigan_whose_upsample_product_does_not_match_hop() {
         let source = HIFIGAN_CONFIG.replace("[8, 8, 2, 2]", "[8, 8, 2, 1]");
-        let error = CoquiHifiGanConfig::from_json5_str(&source).expect_err("mismatch");
+        let error = HifiganBundleConfig::from_json5_str(&source).expect_err("mismatch");
 
         assert!(error.to_string().contains("does not match"));
     }
@@ -346,14 +347,14 @@ mod tests {
         let source = HIFIGAN_CONFIG
             .replace("\"signal_norm\": false", "\"signal_norm\": true")
             .replace("\"stats_path\": null", "\"stats_path\": \"scale.npy\"");
-        let error = CoquiHifiGanConfig::from_json5_str(&source).expect_err("stats");
+        let error = HifiganBundleConfig::from_json5_str(&source).expect_err("stats");
 
         assert!(error.to_string().contains("scale.npy"));
     }
 
     #[test]
     fn derives_burn_generator_defaults_from_coqui_config() {
-        let config = CoquiHifiGanConfig::from_json5_str(HIFIGAN_CONFIG).expect("config");
+        let config = HifiganBundleConfig::from_json5_str(HIFIGAN_CONFIG).expect("config");
         let burn = config.burn_generator_config().expect("Burn config");
 
         assert_eq!(burn.in_channels, 80);
@@ -374,7 +375,7 @@ mod tests {
         };
         let config_path = std::env::var_os("TONGUES_TEST_COQUI_HIFIGAN_CONFIG")
             .expect("TONGUES_TEST_COQUI_HIFIGAN_CONFIG must accompany the model");
-        let config = CoquiHifiGanConfig::from_file(config_path).expect("Coqui config");
+        let config = HifiganBundleConfig::from_file(config_path).expect("model bundle config");
         let device = NdArrayDevice::Cpu;
         let generator = config
             .load_burn_generator::<TestBackend>(model_path, &device)
