@@ -25,6 +25,8 @@ pub const AMY_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voi
 pub const AMY_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json";
 pub const LJSPEECH_HIGH_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx";
 pub const LJSPEECH_HIGH_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json";
+pub const COQUI_DEFAULT_TTS_MODEL_NAME: &str = "tts_models/en/ljspeech/tacotron2-DDC";
+pub const COQUI_DEFAULT_VOCODER_MODEL_NAME: &str = "vocoder_models/en/ljspeech/hifigan_v2";
 pub const DEFAULT_WIKTIONARY_FALLBACK_MODEL_DIR: &str =
     "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
 
@@ -49,6 +51,10 @@ pub enum PiperVoice {
     AmyMedium,
     LjspeechHigh,
     Path { model: PathBuf, config: PathBuf },
+}
+
+pub fn default_piper_voice() -> PiperVoice {
+    PiperVoice::LjspeechHigh
 }
 
 #[derive(Debug)]
@@ -1824,6 +1830,22 @@ mod tests {
         assert_eq!(config.sample_rate_hz, 22_050);
         assert!(config.phoneme_id_map.contains_key("HH"));
         assert_eq!(config.noise_scale, Some(0.667));
+    }
+
+    #[test]
+    fn runnable_default_voice_tracks_coqui_ljspeech_default() {
+        assert_eq!(
+            COQUI_DEFAULT_TTS_MODEL_NAME,
+            "tts_models/en/ljspeech/tacotron2-DDC"
+        );
+        assert_eq!(
+            COQUI_DEFAULT_VOCODER_MODEL_NAME,
+            "vocoder_models/en/ljspeech/hifigan_v2"
+        );
+        assert_eq!(
+            default_voice_model_path(default_piper_voice()),
+            default_piper_voice_dir().join("en_US-ljspeech-high.onnx")
+        );
     }
 
     #[test]

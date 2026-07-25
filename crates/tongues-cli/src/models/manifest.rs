@@ -36,7 +36,7 @@ pub const DEFAULT_LLM_MODEL_ID: &str = "gemma-4-e4b-it-q4-k-m";
 pub const DEFAULT_FACE_MODEL_ID: &str = "face-insightface-buffalo-l";
 pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-large-v3-turbo";
 pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
-pub const DEFAULT_PIPER_VOICE_MODEL_ID: &str = "piper-ryan-medium";
+pub const DEFAULT_PIPER_VOICE_MODEL_ID: &str = "piper-ljspeech-high";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
@@ -285,7 +285,7 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         size_bytes: None,
         license: Some("CC0-1.0"),
         source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("Piper voice ONNX model; Mortar runs it directly without the Piper binary."),
+        notes: Some("Closest runnable ONNX voice to Coqui's default LJSpeech English model; Mortar runs it directly without the Piper binary."),
     },
     ModelAsset {
         id: "piper-ljspeech-high-config",
@@ -391,7 +391,7 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         kind: ModelKind::PiperVoice,
         primary_asset_id: "piper-ryan-medium-onnx",
         required_asset_ids: &["piper-ryan-medium-onnx", "piper-ryan-medium-config"],
-        aliases: &["ryan", "piper", "piper-ryan", "voice"],
+        aliases: &["ryan", "piper-ryan"],
     },
     ModelBundle {
         id: "piper-amy-medium",
@@ -407,7 +407,14 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         kind: ModelKind::PiperVoice,
         primary_asset_id: "piper-ljspeech-high-onnx",
         required_asset_ids: &["piper-ljspeech-high-onnx", "piper-ljspeech-high-config"],
-        aliases: &["ljspeech", "lj", "piper-ljspeech"],
+        aliases: &[
+            "ljspeech",
+            "lj",
+            "piper",
+            "piper-ljspeech",
+            "voice",
+            "coqui-default",
+        ],
     },
 ];
 
@@ -501,6 +508,10 @@ mod tests {
             ModelKind::StyleTts2
         );
         assert_eq!(find_bundle("piper").unwrap().kind, ModelKind::PiperVoice);
+        assert_eq!(
+            find_bundle("coqui-default").unwrap().id,
+            DEFAULT_PIPER_VOICE_MODEL_ID
+        );
         assert_eq!(
             find_bundle("phonemicizer-en-us").unwrap().kind,
             ModelKind::Phonemicizer
