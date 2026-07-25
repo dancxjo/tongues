@@ -279,6 +279,8 @@ fn print_status() -> Result<()> {
             bundle.kind,
             ModelKind::StyleTts2
                 | ModelKind::VoiceModel
+                | ModelKind::AcousticModel
+                | ModelKind::NeuralVocoder
                 | ModelKind::Lexicon
                 | ModelKind::Phonemicizer
         )
@@ -346,6 +348,8 @@ fn model_kind_label(kind: ModelKind) -> &'static str {
         ModelKind::Asr => "asr",
         ModelKind::StyleTts2 => "styletts2",
         ModelKind::VoiceModel => "voice-model",
+        ModelKind::AcousticModel => "acoustic-model",
+        ModelKind::NeuralVocoder => "neural-vocoder",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

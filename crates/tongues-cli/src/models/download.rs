@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
@@ -9,9 +9,10 @@ use owo_colors::OwoColorize;
 use sha2::{Digest, Sha256};
 
 use crate::models::manifest::{
-    bundle_primary_asset, bundle_required_assets, find_asset, find_bundle, ModelAsset, ModelBundle,
-    ModelKind, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID, DEFAULT_STYLETTS2_MODEL_ID,
-    DEFAULT_VOICE_MODEL_ID,
+    bundle_archive_members, bundle_entrypoint_relative_path, bundle_primary_asset,
+    bundle_required_assets, find_archive, find_asset, find_bundle, ModelArchive, ModelAsset,
+    ModelBundle, ModelKind, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
+    DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_mortar_home, selected_bundle, selected_llm_model_path,
@@ -139,8 +140,7 @@ pub fn ensure_voice_model_available() -> Result<PathBuf> {
 pub fn ensure_model_available(model: &str) -> Result<PathBuf> {
     let bundle = find_bundle(model).with_context(|| format!("unknown model `{model}`"))?;
     ensure_bundle_available(bundle)?;
-    let primary = bundle_primary_asset(bundle)?;
-    Ok(asset_path(&resolve_mortar_home()?, primary))
+    Ok(resolve_mortar_home()?.join(bundle_entrypoint_relative_path(bundle)?))
 }
 
 pub fn ensure_runtime_models_available() -> Result<RuntimeModelPaths> {
@@ -155,11 +155,17 @@ pub fn ensure_runtime_models_available() -> Result<RuntimeModelPaths> {
 pub fn missing_model_asset_paths(model: &str) -> Result<Vec<PathBuf>> {
     let bundle = find_bundle(model).with_context(|| format!("unknown model `{model}`"))?;
     let home = resolve_mortar_home()?;
-    Ok(bundle_required_assets(bundle)?
+    let mut paths = bundle_required_assets(bundle)?
         .into_iter()
         .map(|asset| asset_path(&home, asset))
-        .filter(|path| !is_non_empty_file(path))
-        .collect())
+        .collect::<Vec<_>>();
+    paths.extend(
+        bundle_archive_members(bundle)?
+            .into_iter()
+            .map(|member| home.join(member.relative_path)),
+    );
+    paths.retain(|path| !is_non_empty_file(path));
+    Ok(paths)
 }
 
 pub fn fetch_model(model: Option<&str>, force: bool) -> Result<PathBuf> {
@@ -177,8 +183,7 @@ pub fn fetch_model(model: Option<&str>, force: bool) -> Result<PathBuf> {
             return selected_llm_model_path();
         }
 
-        let primary = bundle_primary_asset(bundle)?;
-        return Ok(asset_path(&resolve_mortar_home()?, primary));
+        return Ok(resolve_mortar_home()?.join(bundle_entrypoint_relative_path(bundle)?));
     }
 
     fetch_all_runtime_bundles(force)?;
@@ -242,11 +247,13 @@ fn ensure_asset_available(asset: &ModelAsset) -> Result<()> {
     let home = resolve_mortar_home()?;
     let path = asset_path(&home, asset);
     if is_non_empty_file(&path) {
+        ensure_registered_archive_extracted(asset)?;
         println!("{} {}", "already present".green(), path.display());
         return Ok(());
     }
 
-    fetch_asset(asset, false)
+    fetch_asset(asset, false)?;
+    ensure_registered_archive_extracted(asset)
 }
 
 fn ensure_styletts2_reference_audio_extracted() -> Result<()> {
@@ -301,6 +308,69 @@ fn extract_zip_asset(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_registered_archive_extracted(asset: &ModelAsset) -> Result<()> {
+    let Some(archive) = find_archive(asset.id) else {
+        return Ok(());
+    };
+    let home = resolve_mortar_home()?;
+    if archive
+        .members
+        .iter()
+        .all(|member| is_non_empty_file(&home.join(member.relative_path)))
+    {
+        return Ok(());
+    }
+    extract_registered_zip(&asset_path(&home, asset), archive, &home)
+}
+
+fn extract_registered_zip(path: &Path, archive: &ModelArchive, home: &Path) -> Result<()> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .with_context(|| format!("failed to read ZIP archive {}", path.display()))?;
+
+    for member in archive.members {
+        anyhow::ensure!(
+            Path::new(member.relative_path)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+            "registered archive output must be a relative normalized path: {}",
+            member.relative_path
+        );
+        let mut source = zip.by_name(member.member_path).with_context(|| {
+            format!(
+                "archive {} is missing registered member {}",
+                path.display(),
+                member.member_path
+            )
+        })?;
+        anyhow::ensure!(!source.is_dir(), "{} is a directory", member.member_path);
+        let output_path = home.join(member.relative_path);
+        anyhow::ensure!(
+            output_path.starts_with(home),
+            "registered archive output escapes model home: {}",
+            member.relative_path
+        );
+        let parent = output_path
+            .parent()
+            .context("registered archive output has no parent")?;
+        fs::create_dir_all(parent)?;
+        let part_path = output_path.with_extension("part");
+        let mut output = File::create(&part_path)
+            .with_context(|| format!("failed to create {}", part_path.display()))?;
+        std::io::copy(&mut source, &mut output)
+            .with_context(|| format!("failed to extract {}", output_path.display()))?;
+        output.flush()?;
+        fs::rename(&part_path, &output_path).with_context(|| {
+            format!(
+                "failed to move {} to {}",
+                part_path.display(),
+                output_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn fetch_asset(asset: &ModelAsset, force: bool) -> Result<()> {
     let home = resolve_mortar_home()?;
     let path = asset_path(&home, asset);
@@ -312,6 +382,7 @@ fn fetch_asset(asset: &ModelAsset, force: bool) -> Result<()> {
 
     if is_non_empty_file(&path) && !force {
         verify_existing_asset(&path, expected_sha256.as_deref())?;
+        ensure_registered_archive_extracted(asset)?;
         println!("{} {}", "already present".green(), path.display());
         return Ok(());
     }
@@ -391,6 +462,7 @@ fn fetch_asset(asset: &ModelAsset, force: bool) -> Result<()> {
         );
     }
     write_checksum_sidecar(&path, &sha256)?;
+    ensure_registered_archive_extracted(asset)?;
 
     println!("{} {}", "downloaded".green(), path.display());
     println!("{} {}", "sha256".cyan(), sha256);

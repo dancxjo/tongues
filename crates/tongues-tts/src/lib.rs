@@ -25,6 +25,7 @@ pub mod burn_hifigan;
 pub mod burn_vocoder;
 pub mod components;
 pub mod coqui;
+pub mod coqui_projector;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_vocoder::BurnHifiganVocoder;
@@ -38,6 +39,9 @@ pub use components::{
     SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
 };
 pub use coqui::{CoquiAudioConfig, CoquiHifiGanConfig, CoquiHifiGanGeneratorConfig};
+pub use coqui_projector::{
+    CoquiCharactersConfig, CoquiLinguisticProjector, CoquiTokenIds, CoquiTokenizerConfig,
+};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";
@@ -115,6 +119,7 @@ impl VoiceConfig {
 pub enum SpeechModelFamily {
     AcousticModel,
     NeuralVocoder,
+    EndToEndSpeech,
     EndToEndVits,
     CrossLingualVoiceClone,
     VoiceConversion,
@@ -134,7 +139,9 @@ pub struct SpeechModelCapabilities {
 impl SpeechModelCapabilities {
     pub fn onnx_voice(config: &VoiceConfig) -> Self {
         Self {
-            family: SpeechModelFamily::EndToEndVits,
+            // The imported config format does not identify the architecture.
+            // Do not infer VITS merely because a compatible ONNX graph loaded.
+            family: SpeechModelFamily::EndToEndSpeech,
             supports_named_speakers: !config.speaker_id_map.is_empty(),
             supports_languages: false,
             supports_reference_audio: false,
@@ -2224,7 +2231,7 @@ mod tests {
             vec!["p225".to_string(), "p226".to_string()]
         );
         let capabilities = SpeechModelCapabilities::onnx_voice(&config);
-        assert_eq!(capabilities.family, SpeechModelFamily::EndToEndVits);
+        assert_eq!(capabilities.family, SpeechModelFamily::EndToEndSpeech);
         assert!(capabilities.supports_named_speakers);
         assert!(capabilities.integrated_vocoder);
         assert_eq!(

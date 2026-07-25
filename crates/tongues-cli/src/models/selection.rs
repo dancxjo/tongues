@@ -5,8 +5,9 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::models::manifest::{
-    bundle_multimodal_projector_asset, bundle_primary_asset, bundle_required_assets, find_bundle,
-    ModelAsset, ModelBundle, ModelKind, DEFAULT_LLM_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
+    bundle_archive_members, bundle_multimodal_projector_asset, bundle_primary_asset,
+    bundle_required_assets, find_bundle, ModelAsset, ModelBundle, ModelKind, DEFAULT_LLM_MODEL_ID,
+    DEFAULT_VOICE_MODEL_ID,
 };
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -126,9 +127,13 @@ pub fn asset_path(home: &Path, asset: &ModelAsset) -> PathBuf {
 
 pub fn bundle_present(bundle: &ModelBundle) -> Result<bool> {
     let home = resolve_mortar_home()?;
-    Ok(bundle_required_assets(bundle)?
+    let assets_present = bundle_required_assets(bundle)?
         .iter()
-        .all(|asset| is_non_empty_file(&asset_path(&home, asset))))
+        .all(|asset| is_non_empty_file(&asset_path(&home, asset)));
+    let members_present = bundle_archive_members(bundle)?
+        .iter()
+        .all(|member| is_non_empty_file(&home.join(member.relative_path)));
+    Ok(assets_present && members_present)
 }
 
 pub fn is_non_empty_file(path: &Path) -> bool {
@@ -155,6 +160,8 @@ fn model_kind_name(kind: ModelKind) -> &'static str {
         ModelKind::Asr => "ASR",
         ModelKind::StyleTts2 => "StyleTTS2",
         ModelKind::VoiceModel => "Voice model",
+        ModelKind::AcousticModel => "acoustic model",
+        ModelKind::NeuralVocoder => "neural vocoder",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

@@ -5,6 +5,8 @@ pub enum ModelKind {
     Asr,
     StyleTts2,
     VoiceModel,
+    AcousticModel,
+    NeuralVocoder,
     Lexicon,
     Phonemicizer,
 }
@@ -30,6 +32,19 @@ pub struct ModelBundle {
     pub primary_asset_id: &'static str,
     pub required_asset_ids: &'static [&'static str],
     pub aliases: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArchiveMember {
+    pub member_path: &'static str,
+    pub relative_path: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ModelArchive {
+    pub asset_id: &'static str,
+    pub primary_member_path: &'static str,
+    pub members: &'static [ArchiveMember],
 }
 
 pub const DEFAULT_LLM_MODEL_ID: &str = "gemma-4-e4b-it-q4-k-m";
@@ -298,6 +313,61 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         source: Some("https://huggingface.co/rhasspy/piper-voices"),
         notes: Some("Voice model phoneme map and inference defaults."),
     },
+    ModelAsset {
+        id: "coqui-speedy-speech-ljspeech-release",
+        filename: "tts_models--en--ljspeech--speedy-speech.zip",
+        relative_path:
+            "models/speech/coqui/en/ljspeech/speedy-speech/tts_models--en--ljspeech--speedy-speech.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--speedy-speech.zip",
+        sha256: Some("ae772bc84c6b4d8fe97234f4d2a1282b925bf325659f319f03610edc4eb8023a"),
+        size_bytes: Some(53_437_190),
+        license: Some("Apache-2.0"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
+        notes: Some("Published Coqui SpeedySpeech acoustic-model release archive."),
+    },
+    ModelAsset {
+        id: "coqui-hifigan-v2-ljspeech-release",
+        filename: "vocoder_models--en--ljspeech--hifigan_v2.zip",
+        relative_path:
+            "models/speech/coqui/en/ljspeech/hifigan-v2/vocoder_models--en--ljspeech--hifigan_v2.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--hifigan_v2.zip",
+        sha256: Some("4378dc0afb12ae3f50c1614cb143c4084d066b28fde35b58f45fc6b56b1c75f3"),
+        size_bytes: Some(3_802_006),
+        license: Some("Apache-2.0"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
+        notes: Some("Published Coqui HiFi-GAN v2 neural-vocoder release archive."),
+    },
+];
+
+pub const MODEL_ARCHIVES: &[ModelArchive] = &[
+    ModelArchive {
+        asset_id: "coqui-speedy-speech-ljspeech-release",
+        primary_member_path: "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth",
+        members: &[
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--speedy-speech/model_file.pth",
+                relative_path: "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth",
+            },
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--speedy-speech/config.json",
+                relative_path: "models/speech/coqui/en/ljspeech/speedy-speech/config.json",
+            },
+        ],
+    },
+    ModelArchive {
+        asset_id: "coqui-hifigan-v2-ljspeech-release",
+        primary_member_path: "models/speech/coqui/en/ljspeech/hifigan-v2/model_file.pth",
+        members: &[
+            ArchiveMember {
+                member_path: "vocoder_models--en--ljspeech--hifigan_v2/model_file.pth",
+                relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/model_file.pth",
+            },
+            ArchiveMember {
+                member_path: "vocoder_models--en--ljspeech--hifigan_v2/config.json",
+                relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/config.json",
+            },
+        ],
+    },
 ];
 
 pub const MODEL_BUNDLES: &[ModelBundle] = &[
@@ -409,6 +479,22 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         required_asset_ids: &["voice-ljspeech-high-onnx", "voice-ljspeech-high-config"],
         aliases: &["ljspeech", "lj", "voice", "voice-ljspeech", "coqui-default"],
     },
+    ModelBundle {
+        id: "coqui-speedy-speech-ljspeech",
+        display_name: "Coqui SpeedySpeech LJSpeech",
+        kind: ModelKind::AcousticModel,
+        primary_asset_id: "coqui-speedy-speech-ljspeech-release",
+        required_asset_ids: &["coqui-speedy-speech-ljspeech-release"],
+        aliases: &["speedy-speech", "speedyspeech", "coqui-speedy-speech"],
+    },
+    ModelBundle {
+        id: "coqui-hifigan-v2-ljspeech",
+        display_name: "Coqui HiFi-GAN v2 LJSpeech",
+        kind: ModelKind::NeuralVocoder,
+        primary_asset_id: "coqui-hifigan-v2-ljspeech-release",
+        required_asset_ids: &["coqui-hifigan-v2-ljspeech-release"],
+        aliases: &["hifigan-v2", "hifigan", "coqui-hifigan"],
+    },
 ];
 
 pub fn find_bundle(name: &str) -> Option<&'static ModelBundle> {
@@ -465,6 +551,27 @@ pub fn find_asset(asset_id: &str) -> Option<&'static ModelAsset> {
     MODEL_ASSETS.iter().find(|asset| asset.id == asset_id)
 }
 
+pub fn find_archive(asset_id: &str) -> Option<&'static ModelArchive> {
+    MODEL_ARCHIVES
+        .iter()
+        .find(|archive| archive.asset_id == asset_id)
+}
+
+pub fn bundle_entrypoint_relative_path(bundle: &ModelBundle) -> anyhow::Result<&'static str> {
+    let primary = bundle_primary_asset(bundle)?;
+    Ok(find_archive(primary.id)
+        .map(|archive| archive.primary_member_path)
+        .unwrap_or(primary.relative_path))
+}
+
+pub fn bundle_archive_members(bundle: &ModelBundle) -> anyhow::Result<Vec<&'static ArchiveMember>> {
+    Ok(bundle_required_assets(bundle)?
+        .into_iter()
+        .filter_map(|asset| find_archive(asset.id))
+        .flat_map(|archive| archive.members)
+        .collect())
+}
+
 fn normalize_model_name(name: &str) -> String {
     name.chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
@@ -513,5 +620,28 @@ mod tests {
             find_bundle("lexicon-en-us").unwrap().kind,
             ModelKind::Lexicon
         );
+        assert_eq!(
+            find_bundle("speedy-speech").unwrap().kind,
+            ModelKind::AcousticModel
+        );
+        assert_eq!(
+            find_bundle("hifigan").unwrap().kind,
+            ModelKind::NeuralVocoder
+        );
+    }
+
+    #[test]
+    fn coqui_archives_have_integrity_and_registered_entrypoints() {
+        for bundle_id in ["coqui-speedy-speech-ljspeech", "coqui-hifigan-v2-ljspeech"] {
+            let bundle = find_bundle(bundle_id).expect("bundle");
+            let asset = bundle_primary_asset(bundle).expect("asset");
+            let sha256 = asset.sha256.expect("pinned SHA-256");
+            assert_eq!(sha256.len(), 64);
+            assert!(sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(bundle_entrypoint_relative_path(bundle)
+                .expect("entrypoint")
+                .ends_with("model_file.pth"));
+            assert_eq!(bundle_archive_members(bundle).unwrap().len(), 2);
+        }
     }
 }
