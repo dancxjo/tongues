@@ -4,6 +4,7 @@ use burn::tensor::backend::Backend;
 use burn_cuda::{Cuda, CudaDevice};
 use clap::Args;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::DeviceArg;
 use speaking::{
@@ -123,6 +124,12 @@ pub struct SpeakCommand {
     pub debug_pronunciation: bool,
     #[arg(long, help = "Emit word and audio timing metadata")]
     pub timings: bool,
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "Synthesize the same planned input repeatedly in one process; run 1 is cold and later runs are warm"
+    )]
+    pub benchmark_runs: usize,
     #[arg(long, default_value_t = DEFAULT_MAX_TTS_SYMBOLS, help = "Maximum symbols per TTS chunk")]
     pub max_tts_symbols: usize,
     #[arg(long, help = "Disable automatic text chunking before TTS")]
@@ -198,6 +205,7 @@ pub struct SpeechSynthesisArtifact {
     pub sample_rate_hz: u32,
     pub pcm: Vec<f32>,
     pub timings: Vec<StyleTts2Timing>,
+    pub profile: Vec<speech::SynthesisProfileEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,14 +257,8 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
-type CpuBurnBackend = speech::SpeechPipeline<
-    speech::BurnSpeedySpeechAcoustic<NdArray<f32>>,
-    speech::VocoderDecoder<speech::BurnHifiganVocoder<NdArray<f32>>>,
->;
-type CudaBurnBackend = speech::SpeechPipeline<
-    speech::BurnSpeedySpeechAcoustic<Cuda<f32, i32>>,
-    speech::VocoderDecoder<speech::BurnHifiganVocoder<Cuda<f32, i32>>>,
->;
+type CpuBurnBackend = speech::BurnSpeedySpeechPipeline<NdArray<f32>>;
+type CudaBurnBackend = speech::BurnSpeedySpeechPipeline<Cuda<f32, i32>>;
 type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
 type CudaVitsBackend = speech::BurnVitsSpeech<Cuda<f32, i32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
@@ -303,16 +305,16 @@ impl BackendInstance {
 
         match self {
             Self::BurnCpu(ref mut backend) => {
-                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::BurnCuda(ref mut backend) => {
-                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::VitsCpu(ref mut backend) => {
-                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::VitsCuda(ref mut backend) => {
-                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::Mock(ref mut backend) => {
                 let styletts2_plan = prepare_styletts2_plan(
@@ -344,6 +346,7 @@ impl BackendInstance {
                     sample_rate_hz: output.sample_rate_hz,
                     pcm: pcm_mono_f32,
                     timings: output.timings,
+                    profile: Vec::new(),
                 })
             }
             #[cfg(feature = "styletts2-onnx")]
@@ -421,6 +424,7 @@ impl BackendInstance {
                     sample_rate_hz: output.sample_rate_hz,
                     pcm: pcm_mono_f32,
                     timings: output.timings,
+                    profile: Vec::new(),
                 })
             }
             #[cfg(not(feature = "styletts2-onnx"))]
@@ -449,6 +453,7 @@ impl BackendInstance {
                     sample_rate_hz: backend.sample_rate_hz(),
                     pcm: pcm_mono_f32,
                     timings: Vec::new(),
+                    profile: Vec::new(),
                 })
             }
             #[cfg(not(feature = "onnx-tts"))]
@@ -494,6 +499,7 @@ fn synthesize_burn_engine(
     plan: &UtterancePlan,
     options: &SpeechSynthesisOptions,
     mut on_audio: AudioCallback<'_>,
+    profiling: bool,
 ) -> Result<SpeechSynthesisArtifact> {
     anyhow::ensure!(
         options.speed.is_finite() && options.speed > 0.0,
@@ -512,17 +518,26 @@ fn synthesize_burn_engine(
     };
     let sample_rate_hz = backend.sample_rate_hz();
     let mut pcm = Vec::new();
-    backend.synthesize_plan_streaming(&request, &mut |chunk: speech::AudioChunk| {
+    let mut profile = Vec::new();
+    let mut sink = |chunk: speech::AudioChunk| {
         pcm.extend(&chunk.pcm_mono_f32);
         if let Some(ref mut cb) = on_audio {
             cb(&chunk.pcm_mono_f32);
         }
         Ok(())
-    })?;
+    };
+    if profiling {
+        backend.synthesize_plan_streaming_profiled(&request, &mut sink, &mut |event| {
+            profile.push(event)
+        })?;
+    } else {
+        backend.synthesize_plan_streaming(&request, &mut sink)?;
+    }
     Ok(SpeechSynthesisArtifact {
         sample_rate_hz,
         pcm,
         timings: Vec::new(),
+        profile,
     })
 }
 
@@ -564,6 +579,10 @@ fn split_into_sentences(text: &str) -> Vec<String> {
 }
 
 pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
+    anyhow::ensure!(
+        (1..=32).contains(&command.benchmark_runs),
+        "--benchmark-runs must be between 1 and 32"
+    );
     let options = SpeechSynthesisOptions::from(&command);
 
     if command.list_speakers {
@@ -579,15 +598,22 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         SpeakBackend::Onnx => 22050,
     };
 
+    let startup_started = Instant::now();
+    let mut cache_check_ms = 0.0;
+    let mut model_load_ms = 0.0;
+    let mut model_load_profile = Vec::new();
     let mut backend = match command.backend {
         SpeakBackend::Burn => {
+            let started = Instant::now();
             let acoustic_checkpoint =
                 crate::models::ensure_model_available(crate::models::DEFAULT_ACOUSTIC_MODEL_ID)?;
             let vocoder_checkpoint =
                 crate::models::ensure_model_available(crate::models::DEFAULT_NEURAL_VOCODER_ID)?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
             let acoustic_config = component_config_path(&acoustic_checkpoint)?;
             let vocoder_config = component_config_path(&vocoder_checkpoint)?;
-            match device_arg {
+            let started = Instant::now();
+            let backend = match device_arg {
                 DeviceArg::Cpu => {
                     BackendInstance::BurnCpu(Box::new(load_burn_pipeline::<NdArray<f32>>(
                         &acoustic_config,
@@ -595,6 +621,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
                         &vocoder_config,
                         &vocoder_checkpoint,
                         NdArrayDevice::Cpu,
+                        &mut |event| model_load_profile.push(event),
                     )?))
                 }
                 DeviceArg::Cuda => {
@@ -604,39 +631,49 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
                         &vocoder_config,
                         &vocoder_checkpoint,
                         CudaDevice::default(),
+                        &mut |event| model_load_profile.push(event),
                     )?))
                 }
-            }
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
         }
         SpeakBackend::Vits => {
+            let started = Instant::now();
             let checkpoint = crate::models::ensure_model_available(
                 crate::models::DEFAULT_END_TO_END_SPEECH_MODEL_ID,
             )?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
             let config = component_config_path(&checkpoint)?;
             let speakers = checkpoint
                 .parent()
                 .context("VITS checkpoint path has no parent directory")?
                 .join("speaker_ids.json");
-            match device_arg {
+            let started = Instant::now();
+            let backend = match device_arg {
                 DeviceArg::Cpu => BackendInstance::VitsCpu(Box::new(
-                    speech::BurnVitsSpeech::load(
+                    speech::BurnVitsSpeech::load_profiled(
                         &config,
                         &checkpoint,
                         &speakers,
                         NdArrayDevice::Cpu,
+                        &mut |event| model_load_profile.push(event),
                     )
                     .context("failed to load Burn VITS speech model on CPU")?,
                 )),
                 DeviceArg::Cuda => BackendInstance::VitsCuda(Box::new(
-                    speech::BurnVitsSpeech::load(
+                    speech::BurnVitsSpeech::load_profiled(
                         &config,
                         &checkpoint,
                         &speakers,
                         CudaDevice::default(),
+                        &mut |event| model_load_profile.push(event),
                     )
                     .context("failed to load Burn VITS speech model on CUDA")?,
                 )),
-            }
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
         }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
@@ -692,6 +729,19 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         }
     };
     let backend_label = backend.label();
+    let cold_start_ms = startup_started.elapsed().as_secs_f64() * 1_000.0;
+    if command.timings {
+        println!(
+            "startup_profile_json: {}",
+            serde_json::json!({
+                "backend": backend_label,
+                "download_cache_check_ms": cache_check_ms,
+                "config_model_construction_weight_upload_ms": model_load_ms,
+                "model_load_stages": model_load_profile,
+                "total_cold_start_ms": cold_start_ms,
+            })
+        );
+    }
 
     let player = if command.output.is_none() {
         match AudioStreamPlayer::new(target_sample_rate) {
@@ -723,6 +773,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
             return Ok(());
         }
 
+        let planning_started = Instant::now();
         let variety = VarietyId(command.variety.clone());
         let phonemicizer = phonemicizer_for_variety(&variety)
             .map_err(|e| anyhow::anyhow!("failed to load phonemicizer: {e}"))?;
@@ -750,6 +801,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
                 },
             });
         }
+        let planning_ms = planning_started.elapsed().as_secs_f64() * 1_000.0;
 
         if plan.intended_phonemes.is_empty() {
             return Ok(());
@@ -770,15 +822,56 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
             );
         }
 
-        let mut audio_callback = |chunk: &[f32]| {
-            if let Some(ref p) = player {
-                p.append(chunk);
-            }
-        };
-        let cb_arg: AudioCallback<'_> = Some(&mut audio_callback);
-
+        let diagnostic_projection_started = Instant::now();
         let checkpoint_input = backend.projected_input(&plan)?;
-        let artifact = backend.synthesize(&plan, &options, cb_arg, &command)?;
+        let diagnostic_projection_ms =
+            diagnostic_projection_started.elapsed().as_secs_f64() * 1_000.0;
+        let mut output_artifact = None;
+        for run_index in 0..command.benchmark_runs {
+            let synthesis_started = Instant::now();
+            let mut first_audio_latency_ms = None;
+            let mut audio_callback = |chunk: &[f32]| {
+                if first_audio_latency_ms.is_none() {
+                    first_audio_latency_ms =
+                        Some(synthesis_started.elapsed().as_secs_f64() * 1_000.0);
+                }
+                if run_index == 0 {
+                    if let Some(ref p) = player {
+                        p.append(chunk);
+                    }
+                }
+            };
+            let artifact =
+                backend.synthesize(&plan, &options, Some(&mut audio_callback), &command)?;
+            let elapsed_ms = synthesis_started.elapsed().as_secs_f64() * 1_000.0;
+            let audio_seconds = artifact.pcm.len() as f64 / artifact.sample_rate_hz as f64;
+            let real_time_factor = elapsed_ms / 1_000.0 / audio_seconds;
+            let cold_end_to_end_ms = (run_index == 0)
+                .then_some(cold_start_ms + planning_ms + diagnostic_projection_ms + elapsed_ms);
+            if command.timings {
+                println!(
+                    "inference_profile_json: {}",
+                    serde_json::json!({
+                        "run": run_index + 1,
+                        "temperature": if run_index == 0 { "cold" } else { "warm" },
+                        "planning_ms": planning_ms,
+                        "diagnostic_checkpoint_projection_ms": diagnostic_projection_ms,
+                        "first_playable_audio_latency_ms": first_audio_latency_ms,
+                        "total_synthesis_ms": elapsed_ms,
+                        "audio_seconds": audio_seconds,
+                        "real_time_factor": real_time_factor,
+                        "cold_end_to_end_ms": cold_end_to_end_ms,
+                        "cold_end_to_end_real_time_factor": cold_end_to_end_ms
+                            .map(|total_ms| total_ms / 1_000.0 / audio_seconds),
+                        "stages": &artifact.profile,
+                    })
+                );
+            }
+            if run_index == 0 {
+                output_artifact = Some(artifact);
+            }
+        }
+        let artifact = output_artifact.context("synthesis produced no benchmark runs")?;
 
         let backend_symbols = match (&checkpoint_input, command.backend) {
             (Some(projected), SpeakBackend::Burn | SpeakBackend::Vits) => {
@@ -971,8 +1064,19 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         println!("wav: {}", output_path.display());
     } else {
         println!("Playing audio out loud via CPAL...");
+        let playback_started = Instant::now();
         if let Some(ref p) = player {
             p.wait_until_done(total_samples);
+        }
+        if command.timings {
+            println!(
+                "playback_profile_json: {}",
+                serde_json::json!({
+                    "wait_ms": playback_started.elapsed().as_secs_f64() * 1_000.0,
+                    "samples": total_samples,
+                    "reported_separately_from_synthesis": true,
+                })
+            );
         }
         println!("wav: <none> (played out loud)");
     }
@@ -986,24 +1090,26 @@ fn load_burn_pipeline<B: Backend>(
     vocoder_config: &Path,
     vocoder_checkpoint: &Path,
     device: B::Device,
-) -> Result<
-    speech::SpeechPipeline<
-        speech::BurnSpeedySpeechAcoustic<B>,
-        speech::VocoderDecoder<speech::BurnHifiganVocoder<B>>,
-    >,
->
+    profiler: &mut dyn FnMut(speech::ModelLoadProfileEvent),
+) -> Result<speech::BurnSpeedySpeechPipeline<B>>
 where
     B::Device: Clone,
 {
-    let acoustic = speech::BurnSpeedySpeechAcoustic::load(
+    let acoustic = speech::BurnSpeedySpeechAcoustic::load_profiled(
         acoustic_config,
         acoustic_checkpoint,
         device.clone(),
+        &mut *profiler,
     )
     .context("failed to load Burn SpeedySpeech acoustic model")?;
-    let vocoder = speech::BurnHifiganVocoder::load(vocoder_config, vocoder_checkpoint, device)
-        .context("failed to load Burn HiFi-GAN vocoder")?;
-    speech::SpeechPipeline::new(acoustic, speech::VocoderDecoder::new(vocoder))
+    let vocoder = speech::BurnHifiganVocoder::load_profiled(
+        vocoder_config,
+        vocoder_checkpoint,
+        device,
+        &mut *profiler,
+    )
+    .context("failed to load Burn HiFi-GAN vocoder")?;
+    speech::BurnSpeedySpeechPipeline::new(acoustic, vocoder)
         .context("Burn speech components are incompatible")
 }
 

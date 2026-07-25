@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
 use burn::module::Module;
@@ -15,20 +16,24 @@ use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use burn_store::{ModuleSnapshot, PytorchStore};
 use speaking::UtterancePlan;
 
+use crate::burn_vits_flow::expand_prior_statistics_with_frames;
+use crate::profiling::{
+    finish_backend_stage, finish_host_stage, reborrow_profiler, record_load_stage,
+};
 use crate::vits_config::ImportedVitsConfig;
 use crate::vits_projector::VitsLinguisticProjector;
 use crate::{
-    ceil_durations, expand_prior_statistics, AudioChunk, AudioSink, ResidualCouplingFlow,
-    ResidualCouplingFlowConfig, SpeakerCatalog, SpeechModelCapabilities, SpeechModelFamily,
-    SpeechSynthesisEngine, SpeechSynthesisRequest, StochasticDurationConfig,
-    StochasticDurationPredictor, VitsInferenceConfig, VitsTextPriorConfig, VitsTextPriorEncoder,
-    VitsWaveformDecoder, VitsWaveformDecoderConfig, Waveform, WaveformContract,
+    ceil_durations, AudioChunk, AudioSink, ModelLoadProfileEvent, ModelLoadStage,
+    ResidualCouplingFlow, ResidualCouplingFlowConfig, SpeakerCatalog, SpeechModelCapabilities,
+    SpeechModelFamily, SpeechSynthesisEngine, SpeechSynthesisRequest, StochasticDurationConfig,
+    StochasticDurationPredictor, SynthesisDimension, SynthesisProfiler, SynthesisStage,
+    VitsInferenceConfig, VitsTextPriorConfig, VitsTextPriorEncoder, VitsWaveformDecoder,
+    VitsWaveformDecoderConfig, Waveform, WaveformContract,
 };
 use crate::{LinguisticProjector, ModelInputContract};
 
 const DEFAULT_MAX_OUTPUT_FRAMES: usize = 65_536;
 const STREAM_LATENT_FRAMES: usize = 64;
-const STREAM_CONTEXT_FRAMES: usize = 32;
 
 #[derive(Module, Debug)]
 struct SpeakerEmbedding<B: Backend> {
@@ -36,22 +41,20 @@ struct SpeakerEmbedding<B: Backend> {
 }
 
 impl<B: Backend> SpeakerEmbedding<B> {
-    fn load(
-        num_speakers: usize,
-        dimensions: usize,
-        checkpoint_path: &Path,
-        device: &B::Device,
-    ) -> Result<Self> {
-        let mut module = Self {
+    fn init(num_speakers: usize, dimensions: usize, device: &B::Device) -> Self {
+        Self {
             emb_g: EmbeddingConfig::new(num_speakers, dimensions).init(device),
-        };
+        }
+    }
+
+    fn load_checkpoint(mut self, checkpoint_path: &Path) -> Result<Self> {
         let mut store = PytorchStore::from_file(checkpoint_path)
             .with_top_level_key("model")
             .with_predicate(|path, _| path.starts_with("emb_g."))
             .map_indices_contiguous(false)
             .allow_partial(true)
             .skip_enum_variants(true);
-        let result = module
+        let result = self
             .load_from(&mut store)
             .context("failed to load speaker embedding checkpoint")?;
         let unused = result
@@ -70,7 +73,7 @@ impl<B: Backend> SpeakerEmbedding<B> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        Ok(module)
+        Ok(self)
     }
 
     fn forward(&self, speaker_id: u32, device: &B::Device) -> Tensor<B, 3> {
@@ -103,6 +106,34 @@ impl<B: Backend> BurnVitsSpeech<B> {
         speaker_map_path: impl AsRef<Path>,
         device: B::Device,
     ) -> Result<Self> {
+        Self::load_internal(config_path, checkpoint_path, speaker_map_path, device, None)
+    }
+
+    pub fn load_profiled(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        speaker_map_path: impl AsRef<Path>,
+        device: B::Device,
+        profiler: &mut dyn FnMut(ModelLoadProfileEvent),
+    ) -> Result<Self> {
+        Self::load_internal(
+            config_path,
+            checkpoint_path,
+            speaker_map_path,
+            device,
+            Some(profiler),
+        )
+    }
+
+    fn load_internal(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        speaker_map_path: impl AsRef<Path>,
+        device: B::Device,
+        profiler: Option<&mut dyn FnMut(ModelLoadProfileEvent)>,
+    ) -> Result<Self> {
+        let mut profiler = profiler;
+        let started = Instant::now();
         let config_path = config_path.as_ref();
         let checkpoint_path = checkpoint_path.as_ref();
         let source = fs::read_to_string(config_path)
@@ -130,23 +161,14 @@ impl<B: Backend> BurnVitsSpeech<B> {
         let projector = VitsLinguisticProjector::from_config(imported)?;
         let speakers = SpeakerCatalog::from_file(speaker_map_path, network.num_speakers)?;
         let speaker_channels = network.speaker_embedding_channels;
-        let speaker_embedding = SpeakerEmbedding::load(
-            network.num_speakers as usize,
-            speaker_channels,
-            checkpoint_path,
-            &device,
-        )?;
-        let text_prior = VitsTextPriorConfig::from_model_config(&config)?
-            .load_checkpoint(checkpoint_path, &device)?;
-
+        let text_config = VitsTextPriorConfig::from_model_config(&config)?;
         let mut duration_config = StochasticDurationConfig::new(network.hidden_channels, 192, 3);
         duration_config.conditioning_channels = if network.condition_dp_on_speaker {
             speaker_channels
         } else {
             0
         };
-        let duration_predictor = duration_config.load_checkpoint(checkpoint_path, &device)?;
-        let flow = ResidualCouplingFlowConfig {
+        let flow_config = ResidualCouplingFlowConfig {
             channels: network.hidden_channels,
             hidden_channels: network.hidden_channels,
             kernel_size: network.kernel_size_flow,
@@ -154,11 +176,42 @@ impl<B: Backend> BurnVitsSpeech<B> {
             num_layers: network.num_layers_flow,
             num_flows: 4,
             conditioning_channels: speaker_channels,
-        }
-        .load_checkpoint(checkpoint_path, &device)?;
-        let waveform_decoder = VitsWaveformDecoderConfig::from_model_config(&config)?
-            .load_checkpoint(checkpoint_path, &device)?;
+        };
+        let decoder_config = VitsWaveformDecoderConfig::from_model_config(&config)?;
         let output_contract = WaveformContract::mono(config.audio.sample_rate);
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ConfigCheckpointParsing,
+            started,
+            Some("vits"),
+        );
+
+        let started = Instant::now();
+        let speaker_embedding =
+            SpeakerEmbedding::init(network.num_speakers as usize, speaker_channels, &device);
+        let text_prior = text_config.init(&device)?;
+        let duration_predictor = duration_config.init(&device)?;
+        let flow = flow_config.init(&device)?;
+        let waveform_decoder = decoder_config.init(&device)?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ModelConstruction,
+            started,
+            Some("vits"),
+        );
+
+        let started = Instant::now();
+        let speaker_embedding = speaker_embedding.load_checkpoint(checkpoint_path)?;
+        let text_prior = text_prior.load_checkpoint(checkpoint_path)?;
+        let duration_predictor = duration_predictor.load_checkpoint(checkpoint_path)?;
+        let flow = flow.load_checkpoint(checkpoint_path)?;
+        let waveform_decoder = waveform_decoder.load_checkpoint(checkpoint_path)?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::WeightUpload,
+            started,
+            Some("vits"),
+        );
 
         Ok(Self {
             config,
@@ -188,10 +241,14 @@ impl<B: Backend> BurnVitsSpeech<B> {
 
     pub fn synthesize(&mut self, request: &SpeechSynthesisRequest) -> Result<Waveform> {
         let mut samples = Vec::new();
-        self.synthesize_streaming(request, &mut |chunk: AudioChunk| {
-            samples.extend(chunk.pcm_mono_f32);
-            Ok(())
-        })?;
+        self.synthesize_streaming(
+            request,
+            &mut |chunk: AudioChunk| {
+                samples.extend(chunk.pcm_mono_f32);
+                Ok(())
+            },
+            None,
+        )?;
         let waveform = Waveform {
             contract: self.output_contract.clone(),
             samples,
@@ -203,17 +260,28 @@ impl<B: Backend> BurnVitsSpeech<B> {
     fn prepare_latent(
         &self,
         request: &SpeechSynthesisRequest,
+        profiler: Option<&mut dyn SynthesisProfiler>,
     ) -> Result<(Tensor<B, 3>, Tensor<B, 3>)> {
+        let mut profiler = profiler;
         self.projector.contract().ensure_supports(&request.plan)?;
         ensure!(
             request.plan.speaker_reference.is_none(),
             "this VITS model does not accept reference audio"
         );
+        let started = Instant::now();
         let speaker_id = self
             .speakers
             .resolve(request.plan.speaker.as_ref(), request.options.speaker_id)?;
         let projected = self.projector.project(&request.plan)?;
         let token_count = projected.ids.len();
+        finish_host_stage(
+            &mut profiler,
+            SynthesisStage::CheckpointProjection,
+            started,
+            [SynthesisDimension::new("tokens", token_count)],
+        );
+
+        let started = Instant::now();
         let token_ids = Tensor::<B, 2, Int>::from_data(
             TensorData::new(projected.ids, [1, token_count]),
             &self.device,
@@ -222,8 +290,30 @@ impl<B: Backend> BurnVitsSpeech<B> {
             TensorData::new(vec![token_count as i64], [1]),
             &self.device,
         );
-        let prior = self.text_prior.forward(token_ids, lengths)?;
         let conditioning = self.speaker_embedding.forward(speaker_id, &self.device);
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::HostToDevice,
+            started,
+            [
+                SynthesisDimension::new("tokens", token_count),
+                SynthesisDimension::new("speaker_id", speaker_id as usize),
+            ],
+        )?;
+
+        let started = Instant::now();
+        let prior = self.text_prior.forward(token_ids, lengths)?;
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::TextEncoder,
+            started,
+            [
+                SynthesisDimension::new("tokens", token_count),
+                SynthesisDimension::new("channels", self.config.network.hidden_channels),
+            ],
+        )?;
 
         let duration_noise = request
             .options
@@ -238,6 +328,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
             .network
             .condition_dp_on_speaker
             .then(|| conditioning.clone());
+        let started = Instant::now();
         let log_durations = match request.options.seed {
             Some(seed) => self.duration_predictor.reverse_seeded(
                 prior.encoded,
@@ -253,21 +344,41 @@ impl<B: Backend> BurnVitsSpeech<B> {
                 f64::from(duration_noise),
             )?,
         };
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::DurationPrediction,
+            started,
+            [SynthesisDimension::new("tokens", token_count)],
+        )?;
         let length_scale = request
             .options
             .length_scale
             .unwrap_or(self.config.network.length_scale);
+        let started = Instant::now();
         let rounded = ceil_durations(
             log_durations.exp(),
             prior.mask,
             f64::from(length_scale),
             DEFAULT_MAX_OUTPUT_FRAMES,
         )?;
-        let expanded = expand_prior_statistics(
+        let output_frames = rounded.output_frames;
+        let expanded = expand_prior_statistics_with_frames(
             prior.mean,
             prior.log_scale,
             rounded.values,
+            Some(output_frames),
             DEFAULT_MAX_OUTPUT_FRAMES,
+        )?;
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::DurationExpansion,
+            started,
+            [
+                SynthesisDimension::new("tokens", token_count),
+                SynthesisDimension::new("frames", output_frames),
+            ],
         )?;
 
         let latent_noise = request
@@ -288,6 +399,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
         );
         let latent_prior =
             expanded.mean + noise * expanded.log_scale.exp() * f64::from(latent_noise);
+        let started = Instant::now();
         let latent = self.flow.reverse(
             latent_prior,
             expanded.frame_mask.clone(),
@@ -300,6 +412,16 @@ impl<B: Backend> BurnVitsSpeech<B> {
         } else {
             latent
         };
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::VitsFlow,
+            started,
+            [
+                SynthesisDimension::new("frames", latent.dims()[2]),
+                SynthesisDimension::new("channels", latent.dims()[1]),
+            ],
+        )?;
         Ok((latent, conditioning))
     }
 
@@ -307,9 +429,12 @@ impl<B: Backend> BurnVitsSpeech<B> {
         &self,
         request: &SpeechSynthesisRequest,
         sink: &mut dyn AudioSink,
+        profiler: Option<&mut dyn SynthesisProfiler>,
     ) -> Result<()> {
-        let (latent, conditioning) = self.prepare_latent(request)?;
-        let [batch, channels, frames] = latent.dims();
+        let mut profiler = profiler;
+        let (latent, conditioning) =
+            self.prepare_latent(request, reborrow_profiler(&mut profiler))?;
+        let [batch, _channels, frames] = latent.dims();
         ensure!(
             batch == 1,
             "streaming VITS currently requires batch size one"
@@ -317,38 +442,63 @@ impl<B: Backend> BurnVitsSpeech<B> {
         let upsample = self.waveform_decoder.upsample_factor();
         let chunk_count = frames.div_ceil(STREAM_LATENT_FRAMES);
 
+        // Decode once. The previous overlapping-window implementation launched
+        // the full HiFi-GAN decoder repeatedly and recomputed 64 context frames
+        // around nearly every 64-frame output chunk.
+        let started = Instant::now();
+        let decoded = self.waveform_decoder.forward(latent, Some(conditioning))?;
+        let expected_samples = frames * upsample;
+        ensure!(
+            decoded.dims() == [batch, 1, expected_samples],
+            "VITS decoder emitted {:?}; expected [{batch}, 1, {expected_samples}]",
+            decoded.dims()
+        );
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::WaveformDecoder,
+            started,
+            [
+                SynthesisDimension::new("latent_frames", frames),
+                SynthesisDimension::new("samples", expected_samples),
+                SynthesisDimension::new("decoder_launches", 1),
+            ],
+        )?;
+
+        let started = Instant::now();
+        let samples = decoded
+            .into_data()
+            .to_vec::<f32>()
+            .context("VITS waveform output is not f32")?;
+        finish_host_stage(
+            &mut profiler,
+            SynthesisStage::DeviceToHost,
+            started,
+            [SynthesisDimension::new("samples", expected_samples)],
+        );
+
         for chunk_index in 0..chunk_count {
             let frame_start = chunk_index * STREAM_LATENT_FRAMES;
             let frame_end = (frame_start + STREAM_LATENT_FRAMES).min(frames);
-            let context_start = frame_start.saturating_sub(STREAM_CONTEXT_FRAMES);
-            let context_end = (frame_end + STREAM_CONTEXT_FRAMES).min(frames);
-            let context_latent =
-                latent
-                    .clone()
-                    .slice([0..batch, 0..channels, context_start..context_end]);
-            let decoded = self
-                .waveform_decoder
-                .forward(context_latent, Some(conditioning.clone()))?;
-            let expected_samples = (context_end - context_start) * upsample;
-            ensure!(
-                decoded.dims() == [1, 1, expected_samples],
-                "VITS decoder emitted {:?}; expected [1, 1, {expected_samples}]",
-                decoded.dims()
-            );
-            let sample_start = (frame_start - context_start) * upsample;
-            let sample_end = (frame_end - context_start) * upsample;
-            let samples = decoded
-                .slice([0..1, 0..1, sample_start..sample_end])
-                .into_data()
-                .to_vec::<f32>()
-                .context("VITS waveform output is not f32")?;
+            let sample_start = frame_start * upsample;
+            let sample_end = frame_end * upsample;
+            let started = Instant::now();
             sink.emit(AudioChunk {
                 chunk_index,
                 is_final: chunk_index + 1 == chunk_count,
                 pause_after_ms: 0,
                 sample_rate_hz: self.output_contract.sample_rate_hz,
-                pcm_mono_f32: samples,
+                pcm_mono_f32: samples[sample_start..sample_end].to_vec(),
             })?;
+            finish_host_stage(
+                &mut profiler,
+                SynthesisStage::AudioSink,
+                started,
+                [
+                    SynthesisDimension::new("chunk", chunk_index),
+                    SynthesisDimension::new("samples", sample_end - sample_start),
+                ],
+            );
         }
         Ok(())
     }
@@ -375,7 +525,16 @@ impl<B: Backend> SpeechSynthesisEngine for BurnVitsSpeech<B> {
         request: &SpeechSynthesisRequest,
         sink: &mut dyn AudioSink,
     ) -> Result<()> {
-        self.synthesize_streaming(request, sink)
+        self.synthesize_streaming(request, sink, None)
+    }
+
+    fn synthesize_plan_streaming_profiled(
+        &mut self,
+        request: &SpeechSynthesisRequest,
+        sink: &mut dyn AudioSink,
+        profiler: &mut dyn SynthesisProfiler,
+    ) -> Result<()> {
+        self.synthesize_streaming(request, sink, Some(profiler))
     }
 }
 
@@ -390,21 +549,22 @@ mod tests {
     type TestBackend = NdArray<f32>;
 
     #[test]
+    #[ignore = "requires pinned Coqui VITS artifacts; run scripts/speech-conformance.sh"]
     fn published_named_speakers_synthesize_streaming_when_available() {
-        let (Some(config), Some(checkpoint), Some(speakers)) = (
-            std::env::var_os("TONGUES_TEST_COQUI_VITS_CONFIG"),
-            std::env::var_os("TONGUES_TEST_COQUI_VITS_CHECKPOINT"),
-            std::env::var_os("TONGUES_TEST_COQUI_VITS_SPEAKERS"),
-        ) else {
-            return;
-        };
+        let config = std::env::var_os("TONGUES_TEST_COQUI_VITS_CONFIG")
+            .expect("TONGUES_TEST_COQUI_VITS_CONFIG is required");
+        let checkpoint = std::env::var_os("TONGUES_TEST_COQUI_VITS_CHECKPOINT")
+            .expect("TONGUES_TEST_COQUI_VITS_CHECKPOINT is required");
+        let speakers = std::env::var_os("TONGUES_TEST_COQUI_VITS_SPEAKERS")
+            .expect("TONGUES_TEST_COQUI_VITS_SPEAKERS is required");
         let mut engine =
             BurnVitsSpeech::<TestBackend>::load(config, checkpoint, speakers, NdArrayDevice::Cpu)
                 .expect("published VITS engine");
 
         for (name, text) in [
             ("p225", "Morning light rested on cedar trees."),
-            ("p226", "Rain polished the streets, and lamps glowed."),
+            ("p330", "Rain polished the streets, and lamps glowed."),
+            ("p376", "The patient astronomer mapped three quiet moons."),
         ] {
             let mut plan = utterance_plan_from_text(SpeechRequest {
                 text: text.into(),
@@ -432,6 +592,226 @@ mod tests {
                 first.samples, second.samples,
                 "seeded VITS inference must be repeatable for {name}"
             );
+        }
+    }
+
+    fn json_numbers(value: &serde_json::Value) -> Vec<f32> {
+        value
+            .as_array()
+            .expect("JSON array")
+            .iter()
+            .map(|value| value.as_f64().expect("JSON number") as f32)
+            .collect()
+    }
+
+    fn assert_stage_probes(
+        stage: &str,
+        tensor: Tensor<TestBackend, 3>,
+        reference: &serde_json::Value,
+        tolerance: f32,
+    ) {
+        let [batch, channels, frames] = tensor.dims();
+        assert_eq!(batch, 1, "{stage} batch");
+        let values = tensor
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 conformance tensor");
+        for probe in reference.as_array().expect("stage probes") {
+            let probe = probe.as_array().expect("stage probe");
+            let channel = probe[0].as_u64().expect("channel") as usize;
+            let frame = probe[1].as_u64().expect("frame") as usize;
+            let expected = probe[2].as_f64().expect("expected value") as f32;
+            assert!(channel < channels && frame < frames, "{stage} probe bounds");
+            let actual = values[channel * frames + frame];
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "{stage}[{channel}, {frame}] differs: native {actual}, Coqui {expected}, tolerance {tolerance}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires pinned Coqui VITS artifacts and reference evidence; run scripts/speech-conformance.sh"]
+    fn published_checkpoint_stage_parity() {
+        let config = std::env::var_os("TONGUES_TEST_COQUI_VITS_CONFIG")
+            .expect("TONGUES_TEST_COQUI_VITS_CONFIG is required");
+        let checkpoint = std::env::var_os("TONGUES_TEST_COQUI_VITS_CHECKPOINT")
+            .expect("TONGUES_TEST_COQUI_VITS_CHECKPOINT is required");
+        let speakers = std::env::var_os("TONGUES_TEST_COQUI_VITS_SPEAKERS")
+            .expect("TONGUES_TEST_COQUI_VITS_SPEAKERS is required");
+        let reference_path = std::env::var_os("TONGUES_TEST_COQUI_REFERENCE")
+            .expect("TONGUES_TEST_COQUI_REFERENCE is required");
+        let reference: serde_json::Value = serde_json::from_slice(
+            &fs::read(&reference_path).expect("read Coqui reference evidence"),
+        )
+        .expect("parse Coqui reference evidence");
+        let vits = &reference["vits"];
+        assert_eq!(
+            vits["noise_scale"].as_f64(),
+            Some(0.0),
+            "conformance reference must disable latent noise"
+        );
+        assert_eq!(
+            vits["duration_noise_scale"].as_f64(),
+            Some(0.0),
+            "conformance reference must disable duration noise"
+        );
+        let token_ids = vits["token_ids"]
+            .as_array()
+            .expect("VITS token IDs")
+            .iter()
+            .map(|value| value.as_i64().expect("token ID"))
+            .collect::<Vec<_>>();
+        assert!(
+            token_ids.len() > 32,
+            "conformance sentence must be multiword"
+        );
+
+        let device = NdArrayDevice::Cpu;
+        let engine =
+            BurnVitsSpeech::<TestBackend>::load(config, checkpoint, speakers, device.clone())
+                .expect("published VITS engine");
+        let token_count = token_ids.len();
+
+        for speaker in vits["speakers"].as_array().expect("speaker references") {
+            let speaker_name = speaker["speaker"].as_str().expect("speaker name");
+            let speaker_id = speaker["speaker_id"].as_u64().expect("speaker ID") as u32;
+            assert_eq!(
+                engine
+                    .speakers
+                    .resolve(Some(&SpeakerId(speaker_name.into())), None)
+                    .expect("resolve reference speaker"),
+                speaker_id
+            );
+            let token_tensor = Tensor::<TestBackend, 2, Int>::from_data(
+                TensorData::new(token_ids.clone(), [1, token_count]),
+                &device,
+            );
+            let lengths = Tensor::<TestBackend, 1, Int>::from_data(
+                TensorData::new(vec![token_count as i64], [1]),
+                &device,
+            );
+            let conditioning = engine.speaker_embedding.forward(speaker_id, &device);
+            assert_stage_probes(
+                "speaker_embedding",
+                conditioning.clone(),
+                &speaker["stages"]["speaker_embedding"],
+                2e-5,
+            );
+
+            let prior = engine
+                .text_prior
+                .forward(token_tensor, lengths)
+                .expect("native text prior");
+            assert_stage_probes(
+                "encoded",
+                prior.encoded.clone(),
+                &speaker["stages"]["encoded"],
+                2e-4,
+            );
+            assert_stage_probes(
+                "prior_mean",
+                prior.mean.clone(),
+                &speaker["stages"]["prior_mean"],
+                2e-4,
+            );
+            let zero_noise = Tensor::zeros([1, 2, token_count], &device);
+            let log_durations = engine
+                .duration_predictor
+                .reverse_with_noise(
+                    prior.encoded,
+                    prior.mask.clone(),
+                    Some(conditioning.clone()),
+                    zero_noise,
+                    0.0,
+                )
+                .expect("native deterministic durations");
+            assert_stage_probes(
+                "log_durations",
+                log_durations.clone(),
+                &speaker["stages"]["log_durations"],
+                3e-4,
+            );
+            let rounded = ceil_durations(
+                log_durations.exp(),
+                prior.mask,
+                f64::from(engine.config.network.length_scale),
+                DEFAULT_MAX_OUTPUT_FRAMES,
+            )
+            .expect("rounded durations");
+            let expected_durations = json_numbers(&speaker["durations"]);
+            let actual_durations = rounded
+                .values
+                .clone()
+                .into_data()
+                .to_vec::<f32>()
+                .expect("duration values");
+            assert_eq!(
+                actual_durations, expected_durations,
+                "duration mismatch for {speaker_name}"
+            );
+            let output_frames = speaker["output_frames"].as_u64().expect("output frames") as usize;
+            assert_eq!(rounded.output_frames, output_frames);
+            let expanded = expand_prior_statistics_with_frames(
+                prior.mean,
+                prior.log_scale,
+                rounded.values,
+                Some(output_frames),
+                DEFAULT_MAX_OUTPUT_FRAMES,
+            )
+            .expect("expanded prior");
+            assert_stage_probes(
+                "expanded_mean",
+                expanded.mean.clone(),
+                &speaker["stages"]["expanded_mean"],
+                3e-4,
+            );
+            let latent = engine
+                .flow
+                .reverse(
+                    expanded.mean,
+                    expanded.frame_mask.clone(),
+                    Some(conditioning.clone()),
+                )
+                .expect("native reverse flow")
+                * expanded.frame_mask;
+            assert_stage_probes("latent", latent.clone(), &speaker["stages"]["latent"], 5e-4);
+            let waveform = engine
+                .waveform_decoder
+                .forward(latent, Some(conditioning))
+                .expect("native VITS decoder")
+                .into_data()
+                .to_vec::<f32>()
+                .expect("native VITS samples");
+            let waveform_reference = &speaker["waveform"];
+            assert_eq!(
+                waveform.len(),
+                waveform_reference["samples"]
+                    .as_u64()
+                    .expect("sample count") as usize
+            );
+            assert!(waveform.iter().all(|sample| sample.is_finite()));
+            let rms = (waveform.iter().map(|sample| sample * sample).sum::<f32>()
+                / waveform.len() as f32)
+                .sqrt();
+            let expected_rms = waveform_reference["rms"].as_f64().expect("RMS") as f32;
+            assert!(
+                (rms - expected_rms).abs() <= 5e-4,
+                "waveform RMS differs for {speaker_name}: native {rms}, Coqui {expected_rms}"
+            );
+            for probe in waveform_reference["probes"]
+                .as_array()
+                .expect("waveform probes")
+            {
+                let probe = probe.as_array().expect("waveform probe");
+                let index = probe[0].as_u64().expect("sample index") as usize;
+                let expected = probe[1].as_f64().expect("sample") as f32;
+                let actual = waveform[index];
+                assert!(
+                    (actual - expected).abs() <= 2e-3,
+                    "waveform[{index}] differs for {speaker_name}: native {actual}, Coqui {expected}"
+                );
+            }
         }
     }
 }

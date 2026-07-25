@@ -9,6 +9,8 @@ use axum::{
     routing::{get, post},
 };
 use axum_server::tls_rustls::RustlsConfig;
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn_cuda::{Cuda, CudaDevice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -25,6 +27,9 @@ use tower_http::services::ServeDir;
 const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 const VITS_SPEAKER_RELATIVE_PATH: &str = "models/speech/coqui/en/vctk/vits/speaker_ids.json";
+const SPEEDY_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/speedy-speech";
+const HIFIGAN_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/hifigan-v2";
+const VITS_RELATIVE_DIR: &str = "models/speech/coqui/en/vctk/vits";
 const VITS_SPEAKER_COUNT: u32 = 109;
 const JOB_OUTPUT_LIMIT: usize = 1_000;
 const DEFAULT_HTTP_PORT: u16 = 3000;
@@ -36,9 +41,11 @@ struct AppState {
     workspace_root: PathBuf,
     static_dir: PathBuf,
     jobs: JobRegistry,
+    speech: ResidentSpeechRegistry,
 }
 
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
+type ResidentSpeechRegistry = Arc<Mutex<ResidentSpeechService>>;
 
 #[tokio::main]
 async fn main() {
@@ -51,6 +58,7 @@ async fn main() {
         workspace_root: workspace_root.clone(),
         static_dir: static_dir.clone(),
         jobs: Arc::new(Mutex::new(HashMap::new())),
+        speech: Arc::new(Mutex::new(ResidentSpeechService::default())),
     };
 
     let app = build_app(state);
@@ -123,6 +131,8 @@ fn build_app(state: AppState) -> Router {
         .route("/api/linguistic/varieties", get(get_linguistic_varieties))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
         .route("/api/speech/speakers", get(get_speech_speakers))
+        .route("/api/speech/runtime", get(get_speech_runtime))
+        .route("/api/speech/runtime/reload", post(reload_speech_runtime))
         .route(
             "/api/styletts2-reference-audio/{*sample_id}",
             get(get_styletts2_reference_audio),
@@ -1600,7 +1610,257 @@ fn job_path_to_relative(workspace_root: &FsPath, value: &str) -> Option<PathBuf>
     safe_relative_path(value).ok()
 }
 
-#[derive(Deserialize)]
+type CpuBurnSpeech = tongues_tts::BurnSpeedySpeechPipeline<NdArray<f32>>;
+type CudaBurnSpeech = tongues_tts::BurnSpeedySpeechPipeline<Cuda<f32, i32>>;
+type CpuVitsSpeech = tongues_tts::BurnVitsSpeech<NdArray<f32>>;
+type CudaVitsSpeech = tongues_tts::BurnVitsSpeech<Cuda<f32, i32>>;
+
+enum ResidentSpeechBackend {
+    BurnCpu(Box<CpuBurnSpeech>),
+    BurnCuda(Box<CudaBurnSpeech>),
+    VitsCpu(Box<CpuVitsSpeech>),
+    VitsCuda(Box<CudaVitsSpeech>),
+}
+
+impl ResidentSpeechBackend {
+    fn sample_rate_hz(&self) -> u32 {
+        use tongues_tts::SpeechSynthesisEngine;
+        match self {
+            Self::BurnCpu(engine) => engine.sample_rate_hz(),
+            Self::BurnCuda(engine) => engine.sample_rate_hz(),
+            Self::VitsCpu(engine) => engine.sample_rate_hz(),
+            Self::VitsCuda(engine) => engine.sample_rate_hz(),
+        }
+    }
+
+    fn synthesize(
+        &mut self,
+        request: &tongues_tts::SpeechSynthesisRequest,
+        profile: bool,
+    ) -> anyhow::Result<(Vec<f32>, Vec<tongues_tts::SynthesisProfileEvent>)> {
+        use tongues_tts::SpeechSynthesisEngine;
+
+        let mut pcm = Vec::new();
+        let mut events = Vec::new();
+        let mut sink = |chunk: tongues_tts::AudioChunk| {
+            pcm.extend(chunk.pcm_mono_f32);
+            Ok(())
+        };
+        macro_rules! run {
+            ($engine:expr) => {
+                if profile {
+                    $engine.synthesize_plan_streaming_profiled(request, &mut sink, &mut |event| {
+                        events.push(event)
+                    })
+                } else {
+                    $engine.synthesize_plan_streaming(request, &mut sink)
+                }
+            };
+        }
+        match self {
+            Self::BurnCpu(engine) => run!(engine),
+            Self::BurnCuda(engine) => run!(engine),
+            Self::VitsCpu(engine) => run!(engine),
+            Self::VitsCuda(engine) => run!(engine),
+        }?;
+        Ok((pcm, events))
+    }
+}
+
+#[derive(Default)]
+struct ResidentSpeechService {
+    engines: HashMap<String, ResidentSpeechBackend>,
+    failures: HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct ResidentSpeechRuntimeResponse {
+    device: String,
+    concurrency: &'static str,
+    busy: bool,
+    loaded: Vec<String>,
+    failed: BTreeMap<String, String>,
+}
+
+struct ResidentSynthesisOutput {
+    wav: Vec<u8>,
+    engine_key: String,
+    loaded_now: bool,
+    load_ms: f64,
+    synthesis_ms: f64,
+    audio_seconds: f64,
+    real_time_factor: f64,
+    profile: Vec<tongues_tts::SynthesisProfileEvent>,
+}
+
+impl ResidentSpeechService {
+    fn snapshot(&self) -> ResidentSpeechRuntimeResponse {
+        let mut loaded = self.engines.keys().cloned().collect::<Vec<_>>();
+        loaded.sort();
+        ResidentSpeechRuntimeResponse {
+            device: resident_speech_device().into(),
+            concurrency: "mutex-queued",
+            busy: false,
+            loaded,
+            failed: self
+                .failures
+                .iter()
+                .map(|(key, error)| (key.clone(), error.clone()))
+                .collect(),
+        }
+    }
+
+    fn synthesize(&mut self, payload: &SpeakRequest) -> anyhow::Result<ResidentSynthesisOutput> {
+        let backend_name = payload.backend.as_deref().unwrap_or("burn");
+        let device = resident_speech_device();
+        let engine_key = format!("{backend_name}-{device}");
+        let mut loaded_now = false;
+        let load_started = std::time::Instant::now();
+        if !self.engines.contains_key(&engine_key) {
+            if let Some(error) = self.failures.get(&engine_key) {
+                anyhow::bail!("resident speech engine `{engine_key}` failed to load: {error}");
+            }
+            match load_resident_speech_backend(backend_name, device) {
+                Ok(engine) => {
+                    self.engines.insert(engine_key.clone(), engine);
+                    loaded_now = true;
+                }
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    self.failures.insert(engine_key.clone(), error.clone());
+                    anyhow::bail!("failed to load resident speech engine `{engine_key}`: {error}");
+                }
+            }
+        }
+        let load_ms = load_started.elapsed().as_secs_f64() * 1_000.0;
+
+        let mut plan = tongues_tts::utterance_plan_from_text(tongues_tts::SpeechRequest {
+            text: payload.text.clone(),
+            variety: payload
+                .variety
+                .clone()
+                .unwrap_or_else(|| "en-US".to_string()),
+        })?;
+        plan.speaker = payload.speaker.clone().map(speaking::SpeakerId);
+        let request = tongues_tts::SpeechSynthesisRequest {
+            plan,
+            options: tongues_tts::SynthesisOptions {
+                speaker_id: payload.speaker_id,
+                split_sentences: true,
+                length_scale: payload.speed.map(|speed| (1.0 / speed) as f32),
+                noise_scale: payload.noise_scale,
+                noise_w: payload.duration_noise_scale,
+                seed: payload.seed,
+            },
+        };
+
+        let engine = self
+            .engines
+            .get_mut(&engine_key)
+            .expect("resident engine inserted before synthesis");
+        let sample_rate_hz = engine.sample_rate_hz();
+        let synthesis_started = std::time::Instant::now();
+        let (pcm, profile) = engine.synthesize(&request, payload.timings.unwrap_or(false))?;
+        let synthesis_ms = synthesis_started.elapsed().as_secs_f64() * 1_000.0;
+        let audio_seconds = pcm.len() as f64 / sample_rate_hz as f64;
+        let real_time_factor = synthesis_ms / 1_000.0 / audio_seconds;
+        let wav = encode_wav_mono_f32(sample_rate_hz, &pcm)?;
+        Ok(ResidentSynthesisOutput {
+            wav,
+            engine_key,
+            loaded_now,
+            load_ms,
+            synthesis_ms,
+            audio_seconds,
+            real_time_factor,
+            profile,
+        })
+    }
+}
+
+fn resident_speech_device() -> &'static str {
+    match std::env::var("TONGUES_SPEECH_DEVICE") {
+        Ok(value) if value.eq_ignore_ascii_case("cpu") => "cpu",
+        _ => "cuda",
+    }
+}
+
+fn load_resident_speech_backend(
+    backend: &str,
+    device: &str,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    let home = resolve_mortar_home();
+    match (backend, device) {
+        ("burn", "cpu") => Ok(ResidentSpeechBackend::BurnCpu(Box::new(
+            load_resident_burn(&home, NdArrayDevice::Cpu)?,
+        ))),
+        ("burn", "cuda") => Ok(ResidentSpeechBackend::BurnCuda(Box::new(
+            load_resident_burn(&home, CudaDevice::default())?,
+        ))),
+        ("vits", "cpu") => Ok(ResidentSpeechBackend::VitsCpu(Box::new(
+            load_resident_vits(&home, NdArrayDevice::Cpu)?,
+        ))),
+        ("vits", "cuda") => Ok(ResidentSpeechBackend::VitsCuda(Box::new(
+            load_resident_vits(&home, CudaDevice::default())?,
+        ))),
+        _ => anyhow::bail!("resident speech does not support backend `{backend}` on `{device}`"),
+    }
+}
+
+fn load_resident_burn<B: burn::tensor::backend::Backend>(
+    home: &FsPath,
+    device: B::Device,
+) -> anyhow::Result<tongues_tts::BurnSpeedySpeechPipeline<B>>
+where
+    B::Device: Clone,
+{
+    let acoustic_dir = home.join(SPEEDY_RELATIVE_DIR);
+    let vocoder_dir = home.join(HIFIGAN_RELATIVE_DIR);
+    let acoustic = tongues_tts::BurnSpeedySpeechAcoustic::load(
+        acoustic_dir.join("config.json"),
+        acoustic_dir.join("model_file.pth"),
+        device.clone(),
+    )?;
+    let vocoder = tongues_tts::BurnHifiganVocoder::load(
+        vocoder_dir.join("config.json"),
+        vocoder_dir.join("model_file.pth"),
+        device,
+    )?;
+    tongues_tts::BurnSpeedySpeechPipeline::new(acoustic, vocoder)
+}
+
+fn load_resident_vits<B: burn::tensor::backend::Backend>(
+    home: &FsPath,
+    device: B::Device,
+) -> anyhow::Result<tongues_tts::BurnVitsSpeech<B>> {
+    let dir = home.join(VITS_RELATIVE_DIR);
+    tongues_tts::BurnVitsSpeech::load(
+        dir.join("config.json"),
+        dir.join("model_file.pth"),
+        dir.join("speaker_ids.json"),
+        device,
+    )
+}
+
+fn encode_wav_mono_f32(sample_rate_hz: u32, samples: &[f32]) -> anyhow::Result<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: sample_rate_hz,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::new(&mut cursor, spec)?;
+        for sample in samples {
+            writer.write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16)?;
+        }
+        writer.finalize()?;
+    }
+    Ok(cursor.into_inner())
+}
+
+#[derive(Deserialize, Clone)]
 struct SpeakRequest {
     text: String,
     cpu: Option<bool>,
@@ -1624,6 +1884,9 @@ struct SpeakRequest {
     embedding_scale: Option<f64>,
     style_seed: Option<u64>,
     speed: Option<f64>,
+    noise_scale: Option<f32>,
+    duration_noise_scale: Option<f32>,
+    seed: Option<u64>,
     sample_rate_hz: Option<u32>,
     max_tts_symbols: Option<usize>,
     no_tts_chunking: Option<bool>,
@@ -1638,6 +1901,67 @@ async fn speak(
 ) -> impl IntoResponse {
     if let Err(error) = validate_speak_request(&payload) {
         return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+
+    let backend = payload.backend.as_deref().unwrap_or("burn");
+    if matches!(backend, "burn" | "vits") {
+        let registry = Arc::clone(&state.speech);
+        let request = payload.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            registry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("resident speech registry lock is poisoned"))?
+                .synthesize(&request)
+        })
+        .await;
+        return match result {
+            Ok(Ok(output)) => {
+                if payload.timings.unwrap_or(false) {
+                    eprintln!(
+                        "resident_speech_profile_json: {}",
+                        json!({
+                            "engine": output.engine_key,
+                            "loaded_now": output.loaded_now,
+                            "load_ms": output.load_ms,
+                            "synthesis_ms": output.synthesis_ms,
+                            "audio_seconds": output.audio_seconds,
+                            "real_time_factor": output.real_time_factor,
+                            "stages": output.profile,
+                        })
+                    );
+                }
+                Response::builder()
+                    .header("Content-Type", "audio/wav")
+                    .header("X-Tongues-Speech-Engine", output.engine_key)
+                    .header(
+                        "X-Tongues-Model-Loaded",
+                        if output.loaded_now { "cold" } else { "reused" },
+                    )
+                    .header(
+                        "Server-Timing",
+                        format!(
+                            "model-load;dur={:.3}, synthesis;dur={:.3}",
+                            output.load_ms, output.synthesis_ms
+                        ),
+                    )
+                    .header(
+                        "X-Tongues-Real-Time-Factor",
+                        format!("{:.6}", output.real_time_factor),
+                    )
+                    .body(axum::body::Body::from(output.wav))
+                    .unwrap()
+            }
+            Ok(Err(error)) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Resident synthesis failed: {error:#}"),
+            )
+                .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Resident synthesis task failed: {error}"),
+            )
+                .into_response(),
+        };
     }
 
     let out_wav = state
@@ -1892,6 +2216,47 @@ async fn get_speech_speakers(Query(query): Query<SpeechSpeakersQuery>) -> impl I
     Json(speech_speakers_response(&resolve_mortar_home(), backend))
 }
 
+async fn get_speech_runtime(State(state): State<AppState>) -> impl IntoResponse {
+    match state.speech.try_lock() {
+        Ok(service) => Json(service.snapshot()).into_response(),
+        Err(std::sync::TryLockError::WouldBlock) => Json(ResidentSpeechRuntimeResponse {
+            device: resident_speech_device().into(),
+            concurrency: "mutex-queued",
+            busy: true,
+            loaded: Vec::new(),
+            failed: BTreeMap::new(),
+        })
+        .into_response(),
+        Err(std::sync::TryLockError::Poisoned(_)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "resident speech registry lock is poisoned",
+        )
+            .into_response(),
+    }
+}
+
+async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoResponse {
+    let registry = Arc::clone(&state.speech);
+    match tokio::task::spawn_blocking(move || {
+        let mut service = registry
+            .lock()
+            .map_err(|_| "resident speech registry lock is poisoned")?;
+        service.engines.clear();
+        service.failures.clear();
+        Ok::<_, &'static str>(service.snapshot())
+    })
+    .await
+    {
+        Ok(Ok(snapshot)) => Json(snapshot).into_response(),
+        Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("resident speech reload task failed: {error}"),
+        )
+            .into_response(),
+    }
+}
+
 fn speech_speakers_response(mortar_home: &FsPath, backend: &str) -> SpeechSpeakersResponse {
     if backend != "vits" {
         return SpeechSpeakersResponse {
@@ -2012,6 +2377,13 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     validate_f32_range("style_beta", payload.style_beta, 0.0, 1.0)?;
     validate_f64_range("embedding_scale", payload.embedding_scale, 0.0, 5.0)?;
     validate_f64_range("speed", payload.speed, 0.25, 3.0)?;
+    validate_f32_range("noise_scale", payload.noise_scale, 0.0, 5.0)?;
+    validate_f32_range(
+        "duration_noise_scale",
+        payload.duration_noise_scale,
+        0.0,
+        5.0,
+    )?;
     if let Some(sample_rate_hz) = payload.sample_rate_hz {
         if !(8_000..=48_000).contains(&sample_rate_hz) {
             return Err("sample_rate_hz must be between 8000 and 48000".into());
@@ -2589,6 +2961,40 @@ mod tests {
             assert!(response.speakers.is_empty());
             assert!(response.error.is_none());
         }
+    }
+
+    #[test]
+    fn resident_runtime_reports_queueing_and_loaded_state() {
+        let mut service = ResidentSpeechService::default();
+        service
+            .failures
+            .insert("vits-cuda".into(), "fixture load failure".into());
+
+        let response = service.snapshot();
+
+        assert_eq!(response.concurrency, "mutex-queued");
+        assert!(response.loaded.is_empty());
+        assert_eq!(
+            response.failed.get("vits-cuda").map(String::as_str),
+            Some("fixture load failure")
+        );
+    }
+
+    #[test]
+    fn resident_wav_encoding_is_valid_and_finite() {
+        let bytes = encode_wav_mono_f32(22_050, &[0.0, -0.5, 0.5]).expect("WAV");
+        let mut reader =
+            hound::WavReader::new(std::io::Cursor::new(bytes)).expect("read encoded WAV");
+        assert_eq!(reader.spec().sample_rate, 22_050);
+        assert_eq!(reader.spec().channels, 1);
+        assert_eq!(reader.duration(), 3);
+        assert_eq!(
+            reader
+                .samples::<i16>()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            vec![0, -16384, 16384]
+        );
     }
 
     #[test]

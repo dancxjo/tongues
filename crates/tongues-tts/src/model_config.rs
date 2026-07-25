@@ -237,11 +237,25 @@ impl HifiganBundleConfig {
         checkpoint_path: impl AsRef<Path>,
         device: &B::Device,
     ) -> Result<HifiganGenerator<B>> {
-        let checkpoint_path = checkpoint_path.as_ref();
-        let mut generator = self
-            .burn_generator_config()?
+        let generator = self.init_burn_generator(device)?;
+        self.load_burn_generator_checkpoint(generator, checkpoint_path)
+    }
+
+    pub fn init_burn_generator<B: Backend>(
+        &self,
+        device: &B::Device,
+    ) -> Result<HifiganGenerator<B>> {
+        self.burn_generator_config()?
             .init(device)
-            .map_err(anyhow::Error::new)?;
+            .map_err(anyhow::Error::new)
+    }
+
+    pub fn load_burn_generator_checkpoint<B: Backend>(
+        &self,
+        mut generator: HifiganGenerator<B>,
+        checkpoint_path: impl AsRef<Path>,
+    ) -> Result<HifiganGenerator<B>> {
+        let checkpoint_path = checkpoint_path.as_ref();
         let mut store = PytorchStore::from_file(checkpoint_path)
             .with_top_level_key("model")
             .map_indices_contiguous(false);

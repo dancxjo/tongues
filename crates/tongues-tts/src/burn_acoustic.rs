@@ -1,16 +1,21 @@
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Int, Tensor, TensorData};
 use serde_json::Value;
 
+use crate::profiling::{
+    finish_backend_stage, finish_host_stage, reborrow_profiler, record_load_stage,
+};
 use crate::{
     AcousticArtifact, AcousticModel, AcousticOutputContract, AudioFeatureConfig, EmbeddingContract,
-    InferenceRuntime, LinguisticProjector, ModelInputContract, PhonemeVocabularyProjector,
-    Spectrogram, SpectrogramContract, SpectrogramLayout, SpeechModelCapabilities,
-    SpeechModelFamily, SpeechSynthesisRequest, SpeedySpeech, SpeedySpeechConfig,
+    InferenceRuntime, LinguisticProjector, ModelInputContract, ModelLoadProfileEvent,
+    ModelLoadStage, PhonemeVocabularyProjector, Spectrogram, SpectrogramContract,
+    SpectrogramLayout, SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisRequest,
+    SpeedySpeech, SpeedySpeechConfig, SynthesisDimension, SynthesisProfiler, SynthesisStage,
 };
 
 /// Burn-native adapter for a released SpeedySpeech acoustic checkpoint.
@@ -30,6 +35,26 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
         checkpoint_path: impl AsRef<Path>,
         device: B::Device,
     ) -> Result<Self> {
+        Self::load_internal(config_path, checkpoint_path, device, None)
+    }
+
+    pub fn load_profiled(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        device: B::Device,
+        profiler: &mut dyn FnMut(ModelLoadProfileEvent),
+    ) -> Result<Self> {
+        Self::load_internal(config_path, checkpoint_path, device, Some(profiler))
+    }
+
+    fn load_internal(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        device: B::Device,
+        profiler: Option<&mut dyn FnMut(ModelLoadProfileEvent)>,
+    ) -> Result<Self> {
+        let mut profiler = profiler;
+        let started = Instant::now();
         let config_path = config_path.as_ref();
         let source = fs::read_to_string(config_path)
             .with_context(|| format!("failed to read model config {}", config_path.display()))?;
@@ -55,11 +80,34 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
             output_contract.bins,
             model_config.out_channels
         );
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ConfigCheckpointParsing,
+            started,
+            Some("speedy_speech"),
+        );
+
+        let started = Instant::now();
         let model = model_config
             .init::<B>(&device)
-            .map_err(anyhow::Error::new)?
+            .map_err(anyhow::Error::new)?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ModelConstruction,
+            started,
+            Some("speedy_speech"),
+        );
+
+        let started = Instant::now();
+        let model = model
             .load_checkpoint(checkpoint_path)
             .map_err(anyhow::Error::new)?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::WeightUpload,
+            started,
+            Some("speedy_speech"),
+        );
 
         Ok(Self {
             model,
@@ -75,6 +123,63 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
 
     pub fn model(&self) -> &SpeedySpeech<B> {
         &self.model
+    }
+
+    pub fn synthesize_tensor(
+        &self,
+        request: &SpeechSynthesisRequest,
+        profiler: Option<&mut dyn SynthesisProfiler>,
+    ) -> Result<Tensor<B, 3>> {
+        let mut profiler = profiler;
+        ensure!(
+            request.plan.speaker.is_none() && request.options.speaker_id.is_none(),
+            "the released LJSpeech SpeedySpeech checkpoint is single-speaker"
+        );
+        ensure!(
+            request.plan.speaker_reference.is_none(),
+            "the released LJSpeech SpeedySpeech checkpoint does not accept reference audio"
+        );
+
+        let started = Instant::now();
+        let projected = self.projector.project(&request.plan)?;
+        let token_count = projected.ids.len();
+        ensure!(
+            projected
+                .ids
+                .iter()
+                .all(|id| *id >= 0 && (*id as usize) < self.projector.vocabulary().len()),
+            "projected SpeedySpeech token ID is outside the checkpoint vocabulary"
+        );
+        finish_host_stage(
+            &mut profiler,
+            SynthesisStage::CheckpointProjection,
+            started,
+            [SynthesisDimension::new("tokens", token_count)],
+        );
+
+        let started = Instant::now();
+        let token_ids = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(projected.ids, [1, token_count]),
+            &self.device,
+        );
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::HostToDevice,
+            started,
+            [SynthesisDimension::new("tokens", token_count)],
+        )?;
+        let length_scale = request.options.length_scale.map(f64::from).unwrap_or(1.0);
+        let output = self
+            .model
+            .inference_projected_with_length_scale(
+                token_ids,
+                length_scale,
+                reborrow_profiler(&mut profiler),
+            )
+            .map_err(anyhow::Error::new)
+            .context("Burn SpeedySpeech inference failed")?;
+        Ok(output.mel)
     }
 }
 
@@ -107,29 +212,9 @@ impl<B: Backend> AcousticModel for BurnSpeedySpeechAcoustic<B> {
     }
 
     fn synthesize(&mut self, request: &SpeechSynthesisRequest) -> Result<AcousticArtifact> {
-        ensure!(
-            request.plan.speaker.is_none() && request.options.speaker_id.is_none(),
-            "the released LJSpeech SpeedySpeech checkpoint is single-speaker"
-        );
-        ensure!(
-            request.plan.speaker_reference.is_none(),
-            "the released LJSpeech SpeedySpeech checkpoint does not accept reference audio"
-        );
-        let projected = self.projector.project(&request.plan)?;
-        let token_count = projected.ids.len();
-        let token_ids = Tensor::<B, 2, Int>::from_data(
-            TensorData::new(projected.ids, [1, token_count]),
-            &self.device,
-        );
-        let length_scale = request.options.length_scale.map(f64::from).unwrap_or(1.0);
-        let output = self
-            .model
-            .inference_with_length_scale(token_ids, length_scale)
-            .map_err(anyhow::Error::new)
-            .context("Burn SpeedySpeech inference failed")?;
-        let frames = output.mel.dims()[1];
-        let values = output
-            .mel
+        let mel = self.synthesize_tensor(request, None)?;
+        let frames = mel.dims()[1];
+        let values = mel
             .into_data()
             .to_vec::<f32>()
             .context("Burn SpeedySpeech output is not f32")?;

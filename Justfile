@@ -296,6 +296,10 @@ archive:
 speak *args:
     cargo run --bin tongues -- speak "$@"
 
+# Benchmark cold and resident warm native speech inference on CPU and CUDA
+speech-benchmark *args:
+    scripts/speech-benchmark.sh "$@"
+
 # Play a shuffled sentence through every built-in speech backend, preferring CUDA
 speech-demo *global_args:
     #!/usr/bin/env bash

@@ -1,0 +1,23 @@
+{
+  "reference_runtime": {
+    "name": "Coqui TTS",
+    "revision": "0cf3265a4686d7e856bd472cdaf1572d61cab2b8",
+    "torch": "1.13.1+cpu"
+  },
+  "schema": "tongues-speech-tokenization-v1",
+  "speedy_speech_hifigan": {
+    "checkpoint_symbols": "mɔɹnɪŋ laɪt ɹɛstɪd ɔn ðə sidɚ tɹiz waɪl ðə kɛtəl bɪɡæn tə sɪŋ.",
+    "text": "Morning light rested on the cedar trees while the kettle began to sing.",
+    "token_ids": [14, 43, 77, 15, 63, 33, 129, 13, 3, 63, 21, 129, 77, 50, 20, 21, 63, 6, 129, 43, 15, 129, 30, 48, 129, 20, 10, 6, 49, 129, 21, 77, 10, 27, 129, 24, 3, 63, 13, 129, 30, 48, 129, 12, 50, 21, 48, 13, 129, 4, 63, 55, 28, 15, 129, 21, 48, 129, 20, 63, 33, 125]
+  },
+  "vits": {
+    "checkpoint_symbols": "<BLNK>m<BLNK>ˈ<BLNK>ɔ<BLNK>ː<BLNK>ɹ<BLNK>n<BLNK>ɪ<BLNK>ŋ<BLNK> <BLNK>l<BLNK>ˈ<BLNK>a<BLNK>ɪ<BLNK>t<BLNK> <BLNK>ɹ<BLNK>ˈ<BLNK>ɛ<BLNK>s<BLNK>t<BLNK>ᵻ<BLNK>d<BLNK> <BLNK>ɔ<BLNK>n<BLNK>ð<BLNK>ə<BLNK> <BLNK>s<BLNK>ˈ<BLNK>i<BLNK>ː<BLNK>d<BLNK>ɚ<BLNK> <BLNK>t<BLNK>ɹ<BLNK>ˈ<BLNK>i<BLNK>ː<BLNK>z<BLNK> <BLNK>w<BLNK>ˌ<BLNK>a<BLNK>ɪ<BLNK>l<BLNK> <BLNK>ð<BLNK>ə<BLNK> <BLNK>k<BLNK>ˈ<BLNK>ɛ<BLNK>ɾ<BLNK>ə<BLNK>l<BLNK> <BLNK>b<BLNK>ɪ<BLNK>ɡ<BLNK>ˈ<BLNK>æ<BLNK>n<BLNK> <BLNK>t<BLNK>ə<BLNK> <BLNK>s<BLNK>ˈ<BLNK>ɪ<BLNK>ŋ<BLNK>.<BLNK>",
+    "speakers": [
+      {"speaker": "p225", "speaker_id": 1},
+      {"speaker": "p330", "speaker_id": 90},
+      {"speaker": "p376", "speaker_id": 108}
+    ],
+    "text": "Morning light rested on the cedar trees while the kettle began to sing.",
+    "token_ids": [178, 55, 178, 156, 178, 76, 178, 158, 178, 123, 178, 56, 178, 102, 178, 112, 178, 16, 178, 54, 178, 156, 178, 43, 178, 102, 178, 62, 178, 16, 178, 123, 178, 156, 178, 86, 178, 61, 178, 62, 178, 177, 178, 46, 178, 16, 178, 76, 178, 56, 178, 81, 178, 83, 178, 16, 178, 61, 178, 156, 178, 51, 178, 158, 178, 46, 178, 85, 178, 16, 178, 62, 178, 123, 178, 156, 178, 51, 178, 158, 178, 68, 178, 16, 178, 65, 178, 157, 178, 43, 178, 102, 178, 54, 178, 16, 178, 81, 178, 83, 178, 16, 178, 53, 178, 156, 178, 86, 178, 125, 178, 83, 178, 54, 178, 16, 178, 44, 178, 102, 178, 92, 178, 156, 178, 72, 178, 56, 178, 16, 178, 62, 178, 83, 178, 16, 178, 61, 178, 156, 178, 102, 178, 112, 178, 4, 178]
+  }
+}

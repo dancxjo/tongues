@@ -26,6 +26,7 @@ use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub mod burn_acoustic;
 pub mod burn_hifigan;
+pub mod burn_pipeline;
 pub mod burn_speedy_speech;
 pub mod burn_vits;
 pub mod burn_vits_decoder;
@@ -36,12 +37,14 @@ pub mod burn_vocoder;
 pub mod components;
 pub mod model_config;
 pub mod phoneme_projector;
+pub mod profiling;
 pub mod speakers;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
+pub use burn_pipeline::BurnSpeedySpeechPipeline;
 pub use burn_speedy_speech::{
     ResidualConvConfig, SpeedySpeech, SpeedySpeechConfig, SpeedySpeechError, SpeedySpeechOutput,
 };
@@ -72,6 +75,10 @@ pub use components::{
 pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
 pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
+};
+pub use profiling::{
+    ModelLoadProfileEvent, ModelLoadStage, SynthesisDimension, SynthesisProfileEvent,
+    SynthesisProfiler, SynthesisStage,
 };
 pub use speakers::SpeakerCatalog;
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
@@ -224,6 +231,19 @@ pub trait SpeechSynthesisEngine {
         request: &SpeechSynthesisRequest,
         sink: &mut dyn AudioSink,
     ) -> Result<()>;
+
+    /// Synthesizes while reporting synchronized native stage timings.
+    ///
+    /// Backends without native stage instrumentation retain the ordinary
+    /// behavior and emit no events.
+    fn synthesize_plan_streaming_profiled(
+        &mut self,
+        request: &SpeechSynthesisRequest,
+        sink: &mut dyn AudioSink,
+        _profiler: &mut dyn SynthesisProfiler,
+    ) -> Result<()> {
+        self.synthesize_plan_streaming(request, sink)
+    }
 }
 
 #[doc(hidden)]

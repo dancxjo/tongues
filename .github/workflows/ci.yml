@@ -21,9 +21,11 @@ jobs:
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Check repository scripts
-        run: bash -n scripts/check-feature-matrix.sh scripts/speech-smoke.sh
+        run: bash -n scripts/check-feature-matrix.sh scripts/speech-smoke.sh scripts/speech-conformance.sh
       - name: Check default, no-default, and all-feature workspaces
         run: scripts/check-feature-matrix.sh workspace
+      - name: Build the speech CLI in release mode
+        run: cargo build --release -p tongues-cli
       - name: Test workspace
         run: cargo test --workspace --no-fail-fast
       - name: Check server UI JavaScript

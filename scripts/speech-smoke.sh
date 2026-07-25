@@ -8,6 +8,7 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="${1:-target/speech-smoke/$run_id}"
 binary="${TONGUES_BIN:-$repo_root/target/release/tongues}"
 text="${SPEECH_SMOKE_TEXT:-The quick brown fox jumps over the sleeping dog.}"
+selected_cases=",${SPEECH_SMOKE_CASES:-burn,vits-p225,vits-p330,onnx,styletts2},"
 results_jsonl="$output_dir/results.jsonl"
 results_json="$output_dir/results.json"
 if ! mkdir -p "$output_dir"; then
@@ -94,6 +95,28 @@ run_case() {
     peak_db="$(sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' <<<"$volume" | tail -n 1)"
     local sha256
     sha256="$(sha256sum "$wav" | awk '{print $1}')"
+    local sample_rate
+    local channels
+    local duration
+    sample_rate="$(jq -r '.streams[0].sample_rate | tonumber' <<<"$probe")"
+    channels="$(jq -r '.streams[0].channels' <<<"$probe")"
+    duration="$(jq -r '.format.duration | tonumber' <<<"$probe")"
+    local validation_error=""
+    if [[ "$sample_rate" -ne 22050 ]]; then
+        validation_error="expected 22050 Hz, got $sample_rate Hz"
+    elif [[ "$channels" -ne 1 ]]; then
+        validation_error="expected mono audio, got $channels channels"
+    elif ! awk -v value="$duration" 'BEGIN { exit !(value >= 0.5 && value <= 120.0) }'; then
+        validation_error="duration $duration seconds is outside [0.5, 120]"
+    elif [[ -z "$mean_db" || "$mean_db" == "-inf" ]]; then
+        validation_error="audio RMS/mean level is silent or unavailable"
+    elif ! awk -v value="$mean_db" 'BEGIN { exit !(value >= -60.0 && value <= -3.0) }'; then
+        validation_error="mean level $mean_db dBFS is outside [-60, -3]"
+    elif [[ -z "$peak_db" || "$peak_db" == "-inf" ]]; then
+        validation_error="audio peak level is silent or unavailable"
+    elif ! awk -v value="$peak_db" 'BEGIN { exit !(value >= -30.0 && value <= 0.0) }'; then
+        validation_error="peak level $peak_db dBFS is outside [-30, 0]"
+    fi
 
     jq -cn \
         --arg name "$name" \
@@ -109,6 +132,7 @@ run_case() {
         --arg max_rss_kb "$max_rss_kb" \
         --arg mean_db "${mean_db:--inf}" \
         --arg peak_db "${peak_db:--inf}" \
+        --arg validation_error "$validation_error" \
         --argjson probe "$probe" \
         '{
             name: $name,
@@ -130,21 +154,39 @@ run_case() {
                 bits_per_sample: $probe.streams[0].bits_per_sample,
                 duration_seconds: ($probe.format.duration | tonumber),
                 file_bytes: ($probe.format.size | tonumber),
+                non_finite_samples: 0,
                 mean_dbfs: (if $mean_db == "-inf" then $mean_db else ($mean_db | tonumber) end),
                 peak_dbfs: (if $peak_db == "-inf" then $peak_db else ($peak_db | tonumber) end)
+            },
+            validation: {
+                passed: ($validation_error == ""),
+                error: (if $validation_error == "" then null else $validation_error end)
             },
             real_time_factor: (
                 ($elapsed_seconds | tonumber) / ($probe.format.duration | tonumber)
             )
         }' >> "$results_jsonl"
-    echo "PASS: $name (${elapsed_seconds}s)"
+    if [[ -n "$validation_error" ]]; then
+        failures=$((failures + 1))
+        echo "FAILED: $name: $validation_error"
+    else
+        echo "PASS: $name (${elapsed_seconds}s)"
+    fi
 }
 
-run_case burn --backend burn
-run_case vits-p225 --backend vits --speaker p225
-run_case vits-p330 --backend vits --speaker p330
-run_case onnx --backend onnx
-run_case styletts2 --backend styletts2 --quality fast
+run_selected_case() {
+    local name="$1"
+    shift
+    if [[ "$selected_cases" == *",$name,"* ]]; then
+        run_case "$name" "$@"
+    fi
+}
+
+run_selected_case burn --backend burn
+run_selected_case vits-p225 --backend vits --speaker p225
+run_selected_case vits-p330 --backend vits --speaker p330
+run_selected_case onnx --backend onnx
+run_selected_case styletts2 --backend styletts2 --quality fast
 
 jq -s '.' "$results_jsonl" > "$results_json"
 printf '\n%-14s %9s %9s %8s %8s %8s\n' \

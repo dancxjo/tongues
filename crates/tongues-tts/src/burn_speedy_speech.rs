@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::path::Path;
+use std::time::Instant;
 
 use burn::module::{Initializer, Module, Param};
 use burn::nn::conv::{Conv1d, Conv1dConfig};
@@ -26,6 +27,9 @@ use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor};
 use burn_store::{ModuleSnapshot, PytorchStore};
 use serde_json::Value;
+
+use crate::profiling::finish_backend_stage;
+use crate::{SynthesisDimension, SynthesisProfiler, SynthesisStage};
 
 const BATCH_NORM_EPSILON: f64 = 1e-5;
 const DURATION_NORM_EPSILON: f64 = 1e-4;
@@ -814,14 +818,18 @@ impl<B: Backend> PositionalEncoding<B> {
         let mut values = vec![0.0f32; channels * POSITIONAL_ENCODING_LIMIT];
         for channel in 0..channels {
             let pair = channel / 2;
-            let divisor = 10_000f64.powf((2 * pair) as f64 / channels as f64);
+            // Coqui constructs this table in torch.float32. Keeping the
+            // exponent, power, and phase in f32 matters at high channels:
+            // small divisor rounding differences become large phase shifts
+            // over a 5,000-position table.
+            let divisor = 10_000f32.powf((2 * pair) as f32 / channels as f32);
             for position in 0..POSITIONAL_ENCODING_LIMIT {
-                let angle = position as f64 * divisor;
+                let angle = position as f32 * divisor;
                 values[channel * POSITIONAL_ENCODING_LIMIT + position] =
                     if channel.is_multiple_of(2) {
-                        angle.sin() as f32
+                        angle.sin()
                     } else {
-                        angle.cos() as f32
+                        angle.cos()
                     };
             }
         }
@@ -970,6 +978,15 @@ impl<B: Backend> SpeedySpeech<B> {
                 unexpected_unused.join(", ")
             )));
         }
+        // `pe` is a deterministic buffer, not a learned weight. Burn Store's
+        // PyTorch conversion transposes its last two dimensions as though it
+        // were a linear weight, which preserves frame zero but corrupts every
+        // later position. Rebuild it from the published architecture after
+        // validating that the checkpoint otherwise matches exactly.
+        if let Some(positional) = &self.pos_encoder {
+            let device = positional.pe.val().device();
+            self.pos_encoder = Some(PositionalEncoding::init(positional.channels, &device));
+        }
         Ok(self)
     }
 
@@ -987,6 +1004,26 @@ impl<B: Backend> SpeedySpeech<B> {
         token_ids: Tensor<B, 2, Int>,
         length_scale: f64,
     ) -> Result<SpeedySpeechOutput<B>, SpeedySpeechError> {
+        self.inference_inner(token_ids, length_scale, false, None)
+    }
+
+    pub(crate) fn inference_projected_with_length_scale(
+        &self,
+        token_ids: Tensor<B, 2, Int>,
+        length_scale: f64,
+        profiler: Option<&mut dyn SynthesisProfiler>,
+    ) -> Result<SpeedySpeechOutput<B>, SpeedySpeechError> {
+        self.inference_inner(token_ids, length_scale, true, profiler)
+    }
+
+    fn inference_inner(
+        &self,
+        token_ids: Tensor<B, 2, Int>,
+        length_scale: f64,
+        ids_validated_on_host: bool,
+        profiler: Option<&mut dyn SynthesisProfiler>,
+    ) -> Result<SpeedySpeechOutput<B>, SpeedySpeechError> {
+        let mut profiler = profiler;
         if !length_scale.is_finite() || length_scale <= 0.0 {
             return Err(input_error("length_scale must be finite and positive"));
         }
@@ -1002,18 +1039,31 @@ impl<B: Backend> SpeedySpeech<B> {
                 self.minimum_input_tokens
             )));
         }
-        let highest_id = token_ids.clone().max().into_scalar().elem::<i64>();
-        if highest_id < 0 || highest_id as usize >= self.num_chars {
-            return Err(input_error(format!(
-                "token ID {highest_id} is outside vocabulary 0..{}",
-                self.num_chars
-            )));
+        if !ids_validated_on_host {
+            let highest_id = token_ids.clone().max().into_scalar().elem::<i64>();
+            if highest_id < 0 || highest_id as usize >= self.num_chars {
+                return Err(input_error(format!(
+                    "token ID {highest_id} is outside vocabulary 0..{}",
+                    self.num_chars
+                )));
+            }
         }
 
         let device = token_ids.device();
         let x_mask = Tensor::<B, 3>::ones([batch, 1, tokens], &device);
+        let started = Instant::now();
         let embedded = self.emb.forward(token_ids).swap_dims(1, 2);
         let encoded = self.encoder.forward(embedded, x_mask.clone());
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &device,
+            SynthesisStage::TextEncoder,
+            started,
+            [SynthesisDimension::new("tokens", tokens)],
+        )
+        .map_err(|error| input_error(error.to_string()))?;
+
+        let started = Instant::now();
         let duration_log = self
             .duration_predictor
             .forward(encoded.clone(), x_mask.clone());
@@ -1021,10 +1071,30 @@ impl<B: Backend> SpeedySpeech<B> {
             .clamp_min(1.0)
             .round()
             .reshape([batch, tokens]);
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &device,
+            SynthesisStage::DurationPrediction,
+            started,
+            [SynthesisDimension::new("tokens", tokens)],
+        )
+        .map_err(|error| input_error(error.to_string()))?;
 
+        let started = Instant::now();
         let (expanded, output_mask) =
             expand_by_durations(encoded, durations.clone(), self.max_output_frames)?;
         let output_frames = expanded.dims()[2];
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &device,
+            SynthesisStage::DurationExpansion,
+            started,
+            [
+                SynthesisDimension::new("tokens", tokens),
+                SynthesisDimension::new("frames", output_frames),
+            ],
+        )
+        .map_err(|error| input_error(error.to_string()))?;
         if output_frames < self.minimum_output_frames {
             return Err(input_error(format!(
                 "duration predictor produced {output_frames} frames but this checkpoint requires at least {} for its dilated decoder",
@@ -1035,7 +1105,19 @@ impl<B: Backend> SpeedySpeech<B> {
             Some(positional) => positional.forward(expanded, output_mask.clone())?,
             None => expanded,
         };
+        let started = Instant::now();
         let mel = self.decoder.forward(expanded, output_mask).swap_dims(1, 2);
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &device,
+            SynthesisStage::AcousticDecoder,
+            started,
+            [
+                SynthesisDimension::new("frames", output_frames),
+                SynthesisDimension::new("mel_bins", self.out_channels),
+            ],
+        )
+        .map_err(|error| input_error(error.to_string()))?;
         debug_assert_eq!(mel.dims()[2], self.out_channels);
 
         Ok(SpeedySpeechOutput { mel, durations })
@@ -1256,6 +1338,31 @@ mod tests {
     }
 
     #[test]
+    fn positional_table_matches_coqui_float32_layout_without_a_checkpoint() {
+        let device = Default::default();
+        let positional = PositionalEncoding::<TestBackend>::init(128, &device);
+        let data = positional
+            .pe
+            .val()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 positional table");
+
+        for (channel, position, expected) in [
+            (0, 0, 0.0),
+            (7, 1, 0.030864894),
+            (64, 168, -0.9449728),
+            (127, 338, 0.8975993),
+        ] {
+            let actual = data[channel * POSITIONAL_ENCODING_LIMIT + position];
+            assert!(
+                (actual - expected).abs() <= 1e-6,
+                "positional[{channel},{position}] mismatch: actual={actual}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
     fn loads_and_runs_the_published_checkpoint_when_available() {
         let Some(model_path) = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_MODEL") else {
             return;
@@ -1291,10 +1398,10 @@ mod tests {
     }
 
     #[test]
-    fn published_checkpoint_stage_parity_when_available() {
-        let Some(model_path) = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_MODEL") else {
-            return;
-        };
+    #[ignore = "requires pinned Coqui SpeedySpeech model artifacts; run scripts/speech-conformance.sh"]
+    fn published_checkpoint_stage_parity() {
+        let model_path = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_MODEL")
+            .expect("TONGUES_TEST_COQUI_SPEEDY_MODEL is required");
         let config_path = std::env::var_os("TONGUES_TEST_COQUI_SPEEDY_CONFIG")
             .expect("TONGUES_TEST_COQUI_SPEEDY_CONFIG must accompany the model");
         let source = std::fs::read_to_string(config_path).expect("config");
@@ -1324,18 +1431,99 @@ mod tests {
             .round()
             .reshape([1, 62]);
         let (expanded, output_mask) =
-            expand_by_durations(encoded, durations.clone(), model.max_output_frames)
+            expand_by_durations(encoded.clone(), durations.clone(), model.max_output_frames)
                 .expect("duration expansion");
         let positioned = model
             .pos_encoder
             .as_ref()
             .expect("published positional encoder")
-            .forward(expanded, output_mask.clone())
+            .forward(expanded.clone(), output_mask.clone())
             .expect("positional encoding");
         let mel = model
             .decoder
-            .forward(positioned, output_mask)
+            .forward(positioned.clone(), output_mask)
             .swap_dims(1, 2);
+
+        let encoded_data = encoded
+            .clone()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 encoded");
+        let expanded_before_position_data =
+            expanded.into_data().to_vec::<f32>().expect("f32 expanded");
+        let positioned_data = positioned
+            .clone()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 positioned");
+        let positional_data = model
+            .pos_encoder
+            .as_ref()
+            .expect("published positional encoder")
+            .pe
+            .val()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("f32 positional");
+        for (actual, expected, stage) in [
+            (encoded_data[0], 0.28330755, "encoded[0,0]"),
+            (encoded_data[7 * 62 + 1], -0.017651677, "encoded[7,1]"),
+            (encoded_data[64 * 62 + 20], 0.014495345, "encoded[64,20]"),
+            (encoded_data[127 * 62 + 61], -0.11383733, "encoded[127,61]"),
+            (
+                expanded_before_position_data[0],
+                0.28330755,
+                "expanded[0,0]",
+            ),
+            (
+                expanded_before_position_data[7 * 339 + 1],
+                -0.47962627,
+                "expanded[7,1]",
+            ),
+            (
+                expanded_before_position_data[64 * 339 + 168],
+                0.26118344,
+                "expanded[64,168]",
+            ),
+            (
+                expanded_before_position_data[127 * 339 + 338],
+                -0.11383733,
+                "expanded[127,338]",
+            ),
+            (positioned_data[0], 3.205259, "positioned[0,0]"),
+            (positioned_data[7 * 339 + 1], -5.395487, "positioned[7,1]"),
+            (
+                positioned_data[64 * 339 + 168],
+                2.0099804,
+                "positioned[64,168]",
+            ),
+            (
+                positioned_data[127 * 339 + 338],
+                -0.3903231,
+                "positioned[127,338]",
+            ),
+            (positional_data[0], 0.0, "positional[0,0]"),
+            (
+                positional_data[7 * POSITIONAL_ENCODING_LIMIT + 1],
+                0.030864894,
+                "positional[7,1]",
+            ),
+            (
+                positional_data[64 * POSITIONAL_ENCODING_LIMIT + 168],
+                -0.9449728,
+                "positional[64,168]",
+            ),
+            (
+                positional_data[127 * POSITIONAL_ENCODING_LIMIT + 338],
+                0.8975993,
+                "positional[127,338]",
+            ),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 2e-5,
+                "{stage} parity mismatch: actual={actual}, expected={expected}"
+            );
+        }
 
         let actual_durations = durations
             .into_data()
@@ -1351,15 +1539,59 @@ mod tests {
             ]
         );
         assert_eq!(mel.dims(), [1, 339, 80]);
-        let mel_data = mel.into_data().to_vec::<f32>().expect("f32 mel");
+        let mel_data = mel.clone().into_data().to_vec::<f32>().expect("f32 mel");
         let reference = [
-            -7.4673758, -6.7190876, -6.0384293, -5.8300047, -5.931164, -5.858857, -5.4986215,
-            -5.5024877,
+            (0, 0, -7.4673758),
+            (0, 79, -9.108585),
+            (1, 7, -3.5108964),
+            (5, 23, -5.008403),
+            (20, 40, -4.3483267),
+            (50, 79, -5.0085955),
+            (100, 23, -5.913802),
+            (168, 40, -4.2294984),
+            (250, 7, -3.2281606),
+            (338, 79, -9.108585),
         ];
-        for (actual, expected) in mel_data.iter().zip(reference) {
+        for (frame, bin, expected) in reference {
+            let actual = mel_data[frame * config.out_channels + bin];
             assert!(
                 (actual - expected).abs() <= 2e-4,
-                "mel parity mismatch: actual={actual}, expected={expected}"
+                "mel parity mismatch at frame {frame}, bin {bin}: actual={actual}, expected={expected}"
+            );
+        }
+
+        let vocoder_model = std::env::var_os("TONGUES_TEST_COQUI_HIFIGAN_MODEL")
+            .expect("TONGUES_TEST_COQUI_HIFIGAN_MODEL is required");
+        let vocoder_config = std::env::var_os("TONGUES_TEST_COQUI_HIFIGAN_CONFIG")
+            .expect("TONGUES_TEST_COQUI_HIFIGAN_CONFIG is required");
+        let generator = crate::HifiganBundleConfig::from_file(vocoder_config)
+            .expect("HiFi-GAN config")
+            .load_burn_generator(vocoder_model, &device)
+            .expect("HiFi-GAN checkpoint");
+        let waveform = generator
+            .inference(mel.swap_dims(1, 2))
+            .expect("HiFi-GAN inference");
+        assert_eq!(waveform.dims(), [1, 1, 89_344]);
+        let waveform = waveform.into_data().to_vec::<f32>().expect("f32 waveform");
+        assert!(waveform.iter().all(|sample| sample.is_finite()));
+        let rms = (waveform.iter().map(|sample| sample * sample).sum::<f32>()
+            / waveform.len() as f32)
+            .sqrt();
+        assert!((rms - 0.05458769).abs() <= 2e-5, "waveform RMS: {rms}");
+        for (index, expected) in [
+            (0, -0.0014194329),
+            (1, -0.0012611531),
+            (255, -0.00044831855),
+            (256, -0.00046205145),
+            (1_000, 0.0004874973),
+            (44_672, -0.011885947),
+            (89_342, 0.00084172835),
+            (89_343, 0.0003609802),
+        ] {
+            let actual = waveform[index];
+            assert!(
+                (actual - expected).abs() <= 2e-4,
+                "waveform parity mismatch at sample {index}: actual={actual}, expected={expected}"
             );
         }
     }

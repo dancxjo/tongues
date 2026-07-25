@@ -81,6 +81,40 @@ just speech-demo --cpu
 For a repeatable five-case synthesis probe, measured output fields, and the
 latest recorded run, see [Speech synthesis smoke measurements](speech-smoke.md).
 
+For native stage profiling and cold-versus-warm CPU/CUDA measurements, run:
+
+```sh
+scripts/speech-benchmark.sh
+```
+
+The latest measured matrix and CUDA kernel evidence are in
+[Native speech performance](speech-performance.md).
+
+The benchmark keeps each model resident for repeated inference. `--timings`
+emits machine-readable `startup_profile_json` and `inference_profile_json`
+records with token, frame, and sample dimensions. Each inference record reports
+first playable audio latency, total synthesis time, audio duration, and
+real-time factor independently. Playback drain time is emitted separately as
+`playback_profile_json` when no WAV output is requested.
+
+Use `nsys` to verify CUDA kernel execution and inspect synchronization:
+
+```sh
+nsys profile \
+  --trace=cuda,osrt \
+  --stats=true \
+  --force-overwrite=true \
+  --output=target/speech-benchmark/vits-cuda \
+  target/release/tongues --verbose speak \
+    --backend vits --speaker p225 --seed 27 \
+    --benchmark-runs 2 --timings \
+    --output target/speech-benchmark/vits.wav \
+    "Morning light rested on the cedar trees."
+```
+
+The first run includes Burn fusion/CUDA kernel compilation. Runs two and later
+are the representative warm measurements.
+
 ## Linguistic Boundary
 
 The `speaking` crate produces a backend-neutral utterance plan containing
@@ -117,6 +151,7 @@ fail at the boundary.
   decoding;
 - named-speaker lookup for the VCTK model;
 - streaming audio chunks for end-to-end synthesis;
+- synchronized, structured profiling at native model boundaries;
 - ONNX voice compatibility for registered voice bundles.
 
 Burn synthesis uses CUDA when it is available and the command supports it, with
@@ -126,6 +161,71 @@ recommended for real synthesis:
 ```sh
 cargo run --release --bin tongues -- speak --backend vits --speaker p225 "Hello."
 ```
+
+The native SpeedySpeech pipeline keeps mel features on the Burn device between
+the acoustic model and HiFi-GAN, avoiding a GPU-to-host-to-GPU round trip. VITS
+decodes the complete latent sequence once and slices the resulting host
+waveform into sink chunks; it does not repeatedly launch the decoder over
+overlapping latent windows.
+
+## Speech conformance
+
+The normal CI workflow checks the default, no-default, and declared feature
+combinations, runs the workspace tests, and compiles the speech CLI in release
+mode. These jobs do not download multi-gigabyte speech checkpoints.
+
+Run the opt-in full-model harness on a machine with the registered Coqui and
+ONNX model bundles:
+
+```sh
+scripts/speech-conformance.sh
+```
+
+The harness builds a container pinned to Coqui TTS revision
+`0cf3265a4686d7e856bd472cdaf1572d61cab2b8` and PyTorch 1.13.1 CPU, verifies
+every model artifact by SHA-256, and atomically writes reference evidence under
+`target/speech-conformance/`. Missing or mismatched large artifacts are hard
+failures, never successful skips.
+
+The reference and native implementations use the same multiword sentence and
+zero acoustic/duration noise. Conformance covers:
+
+- SpeedySpeech token IDs, predicted durations, encoder expansion, positional
+  encoding, mel frames, and HiFi-GAN output;
+- VITS token IDs, speaker rows p225, p330, and p376, duration expansion, text
+  prior, reverse flow, and integrated waveform decoder;
+- the registered ONNX voice through an actual CLI synthesis;
+- mono/22.05 kHz validity, bounded duration and levels, non-silent RMS/mean,
+  peak, sample count, deterministic probes, and wall-clock timing.
+
+Stage probes span the whole utterance. They serve as the semantic/intelligibility
+gate: a native backend cannot pass merely by producing finite audio with the
+right shape after diverging from the pinned upstream text, duration, acoustic,
+or latent path. The small tokenizer fixture in `fixtures/speech/` is committed
+to the repository; model weights and generated audio are not.
+
+## Resident server execution
+
+`tongues-server` owns a mutex-queued resident registry for the native `burn` and
+`vits` backends. The first request loads the selected model; subsequent
+`POST /api/speak` requests reuse it. Native requests do not invoke `cargo run`.
+Responses include `X-Tongues-Model-Loaded`, `X-Tongues-Speech-Engine`,
+`X-Tongues-Real-Time-Factor`, and `Server-Timing` headers.
+
+Inspect loading, ready, and failed state at:
+
+```text
+GET /api/speech/runtime
+```
+
+`POST /api/speech/runtime/reload` waits for active synthesis to finish, then
+drops loaded engines and clears cached load failures. The next request reloads
+the current model files deliberately.
+
+The resident runtime uses CUDA by default. Set
+`TONGUES_SPEECH_DEVICE=cpu` before server startup to force CPU inference.
+Mutable engines are serialized through one registry mutex, so concurrent native
+requests queue predictably rather than entering an engine concurrently.
 
 ## Current Limits
 

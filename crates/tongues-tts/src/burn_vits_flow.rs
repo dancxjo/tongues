@@ -100,17 +100,31 @@ pub fn ceil_durations<B: Backend>(
     if max_output_frames == 0 {
         return Err(input_error("max_output_frames must be positive"));
     }
-    let minimum = durations.clone().min().into_scalar().elem::<f32>();
-    if !minimum.is_finite() || minimum < 0.0 {
+    let device = durations.device();
+    let scaled = (durations * token_mask * length_scale).reshape([batch, tokens]);
+    // Shape decisions require a host value. Read the small duration vector once
+    // and derive validation plus every per-batch frame count from that single
+    // synchronization, instead of issuing separate min/sum/max scalar reads.
+    let mut host_values = scaled
+        .into_data()
+        .to_vec::<f32>()
+        .map_err(|error| input_error(format!("rounded durations are not f32: {error}")))?;
+    if host_values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
         return Err(input_error(
             "predicted durations must be finite and non-negative",
         ));
     }
-
-    let values = (durations * token_mask * length_scale)
-        .ceil()
-        .reshape([batch, tokens]);
-    let output_frames = values.clone().sum_dim(1).max().into_scalar().elem::<f32>() as usize;
+    for value in &mut host_values {
+        *value = value.ceil();
+    }
+    let output_frames = host_values
+        .chunks(tokens)
+        .map(|row| row.iter().map(|value| *value as usize).sum::<usize>())
+        .max()
+        .unwrap_or(0);
     if output_frames == 0 {
         return Err(input_error("rounded durations produce zero output frames"));
     }
@@ -121,7 +135,10 @@ pub fn ceil_durations<B: Backend>(
     }
 
     Ok(CeiledDurations {
-        values,
+        values: Tensor::<B, 2>::from_data(
+            burn::tensor::TensorData::new(host_values, [batch, tokens]),
+            &device,
+        ),
         output_frames,
     })
 }
@@ -191,6 +208,16 @@ pub fn expand_prior_statistics<B: Backend>(
     durations: Tensor<B, 2>,
     max_output_frames: usize,
 ) -> Result<ExpandedPrior<B>, VitsFlowError> {
+    expand_prior_statistics_with_frames(mean, log_scale, durations, None, max_output_frames)
+}
+
+pub(crate) fn expand_prior_statistics_with_frames<B: Backend>(
+    mean: Tensor<B, 3>,
+    log_scale: Tensor<B, 3>,
+    durations: Tensor<B, 2>,
+    known_output_frames: Option<usize>,
+    max_output_frames: usize,
+) -> Result<ExpandedPrior<B>, VitsFlowError> {
     let [batch, channels, tokens] = mean.dims();
     if batch == 0 || channels == 0 || tokens == 0 {
         return Err(input_error(
@@ -214,7 +241,10 @@ pub fn expand_prior_statistics<B: Backend>(
     }
 
     let frame_lengths = durations.clone().sum_dim(1).reshape([batch]);
-    let frames = frame_lengths.clone().max().into_scalar().elem::<f32>() as usize;
+    let frames = match known_output_frames {
+        Some(frames) => frames,
+        None => frame_lengths.clone().max().into_scalar().elem::<f32>() as usize,
+    };
     if frames == 0 {
         return Err(input_error("durations produce zero output frames"));
     }
