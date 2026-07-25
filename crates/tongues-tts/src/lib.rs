@@ -6,6 +6,8 @@ use anyhow::{bail, ensure, Context, Result};
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn::tensor::{Int, Tensor as BurnTensor, TensorData};
 #[cfg(feature = "onnx-tts")]
+use ort::ep::ExecutionProviderDispatch;
+#[cfg(feature = "onnx-tts")]
 use ort::session::{builder::GraphOptimizationLevel, Session};
 #[cfg(feature = "onnx-tts")]
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
@@ -1112,8 +1114,51 @@ impl PhonemeSequence {
 }
 
 #[cfg(feature = "onnx-tts")]
+fn load_onnx_speech_session(
+    model_path: &Path,
+    execution_providers: &[ExecutionProviderDispatch],
+) -> Result<Session> {
+    let builder = Session::builder()
+        .context("failed to create ONNX speech session builder")?
+        .with_intra_threads(1)
+        .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech threads: {error}"))?
+        .with_inter_threads(1)
+        .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech threads: {error}"))?
+        .with_intra_op_spinning(false)
+        .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech spinning: {error}"))?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(|error| {
+            anyhow::anyhow!("failed to configure ONNX speech optimization: {error}")
+        })?;
+    let mut builder = if execution_providers.is_empty() {
+        builder
+    } else {
+        builder
+            .with_execution_providers(execution_providers)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to configure ONNX speech execution providers: {error}")
+            })?
+    };
+    builder
+        .commit_from_file(model_path)
+        .with_context(|| format!("failed to load ONNX speech model {}", model_path.display()))
+}
+
+#[cfg(feature = "onnx-tts")]
 impl OnnxSpeechBackend {
     pub fn load(model_path: impl AsRef<Path>, config: VoiceConfig) -> Result<Self> {
+        Self::load_with_cuda(model_path, config, true)
+    }
+
+    pub fn load_cpu(model_path: impl AsRef<Path>, config: VoiceConfig) -> Result<Self> {
+        Self::load_with_cuda(model_path, config, false)
+    }
+
+    fn load_with_cuda(
+        model_path: impl AsRef<Path>,
+        config: VoiceConfig,
+        use_cuda: bool,
+    ) -> Result<Self> {
         validate_config(&config)?;
         let model_path = model_path.as_ref().to_path_buf();
         ensure!(
@@ -1123,22 +1168,15 @@ impl OnnxSpeechBackend {
         );
         initialize_ort_runtime()?;
 
-        let session = Session::builder()
-            .context("failed to create ONNX speech session builder")?
-            .with_intra_threads(1)
-            .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech threads: {error}"))?
-            .with_inter_threads(1)
-            .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech threads: {error}"))?
-            .with_intra_op_spinning(false)
-            .map_err(|error| anyhow::anyhow!("failed to configure ONNX speech spinning: {error}"))?
-            .with_optimization_level(GraphOptimizationLevel::Disable)
-            .map_err(|error| {
-                anyhow::anyhow!("failed to configure ONNX speech optimization: {error}")
-            })?
-            .commit_from_file(&model_path)
-            .with_context(|| {
-                format!("failed to load ONNX speech model {}", model_path.display())
-            })?;
+        let session = if use_cuda {
+            load_onnx_speech_session(
+                &model_path,
+                &[ort::ep::CUDA::default().build().fail_silently()],
+            )
+            .or_else(|_| load_onnx_speech_session(&model_path, &[]))?
+        } else {
+            load_onnx_speech_session(&model_path, &[])?
+        };
 
         Ok(Self {
             config,
@@ -1420,6 +1458,10 @@ pub struct OnnxSpeechBackend;
 #[cfg(not(feature = "onnx-tts"))]
 impl OnnxSpeechBackend {
     pub fn load(_model_path: impl AsRef<Path>, _config: VoiceConfig) -> Result<Self> {
+        bail!("ONNX speech synthesis requires building with the `onnx-tts` feature")
+    }
+
+    pub fn load_cpu(_model_path: impl AsRef<Path>, _config: VoiceConfig) -> Result<Self> {
         bail!("ONNX speech synthesis requires building with the `onnx-tts` feature")
     }
 

@@ -19,4 +19,4 @@ tongues-wiktionary = { path = "../tongues-wiktionary" }
 
 [features]
 default = ["onnx-tts"]
-onnx-tts = ["dep:ort"]
+onnx-tts = ["dep:ort", "ort/cuda"]

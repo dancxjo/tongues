@@ -125,7 +125,7 @@ fn quiet_output() -> bool {
 
 // ── CLI definition ─────────────────────────────────────────────────────────
 
-/// tongues – neural lexical and speech-front-end model families
+/// tongues – spoken-language modeling, synthesis, and interpretation
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -1763,7 +1763,8 @@ fn cuda_probe_failure_reason() -> Option<String> {
     let result = panic::catch_unwind(|| {
         let device = CudaDevice::default();
         type B = Cuda<f32, i32>;
-        let _tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
+        let tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
+        let _ = tensor.into_data();
     });
     panic::set_hook(default_hook);
 
@@ -1798,26 +1799,35 @@ fn main() -> Result<()> {
     let output_mode = OutputMode::for_command(&command, cli.quiet, cli.verbose);
     set_quiet_output(output_mode.quiet);
 
-    // Determine target device (CUDA with fallback to CPU, or forced CPU)
-    let cuda_failure = if cli.cpu {
-        None
-    } else {
-        cuda_probe_failure_reason()
-    };
-    let device_arg = if cli.cpu {
+    // Determine target device only for commands that use a Burn model. Avoid
+    // initializing a CUDA context for data preparation and other CPU-only work.
+    let needs_device = command_needs_device(&command);
+    let cuda_failure = (!cli.cpu && needs_device)
+        .then(cuda_probe_failure_reason)
+        .flatten();
+    let device_arg = if cli.cpu || !needs_device {
         DeviceArg::Cpu
     } else if cuda_failure.is_none() {
         DeviceArg::Cuda
     } else {
         // Only warn for commands that actually run model computations on the device
         if command_needs_device(&command) && output_mode.verbose() {
-            println!(
+            eprintln!(
                 "Warning: CUDA is not available ({}). Falling back to CPU.",
                 cuda_failure.as_deref().unwrap_or("unknown reason")
             );
         }
         DeviceArg::Cpu
     };
+    if needs_device && output_mode.verbose() {
+        eprintln!(
+            "device: {}",
+            match device_arg {
+                DeviceArg::Cpu => "CPU",
+                DeviceArg::Cuda => "CUDA GPU",
+            }
+        );
+    }
 
     match command {
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
@@ -1970,8 +1980,8 @@ fn main() -> Result<()> {
             warn_legacy_command("repl", "g2p2g repl");
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
-        Commands::Speak(command) => speak::run_speak(command),
-        Commands::Be(command) => cmd_be(command),
+        Commands::Speak(command) => speak::run_speak(command, device_arg),
+        Commands::Be(command) => cmd_be(command, device_arg),
         Commands::SpeakingDemo {
             mode,
             varieties,
@@ -2013,7 +2023,13 @@ fn command_needs_device(command: &Commands) -> bool {
             )
         }
         Commands::Wiktionary { command } => matches!(command, WiktionaryCommands::Train { .. }),
-        Commands::Be(command) => !command.mechanical,
+        Commands::Be(command) => {
+            !command.mechanical || matches!(command.voice_backend, BeVoiceBackend::Onnx)
+        }
+        Commands::Speak(command) => matches!(
+            command.backend,
+            speak::SpeakBackend::Burn | speak::SpeakBackend::Vits | speak::SpeakBackend::Onnx
+        ),
         Commands::Train { .. }
         | Commands::Eval { .. }
         | Commands::Refine { .. }
@@ -3580,8 +3596,23 @@ fn cmd_head2phones_infer(
     Ok(())
 }
 
-fn cmd_be(command: BeCommand) -> Result<()> {
-    let device = NdArrayDevice::Cpu;
+fn cmd_be(command: BeCommand, device_arg: DeviceArg) -> Result<()> {
+    match device_arg {
+        DeviceArg::Cpu => {
+            cmd_be_backend::<CpuInferBackend>(command, NdArrayDevice::Cpu, "CPU", false)
+        }
+        DeviceArg::Cuda => {
+            cmd_be_backend::<CudaInferBackend>(command, CudaDevice::default(), "CUDA", true)
+        }
+    }
+}
+
+fn cmd_be_backend<B: Backend>(
+    command: BeCommand,
+    device: B::Device,
+    device_label: &'static str,
+    use_cuda_voice: bool,
+) -> Result<()> {
     let head2phones = if command.mechanical {
         None
     } else {
@@ -3598,7 +3629,7 @@ fn cmd_be(command: BeCommand) -> Result<()> {
         let model_config: ModelConfig =
             read_json_file(&command.head2phones_model.join("model_config.json"))?;
         let vocab: Vocab = read_json_file(&command.head2phones_model.join("vocab.json"))?;
-        let model = load_model::<CpuInferBackend>(
+        let model = load_model::<B>(
             &model_config,
             &command.head2phones_model.join("model"),
             &device,
@@ -3617,26 +3648,39 @@ fn cmd_be(command: BeCommand) -> Result<()> {
     );
 
     match command.voice_backend {
-        BeVoiceBackend::Onnx => cmd_be_with_onnx(command, head2phones, seams_detector, &device),
+        BeVoiceBackend::Onnx => cmd_be_with_onnx(
+            command,
+            head2phones,
+            seams_detector,
+            &device,
+            device_label,
+            use_cuda_voice,
+        ),
         BeVoiceBackend::Styletts2 => {
-            cmd_be_with_styletts2(command, head2phones, seams_detector, &device)
+            cmd_be_with_styletts2(command, head2phones, seams_detector, &device, device_label)
         }
     }
 }
 
-fn cmd_be_with_onnx(
+fn cmd_be_with_onnx<B: Backend>(
     command: BeCommand,
-    head2phones: Option<(Seq2SeqModel<CpuInferBackend>, Vocab, ModelConfig)>,
+    head2phones: Option<(Seq2SeqModel<B>, Vocab, ModelConfig)>,
     seams_detector: Option<seams::SentenceDetectorDialog>,
-    device: &NdArrayDevice,
+    device: &B::Device,
+    device_label: &str,
+    use_cuda_voice: bool,
 ) -> Result<()> {
     let voice_model = models::ensure_voice_model_available()?;
     let voice_config_path = speech::voice_config_path(&voice_model);
     let voice_config = speech::VoiceConfig::from_json_file(&voice_config_path)?;
-    let mut speech_backend = speech::OnnxSpeechBackend::load(&voice_model, voice_config)?;
+    let mut speech_backend = if use_cuda_voice {
+        speech::OnnxSpeechBackend::load(&voice_model, voice_config)?
+    } else {
+        speech::OnnxSpeechBackend::load_cpu(&voice_model, voice_config)?
+    };
     let player = speak::AudioStreamPlayer::new(speech_backend.sample_rate_hz())
         .context("failed to start CPAL playback")?;
-    log_be_speech_path(&command, "onnx", &voice_model);
+    log_be_speech_path(&command, "onnx", &voice_model, device_label);
     eprintln!("be: cpal output={}", player.description());
 
     let mut total_samples = 0usize;
@@ -3682,11 +3726,12 @@ fn cmd_be_with_onnx(
     Ok(())
 }
 
-fn cmd_be_with_styletts2(
+fn cmd_be_with_styletts2<B: Backend>(
     command: BeCommand,
-    head2phones: Option<(Seq2SeqModel<CpuInferBackend>, Vocab, ModelConfig)>,
+    head2phones: Option<(Seq2SeqModel<B>, Vocab, ModelConfig)>,
     seams_detector: Option<seams::SentenceDetectorDialog>,
-    device: &NdArrayDevice,
+    device: &B::Device,
+    device_label: &str,
 ) -> Result<()> {
     let primary_model = models::ensure_styletts2_model_available()?;
     let model_dir = primary_model
@@ -3705,7 +3750,7 @@ fn cmd_be_with_styletts2(
         .with_diffusion_options(diffusion_opts)
         .context("invalid StyleTTS2 diffusion options")?;
     let player = speak::AudioStreamPlayer::new(24_000).context("failed to start CPAL playback")?;
-    log_be_speech_path(&command, "styletts2", &primary_model);
+    log_be_speech_path(&command, "styletts2", &primary_model, device_label);
     eprintln!(
         "be: styletts2 refs voice={} style={}",
         default_refs.voice.display(),
@@ -3775,7 +3820,12 @@ fn cmd_be_with_styletts2(
     Ok(())
 }
 
-fn log_be_speech_path(command: &BeCommand, backend_label: &str, model_path: &Path) {
+fn log_be_speech_path(
+    command: &BeCommand,
+    backend_label: &str,
+    model_path: &Path,
+    device_label: &str,
+) {
     if command.mechanical {
         eprintln!(
             "be: mechanical seams+phonemicizer variety={} voice_backend={} model={}",
@@ -3785,7 +3835,8 @@ fn log_be_speech_path(command: &BeCommand, backend_label: &str, model_path: &Pat
         );
     } else {
         eprintln!(
-            "be: resident head2phones CPU model={} voice_backend={} model={}",
+            "be: resident head2phones {} model={} voice_backend={} model={}",
+            device_label,
             command.head2phones_model.display(),
             backend_label,
             model_path.display()

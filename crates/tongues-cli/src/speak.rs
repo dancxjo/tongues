@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::tensor::backend::Backend;
+use burn_cuda::{Cuda, CudaDevice};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
+use crate::DeviceArg;
 use speaking::{
     phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
@@ -232,17 +235,24 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
-type BurnBackend = speech::SpeechPipeline<
+type CpuBurnBackend = speech::SpeechPipeline<
     speech::BurnSpeedySpeechAcoustic<NdArray<f32>>,
     speech::VocoderDecoder<speech::BurnHifiganVocoder<NdArray<f32>>>,
 >;
-type VitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
+type CudaBurnBackend = speech::SpeechPipeline<
+    speech::BurnSpeedySpeechAcoustic<Cuda<f32, i32>>,
+    speech::VocoderDecoder<speech::BurnHifiganVocoder<Cuda<f32, i32>>>,
+>;
+type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
+type CudaVitsBackend = speech::BurnVitsSpeech<Cuda<f32, i32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
 
 #[allow(dead_code)]
 enum BackendInstance {
-    Burn(Box<BurnBackend>),
-    Vits(Box<VitsBackend>),
+    BurnCpu(Box<CpuBurnBackend>),
+    BurnCuda(Box<CudaBurnBackend>),
+    VitsCpu(Box<CpuVitsBackend>),
+    VitsCuda(Box<CudaVitsBackend>),
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
@@ -255,6 +265,18 @@ enum BackendInstance {
 }
 
 impl BackendInstance {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::BurnCpu(_) => "burn-cpu",
+            Self::BurnCuda(_) => "burn-cuda",
+            Self::VitsCpu(_) => "vits-cpu",
+            Self::VitsCuda(_) => "vits-cuda",
+            Self::Mock(_) => "mock",
+            Self::StyleTts2 { .. } => "styletts2",
+            Self::Onnx { .. } => "onnx",
+        }
+    }
+
     fn synthesize(
         &mut self,
         plan: &UtterancePlan,
@@ -266,63 +288,17 @@ impl BackendInstance {
         let _ = options;
 
         match self {
-            Self::Burn(ref mut backend) => {
-                anyhow::ensure!(
-                    options.speed.is_finite() && options.speed > 0.0,
-                    "--speed must be finite and positive"
-                );
-                let request = speech::SpeechSynthesisRequest {
-                    plan: plan.clone(),
-                    options: speech::SynthesisOptions {
-                        speaker_id: options.speaker_id,
-                        split_sentences: true,
-                        length_scale: Some((1.0 / options.speed) as f32),
-                        noise_scale: None,
-                        noise_w: None,
-                    },
-                };
-                let waveform = backend.synthesize(&request)?;
-                if let Some(ref mut cb) = on_audio {
-                    cb(&waveform.samples);
-                }
-                Ok(SpeechSynthesisArtifact {
-                    sample_rate_hz: waveform.contract.sample_rate_hz,
-                    pcm: waveform.samples,
-                    timings: Vec::new(),
-                })
+            Self::BurnCpu(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
             }
-            Self::Vits(ref mut backend) => {
-                anyhow::ensure!(
-                    options.speed.is_finite() && options.speed > 0.0,
-                    "--speed must be finite and positive"
-                );
-                let request = speech::SpeechSynthesisRequest {
-                    plan: plan.clone(),
-                    options: speech::SynthesisOptions {
-                        speaker_id: options.speaker_id,
-                        split_sentences: true,
-                        length_scale: Some((1.0 / options.speed) as f32),
-                        noise_scale: None,
-                        noise_w: None,
-                    },
-                };
-                let mut pcm = Vec::new();
-                speech::SpeechSynthesisEngine::synthesize_plan_streaming(
-                    backend.as_mut(),
-                    &request,
-                    &mut |chunk: speech::AudioChunk| {
-                        pcm.extend(&chunk.pcm_mono_f32);
-                        if let Some(ref mut cb) = on_audio {
-                            cb(&chunk.pcm_mono_f32);
-                        }
-                        Ok(())
-                    },
-                )?;
-                Ok(SpeechSynthesisArtifact {
-                    sample_rate_hz: speech::SpeechSynthesisEngine::sample_rate_hz(backend.as_ref()),
-                    pcm,
-                    timings: Vec::new(),
-                })
+            Self::BurnCuda(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+            }
+            Self::VitsCpu(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
+            }
+            Self::VitsCuda(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio)
             }
             Self::Mock(ref mut backend) => {
                 let styletts2_plan = prepare_styletts2_plan(
@@ -469,6 +445,42 @@ impl BackendInstance {
     }
 }
 
+fn synthesize_burn_engine(
+    backend: &mut dyn speech::SpeechSynthesisEngine,
+    plan: &UtterancePlan,
+    options: &SpeechSynthesisOptions,
+    mut on_audio: AudioCallback<'_>,
+) -> Result<SpeechSynthesisArtifact> {
+    anyhow::ensure!(
+        options.speed.is_finite() && options.speed > 0.0,
+        "--speed must be finite and positive"
+    );
+    let request = speech::SpeechSynthesisRequest {
+        plan: plan.clone(),
+        options: speech::SynthesisOptions {
+            speaker_id: options.speaker_id,
+            split_sentences: true,
+            length_scale: Some((1.0 / options.speed) as f32),
+            noise_scale: None,
+            noise_w: None,
+        },
+    };
+    let sample_rate_hz = backend.sample_rate_hz();
+    let mut pcm = Vec::new();
+    backend.synthesize_plan_streaming(&request, &mut |chunk: speech::AudioChunk| {
+        pcm.extend(&chunk.pcm_mono_f32);
+        if let Some(ref mut cb) = on_audio {
+            cb(&chunk.pcm_mono_f32);
+        }
+        Ok(())
+    })?;
+    Ok(SpeechSynthesisArtifact {
+        sample_rate_hz,
+        pcm,
+        timings: Vec::new(),
+    })
+}
+
 fn split_into_sentences(text: &str) -> Vec<String> {
     let mut sentences = Vec::new();
     let mut current = String::new();
@@ -506,21 +518,13 @@ fn split_into_sentences(text: &str) -> Vec<String> {
     sentences
 }
 
-pub fn run_speak(command: SpeakCommand) -> Result<()> {
+pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
     let options = SpeechSynthesisOptions::from(&command);
 
     if command.list_speakers {
         print_available_speakers(&command)?;
         return Ok(());
     }
-
-    let backend_label = match command.backend {
-        SpeakBackend::Burn => "burn",
-        SpeakBackend::Vits => "vits",
-        SpeakBackend::Mock => "mock",
-        SpeakBackend::Styletts2 => "styletts2",
-        SpeakBackend::Onnx => "onnx",
-    };
 
     let target_sample_rate = match command.backend {
         SpeakBackend::Burn => 22_050,
@@ -538,20 +542,26 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 crate::models::ensure_model_available(crate::models::DEFAULT_NEURAL_VOCODER_ID)?;
             let acoustic_config = component_config_path(&acoustic_checkpoint)?;
             let vocoder_config = component_config_path(&vocoder_checkpoint)?;
-            let device = NdArrayDevice::Cpu;
-            let acoustic = speech::BurnSpeedySpeechAcoustic::load(
-                acoustic_config,
-                acoustic_checkpoint,
-                device,
-            )
-            .context("failed to load Burn SpeedySpeech acoustic model")?;
-            let vocoder =
-                speech::BurnHifiganVocoder::load(vocoder_config, vocoder_checkpoint, device)
-                    .context("failed to load Burn HiFi-GAN vocoder")?;
-            BackendInstance::Burn(Box::new(
-                speech::SpeechPipeline::new(acoustic, speech::VocoderDecoder::new(vocoder))
-                    .context("Burn speech components are incompatible")?,
-            ))
+            match device_arg {
+                DeviceArg::Cpu => {
+                    BackendInstance::BurnCpu(Box::new(load_burn_pipeline::<NdArray<f32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        NdArrayDevice::Cpu,
+                    )?))
+                }
+                DeviceArg::Cuda => {
+                    BackendInstance::BurnCuda(Box::new(load_burn_pipeline::<Cuda<f32, i32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        CudaDevice::default(),
+                    )?))
+                }
+            }
         }
         SpeakBackend::Vits => {
             let checkpoint = crate::models::ensure_model_available(
@@ -562,10 +572,26 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 .parent()
                 .context("VITS checkpoint path has no parent directory")?
                 .join("speaker_ids.json");
-            let backend =
-                speech::BurnVitsSpeech::load(config, checkpoint, speakers, NdArrayDevice::Cpu)
-                    .context("failed to load Burn VITS speech model")?;
-            BackendInstance::Vits(Box::new(backend))
+            match device_arg {
+                DeviceArg::Cpu => BackendInstance::VitsCpu(Box::new(
+                    speech::BurnVitsSpeech::load(
+                        &config,
+                        &checkpoint,
+                        &speakers,
+                        NdArrayDevice::Cpu,
+                    )
+                    .context("failed to load Burn VITS speech model on CPU")?,
+                )),
+                DeviceArg::Cuda => BackendInstance::VitsCuda(Box::new(
+                    speech::BurnVitsSpeech::load(
+                        &config,
+                        &checkpoint,
+                        &speakers,
+                        CudaDevice::default(),
+                    )
+                    .context("failed to load Burn VITS speech model on CUDA")?,
+                )),
+            }
         }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
@@ -608,7 +634,10 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 let primary_model = crate::models::ensure_voice_model_available()?;
                 let config_path = voice_config_path(&primary_model);
                 let config = VoiceConfig::from_json_file(&config_path)?;
-                let backend = OnnxSpeechBackend::load(&primary_model, config)?;
+                let backend = match device_arg {
+                    DeviceArg::Cpu => OnnxSpeechBackend::load_cpu(&primary_model, config)?,
+                    DeviceArg::Cuda => OnnxSpeechBackend::load(&primary_model, config)?,
+                };
                 BackendInstance::Onnx(backend)
             }
             #[cfg(not(feature = "onnx-tts"))]
@@ -617,6 +646,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             }
         }
     };
+    let backend_label = backend.label();
 
     let player = if command.output.is_none() {
         match AudioStreamPlayer::new(target_sample_rate) {
@@ -863,6 +893,33 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn load_burn_pipeline<B: Backend>(
+    acoustic_config: &Path,
+    acoustic_checkpoint: &Path,
+    vocoder_config: &Path,
+    vocoder_checkpoint: &Path,
+    device: B::Device,
+) -> Result<
+    speech::SpeechPipeline<
+        speech::BurnSpeedySpeechAcoustic<B>,
+        speech::VocoderDecoder<speech::BurnHifiganVocoder<B>>,
+    >,
+>
+where
+    B::Device: Clone,
+{
+    let acoustic = speech::BurnSpeedySpeechAcoustic::load(
+        acoustic_config,
+        acoustic_checkpoint,
+        device.clone(),
+    )
+    .context("failed to load Burn SpeedySpeech acoustic model")?;
+    let vocoder = speech::BurnHifiganVocoder::load(vocoder_config, vocoder_checkpoint, device)
+        .context("failed to load Burn HiFi-GAN vocoder")?;
+    speech::SpeechPipeline::new(acoustic, speech::VocoderDecoder::new(vocoder))
+        .context("Burn speech components are incompatible")
 }
 
 fn print_available_speakers(command: &SpeakCommand) -> Result<()> {

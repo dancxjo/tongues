@@ -15,9 +15,9 @@ race *args:
 continue *args:
     @cargo run -q -p xtask -- continue "$@"
 
-# Stream an Ollama story through resident CPU head2phones and ONNX speech playback
+# Stream an Ollama story through resident head2phones and ONNX speech playback
 be *args:
-    @cargo run -q --bin tongues -- --cpu be "$@"
+    @cargo run -q --bin tongues -- be "$@"
 
 # Stream stdin through the sentence parser and emit one sentence per line
 parse *args:
