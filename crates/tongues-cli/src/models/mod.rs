@@ -12,9 +12,9 @@ pub use download::{
     StyleTts2ReferenceAudioPaths,
 };
 pub use manifest::{
-    bundle_multimodal_projector_asset, ModelAsset, ModelBundle, DEFAULT_ASR_MODEL_ID,
-    DEFAULT_FACE_MODEL_ID, DEFAULT_LLM_MODEL_ID, DEFAULT_STYLETTS2_MODEL_ID,
-    DEFAULT_VOICE_MODEL_ID, MODEL_ASSETS, MODEL_BUNDLES,
+    bundle_multimodal_projector_asset, ModelAsset, ModelBundle, DEFAULT_ACOUSTIC_MODEL_ID,
+    DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID, DEFAULT_LLM_MODEL_ID, DEFAULT_NEURAL_VOCODER_ID,
+    DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID, MODEL_ASSETS, MODEL_BUNDLES,
 };
 pub use selection::{
     selected_bundle, selected_bundle_for_kind, selected_llm_model_label, selected_llm_model_path,

@@ -52,6 +52,8 @@ pub const DEFAULT_FACE_MODEL_ID: &str = "face-insightface-buffalo-l";
 pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-large-v3-turbo";
 pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
 pub const DEFAULT_VOICE_MODEL_ID: &str = "voice-ljspeech-high";
+pub const DEFAULT_ACOUSTIC_MODEL_ID: &str = "coqui-speedy-speech-ljspeech";
+pub const DEFAULT_NEURAL_VOCODER_ID: &str = "coqui-hifigan-v2-ljspeech";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
@@ -480,7 +482,7 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         aliases: &["ljspeech", "lj", "voice", "voice-ljspeech", "coqui-default"],
     },
     ModelBundle {
-        id: "coqui-speedy-speech-ljspeech",
+        id: DEFAULT_ACOUSTIC_MODEL_ID,
         display_name: "Coqui SpeedySpeech LJSpeech",
         kind: ModelKind::AcousticModel,
         primary_asset_id: "coqui-speedy-speech-ljspeech-release",
@@ -488,7 +490,7 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         aliases: &["speedy-speech", "speedyspeech", "coqui-speedy-speech"],
     },
     ModelBundle {
-        id: "coqui-hifigan-v2-ljspeech",
+        id: DEFAULT_NEURAL_VOCODER_ID,
         display_name: "Coqui HiFi-GAN v2 LJSpeech",
         kind: ModelKind::NeuralVocoder,
         primary_asset_id: "coqui-hifigan-v2-ljspeech-release",

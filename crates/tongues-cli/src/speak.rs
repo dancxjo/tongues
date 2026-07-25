@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
@@ -33,7 +34,7 @@ pub struct SpeakCommand {
         help = "Language or pronunciation variety tag"
     )]
     pub variety: String,
-    #[arg(long, value_enum, default_value_t = SpeakBackend::Styletts2, help = "Speech backend to use")]
+    #[arg(long, value_enum, default_value_t = SpeakBackend::Burn, help = "Speech backend to use")]
     pub backend: SpeakBackend,
     #[arg(
         long,
@@ -122,6 +123,7 @@ pub struct SpeakCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum SpeakBackend {
+    Burn,
     Mock,
     Styletts2,
     Onnx,
@@ -229,8 +231,15 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
+type BurnBackend = speech::SpeechPipeline<
+    speech::BurnSpeedySpeechAcoustic<NdArray<f32>>,
+    speech::VocoderDecoder<speech::BurnHifiganVocoder<NdArray<f32>>>,
+>;
+type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
+
 #[allow(dead_code)]
 enum BackendInstance {
+    Burn(Box<BurnBackend>),
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
@@ -247,13 +256,38 @@ impl BackendInstance {
         &mut self,
         plan: &UtterancePlan,
         options: &SpeechSynthesisOptions,
-        mut on_audio: Option<&mut dyn FnMut(&[f32])>,
+        mut on_audio: AudioCallback<'_>,
         command: &SpeakCommand,
     ) -> Result<SpeechSynthesisArtifact> {
         #[cfg(not(any(feature = "styletts2-onnx", feature = "onnx-tts")))]
         let _ = options;
 
         match self {
+            Self::Burn(ref mut backend) => {
+                anyhow::ensure!(
+                    options.speed.is_finite() && options.speed > 0.0,
+                    "--speed must be finite and positive"
+                );
+                let request = speech::SpeechSynthesisRequest {
+                    plan: plan.clone(),
+                    options: speech::SynthesisOptions {
+                        speaker_id: options.speaker_id,
+                        split_sentences: true,
+                        length_scale: Some((1.0 / options.speed) as f32),
+                        noise_scale: None,
+                        noise_w: None,
+                    },
+                };
+                let waveform = backend.synthesize(&request)?;
+                if let Some(ref mut cb) = on_audio {
+                    cb(&waveform.samples);
+                }
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: waveform.contract.sample_rate_hz,
+                    pcm: waveform.samples,
+                    timings: Vec::new(),
+                })
+            }
             Self::Mock(ref mut backend) => {
                 let styletts2_plan = prepare_styletts2_plan(
                     plan,
@@ -445,18 +479,42 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     }
 
     let backend_label = match command.backend {
+        SpeakBackend::Burn => "burn",
         SpeakBackend::Mock => "mock",
         SpeakBackend::Styletts2 => "styletts2",
         SpeakBackend::Onnx => "onnx",
     };
 
     let target_sample_rate = match command.backend {
+        SpeakBackend::Burn => 22_050,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => 22050,
     };
 
     let mut backend = match command.backend {
+        SpeakBackend::Burn => {
+            let acoustic_checkpoint =
+                crate::models::ensure_model_available(crate::models::DEFAULT_ACOUSTIC_MODEL_ID)?;
+            let vocoder_checkpoint =
+                crate::models::ensure_model_available(crate::models::DEFAULT_NEURAL_VOCODER_ID)?;
+            let acoustic_config = component_config_path(&acoustic_checkpoint)?;
+            let vocoder_config = component_config_path(&vocoder_checkpoint)?;
+            let device = NdArrayDevice::Cpu;
+            let acoustic = speech::BurnSpeedySpeechAcoustic::load(
+                acoustic_config,
+                acoustic_checkpoint,
+                device,
+            )
+            .context("failed to load Burn SpeedySpeech acoustic model")?;
+            let vocoder =
+                speech::BurnHifiganVocoder::load(vocoder_config, vocoder_checkpoint, device)
+                    .context("failed to load Burn HiFi-GAN vocoder")?;
+            BackendInstance::Burn(Box::new(
+                speech::SpeechPipeline::new(acoustic, speech::VocoderDecoder::new(vocoder))
+                    .context("Burn speech components are incompatible")?,
+            ))
+        }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
         }
@@ -590,11 +648,12 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 p.append(chunk);
             }
         };
-        let cb_arg: Option<&mut dyn FnMut(&[f32])> = Some(&mut audio_callback);
+        let cb_arg: AudioCallback<'_> = Some(&mut audio_callback);
 
         let artifact = backend.synthesize(&plan, &options, cb_arg, &command)?;
 
         let backend_symbols = match command.backend {
+            SpeakBackend::Burn => format_phones(&phonemicized),
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
                 let styletts2_plan = prepare_styletts2_plan(
                     &plan,
@@ -653,6 +712,9 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 
         println!("chunks:");
         match command.backend {
+            SpeakBackend::Burn => {
+                println!("  1: {}", format_phones(&phonemicized));
+            }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
                 let styletts2_plan = prepare_styletts2_plan(
                     &plan,
@@ -752,6 +814,10 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 }
 
 fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
+    if matches!(command.backend, SpeakBackend::Burn) {
+        println!("speakers: <none> (single-speaker acoustic model)");
+        return Ok(());
+    }
     anyhow::ensure!(
         matches!(command.backend, SpeakBackend::Onnx),
         "--list-speakers is currently available for --backend onnx"
@@ -779,9 +845,22 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     }
 }
 
+fn component_config_path(checkpoint_path: &Path) -> Result<PathBuf> {
+    let config_path = checkpoint_path
+        .parent()
+        .context("speech component checkpoint has no parent directory")?
+        .join("config.json");
+    anyhow::ensure!(
+        config_path.is_file(),
+        "speech component config is missing: {}",
+        config_path.display()
+    );
+    Ok(config_path)
+}
+
 pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
     UtterancePlan {
-        id: UtteranceId("styletts2.demo.utterance".into()),
+        id: UtteranceId("tongues.speak.utterance".into()),
         variety: output.variety.clone(),
         speaker: None,
         intended_text: Some(output.text.clone()),
@@ -796,7 +875,7 @@ pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> Ut
         style: None,
         provenance: EvidenceProvenance {
             source: EvidenceSource::TtsPlan,
-            method: "tongues speak phonemicized StyleTTS2 plan".into(),
+            method: "tongues speak phonemicized plan".into(),
             version: Some("0.1".into()),
         },
     }
@@ -865,8 +944,10 @@ fn format_symbols_with_boundary_markers(
         let next_word_index = symbols
             .get(index + 1)
             .and_then(|(_, word_index)| *word_index);
-        if word_index.is_some() && word_index != next_word_index {
-            for marker in boundary_markers_after_word(boundaries, word_index.expect("checked")) {
+        if let Some(word_index) =
+            word_index.filter(|word_index| Some(*word_index) != next_word_index)
+        {
+            for marker in boundary_markers_after_word(boundaries, word_index) {
                 symbol.push_str(marker);
             }
         }

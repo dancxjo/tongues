@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use crate::models::manifest::{
     bundle_archive_members, bundle_entrypoint_relative_path, bundle_primary_asset,
     bundle_required_assets, find_archive, find_asset, find_bundle, ModelArchive, ModelAsset,
-    ModelBundle, ModelKind, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
-    DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
+    ModelBundle, ModelKind, DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
+    DEFAULT_NEURAL_VOCODER_ID, DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_mortar_home, selected_bundle, selected_llm_model_path,
@@ -206,8 +206,10 @@ fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
         find_bundle(DEFAULT_FACE_MODEL_ID)
             .context("default face model bundle is not registered")?,
         find_bundle(DEFAULT_ASR_MODEL_ID).context("default ASR model bundle is not registered")?,
-        find_bundle(DEFAULT_STYLETTS2_MODEL_ID)
-            .context("default StyleTTS2 model bundle is not registered")?,
+        find_bundle(DEFAULT_ACOUSTIC_MODEL_ID)
+            .context("default acoustic model bundle is not registered")?,
+        find_bundle(DEFAULT_NEURAL_VOCODER_ID)
+            .context("default neural vocoder bundle is not registered")?,
         find_bundle(DEFAULT_VOICE_MODEL_ID)
             .context("default voice model bundle is not registered")?,
     ])
@@ -593,14 +595,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_runtime_fetch_includes_styletts2_bundle() {
+    fn default_runtime_fetch_includes_native_burn_speech_components() {
         let ids = default_runtime_bundles()
             .expect("default runtime bundles")
             .into_iter()
             .map(|bundle| bundle.id)
             .collect::<Vec<_>>();
 
-        assert!(ids.contains(&DEFAULT_STYLETTS2_MODEL_ID));
+        assert!(ids.contains(&DEFAULT_ACOUSTIC_MODEL_ID));
+        assert!(ids.contains(&DEFAULT_NEURAL_VOCODER_ID));
         assert!(ids.contains(&DEFAULT_VOICE_MODEL_ID));
     }
 }
