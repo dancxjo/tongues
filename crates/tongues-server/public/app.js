@@ -1682,11 +1682,63 @@ async function initStyleTts2() {
     const btn = byId('submit-btn');
     const resultContainer = byId('result-container');
     const audioPlayer = byId('audio-player');
+    const runtimeState = byId('speech-runtime-state');
+    const runtimeDetail = byId('speech-runtime-detail');
+    const reloadRuntimeButton = byId('reload-speech-runtime');
 
     if (!form) return;
 
     const emotions = new Map();
     const samples = new Map();
+
+    const renderRuntime = (runtime) => {
+        const state = runtime.state || (runtime.busy ? 'busy' : 'idle');
+        runtimeState.dataset.state = state;
+        runtimeState.textContent = state;
+
+        const details = [`${runtime.device || 'unknown'} device`];
+        if (Number.isInteger(runtime.active) && Number.isInteger(runtime.queued)) {
+            details.push(`${runtime.active} active · ${runtime.queued} queued · ${runtime.capacity} max`);
+        }
+        if ((runtime.loaded || []).length > 0) {
+            details.push(`loaded: ${runtime.loaded.join(', ')}`);
+        }
+        const failures = Object.entries(runtime.failed || {});
+        if (failures.length > 0) {
+            details.push(failures.map(([engine, error]) => `${engine}: ${error}`).join(' · '));
+        } else if (state === 'idle') {
+            details.push('models load on first request');
+        }
+        runtimeDetail.textContent = details.join(' · ');
+    };
+
+    const loadRuntime = async () => {
+        const response = await fetch('/api/speech/runtime', { cache: 'no-store' });
+        if (!response.ok) throw new Error(await response.text());
+        const runtime = await response.json();
+        renderRuntime(runtime);
+        return runtime;
+    };
+
+    reloadRuntimeButton.addEventListener('click', async () => {
+        reloadRuntimeButton.classList.add('loading');
+        reloadRuntimeButton.disabled = true;
+        try {
+            const response = await fetch('/api/speech/runtime/reload', { method: 'POST' });
+            if (!response.ok) throw new Error(await response.text());
+            renderRuntime(await response.json());
+        } catch (error) {
+            runtimeState.dataset.state = 'failed';
+            runtimeState.textContent = 'failed';
+            runtimeDetail.textContent = `Reload failed: ${error.message}`;
+        } finally {
+            reloadRuntimeButton.classList.remove('loading');
+            reloadRuntimeButton.disabled = false;
+            loadRuntime().catch((error) => {
+                runtimeDetail.textContent = `Runtime status unavailable: ${error.message}`;
+            });
+        }
+    });
 
     const numericControls = [
         ['diffusion_steps', 'diffusion-steps-val', 0],
@@ -1900,12 +1952,21 @@ async function initStyleTts2() {
             console.error('Failed to load linguistic varieties', err);
             byId('variety').innerHTML = '<option value="">Variety registry unavailable</option>';
         }),
+        loadRuntime().catch((err) => {
+            console.error('Failed to load speech runtime', err);
+            runtimeState.dataset.state = 'failed';
+            runtimeState.textContent = 'unavailable';
+            runtimeDetail.textContent = `Runtime status unavailable: ${err.message}`;
+        }),
     ]);
 
     byId('backend').addEventListener('change', () => {
         loadSpeakers().catch((err) => {
             console.error('Failed to load speech speakers', err);
             byId('speaker-detail').textContent = 'Failed to load named speakers';
+        });
+        loadRuntime().catch((err) => {
+            console.error('Failed to refresh speech runtime', err);
         });
     });
 
@@ -1922,6 +1983,10 @@ async function initStyleTts2() {
         btn.classList.add('loading');
         btn.disabled = true;
         resultContainer.classList.add('hidden');
+        loadRuntime().catch(() => {});
+        const runtimePoll = window.setInterval(() => {
+            loadRuntime().catch(() => {});
+        }, 750);
 
         try {
             const payload = {
@@ -1980,8 +2045,12 @@ async function initStyleTts2() {
         } catch (err) {
             alert(`Synthesis Error: ${err.message}`);
         } finally {
+            window.clearInterval(runtimePoll);
             btn.classList.remove('loading');
             btn.disabled = false;
+            loadRuntime().catch((err) => {
+                console.error('Failed to refresh speech runtime', err);
+            });
         }
     });
 }

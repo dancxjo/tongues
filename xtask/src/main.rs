@@ -1,3 +1,4 @@
+use rand::seq::SliceRandom;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,15 @@ fn run() -> Result<(), String> {
                 continue_stream(args)
             }
         }
+        Some("speech-demo") => {
+            let args = args.collect::<Vec<_>>();
+            if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+                print!("{}", speech_demo_usage());
+                Ok(())
+            } else {
+                speech_demo(args)
+            }
+        }
         Some("-h") | Some("--help") | None => {
             print!("{}", usage());
             Ok(())
@@ -56,7 +66,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n  continue [options]       Generate text, phones, and speech chunks continuously\n"
+    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n  continue [options]       Generate text, phones, and speech chunks continuously\n  speech-demo [options]    Run every speech backend in one resident process\n"
 }
 
 fn race_usage() -> &'static str {
@@ -65,6 +75,10 @@ fn race_usage() -> &'static str {
 
 fn continue_usage() -> &'static str {
     "Usage: cargo xtask continue [options]\n\nOptions:\n  --cpu                  Force CPU for model-backed commands\n  --skip-build           Do not build the tongues binary first\n  --forever              Run until interrupted\n  --chunks <n>           Number of chunks to generate (default: 8)\n  --sleep-ms <n>         Delay between chunks (default: 250)\n  --speak-backend <name> Speech backend passed to `tongues speak` (default: mock)\n  --out-dir <path>       Directory for generated WAV files (default: runs/head2phones/continue)\n"
+}
+
+fn speech_demo_usage() -> &'static str {
+    "Usage: cargo xtask speech-demo [options]\n\nOptions:\n  --cpu                  Force CPU inference\n  --skip-build           Reuse the existing target/release/tongues binary\n  --output-dir <path>    Write WAVs instead of playing audio\n  --timings              Emit startup and inference timing JSON\n  --quality <preset>     StyleTTS2 quality: fast (default) or balanced\n  --quiet                Silence normal CLI progress output\n  --verbose              Show device and diagnostic progress output\n"
 }
 
 #[derive(Debug)]
@@ -256,6 +270,60 @@ impl ScorecardRow {
         } else {
             "Still haunted"
         }
+    }
+}
+
+fn speech_demo(raw_args: Vec<String>) -> Result<(), String> {
+    let mut skip_build = false;
+    let mut forwarded_args = Vec::new();
+    for arg in raw_args {
+        if arg == "--skip-build" {
+            skip_build = true;
+        } else {
+            forwarded_args.push(arg);
+        }
+    }
+
+    if !skip_build {
+        println!("speech-demo: building the optimized tongues binary once");
+        run_release_build()?;
+    }
+    let tongues = release_tongues_bin_path();
+    if !tongues.exists() {
+        return Err(format!(
+            "{} does not exist; run without --skip-build first",
+            tongues.display()
+        ));
+    }
+
+    let mut sentences = [
+        "Morning light rested on the cedar trees while the kettle began to sing.",
+        "A clear river curved through the valley beneath a patient summer sky.",
+        "Fresh bread cooled by the window as music drifted in from the garden.",
+        "The old observatory opened its dome to a field of quiet stars.",
+        "Rain polished the streets, and every lamp made a small golden harbor.",
+        "Beyond the orchard, a train carried warm letters toward the coast.",
+        "She found a blue feather on the path and tucked it into her notebook.",
+        "At dusk, the library windows glowed softly above the sleeping square.",
+    ];
+    sentences.shuffle(&mut rand::thread_rng());
+
+    println!(
+        "speech-demo: starting one resident process for all backends ({})",
+        tongues.display()
+    );
+    let mut process = Command::new(&tongues);
+    process.arg("speech-demo").args(forwarded_args);
+    for sentence in sentences.into_iter().take(6) {
+        process.args(["--sentence", sentence]);
+    }
+    let status = process
+        .status()
+        .map_err(|error| format!("starting {}: {error}", tongues.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("resident speech demo failed with {status}"))
     }
 }
 
@@ -1059,6 +1127,26 @@ fn run_build() -> Result<(), String> {
     }
 }
 
+fn run_release_build() -> Result<(), String> {
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "--quiet",
+            "--release",
+            "--package",
+            "tongues-cli",
+            "--bin",
+            "tongues",
+        ])
+        .status()
+        .map_err(|error| format!("starting release cargo build: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("release cargo build failed with {status}"))
+    }
+}
+
 fn round_trip_g2p2g(
     tongues: &Path,
     config: &RaceConfig,
@@ -1540,6 +1628,15 @@ fn default_race_words() -> Vec<String> {
 fn tongues_bin_path() -> PathBuf {
     PathBuf::from("target")
         .join("debug")
+        .join(format!("tongues{}", env::consts::EXE_SUFFIX))
+}
+
+fn release_tongues_bin_path() -> PathBuf {
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"));
+    target_dir
+        .join("release")
         .join(format!("tongues{}", env::consts::EXE_SUFFIX))
 }
 

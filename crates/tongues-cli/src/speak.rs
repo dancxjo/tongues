@@ -138,7 +138,65 @@ pub struct SpeakCommand {
     pub fail_on_guessed_pronunciation: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+impl Default for SpeakCommand {
+    fn default() -> Self {
+        Self {
+            text: None,
+            variety: "en-US".into(),
+            backend: SpeakBackend::Burn,
+            output: None,
+            sample_rate_hz: 24_000,
+            speaker: None,
+            speaker_id: None,
+            list_speakers: false,
+            voice_wav: None,
+            style_wav: None,
+            quality: SpeakQuality::Balanced,
+            diffusion_steps: None,
+            speaker_reference_strength: None,
+            style_reference_strength: None,
+            style_alpha: DEFAULT_STYLE_ALPHA,
+            style_beta: DEFAULT_STYLE_BETA,
+            emotion_signatures: None,
+            emotion: None,
+            emotion_strength: 1.0,
+            embedding_scale: 1.0,
+            style_seed: 0,
+            speed: DEFAULT_SPEED,
+            noise_scale: None,
+            duration_noise_scale: None,
+            seed: None,
+            debug_pronunciation: false,
+            timings: false,
+            benchmark_runs: 1,
+            max_tts_symbols: DEFAULT_MAX_TTS_SYMBOLS,
+            no_tts_chunking: false,
+            fail_on_guessed_pronunciation: false,
+        }
+    }
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct SpeechDemoCommand {
+    #[arg(
+        long = "sentence",
+        help = "Sentence supplied by xtask; repeat exactly six times"
+    )]
+    pub sentences: Vec<String>,
+    #[arg(long, help = "Write WAVs here instead of playing them")]
+    pub output_dir: Option<PathBuf>,
+    #[arg(long, help = "Emit startup and inference timing JSON")]
+    pub timings: bool,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SpeakQuality::Fast,
+        help = "StyleTTS2 quality preset (the demo defaults to fast)"
+    )]
+    pub quality: SpeakQuality,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum SpeakBackend {
     Burn,
     Vits,
@@ -278,6 +336,13 @@ enum BackendInstance {
     Onnx(speech::OnnxSpeechBackend),
     #[cfg(not(feature = "onnx-tts"))]
     Onnx,
+}
+
+struct BackendStartupProfile {
+    cache_check_ms: f64,
+    model_load_ms: f64,
+    model_load_profile: Vec<speech::ModelLoadProfileEvent>,
+    cold_start_ms: f64,
 }
 
 impl BackendInstance {
@@ -578,31 +643,16 @@ fn split_into_sentences(text: &str) -> Vec<String> {
     sentences
 }
 
-pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
-    anyhow::ensure!(
-        (1..=32).contains(&command.benchmark_runs),
-        "--benchmark-runs must be between 1 and 32"
-    );
-    let options = SpeechSynthesisOptions::from(&command);
-
-    if command.list_speakers {
-        print_available_speakers(&command)?;
-        return Ok(());
-    }
-
-    let target_sample_rate = match command.backend {
-        SpeakBackend::Burn => 22_050,
-        SpeakBackend::Vits => 22_050,
-        SpeakBackend::Mock => command.sample_rate_hz,
-        SpeakBackend::Styletts2 => command.sample_rate_hz,
-        SpeakBackend::Onnx => 22050,
-    };
-
+fn load_backend(
+    command: &SpeakCommand,
+    device_arg: DeviceArg,
+) -> Result<(BackendInstance, BackendStartupProfile)> {
+    let options = SpeechSynthesisOptions::from(command);
     let startup_started = Instant::now();
     let mut cache_check_ms = 0.0;
     let mut model_load_ms = 0.0;
     let mut model_load_profile = Vec::new();
-    let mut backend = match command.backend {
+    let backend = match command.backend {
         SpeakBackend::Burn => {
             let started = Instant::now();
             let acoustic_checkpoint =
@@ -728,17 +778,55 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
             }
         }
     };
-    let backend_label = backend.label();
     let cold_start_ms = startup_started.elapsed().as_secs_f64() * 1_000.0;
+    Ok((
+        backend,
+        BackendStartupProfile {
+            cache_check_ms,
+            model_load_ms,
+            model_load_profile,
+            cold_start_ms,
+        },
+    ))
+}
+
+pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
+    anyhow::ensure!(
+        (1..=32).contains(&command.benchmark_runs),
+        "--benchmark-runs must be between 1 and 32"
+    );
+    if command.list_speakers {
+        print_available_speakers(&command)?;
+        return Ok(());
+    }
+
+    let (mut backend, startup) = load_backend(&command, device_arg)?;
+    run_speak_with_backend(command, &mut backend, &startup)
+}
+
+fn run_speak_with_backend(
+    command: SpeakCommand,
+    backend: &mut BackendInstance,
+    startup: &BackendStartupProfile,
+) -> Result<()> {
+    let options = SpeechSynthesisOptions::from(&command);
+    let target_sample_rate = match command.backend {
+        SpeakBackend::Burn => 22_050,
+        SpeakBackend::Vits => 22_050,
+        SpeakBackend::Mock => command.sample_rate_hz,
+        SpeakBackend::Styletts2 => command.sample_rate_hz,
+        SpeakBackend::Onnx => 22_050,
+    };
+    let backend_label = backend.label();
     if command.timings {
         println!(
             "startup_profile_json: {}",
             serde_json::json!({
                 "backend": backend_label,
-                "download_cache_check_ms": cache_check_ms,
-                "config_model_construction_weight_upload_ms": model_load_ms,
-                "model_load_stages": model_load_profile,
-                "total_cold_start_ms": cold_start_ms,
+                "download_cache_check_ms": startup.cache_check_ms,
+                "config_model_construction_weight_upload_ms": startup.model_load_ms,
+                "model_load_stages": &startup.model_load_profile,
+                "total_cold_start_ms": startup.cold_start_ms,
             })
         );
     }
@@ -846,8 +934,9 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
             let elapsed_ms = synthesis_started.elapsed().as_secs_f64() * 1_000.0;
             let audio_seconds = artifact.pcm.len() as f64 / artifact.sample_rate_hz as f64;
             let real_time_factor = elapsed_ms / 1_000.0 / audio_seconds;
-            let cold_end_to_end_ms = (run_index == 0)
-                .then_some(cold_start_ms + planning_ms + diagnostic_projection_ms + elapsed_ms);
+            let cold_end_to_end_ms = (run_index == 0).then_some(
+                startup.cold_start_ms + planning_ms + diagnostic_projection_ms + elapsed_ms,
+            );
             if command.timings {
                 println!(
                     "inference_profile_json: {}",
@@ -1029,7 +1118,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
     if let Some(ref text) = command.text {
         process_chunk(
             text,
-            &mut backend,
+            &mut *backend,
             &player,
             &mut all_pcm,
             &mut all_timings,
@@ -1046,7 +1135,7 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
                 if !sentence.is_empty() {
                     process_chunk(
                         &sentence,
-                        &mut backend,
+                        &mut *backend,
                         &player,
                         &mut all_pcm,
                         &mut all_timings,
@@ -1082,6 +1171,152 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
     }
 
     Ok(())
+}
+
+struct SpeechDemoCase {
+    label: &'static str,
+    command: SpeakCommand,
+}
+
+struct ResidentDemoBackend {
+    kind: SpeakBackend,
+    instance: BackendInstance,
+    startup: BackendStartupProfile,
+}
+
+pub fn run_speech_demo(command: SpeechDemoCommand, device_arg: DeviceArg) -> Result<()> {
+    anyhow::ensure!(
+        command.sentences.len() == 6,
+        "speech-demo requires exactly six --sentence values from xtask, got {}",
+        command.sentences.len()
+    );
+    if let Some(output_dir) = &command.output_dir {
+        std::fs::create_dir_all(output_dir).with_context(|| {
+            format!(
+                "failed to create speech demo output directory {}",
+                output_dir.display()
+            )
+        })?;
+    }
+
+    let cases = speech_demo_cases(&command);
+    let requested_device = match device_arg {
+        DeviceArg::Cpu => "CPU",
+        DeviceArg::Cuda => "CUDA",
+    };
+    println!(
+        "Speech demo: preloading 5 unique backends once ({requested_device}); all engines remain resident"
+    );
+
+    let mut residents = Vec::with_capacity(5);
+    for kind in [
+        SpeakBackend::Burn,
+        SpeakBackend::Vits,
+        SpeakBackend::Onnx,
+        SpeakBackend::Styletts2,
+        SpeakBackend::Mock,
+    ] {
+        let template = cases
+            .iter()
+            .find(|case| case.command.backend == kind)
+            .expect("every demo backend has a case");
+        eprintln!("speech-demo: loading {}...", demo_backend_name(kind));
+        let (instance, startup) = load_backend(&template.command, device_arg)
+            .with_context(|| format!("failed to preload {}", demo_backend_name(kind)))?;
+        eprintln!(
+            "speech-demo: resident {} ({:.0} ms)",
+            instance.label(),
+            startup.cold_start_ms
+        );
+        residents.push(ResidentDemoBackend {
+            kind,
+            instance,
+            startup,
+        });
+    }
+    println!("Speech demo: all 5 unique backends are resident; beginning synthesis");
+
+    for (index, case) in cases.into_iter().enumerate() {
+        println!();
+        println!("== {} ==", case.label);
+        println!(
+            "{}",
+            case.command.text.as_deref().unwrap_or("<missing sentence>")
+        );
+        let resident = residents
+            .iter_mut()
+            .find(|resident| resident.kind == case.command.backend)
+            .expect("demo backend was preloaded");
+        run_speak_with_backend(case.command, &mut resident.instance, &resident.startup)
+            .with_context(|| format!("speech demo case {} failed", index + 1))?;
+    }
+
+    println!("Speech demo complete; each unique model was loaded exactly once.");
+    Ok(())
+}
+
+fn speech_demo_cases(command: &SpeechDemoCommand) -> Vec<SpeechDemoCase> {
+    let definitions = [
+        (
+            "Burn components: SpeedySpeech + HiFi-GAN",
+            "burn",
+            SpeakBackend::Burn,
+            None,
+        ),
+        (
+            "Burn end-to-end: VITS speaker p225",
+            "vits-p225",
+            SpeakBackend::Vits,
+            Some("p225"),
+        ),
+        (
+            "Burn end-to-end: VITS speaker p226",
+            "vits-p226",
+            SpeakBackend::Vits,
+            Some("p226"),
+        ),
+        ("ONNX compatibility voice", "onnx", SpeakBackend::Onnx, None),
+        ("StyleTTS2", "styletts2", SpeakBackend::Styletts2, None),
+        (
+            "Deterministic mock backend",
+            "mock",
+            SpeakBackend::Mock,
+            None,
+        ),
+    ];
+
+    definitions
+        .into_iter()
+        .zip(&command.sentences)
+        .map(|((label, file_stem, backend, speaker), sentence)| {
+            let output = command
+                .output_dir
+                .as_ref()
+                .map(|directory| directory.join(format!("{file_stem}.wav")));
+            SpeechDemoCase {
+                label,
+                command: SpeakCommand {
+                    text: Some(sentence.clone()),
+                    backend,
+                    output,
+                    speaker: speaker.map(str::to_string),
+                    quality: command.quality,
+                    timings: command.timings,
+                    ..SpeakCommand::default()
+                },
+            }
+        })
+        .collect()
+}
+
+fn demo_backend_name(backend: SpeakBackend) -> &'static str {
+    match backend {
+        SpeakBackend::Burn => "Burn components",
+        SpeakBackend::Vits => "VITS",
+        SpeakBackend::Onnx => "ONNX compatibility voice",
+        SpeakBackend::Styletts2 => "StyleTTS2",
+        SpeakBackend::Mock => "mock",
+    }
 }
 
 fn load_burn_pipeline<B: Backend>(
@@ -1571,5 +1806,57 @@ impl AudioStreamPlayer {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo_command(output_dir: Option<PathBuf>) -> SpeechDemoCommand {
+        SpeechDemoCommand {
+            sentences: (1..=6).map(|index| format!("Sentence {index}.")).collect(),
+            output_dir,
+            timings: false,
+            quality: SpeakQuality::Fast,
+        }
+    }
+
+    #[test]
+    fn demo_shares_one_vits_backend_between_two_speakers() {
+        let cases = speech_demo_cases(&demo_command(None));
+        let vits = cases
+            .iter()
+            .filter(|case| case.command.backend == SpeakBackend::Vits)
+            .collect::<Vec<_>>();
+
+        assert_eq!(cases.len(), 6);
+        assert_eq!(vits.len(), 2);
+        assert_eq!(vits[0].command.speaker.as_deref(), Some("p225"));
+        assert_eq!(vits[1].command.speaker.as_deref(), Some("p226"));
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case.command.backend)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            5
+        );
+    }
+
+    #[test]
+    fn demo_wav_names_are_stable_and_use_fast_styletts2() {
+        let output_dir = PathBuf::from("target/speech-demo-test");
+        let cases = speech_demo_cases(&demo_command(Some(output_dir.clone())));
+
+        assert_eq!(
+            cases[0].command.output.as_deref(),
+            Some(output_dir.join("burn.wav").as_path())
+        );
+        assert_eq!(
+            cases[2].command.output.as_deref(),
+            Some(output_dir.join("vits-p226.wav").as_path())
+        );
+        assert_eq!(cases[4].command.quality, SpeakQuality::Fast);
     }
 }

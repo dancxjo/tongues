@@ -264,6 +264,56 @@ a {
     margin-top: 0.5rem;
 }
 
+.speech-runtime {
+    align-items: center;
+    background: #f7fbfb;
+    border: 1px solid #d6ebe8;
+    border-radius: 8px;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+    padding: 0.9rem 1rem;
+}
+
+.speech-runtime > div {
+    display: grid;
+    gap: 0.25rem;
+    grid-template-columns: auto 1fr;
+}
+
+.speech-runtime strong {
+    align-self: center;
+}
+
+.speech-runtime small {
+    color: var(--text-muted);
+    grid-column: 1 / -1;
+}
+
+.runtime-badge {
+    align-self: center;
+    background: #e7f5f2;
+    border-radius: 999px;
+    color: var(--primary-hover);
+    font-size: 0.7rem;
+    font-weight: 800;
+    padding: 0.25rem 0.5rem;
+    text-transform: uppercase;
+}
+
+.runtime-badge[data-state="loading"],
+.runtime-badge[data-state="busy"],
+.runtime-badge[data-state="reloading"] {
+    background: #fff3de;
+    color: var(--warning);
+}
+
+.runtime-badge[data-state="failed"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
 .cli-equivalent code {
     color: var(--primary);
 }

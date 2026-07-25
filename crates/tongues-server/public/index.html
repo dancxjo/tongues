@@ -184,6 +184,17 @@
                                 </p>
                                 <p>Use the defaults for a smoke test, then try voice, style, and emotion references.</p>
                             </div>
+                            <div id="speech-runtime" class="speech-runtime" aria-live="polite">
+                                <div>
+                                    <span id="speech-runtime-state" class="runtime-badge" data-state="loading">Checking</span>
+                                    <strong>Resident speech runtime</strong>
+                                    <small id="speech-runtime-detail">Loading model and queue status…</small>
+                                </div>
+                                <button id="reload-speech-runtime" type="button" class="secondary-button">
+                                    <span class="btn-text">Reload Models</span>
+                                    <div class="spinner"></div>
+                                </button>
+                            </div>
                             <div class="form-group">
                                 <label for="text">Prompt</label>
                                 <textarea id="text" placeholder="Type something for PETE to say..." required>Wow, the magic wand actually worked!</textarea>

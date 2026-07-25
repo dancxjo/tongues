@@ -17,7 +17,7 @@ serde_json.workspace = true
 rustls = { version = "0.23.40", features = ["aws-lc-rs"] }
 speaking = { version = "0.1.0", path = "../speaking" }
 styletts2 = { version = "0.1.0", path = "../styletts2" }
-tongues-tts = { version = "0.1.0", path = "../tongues-tts", default-features = false }
+tongues-tts = { version = "0.1.0", path = "../tongues-tts" }
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 tower-http = { version = "0.7.0", features = ["fs", "cors"] }

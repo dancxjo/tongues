@@ -70,12 +70,22 @@ Run every built-in backend:
 just speech-demo
 ```
 
-The demo uses optimized inference, selects CUDA automatically when it is
-available, and assigns a shuffled sentence to each backend. Pass `--cpu` to
-force the CPU path for backends that support both:
+The demo is orchestrated by `xtask`: it builds the optimized binary once,
+starts one speech process, and preloads each unique backend once. All engines
+remain resident for the whole run, so the two VITS speakers share one
+CUDA-resident checkpoint instead of reloading it. CUDA is selected
+automatically when available, StyleTTS2 uses its fast quality preset by
+default, and each backend receives a shuffled sentence. Pass `--cpu` to force
+the CPU path for backends that support both:
 
 ```sh
 just speech-demo --cpu
+```
+
+To validate without opening an audio device, write each result to a WAV:
+
+```sh
+just speech-demo --output-dir target/speech-demo
 ```
 
 For a repeatable five-case synthesis probe, measured output fields, and the
@@ -206,9 +216,10 @@ to the repository; model weights and generated audio are not.
 
 ## Resident server execution
 
-`tongues-server` owns a mutex-queued resident registry for the native `burn` and
-`vits` backends. The first request loads the selected model; subsequent
-`POST /api/speak` requests reuse it. Native requests do not invoke `cargo run`.
+`tongues-server` owns a resident registry for the `burn`, `vits`, `onnx`,
+`styletts2`, and `mock` backends. The first request loads the selected model;
+subsequent `POST /api/speak` requests reuse it. Speech requests do not invoke
+`cargo run`.
 Responses include `X-Tongues-Model-Loaded`, `X-Tongues-Speech-Engine`,
 `X-Tongues-Real-Time-Factor`, and `Server-Timing` headers.
 
@@ -218,14 +229,22 @@ Inspect loading, ready, and failed state at:
 GET /api/speech/runtime
 ```
 
-`POST /api/speech/runtime/reload` waits for active synthesis to finish, then
-drops loaded engines and clears cached load failures. The next request reloads
-the current model files deliberately.
+The response exposes explicit `idle`, `loading`, `ready`, `busy`, `reloading`,
+and `failed` state plus active, queued, and capacity counts. The synthesis UI
+shows this state and provides a Reload Models control.
+
+`POST /api/speech/runtime/reload` enters the same bounded admission path, waits
+for an admitted active synthesis to finish, then drops loaded engines and clears
+cached load failures. The next request reloads the current model files
+deliberately.
 
 The resident runtime uses CUDA by default. Set
 `TONGUES_SPEECH_DEVICE=cpu` before server startup to force CPU inference.
-Mutable engines are serialized through one registry mutex, so concurrent native
-requests queue predictably rather than entering an engine concurrently.
+Mutable engines are serialized through one registry mutex behind a bounded FIFO
+admission gate. The default permits one active request and one queued request;
+additional requests receive HTTP 429 with `Retry-After: 1`. Set
+`TONGUES_SPEECH_MAX_IN_FLIGHT` to a value from 1 through 32 before server startup
+to change the total admitted request count.
 
 ## Current Limits
 

@@ -300,41 +300,9 @@ speak *args:
 speech-benchmark *args:
     scripts/speech-benchmark.sh "$@"
 
-# Play a shuffled sentence through every built-in speech backend, preferring CUDA
-speech-demo *global_args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    global_args=("$@")
-    sentences=(
-        "Morning light rested on the cedar trees while the kettle began to sing."
-        "A clear river curved through the valley beneath a patient summer sky."
-        "Fresh bread cooled by the window as music drifted in from the garden."
-        "The old observatory opened its dome to a field of quiet stars."
-        "Rain polished the streets, and every lamp made a small golden harbor."
-        "Beyond the orchard, a train carried warm letters toward the coast."
-        "She found a blue feather on the path and tucked it into her notebook."
-        "At dusk, the library windows glowed softly above the sleeping square."
-    )
-    mapfile -t shuffled < <(printf '%s\n' "${sentences[@]}" | shuf)
-    index=0
-
-    play() {
-        local label="$1"
-        local backend="$2"
-        shift 2
-        local sentence="${shuffled[$index]}"
-        index=$((index + 1))
-        printf '\n== %s ==\n%s\n' "$label" "$sentence"
-        cargo run -q --release --bin tongues -- "${global_args[@]}" speak --backend "$backend" "$@" "$sentence"
-    }
-
-    play "Burn components: SpeedySpeech + HiFi-GAN" burn
-    play "Burn end-to-end: VITS speaker p225" vits --speaker p225
-    play "Burn end-to-end: VITS speaker p226" vits --speaker p226
-    play "ONNX compatibility voice" onnx
-    play "StyleTTS2" styletts2
-    play "Deterministic mock backend" mock
+# Play shuffled sentences through resident speech backends, preferring CUDA
+speech-demo *args:
+    @cargo run -q -p xtask -- speech-demo "$@"
 
 # Demonstrate the speaking library across every built-in language variety
 speaking *args:

@@ -453,6 +453,10 @@ enum Commands {
     /// Speak/synthesize text into a WAV file using speech plans
     Speak(speak::SpeakCommand),
 
+    /// Run the xtask-orchestrated speech demo with resident model backends
+    #[command(name = "speech-demo")]
+    SpeechDemo(speak::SpeechDemoCommand),
+
     /// Stream an Ollama story through head2phones and speech playback
     Be(BeCommand),
 
@@ -1981,6 +1985,7 @@ fn main() -> Result<()> {
             cmd_repl(&model, &task, device_arg, data.as_deref())
         }
         Commands::Speak(command) => speak::run_speak(command, device_arg),
+        Commands::SpeechDemo(command) => speak::run_speech_demo(command, device_arg),
         Commands::Be(command) => cmd_be(command, device_arg),
         Commands::SpeakingDemo {
             mode,
@@ -2030,6 +2035,7 @@ fn command_needs_device(command: &Commands) -> bool {
             command.backend,
             speak::SpeakBackend::Burn | speak::SpeakBackend::Vits | speak::SpeakBackend::Onnx
         ),
+        Commands::SpeechDemo(_) => true,
         Commands::Train { .. }
         | Commands::Eval { .. }
         | Commands::Refine { .. }

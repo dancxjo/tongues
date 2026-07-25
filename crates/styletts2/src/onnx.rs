@@ -264,19 +264,32 @@ impl StyleTts2OnnxBackend {
         mut self,
         options: StyleTts2DiffusionOptions,
     ) -> Result<Self, StyleTts2Error> {
-        validate_diffusion_options(&options)?;
-        self.diffusion_options = options;
+        self.set_diffusion_options(options)?;
         Ok(self)
     }
 
     pub fn with_speed(mut self, speed: f64) -> Result<Self, StyleTts2Error> {
+        self.set_speed(speed)?;
+        Ok(self)
+    }
+
+    pub fn set_diffusion_options(
+        &mut self,
+        options: StyleTts2DiffusionOptions,
+    ) -> Result<(), StyleTts2Error> {
+        validate_diffusion_options(&options)?;
+        self.diffusion_options = options;
+        Ok(())
+    }
+
+    pub fn set_speed(&mut self, speed: f64) -> Result<(), StyleTts2Error> {
         if !speed.is_finite() || speed <= 0.0 {
             return Err(invalid_output(format!(
                 "StyleTTS2 speed must be finite and positive, got {speed}"
             )));
         }
         self.speed = speed;
-        Ok(self)
+        Ok(())
     }
 }
 
