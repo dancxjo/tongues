@@ -11,7 +11,7 @@ const controlDescriptions = {
     model: 'Model bundle id or model selector value.',
     '--all': 'Apply the clean operation to both prepared data and model artifacts.',
     '--archive-dir': 'Root directory where cleaned artifacts are archived.',
-    '--backend': 'Speech backend: StyleTTS2 for neural synthesis, mock for tests, or Piper when configured.',
+    '--backend': 'Speech backend: StyleTTS2 for neural synthesis, mock for tests, or ONNX voice models when configured.',
     '--batch-size': 'Mini-batch size used during training.',
     '--cache-dir': 'Directory used for downloaded or cached source data.',
     '--config': 'TOML configuration file for this module.',
@@ -84,6 +84,7 @@ const controlDescriptions = {
     '--source': 'Refinement source: held-out discrepancies or the built-in sight-word list.',
     '--source-manifest': 'Source JSONL manifest with emotion labels and audio paths.',
     '--span-mask-prob': 'Probability weight for span masking during masked-phone training.',
+    '--speaker': 'Named speaker declared by the selected voice model.',
     '--speaker-reference-strength': 'Voice reference strength from 0 to 1; higher keeps more speaker timbre.',
     '--speed': 'StyleTTS2 decoder speed multiplier.',
     '--split': 'Prepared data split to evaluate, usually train, valid, or test.',
@@ -121,11 +122,11 @@ const controlDescriptions = {
     presence: 'Whether the model bundle assets are present locally.',
     'model category': 'Model category chosen in the interactive model menu.',
     'selected model': 'Currently selected LLM model bundle.',
-    'selected Piper voice': 'Currently selected Piper voice bundle.',
+    'selected voice model': 'Currently selected voice model bundle.',
 };
 
 const controlOptions = {
-    '--backend': ['styletts2', 'mock', 'piper'],
+    '--backend': ['styletts2', 'mock', 'onnx'],
     '--corpus': ['ravdess', 'crema-d', 'tess', 'savee', 'emodb', 'iemocap'],
     '--mask-policy': ['variable', 'single'],
     '--method': ['speaker-neutral-delta'],
@@ -137,7 +138,7 @@ const controlOptions = {
     '--subset': ['mini', 'train-clean-100'],
     '--training-set': ['all', 'seams', 'naive-discrepancy'],
     '--variety': ['en-US', 'en-GB'],
-    'model category': ['LLM', 'Piper voice'],
+    'model category': ['LLM', 'Voice model'],
 };
 
 const pathDefaults = {
@@ -392,10 +393,10 @@ const commandPages = [
         fields: [
             { name: 'text', description: 'Text to synthesize; stdin is used in the CLI when omitted.' },
             { name: '--output', description: 'WAV file path written by the CLI.' },
-            { name: '--backend', options: ['styletts2', 'mock', 'piper'], default: 'styletts2' },
+            { name: '--backend', options: ['styletts2', 'mock', 'onnx'], default: 'styletts2' },
             { name: '--variety', default: 'en-US' },
         ],
-        advanced: ['--sample-rate-hz', '--voice-wav', '--style-wav', '--quality', '--diffusion-steps', '--speaker-reference-strength', '--style-reference-strength', '--style-alpha', '--style-beta', '--emotion-signatures', '--emotion', '--emotion-strength', '--embedding-scale', '--style-seed', '--speed', { name: '--debug-pronunciation', type: 'flag' }, { name: '--timings', type: 'flag' }, '--max-tts-symbols', { name: '--no-tts-chunking', type: 'flag' }, { name: '--fail-on-guessed-pronunciation', type: 'flag' }],
+        advanced: ['--sample-rate-hz', '--speaker', '--voice-wav', '--style-wav', '--quality', '--diffusion-steps', '--speaker-reference-strength', '--style-reference-strength', '--style-alpha', '--style-beta', '--emotion-signatures', '--emotion', '--emotion-strength', '--embedding-scale', '--style-seed', '--speed', { name: '--debug-pronunciation', type: 'flag' }, { name: '--timings', type: 'flag' }, '--max-tts-symbols', { name: '--no-tts-chunking', type: 'flag' }, { name: '--fail-on-guessed-pronunciation', type: 'flag' }],
     },
     {
         title: 'Phonemes',
@@ -1417,13 +1418,13 @@ function normalizeControl(field, page) {
 
 function optionsForControl(name, page) {
     if (name === '--task') return taskOptionsFor(page);
-    if (name === 'model' && page.command === 'tongues models use') return ['gemma4', 'styletts2', 'piper-en-us'];
+    if (name === 'model' && page.command === 'tongues models use') return ['gemma4', 'styletts2', 'voice-ljspeech-high'];
     if (name === 'model' && page.command === 'tongues models fetch') {
         return [
             { value: '', label: 'Default runtime models' },
             { value: 'gemma4', label: 'Gemma 4' },
             { value: 'styletts2', label: 'StyleTTS2' },
-            { value: 'piper-en-us', label: 'Piper en-US' },
+            { value: 'voice-ljspeech-high', label: 'Voice model en-US' },
         ];
     }
     return controlOptions[name];
@@ -1871,6 +1872,7 @@ async function initStyleTts2() {
                 verbose: verboseInput.checked,
                 variety: byId('variety').value || 'en-US',
                 backend: byId('backend').value || 'styletts2',
+                speaker: byId('speaker').value.trim() || null,
                 voice_sample: voiceSelect.value || null,
                 style_sample: styleSelect.value || null,
                 emotion: emotion || null,

@@ -56,7 +56,7 @@ use tongues_interpretation::{
     InterpretationConfig, InterpretationTrainConfig, LibriSpeechSubset, TranscriptRefinement,
 };
 use tongues_neural::{write_manifest, ModelArtifactManifest};
-use tongues_tts as piper;
+use tongues_tts as speech;
 
 // ── Backend aliases ────────────────────────────────────────────────────────
 
@@ -1044,7 +1044,7 @@ struct BeCommand {
     variety: String,
 
     /// Speech backend to use for spoken output
-    #[arg(long, value_enum, default_value_t = BeVoiceBackend::Piper)]
+    #[arg(long, value_enum, default_value_t = BeVoiceBackend::Onnx)]
     voice_backend: BeVoiceBackend,
 
     /// Maximum symbols per StyleTTS2 chunk when --voice-backend styletts2 is used
@@ -1058,7 +1058,7 @@ struct BeCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum BeVoiceBackend {
-    Piper,
+    Onnx,
     Styletts2,
 }
 
@@ -3613,30 +3613,30 @@ fn cmd_be(command: BeCommand) -> Result<()> {
     );
 
     match command.voice_backend {
-        BeVoiceBackend::Piper => cmd_be_with_piper(command, head2phones, seams_detector, &device),
+        BeVoiceBackend::Onnx => cmd_be_with_onnx(command, head2phones, seams_detector, &device),
         BeVoiceBackend::Styletts2 => {
             cmd_be_with_styletts2(command, head2phones, seams_detector, &device)
         }
     }
 }
 
-fn cmd_be_with_piper(
+fn cmd_be_with_onnx(
     command: BeCommand,
     head2phones: Option<(Seq2SeqModel<CpuInferBackend>, Vocab, ModelConfig)>,
     seams_detector: Option<seams::SentenceDetectorDialog>,
     device: &NdArrayDevice,
 ) -> Result<()> {
-    let piper_model = models::ensure_piper_voice_model_available()?;
-    let piper_config_path = piper::piper_voice_config_path(&piper_model);
-    let piper_config = piper::PiperVoiceConfig::from_json_file(&piper_config_path)?;
-    let mut piper = piper::PiperOnnxBackend::load(&piper_model, piper_config)?;
-    let player = speak::AudioStreamPlayer::new(piper.sample_rate_hz())
+    let voice_model = models::ensure_voice_model_available()?;
+    let voice_config_path = speech::voice_config_path(&voice_model);
+    let voice_config = speech::VoiceConfig::from_json_file(&voice_config_path)?;
+    let mut speech_backend = speech::OnnxSpeechBackend::load(&voice_model, voice_config)?;
+    let player = speak::AudioStreamPlayer::new(speech_backend.sample_rate_hz())
         .context("failed to start CPAL playback")?;
-    log_be_speech_path(&command, "piper", &piper_model);
+    log_be_speech_path(&command, "onnx", &voice_model);
     eprintln!("be: cpal output={}", player.description());
 
     let mut total_samples = 0usize;
-    let mut sink = |chunk: piper::PiperAudioChunk| -> Result<()> {
+    let mut sink = |chunk: speech::AudioChunk| -> Result<()> {
         total_samples += chunk.pcm_mono_f32.len();
         eprintln!(
             "be: queued audio chunk samples={} total={} rate={}Hz",
@@ -3657,11 +3657,16 @@ fn cmd_be_with_piper(
                 vocab,
                 model_config,
                 device,
-                &mut piper,
+                &mut speech_backend,
                 &mut sink,
             )?;
         } else {
-            synthesize_mechanical_sentence(sentence, &command.variety, &mut piper, &mut sink)?;
+            synthesize_mechanical_sentence(
+                sentence,
+                &command.variety,
+                &mut speech_backend,
+                &mut sink,
+            )?;
         }
         Ok(())
     })?;
@@ -3897,8 +3902,8 @@ fn speak_head2phones_sentence<B: Backend>(
     vocab: &Vocab,
     model_config: &ModelConfig,
     device: &B::Device,
-    piper: &mut piper::PiperOnnxBackend,
-    sink: &mut dyn piper::PiperAudioSink,
+    speech_backend: &mut speech::OnnxSpeechBackend,
+    sink: &mut dyn speech::AudioSink,
 ) -> Result<()> {
     let mut remaining = sentence.trim().to_string();
     let mut iterations = 0usize;
@@ -3917,7 +3922,7 @@ fn speak_head2phones_sentence<B: Backend>(
             vocab,
             model_config,
             device,
-            piper,
+            speech_backend,
             sink,
         )?;
         match next {
@@ -3946,8 +3951,8 @@ fn speak_head2phones_head<B: Backend>(
     vocab: &Vocab,
     model_config: &ModelConfig,
     device: &B::Device,
-    piper: &mut piper::PiperOnnxBackend,
-    sink: &mut dyn piper::PiperAudioSink,
+    speech_backend: &mut speech::OnnxSpeechBackend,
+    sink: &mut dyn speech::AudioSink,
 ) -> Result<Option<String>> {
     let input = tongues_head2phones::format_input_for_variety(variety, sentence);
     let input_len = vocab.encode_string(&input).len();
@@ -3962,7 +3967,7 @@ fn speak_head2phones_head<B: Backend>(
                     vocab,
                     model_config,
                     device,
-                    piper,
+                    speech_backend,
                     sink,
                 )?;
             }
@@ -3986,38 +3991,38 @@ fn speak_head2phones_head<B: Backend>(
             fallback
         );
         if !fallback.is_empty() {
-            synthesize_rule_based_fallback(&fallback, variety, piper, sink)?;
+            synthesize_rule_based_fallback(&fallback, variety, speech_backend, sink)?;
         }
         return Ok(None);
     };
     let (head, rest) = head2phones_head_and_rest(sentence, prediction.split_after);
     let head = head.trim();
     let rest = rest.to_string();
-    let sequence = piper_sequence_from_head2phones_phones(&prediction.phones);
+    let sequence = voice_sequence_from_head2phones_phones(&prediction.phones);
     eprintln!(
-        "\nbe: head={:?}\nbe: phones={}\nbe: piper={}",
+        "\nbe: head={:?}\nbe: phones={}\nbe: voice={}",
         head,
         prediction.phones,
         sequence.symbols.join(" ")
     );
     if sequence.symbols.is_empty() {
-        synthesize_rule_based_fallback(head, variety, piper, sink)?;
+        synthesize_rule_based_fallback(head, variety, speech_backend, sink)?;
         return Ok(nonempty_remainder(rest));
     }
-    for chunk in piper::piper_synthesis_chunks_from_sequence(sequence) {
+    for chunk in speech::synthesis_chunks_from_sequence(sequence) {
         let ids = chunk
             .sequence
-            .to_text_ids_compatible(piper.voice_config())?;
-        let mut audio = piper.synthesize_ids(&ids)?.pcm_mono_f32;
-        audio.extend(
-            std::iter::repeat(0.0)
-                .take((piper.sample_rate_hz() as usize * chunk.pause_after_ms as usize) / 1000),
-        );
-        sink.emit(piper::PiperAudioChunk {
+            .to_text_ids_compatible(speech_backend.voice_config())?;
+        let mut audio = speech_backend.synthesize_ids(&ids)?.pcm_mono_f32;
+        audio.extend(std::iter::repeat(0.0).take(
+            (speech_backend.sample_rate_hz() as usize * chunk.pause_after_ms as usize) / 1000,
+        ));
+        sink.emit(speech::AudioChunk {
             chunk_index: 0,
             is_final: true,
-            pause_after_ms: chunk.pause_after_ms,
-            sample_rate_hz: piper.sample_rate_hz(),
+            // The pause is already materialized in the emitted PCM.
+            pause_after_ms: 0,
+            sample_rate_hz: speech_backend.sample_rate_hz(),
             pcm_mono_f32: audio,
         })?;
     }
@@ -4289,17 +4294,17 @@ fn split_long_sentence(
 fn synthesize_rule_based_fallback(
     sentence: &str,
     variety: &str,
-    piper: &mut piper::PiperOnnxBackend,
-    sink: &mut dyn piper::PiperAudioSink,
+    speech_backend: &mut speech::OnnxSpeechBackend,
+    sink: &mut dyn speech::AudioSink,
 ) -> Result<()> {
-    synthesize_mechanical_sentence(sentence, variety, piper, sink)
+    synthesize_mechanical_sentence(sentence, variety, speech_backend, sink)
 }
 
 fn synthesize_mechanical_sentence(
     sentence: &str,
     variety: &str,
-    piper: &mut piper::PiperOnnxBackend,
-    sink: &mut dyn piper::PiperAudioSink,
+    speech_backend: &mut speech::OnnxSpeechBackend,
+    sink: &mut dyn speech::AudioSink,
 ) -> Result<()> {
     let variety = speaking::VarietyId(variety.to_string());
     let phonemicizer = speaking::phonemicizer_for_variety(&variety)
@@ -4315,7 +4320,7 @@ fn synthesize_mechanical_sentence(
         sentence,
         format_be_mechanical_phones(&output)
     );
-    piper.synthesize_plan_streaming(&plan, sink)
+    speech_backend.synthesize_plan_streaming(&plan, sink)
 }
 
 fn synthesize_mechanical_sentence_styletts2(
@@ -4403,6 +4408,7 @@ fn styletts2_plan_from_head2phones_prediction(
         boundaries: Vec::new(),
         target_prosody: Default::default(),
         target_acoustics: Vec::new(),
+        speaker_reference: None,
         style: None,
         provenance: EvidenceProvenance {
             source: EvidenceSource::TtsPlan,
@@ -4601,7 +4607,7 @@ fn nonempty_remainder(rest: String) -> Option<String> {
     }
 }
 
-fn piper_sequence_from_head2phones_phones(phones: &str) -> piper::PiperPhonemeSequence {
+fn voice_sequence_from_head2phones_phones(phones: &str) -> speech::PhonemeSequence {
     let mut symbols = Vec::new();
     let mut stress = None;
     let mut rest = phones;
@@ -4614,7 +4620,7 @@ fn piper_sequence_from_head2phones_phones(phones: &str) -> piper::PiperPhonemeSe
             rest = consume_char(rest);
             continue;
         }
-        if let Some((symbol, used_stress, remaining)) = next_piper_symbol_from_ipa(rest, stress) {
+        if let Some((symbol, used_stress, remaining)) = next_voice_symbol_from_ipa(rest, stress) {
             if symbol == " " {
                 if !symbols.last().is_some_and(|last| last == " ") {
                     symbols.push(symbol.to_string());
@@ -4635,10 +4641,10 @@ fn piper_sequence_from_head2phones_phones(phones: &str) -> piper::PiperPhonemeSe
         }
         rest = consume_char(rest);
     }
-    piper::PiperPhonemeSequence { symbols }
+    speech::PhonemeSequence { symbols }
 }
 
-fn next_piper_symbol_from_ipa(
+fn next_voice_symbol_from_ipa(
     rest: &str,
     stress: Option<char>,
 ) -> Option<(&'static str, bool, &str)> {

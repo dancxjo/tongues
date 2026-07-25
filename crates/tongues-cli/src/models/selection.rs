@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::manifest::{
     bundle_multimodal_projector_asset, bundle_primary_asset, bundle_required_assets, find_bundle,
-    ModelAsset, ModelBundle, ModelKind, DEFAULT_LLM_MODEL_ID, DEFAULT_PIPER_VOICE_MODEL_ID,
+    ModelAsset, ModelBundle, ModelKind, DEFAULT_LLM_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
 };
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct ModelSelection {
     llm: Option<String>,
-    piper_voice: Option<String>,
+    voice_model: Option<String>,
 }
 
 pub fn selected_llm_model_path() -> Result<PathBuf> {
@@ -47,18 +47,18 @@ pub fn selected_bundle() -> Result<&'static ModelBundle> {
     selected_bundle_for_kind(ModelKind::Llm)
 }
 
-pub fn selected_piper_voice_bundle() -> Result<&'static ModelBundle> {
-    selected_bundle_for_kind(ModelKind::PiperVoice)
+pub fn selected_voice_model_bundle() -> Result<&'static ModelBundle> {
+    selected_bundle_for_kind(ModelKind::VoiceModel)
 }
 
 pub fn selected_bundle_for_kind(kind: ModelKind) -> Result<&'static ModelBundle> {
     let selection = read_selection()?;
     let selected = match kind {
         ModelKind::Llm => selection.llm.as_deref().unwrap_or(DEFAULT_LLM_MODEL_ID),
-        ModelKind::PiperVoice => selection
-            .piper_voice
+        ModelKind::VoiceModel => selection
+            .voice_model
             .as_deref()
-            .unwrap_or(DEFAULT_PIPER_VOICE_MODEL_ID),
+            .unwrap_or(DEFAULT_VOICE_MODEL_ID),
         _ => default_bundle_id_for_kind(kind)?,
     };
     let bundle = find_bundle(selected)
@@ -93,7 +93,7 @@ pub fn write_selected_model_for_kind(kind: ModelKind, model_id: &str) -> Result<
     let mut selection = read_selection()?;
     match kind {
         ModelKind::Llm => selection.llm = Some(model_id.to_string()),
-        ModelKind::PiperVoice => selection.piper_voice = Some(model_id.to_string()),
+        ModelKind::VoiceModel => selection.voice_model = Some(model_id.to_string()),
         _ => bail!("{} selections are not stored yet", model_kind_name(kind)),
     }
     fs::write(&path, serde_json::to_vec_pretty(&selection)?)?;
@@ -139,7 +139,7 @@ pub fn is_non_empty_file(path: &Path) -> bool {
 fn default_bundle_id_for_kind(kind: ModelKind) -> Result<&'static str> {
     match kind {
         ModelKind::Llm => Ok(DEFAULT_LLM_MODEL_ID),
-        ModelKind::PiperVoice => Ok(DEFAULT_PIPER_VOICE_MODEL_ID),
+        ModelKind::VoiceModel => Ok(DEFAULT_VOICE_MODEL_ID),
         _ => missing_default_for_kind(kind),
     }
 }
@@ -154,7 +154,7 @@ fn model_kind_name(kind: ModelKind) -> &'static str {
         ModelKind::Face => "face",
         ModelKind::Asr => "ASR",
         ModelKind::StyleTts2 => "StyleTTS2",
-        ModelKind::PiperVoice => "Piper voice",
+        ModelKind::VoiceModel => "Voice model",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

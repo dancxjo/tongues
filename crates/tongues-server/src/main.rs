@@ -1,12 +1,12 @@
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{
-        Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
+    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
@@ -1544,6 +1544,8 @@ struct SpeakRequest {
     verbose: Option<bool>,
     variety: Option<String>,
     backend: Option<String>,
+    speaker: Option<String>,
+    speaker_id: Option<u32>,
     emotion: Option<String>,
     emotion_vector: Option<Vec<f32>>,
     emotion_strength: Option<f32>,
@@ -1617,6 +1619,16 @@ async fn speak(
     if let Some(backend) = payload.backend.as_deref().filter(|value| !value.is_empty()) {
         args.push("--backend".to_string());
         args.push(backend.to_string());
+    }
+
+    if let Some(speaker) = payload.speaker.as_deref().filter(|value| !value.is_empty()) {
+        args.push("--speaker".to_string());
+        args.push(speaker.to_string());
+    }
+
+    if let Some(speaker_id) = payload.speaker_id {
+        args.push("--speaker-id".to_string());
+        args.push(speaker_id.to_string());
     }
 
     if let Some(sample_rate_hz) = payload.sample_rate_hz {
@@ -1849,10 +1861,17 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
         return Err("quiet and verbose cannot both be enabled".into());
     }
     if let Some(backend) = payload.backend.as_deref() {
-        if !backend.is_empty() && backend != "mock" && backend != "styletts2" && backend != "piper"
-        {
-            return Err("backend must be `mock`, `styletts2`, or `piper`".into());
+        if !backend.is_empty() && backend != "mock" && backend != "styletts2" && backend != "onnx" {
+            return Err("backend must be `mock`, `styletts2`, or `onnx`".into());
         }
+    }
+    if payload
+        .speaker
+        .as_deref()
+        .is_some_and(|speaker| !speaker.is_empty())
+        && payload.speaker_id.is_some()
+    {
+        return Err("speaker and speaker_id cannot both be set".into());
     }
     if let Some(diffusion_steps) = payload.diffusion_steps {
         if !(1..=64).contains(&diffusion_steps) {

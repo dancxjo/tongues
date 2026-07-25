@@ -15,7 +15,7 @@ race *args:
 continue *args:
     @cargo run -q -p xtask -- continue "$@"
 
-# Stream an Ollama story through resident CPU head2phones and Piper playback
+# Stream an Ollama story through resident CPU head2phones and ONNX speech playback
 be *args:
     @cargo run -q --bin tongues -- --cpu be "$@"
 
@@ -274,7 +274,7 @@ archive:
         echo "Archived generated data, runs, and models to $archive_dir"
     fi
 
-# Synthesize speech using StyleTTS2 or Piper backends
+# Synthesize speech using StyleTTS2 or ONNX speech backends
 speak *args:
     cargo run --bin tongues -- speak "$@"
 

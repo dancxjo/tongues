@@ -42,8 +42,23 @@ pub struct UtterancePlan {
     pub boundaries: Vec<SpeechBoundaryToken>,
     pub target_prosody: ProsodyTrack,
     pub target_acoustics: Vec<AcousticFrame>,
+    #[serde(default)]
+    pub speaker_reference: Option<SpeakerReference>,
     pub style: Option<StyleRef>,
     pub provenance: EvidenceProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpeakerReference {
+    pub description: Option<String>,
+    pub source: SpeakerReferenceSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeakerReferenceSource {
+    ReferenceAudio { uri: String },
+    Embedding { space: String, values: Vec<f32> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

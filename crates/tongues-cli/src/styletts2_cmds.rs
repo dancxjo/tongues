@@ -170,6 +170,7 @@ fn run_discover(
         boundaries: vec![],
         target_prosody: Default::default(),
         target_acoustics: vec![],
+        speaker_reference: None,
         style: None,
         provenance: speaking::EvidenceProvenance {
             source: speaking::EvidenceSource::TtsPlan,

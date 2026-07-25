@@ -33,7 +33,7 @@ Tongues is also evolving into a broader speech research toolkit containing model
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
 - Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
-- Experimental StyleTTS2/Piper-adjacent speech plumbing.
+- Experimental StyleTTS2/ONNX voice speech plumbing.
 
 ## Quick Start
 
@@ -121,7 +121,7 @@ The workspace is defined in `Cargo.toml` and currently uses Burn with ndarray/au
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |
-| `just be [--mechanical]` | Stream Ollama text through sentence detection, pronunciation, Piper playback, and the local audio queue. |
+| `just be [--mechanical]` | Stream Ollama text through sentence detection, pronunciation, ONNX speech playback, and the local audio queue. |
 
 The model-family `just` recipes forward their arguments to the `tongues` CLI.
 

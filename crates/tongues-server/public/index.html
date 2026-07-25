@@ -243,9 +243,15 @@
                                     <select id="backend">
                                         <option value="styletts2">StyleTTS2</option>
                                         <option value="mock">Mock</option>
-                                        <option value="piper">Piper</option>
+                                        <option value="onnx">ONNX voice</option>
                                     </select>
                                     <small>Speech backend passed as `--backend`.</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="speaker">Speaker</label>
+                                    <input id="speaker" type="text" placeholder="p225">
+                                    <small>Named speaker declared by the selected voice model.</small>
                                 </div>
                             </div>
 

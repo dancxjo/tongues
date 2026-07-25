@@ -30,7 +30,7 @@ This is the first packaged `head2phones` seq2seq model. It predicts the first
 complete TTS-speakable head chunk from a rolling UTF-8 text buffer, and emits
 phones plus the split position for that chunk.
 
-It is intended for the current `just be` / Piper-adjacent streaming path, where
+It is intended for the current `just be` / ONNX voice streaming path, where
 the runtime can fall back to the original text when the model refuses, truncates,
 or produces an incomplete control block.
 
@@ -199,7 +199,7 @@ Observed from the June 20, 2026 `just be` run:
 - It is trained on multiple varieties, but the currently observed streaming
   path is primarily English. Non-English behavior should be treated as ungraded.
 - The phones are broad IPA-ish `speaking` IR intended for downstream lowering.
-  Backend-specific phoneme conversion, such as Piper ARPABET lowering, remains
+  Backend-specific phoneme conversion, such as voice-model ARPABET lowering, remains
   a separate synthesis-time step.
 
 The practical release contract is therefore:

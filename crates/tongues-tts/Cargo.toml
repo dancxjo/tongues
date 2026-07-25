@@ -6,8 +6,11 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 burn = { workspace = true }
+burn-store = { version = "0.21", default-features = false, features = ["std", "pytorch", "safetensors"] }
 dirs = { workspace = true }
+json5 = "0.4"
 ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-rustls", "api-23"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 speaking = { path = "../speaking" }
 tongues-core = { path = "../tongues-core" }
@@ -15,5 +18,5 @@ tongues-g2p2g = { path = "../tongues-g2p2g" }
 tongues-wiktionary = { path = "../tongues-wiktionary" }
 
 [features]
-default = ["piper-onnx"]
-piper-onnx = ["dep:ort"]
+default = ["onnx-tts"]
+onnx-tts = ["dep:ort"]

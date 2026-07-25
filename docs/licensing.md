@@ -18,7 +18,7 @@ Treat prepared data directories as local artifacts unless you have reviewed thei
 | Wikimedia Commons pronunciation audio | Optional real-human pronunciation audio lookup from allowed Commons file pages and direct media URLs. | Individual Commons files carry their own licenses; prepare preserves source URL, license label, and attribution in provenance. |
 | AnySpeak | Optional local MP3 generation through an AnySpeak checkout (`anyspeak_dir` or `ANYSPEAK_DIR`). | AnySpeak is AGPL-3 and Qwen3-TTS-based; review AnySpeak and model/output terms before redistributing generated audio. |
 | Dictionary.com | Reference URL metadata only. | Pages are not fetched by prepare; respect Dictionary.com's terms if using those links manually. |
-| StyleTTS2/Piper | Opportunistic local synthesis backends through installed local models. | Model/audio asset terms depend on the specific installed assets. |
+| Local speech synthesis | Opportunistic synthesis through installed local models and compatible runtimes. | Model/audio asset terms depend on the specific installed assets. |
 
 ## Redistribution Checklist
 

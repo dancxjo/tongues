@@ -66,7 +66,7 @@ fn model_menu() -> Result<()> {
         "Model category",
         vec![
             CategoryChoice::new(ModelKind::Llm)?,
-            CategoryChoice::new(ModelKind::PiperVoice)?,
+            CategoryChoice::new(ModelKind::VoiceModel)?,
         ],
     )
     .prompt()
@@ -123,7 +123,7 @@ impl CategoryChoice {
     fn new(kind: ModelKind) -> Result<Self> {
         let name = match kind {
             ModelKind::Llm => "LLM",
-            ModelKind::PiperVoice => "Piper voice",
+            ModelKind::VoiceModel => "Voice model",
             _ => model_kind_label(kind),
         };
         let selected = selected_bundle_for_kind(kind)?;
@@ -158,11 +158,11 @@ impl std::fmt::Display for ModelChoice {
 
 fn list_models() -> Result<()> {
     let selected = selected_bundle()?;
-    let selected_piper = selected_bundle_for_kind(ModelKind::PiperVoice)?;
+    let selected_voice = selected_bundle_for_kind(ModelKind::VoiceModel)?;
     println!("{}", "Models".bold());
     for bundle in MODEL_BUNDLES {
         let marker = if (bundle.kind == ModelKind::Llm && bundle.id == selected.id)
-            || (bundle.kind == ModelKind::PiperVoice && bundle.id == selected_piper.id)
+            || (bundle.kind == ModelKind::VoiceModel && bundle.id == selected_voice.id)
         {
             "*"
         } else {
@@ -278,13 +278,13 @@ fn print_status() -> Result<()> {
         matches!(
             bundle.kind,
             ModelKind::StyleTts2
-                | ModelKind::PiperVoice
+                | ModelKind::VoiceModel
                 | ModelKind::Lexicon
                 | ModelKind::Phonemicizer
         )
     }) {
-        let selected_marker = if bundle.kind == ModelKind::PiperVoice
-            && bundle.id == selected_bundle_for_kind(ModelKind::PiperVoice)?.id
+        let selected_marker = if bundle.kind == ModelKind::VoiceModel
+            && bundle.id == selected_bundle_for_kind(ModelKind::VoiceModel)?.id
         {
             "* "
         } else {
@@ -321,10 +321,10 @@ fn select_model(model: &str) -> Result<()> {
             write_selected_model(bundle.id)?;
             println!("{} LLM {}", "selected".green(), bundle.display_name.bold());
         }
-        ModelKind::PiperVoice => {
-            write_selected_model_for_kind(ModelKind::PiperVoice, bundle.id)?;
+        ModelKind::VoiceModel => {
+            write_selected_model_for_kind(ModelKind::VoiceModel, bundle.id)?;
             println!(
-                "{} piper-voice {}",
+                "{} voice-model {}",
                 "selected".green(),
                 bundle.display_name.bold()
             );
@@ -345,7 +345,7 @@ fn model_kind_label(kind: ModelKind) -> &'static str {
         ModelKind::Face => "face",
         ModelKind::Asr => "asr",
         ModelKind::StyleTts2 => "styletts2",
-        ModelKind::PiperVoice => "piper-voice",
+        ModelKind::VoiceModel => "voice-model",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

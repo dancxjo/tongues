@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 use speaking::{
     phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
     EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
-    PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, Spec,
-    SpeechBoundaryToken, TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
+    PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, SpeakerId,
+    SpeakerReference, SpeakerReferenceSource, Spec, SpeechBoundaryToken, StyleRef, StyleSource,
+    TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
 use styletts2::{
     prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
     validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
     StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
 };
-use tongues_tts as piper;
+use tongues_tts as speech;
 
 #[cfg(feature = "styletts2-onnx")]
 use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
@@ -42,6 +43,15 @@ pub struct SpeakCommand {
     pub output: Option<PathBuf>,
     #[arg(long, default_value_t = 24_000, help = "Output sample rate in Hz")]
     pub sample_rate_hz: u32,
+    #[arg(
+        long,
+        help = "Named speaker from the selected voice model, such as p225"
+    )]
+    pub speaker: Option<String>,
+    #[arg(long, help = "Numeric speaker ID for low-level voice model testing")]
+    pub speaker_id: Option<u32>,
+    #[arg(long, help = "List speakers declared by the selected voice model")]
+    pub list_speakers: bool,
     #[arg(long, help = "Reference WAV for speaker timbre")]
     pub voice_wav: Option<PathBuf>,
     #[arg(long, help = "Reference WAV for style and prosody")]
@@ -114,7 +124,7 @@ pub struct SpeakCommand {
 pub enum SpeakBackend {
     Mock,
     Styletts2,
-    Piper,
+    Onnx,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -155,6 +165,20 @@ fn reference_strength_to_blend(strength: f32) -> f32 {
     1.0 - strength
 }
 
+#[cfg(feature = "onnx-tts")]
+fn onnx_synthesis_options(options: &SpeechSynthesisOptions) -> Result<speech::SynthesisOptions> {
+    if options.speaker.is_some() && options.speaker_id.is_some() {
+        anyhow::bail!("use either --speaker or --speaker-id, not both");
+    }
+    Ok(speech::SynthesisOptions {
+        speaker_id: options.speaker_id,
+        split_sentences: true,
+        length_scale: None,
+        noise_scale: None,
+        noise_w: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeechSynthesisArtifact {
     pub sample_rate_hz: u32,
@@ -165,6 +189,8 @@ pub struct SpeechSynthesisArtifact {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeechSynthesisOptions {
     pub sample_rate_hz: u32,
+    pub speaker: Option<String>,
+    pub speaker_id: Option<u32>,
     pub voice_wav: Option<PathBuf>,
     pub style_wav: Option<PathBuf>,
     pub diffusion_steps: usize,
@@ -184,6 +210,8 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     fn from(command: &SpeakCommand) -> Self {
         Self {
             sample_rate_hz: command.sample_rate_hz,
+            speaker: command.speaker.clone(),
+            speaker_id: command.speaker_id,
             voice_wav: command.voice_wav.clone(),
             style_wav: command.style_wav.clone(),
             diffusion_steps: command.resolved_diffusion_steps(),
@@ -201,16 +229,17 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
+#[allow(dead_code)]
 enum BackendInstance {
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
     #[cfg(not(feature = "styletts2-onnx"))]
     StyleTts2,
-    #[cfg(feature = "piper-onnx")]
-    Piper(piper::PiperOnnxBackend),
-    #[cfg(not(feature = "piper-onnx"))]
-    Piper,
+    #[cfg(feature = "onnx-tts")]
+    Onnx(speech::OnnxSpeechBackend),
+    #[cfg(not(feature = "onnx-tts"))]
+    Onnx,
 }
 
 impl BackendInstance {
@@ -221,6 +250,9 @@ impl BackendInstance {
         mut on_audio: Option<&mut dyn FnMut(&[f32])>,
         command: &SpeakCommand,
     ) -> Result<SpeechSynthesisArtifact> {
+        #[cfg(not(any(feature = "styletts2-onnx", feature = "onnx-tts")))]
+        let _ = options;
+
         match self {
             Self::Mock(ref mut backend) => {
                 let styletts2_plan = prepare_styletts2_plan(
@@ -337,16 +369,21 @@ impl BackendInstance {
                     "StyleTTS2 native backend requires compiling with feature `styletts2-onnx`"
                 )
             }
-            #[cfg(feature = "piper-onnx")]
-            Self::Piper(ref mut backend) => {
+            #[cfg(feature = "onnx-tts")]
+            Self::Onnx(ref mut backend) => {
                 let mut pcm_mono_f32 = Vec::new();
-                backend.synthesize_plan_streaming(plan, &mut |chunk: piper::PiperAudioChunk| {
-                    pcm_mono_f32.extend(&chunk.pcm_mono_f32);
-                    if let Some(ref mut cb) = on_audio {
-                        cb(&chunk.pcm_mono_f32);
-                    }
-                    Ok(())
-                })?;
+                let synthesis_options = onnx_synthesis_options(options)?;
+                backend.synthesize_plan_streaming_with_options(
+                    plan,
+                    &synthesis_options,
+                    &mut |chunk: speech::AudioChunk| {
+                        pcm_mono_f32.extend(&chunk.pcm_mono_f32);
+                        if let Some(ref mut cb) = on_audio {
+                            cb(&chunk.pcm_mono_f32);
+                        }
+                        Ok(())
+                    },
+                )?;
 
                 Ok(SpeechSynthesisArtifact {
                     sample_rate_hz: backend.sample_rate_hz(),
@@ -354,9 +391,9 @@ impl BackendInstance {
                     timings: Vec::new(),
                 })
             }
-            #[cfg(not(feature = "piper-onnx"))]
-            Self::Piper => {
-                anyhow::bail!("Piper native backend requires compiling with feature `piper-onnx`")
+            #[cfg(not(feature = "onnx-tts"))]
+            Self::Onnx => {
+                anyhow::bail!("ONNX speech backend requires compiling with feature `onnx-tts`")
             }
         }
     }
@@ -402,16 +439,21 @@ fn split_into_sentences(text: &str) -> Vec<String> {
 pub fn run_speak(command: SpeakCommand) -> Result<()> {
     let options = SpeechSynthesisOptions::from(&command);
 
+    if command.list_speakers {
+        print_available_speakers(&command)?;
+        return Ok(());
+    }
+
     let backend_label = match command.backend {
         SpeakBackend::Mock => "mock",
         SpeakBackend::Styletts2 => "styletts2",
-        SpeakBackend::Piper => "piper",
+        SpeakBackend::Onnx => "onnx",
     };
 
     let target_sample_rate = match command.backend {
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
-        SpeakBackend::Piper => 22050,
+        SpeakBackend::Onnx => 22050,
     };
 
     let mut backend = match command.backend {
@@ -449,19 +491,19 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 )
             }
         }
-        SpeakBackend::Piper => {
-            #[cfg(feature = "piper-onnx")]
+        SpeakBackend::Onnx => {
+            #[cfg(feature = "onnx-tts")]
             {
-                use piper::{piper_voice_config_path, PiperOnnxBackend, PiperVoiceConfig};
-                let primary_model = crate::models::ensure_piper_voice_model_available()?;
-                let config_path = piper_voice_config_path(&primary_model);
-                let config = PiperVoiceConfig::from_json_file(&config_path)?;
-                let backend = PiperOnnxBackend::load(&primary_model, config)?;
-                BackendInstance::Piper(backend)
+                use speech::{voice_config_path, OnnxSpeechBackend, VoiceConfig};
+                let primary_model = crate::models::ensure_voice_model_available()?;
+                let config_path = voice_config_path(&primary_model);
+                let config = VoiceConfig::from_json_file(&config_path)?;
+                let backend = OnnxSpeechBackend::load(&primary_model, config)?;
+                BackendInstance::Onnx(backend)
             }
-            #[cfg(not(feature = "piper-onnx"))]
+            #[cfg(not(feature = "onnx-tts"))]
             {
-                anyhow::bail!("Piper native backend requires compiling with feature `piper-onnx`")
+                anyhow::bail!("ONNX speech backend requires compiling with feature `onnx-tts`")
             }
         }
     };
@@ -507,7 +549,22 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
             })
             .context("failed to phonemicize text into a speech plan")?;
 
-        let plan = utterance_plan_from_phonemicized(&phonemicized);
+        let mut plan = utterance_plan_from_phonemicized(&phonemicized);
+        plan.speaker = options.speaker.clone().map(SpeakerId);
+        plan.speaker_reference = options.voice_wav.as_ref().map(|path| SpeakerReference {
+            description: Some("CLI speaker reference".into()),
+            source: SpeakerReferenceSource::ReferenceAudio {
+                uri: path.display().to_string(),
+            },
+        });
+        if let Some(path) = options.style_wav.as_ref() {
+            plan.style = Some(StyleRef {
+                description: Some("CLI style reference".into()),
+                source: StyleSource::ReferenceAudio {
+                    uri: path.display().to_string(),
+                },
+            });
+        }
 
         if plan.intended_phonemes.is_empty() {
             return Ok(());
@@ -556,8 +613,8 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                     .context("failed to format StyleTTS2 backend symbols")?
                     .join(" || ")
             }
-            SpeakBackend::Piper => {
-                let sequence = piper::piper_sequence_from_plan(&plan)?;
+            SpeakBackend::Onnx => {
+                let sequence = speech::phoneme_sequence_from_plan(&plan)?;
                 sequence.symbols.join(" ")
             }
         };
@@ -613,8 +670,8 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                     );
                 }
             }
-            SpeakBackend::Piper => {
-                let chunks = piper::piper_synthesis_chunks_from_plan(&plan)?;
+            SpeakBackend::Onnx => {
+                let chunks = speech::synthesis_chunks_from_plan(&plan)?;
                 for (index, chunk) in chunks.iter().enumerate() {
                     println!(
                         "  {}: {} (pause_after: {}ms)",
@@ -694,6 +751,34 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
     Ok(())
 }
 
+fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
+    anyhow::ensure!(
+        matches!(command.backend, SpeakBackend::Onnx),
+        "--list-speakers is currently available for --backend onnx"
+    );
+    #[cfg(feature = "onnx-tts")]
+    {
+        use speech::{voice_config_path, VoiceConfig};
+        let primary_model = crate::models::ensure_voice_model_available()?;
+        let config_path = voice_config_path(&primary_model);
+        let config = VoiceConfig::from_json_file(&config_path)?;
+        let speakers = config.available_speaker_names();
+        if speakers.is_empty() {
+            println!("speakers: <none>");
+        } else {
+            println!("speakers:");
+            for speaker in speakers {
+                println!("  {speaker}");
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "onnx-tts"))]
+    {
+        anyhow::bail!("ONNX speech backend requires compiling with feature `onnx-tts`")
+    }
+}
+
 pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
     UtterancePlan {
         id: UtteranceId("styletts2.demo.utterance".into()),
@@ -707,6 +792,7 @@ pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> Ut
         boundaries: output.boundaries.clone(),
         target_prosody: output.prosody.clone(),
         target_acoustics: Vec::new(),
+        speaker_reference: None,
         style: None,
         provenance: EvidenceProvenance {
             source: EvidenceSource::TtsPlan,

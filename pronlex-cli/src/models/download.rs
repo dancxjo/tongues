@@ -9,13 +9,13 @@ use owo_colors::OwoColorize;
 use sha2::{Digest, Sha256};
 
 use crate::models::manifest::{
-    DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID, DEFAULT_PIPER_VOICE_MODEL_ID,
+    DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
     DEFAULT_STYLETTS2_MODEL_ID, ModelAsset, ModelBundle, ModelKind, bundle_primary_asset,
     bundle_required_assets, find_asset, find_bundle,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_pronlex_home, selected_bundle, selected_llm_model_path,
-    selected_llm_projector_path, selected_piper_voice_bundle, write_selected_model,
+    selected_llm_projector_path, selected_voice_model_bundle, write_selected_model,
 };
 
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ pub struct RuntimeModelPaths {
     pub llm: PathBuf,
     pub llm_projector: Option<PathBuf>,
     pub face: FaceModelPaths,
-    pub piper_voice: PathBuf,
+    pub voice_model: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -129,8 +129,8 @@ pub fn styletts2_default_reference_audio_paths() -> Result<StyleTts2ReferenceAud
     })
 }
 
-pub fn ensure_piper_voice_model_available() -> Result<PathBuf> {
-    let bundle = selected_piper_voice_bundle()?;
+pub fn ensure_voice_model_available() -> Result<PathBuf> {
+    let bundle = selected_voice_model_bundle()?;
     ensure_bundle_available(bundle)?;
     let primary = bundle_primary_asset(bundle)?;
     Ok(asset_path(&resolve_pronlex_home()?, primary))
@@ -148,7 +148,7 @@ pub fn ensure_runtime_models_available() -> Result<RuntimeModelPaths> {
         llm: ensure_selected_llm_available()?,
         llm_projector: ensure_selected_llm_projector_available()?,
         face: ensure_face_models_available()?,
-        piper_voice: ensure_piper_voice_model_available()?,
+        voice_model: ensure_voice_model_available()?,
     })
 }
 
@@ -203,8 +203,8 @@ fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
         find_bundle(DEFAULT_ASR_MODEL_ID).context("default ASR model bundle is not registered")?,
         find_bundle(DEFAULT_STYLETTS2_MODEL_ID)
             .context("default StyleTTS2 model bundle is not registered")?,
-        find_bundle(DEFAULT_PIPER_VOICE_MODEL_ID)
-            .context("default Piper voice model bundle is not registered")?,
+        find_bundle(DEFAULT_VOICE_MODEL_ID)
+            .context("default voice model bundle is not registered")?,
     ])
 }
 
