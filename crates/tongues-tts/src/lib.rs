@@ -30,7 +30,8 @@ pub mod model_config;
 pub mod phoneme_projector;
 pub mod speakers;
 pub mod vits_config;
-pub mod vits_projector;
+#[allow(dead_code)]
+mod vits_projector;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_speedy_speech::{
@@ -51,8 +52,7 @@ pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
 };
 pub use speakers::SpeakerCatalog;
-pub use vits_config::{VitsCharactersConfig, VitsModelArgs, VitsModelConfig, VITS_BLANK_TOKEN};
-pub use vits_projector::{VitsLinguisticProjector, VitsTokenIds};
+pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";
@@ -131,7 +131,6 @@ pub enum SpeechModelFamily {
     AcousticModel,
     NeuralVocoder,
     EndToEndSpeech,
-    EndToEndVits,
     CrossLingualVoiceClone,
     VoiceConversion,
     Unknown(String),

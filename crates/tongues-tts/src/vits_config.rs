@@ -6,10 +6,10 @@ use serde::Deserialize;
 
 use crate::AudioFeatureConfig;
 
-pub const VITS_BLANK_TOKEN: &str = "<BLNK>";
+const IMPORTED_VITS_BLANK_TOKEN: &str = "<BLNK>";
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct VitsCharactersConfig {
+pub(crate) struct ImportedVitsCharactersConfig {
     pub characters_class: Option<String>,
     pub pad: String,
     pub eos: Option<String>,
@@ -25,7 +25,7 @@ pub struct VitsCharactersConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct VitsModelArgs {
+pub struct VitsNetworkConfig {
     pub num_chars: usize,
     pub out_channels: usize,
     pub spec_segment_size: usize,
@@ -64,27 +64,37 @@ pub struct VitsModelArgs {
     pub num_languages: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct VitsModelConfig {
-    pub model: String,
-    pub use_phonemes: bool,
-    pub phoneme_language: Option<String>,
-    pub add_blank: bool,
-    pub enable_eos_bos_chars: bool,
-    pub characters: VitsCharactersConfig,
-    pub model_args: VitsModelArgs,
+/// Architecture and signal contract needed to construct a VITS inference
+/// graph. Tokenizer and artifact-container conventions are deliberately not
+/// part of this type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VitsInferenceConfig {
+    pub network: VitsNetworkConfig,
     pub audio: AudioFeatureConfig,
 }
 
-impl VitsModelConfig {
-    pub fn from_json5_str(source: &str) -> Result<Self> {
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub(crate) struct ImportedVitsConfig {
+    pub(crate) model: String,
+    pub(crate) use_phonemes: bool,
+    pub(crate) phoneme_language: Option<String>,
+    pub(crate) add_blank: bool,
+    pub(crate) enable_eos_bos_chars: bool,
+    pub(crate) characters: ImportedVitsCharactersConfig,
+    pub(crate) model_args: VitsNetworkConfig,
+    pub(crate) audio: AudioFeatureConfig,
+}
+
+impl ImportedVitsConfig {
+    pub(crate) fn from_json5_str(source: &str) -> Result<Self> {
         let config: Self =
             json5::from_str(source).context("failed to parse imported VITS config")?;
         config.validate()?;
         Ok(config)
     }
 
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let source = fs::read_to_string(path)
             .with_context(|| format!("failed to read VITS config {}", path.display()))?;
@@ -92,7 +102,7 @@ impl VitsModelConfig {
             .with_context(|| format!("invalid VITS config {}", path.display()))
     }
 
-    pub fn vocabulary(&self) -> Vec<String> {
+    pub(crate) fn vocabulary(&self) -> Vec<String> {
         let mut model_characters = self.characters.characters.chars().collect::<Vec<_>>();
         if let Some(phonemes) = &self.characters.phonemes {
             model_characters.extend(phonemes.chars());
@@ -116,11 +126,11 @@ impl VitsModelConfig {
                 .into_iter()
                 .map(|symbol| symbol.to_string()),
         );
-        vocabulary.push(VITS_BLANK_TOKEN.to_string());
+        vocabulary.push(IMPORTED_VITS_BLANK_TOKEN.to_string());
         vocabulary
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             self.model.eq_ignore_ascii_case("vits"),
             "expected VITS model, found `{}`",
@@ -255,6 +265,109 @@ impl VitsModelConfig {
         self.audio.mel_contract()?;
         Ok(())
     }
+
+    pub(crate) fn inference_config(&self) -> VitsInferenceConfig {
+        VitsInferenceConfig {
+            network: self.model_args.clone(),
+            audio: self.audio.clone(),
+        }
+    }
+}
+
+impl VitsInferenceConfig {
+    pub fn from_json5_str(source: &str) -> Result<Self> {
+        let imported = ImportedVitsConfig::from_json5_str(source)?;
+        Ok(imported.inference_config())
+    }
+
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("failed to read VITS model config {}", path.display()))?;
+        Self::from_json5_str(&source)
+            .with_context(|| format!("invalid VITS model config {}", path.display()))
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let args = &self.network;
+        ensure!(
+            args.num_chars > 0
+                && args.hidden_channels > 0
+                && args.hidden_channels_ffn_text_encoder > 0
+                && args.num_heads_text_encoder > 0
+                && args.num_layers_text_encoder > 0,
+            "VITS text encoder dimensions must be positive"
+        );
+        ensure!(
+            args.hidden_channels % args.num_heads_text_encoder == 0,
+            "VITS hidden channels must divide evenly across attention heads"
+        );
+        ensure!(
+            args.out_channels == self.audio.fft_size / 2 + 1,
+            "VITS output channels {} do not match FFT size {}",
+            args.out_channels,
+            self.audio.fft_size
+        );
+        ensure!(
+            !args.resblock_kernel_sizes_decoder.is_empty()
+                && args.resblock_kernel_sizes_decoder.len()
+                    == args.resblock_dilation_sizes_decoder.len(),
+            "VITS decoder residual kernel and dilation lists differ"
+        );
+        ensure!(
+            args.resblock_dilation_sizes_decoder
+                .iter()
+                .all(|dilations| !dilations.is_empty()),
+            "VITS decoder residual blocks require dilation stages"
+        );
+        ensure!(
+            !args.upsample_rates_decoder.is_empty()
+                && args.upsample_rates_decoder.len() == args.upsample_kernel_sizes_decoder.len(),
+            "VITS decoder upsample rate and kernel lists differ"
+        );
+        let upsample = args
+            .upsample_rates_decoder
+            .iter()
+            .try_fold(1usize, |product, rate| product.checked_mul(*rate))
+            .context("VITS decoder upsample product overflow")?;
+        ensure!(
+            upsample == self.audio.hop_length,
+            "VITS decoder upsample product {upsample} does not match hop length {}",
+            self.audio.hop_length
+        );
+        ensure!(
+            args.inference_noise_scale.is_finite() && args.inference_noise_scale >= 0.0,
+            "VITS inference noise scale must be finite and non-negative"
+        );
+        ensure!(
+            args.inference_noise_scale_dp.is_finite() && args.inference_noise_scale_dp >= 0.0,
+            "VITS duration noise scale must be finite and non-negative"
+        );
+        ensure!(
+            args.length_scale.is_finite() && args.length_scale > 0.0,
+            "VITS length scale must be finite and positive"
+        );
+        if args.use_speaker_embedding {
+            ensure!(
+                args.num_speakers > 0 && args.speaker_embedding_channels > 0,
+                "VITS speaker embedding dimensions must be positive"
+            );
+        }
+        if args.use_d_vector_file {
+            ensure!(
+                args.d_vector_dim > 0,
+                "VITS d-vector mode requires a positive dimension"
+            );
+        }
+        if args.use_language_embedding {
+            ensure!(
+                args.num_languages > 0 && args.embedded_language_dim > 0,
+                "VITS language embedding dimensions must be positive"
+            );
+        }
+        self.audio.mel_contract()?;
+        Ok(())
+    }
 }
 
 fn default_true() -> bool {
@@ -262,14 +375,14 @@ fn default_true() -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn test_vits_config() -> VitsModelConfig {
-    VitsModelConfig {
+pub(crate) fn test_imported_vits_config() -> ImportedVitsConfig {
+    ImportedVitsConfig {
         model: "vits".into(),
         use_phonemes: true,
         phoneme_language: Some("en".into()),
         add_blank: true,
         enable_eos_bos_chars: false,
-        characters: VitsCharactersConfig {
+        characters: ImportedVitsCharactersConfig {
             characters_class: Some("TTS.tts.models.vits.VitsCharacters".into()),
             pad: "_".into(),
             eos: Some(String::new()),
@@ -281,7 +394,7 @@ pub(crate) fn test_vits_config() -> VitsModelConfig {
             is_unique: true,
             is_sorted: true,
         },
-        model_args: VitsModelArgs {
+        model_args: VitsNetworkConfig {
             num_chars: 10,
             out_channels: 5,
             spec_segment_size: 2,
@@ -348,7 +461,7 @@ mod tests {
 
     #[test]
     fn compatibility_vocabulary_keeps_duplicate_rows_and_terminal_blank() {
-        let config = test_vits_config();
+        let config = test_imported_vits_config();
 
         config.validate().expect("valid VITS config");
         assert_eq!(
@@ -362,16 +475,18 @@ mod tests {
         let Some(path) = std::env::var_os("TONGUES_TEST_COQUI_VITS_CONFIG") else {
             return;
         };
-        let config = VitsModelConfig::from_file(path).expect("published VCTK VITS config");
+        let config = ImportedVitsConfig::from_file(path).expect("published VCTK VITS config");
+        let inference = config.inference_config();
 
-        assert_eq!(config.model_args.num_chars, 179);
-        assert_eq!(config.model_args.out_channels, 513);
-        assert_eq!(config.model_args.hidden_channels, 192);
-        assert_eq!(config.model_args.num_speakers, 109);
-        assert_eq!(config.model_args.speaker_embedding_channels, 256);
-        assert_eq!(config.audio.sample_rate, 22_050);
-        assert_eq!(config.audio.hop_length, 256);
-        assert!(config.model_args.use_sdp);
-        assert!(config.model_args.condition_dp_on_speaker);
+        inference.validate().expect("neutral inference config");
+        assert_eq!(inference.network.num_chars, 179);
+        assert_eq!(inference.network.out_channels, 513);
+        assert_eq!(inference.network.hidden_channels, 192);
+        assert_eq!(inference.network.num_speakers, 109);
+        assert_eq!(inference.network.speaker_embedding_channels, 256);
+        assert_eq!(inference.audio.sample_rate, 22_050);
+        assert_eq!(inference.audio.hop_length, 256);
+        assert!(inference.network.use_sdp);
+        assert!(inference.network.condition_dp_on_speaker);
     }
 }

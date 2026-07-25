@@ -15,6 +15,7 @@ use crate::{
 pub enum InferenceRuntime {
     Burn,
     OnnxCompatibility,
+    PassThrough,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -665,7 +666,7 @@ impl IdentityAudioDecoder {
 
 impl AudioDecoder for IdentityAudioDecoder {
     fn runtime(&self) -> InferenceRuntime {
-        InferenceRuntime::Burn
+        InferenceRuntime::PassThrough
     }
 
     fn validate_input_contract(&self, input: &AcousticOutputContract) -> Result<()> {

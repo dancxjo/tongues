@@ -4,20 +4,20 @@ use anyhow::{ensure, Context, Result};
 use speaking::{PauseKind, Spec, TerminalPunctuation, UtterancePlan};
 
 use crate::{
-    LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract,
-    VitsModelConfig, VITS_BLANK_TOKEN,
+    vits_config::ImportedVitsConfig, LinguisticInputKind, LinguisticIntent, LinguisticProjector,
+    ModelInputContract,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VitsTokenIds {
-    pub ids: Vec<i64>,
-    pub projected_symbols: String,
+pub(crate) struct VitsTokenIds {
+    pub(crate) ids: Vec<i64>,
+    pub(crate) projected_symbols: String,
 }
 
 /// Terminal projection from Tongues' linguistic IR into the vocabulary
 /// embedded in a VITS checkpoint.
 #[derive(Debug, Clone)]
-pub struct VitsLinguisticProjector {
+pub(crate) struct VitsLinguisticProjector {
     add_blank: bool,
     vocabulary: Vec<String>,
     symbol_to_id: BTreeMap<String, i64>,
@@ -26,11 +26,11 @@ pub struct VitsLinguisticProjector {
 }
 
 impl VitsLinguisticProjector {
-    pub fn from_json5_str(source: &str) -> Result<Self> {
-        Self::from_config(VitsModelConfig::from_json5_str(source)?)
+    pub(crate) fn from_json5_str(source: &str) -> Result<Self> {
+        Self::from_config(ImportedVitsConfig::from_json5_str(source)?)
     }
 
-    pub fn from_config(config: VitsModelConfig) -> Result<Self> {
+    pub(crate) fn from_config(config: ImportedVitsConfig) -> Result<Self> {
         config.validate()?;
         let vocabulary = config.vocabulary();
         let mut symbol_to_id = BTreeMap::new();
@@ -41,7 +41,7 @@ impl VitsLinguisticProjector {
             symbol_to_id.insert(symbol.clone(), id);
         }
         let blank_id = symbol_to_id
-            .get(VITS_BLANK_TOKEN)
+            .get("<BLNK>")
             .copied()
             .context("VITS blank token is absent from the vocabulary")?;
         let variety = config
@@ -57,7 +57,6 @@ impl VitsLinguisticProjector {
                 LinguisticIntent::Phones,
                 LinguisticIntent::Boundaries,
                 LinguisticIntent::ProsodicBreaks,
-                LinguisticIntent::SpeakerIdentity,
             ]),
         };
         contract.validate()?;
@@ -71,15 +70,15 @@ impl VitsLinguisticProjector {
         })
     }
 
-    pub fn vocabulary(&self) -> &[String] {
+    pub(crate) fn vocabulary(&self) -> &[String] {
         &self.vocabulary
     }
 
-    pub fn symbol_id(&self, symbol: &str) -> Option<i64> {
+    pub(crate) fn symbol_id(&self, symbol: &str) -> Option<i64> {
         self.symbol_to_id.get(symbol).copied()
     }
 
-    pub fn blank_id(&self) -> i64 {
+    pub(crate) fn blank_id(&self) -> i64 {
         self.blank_id
     }
 
@@ -248,7 +247,7 @@ mod tests {
     #[test]
     fn projects_native_ipa_and_intersperses_the_model_blank() {
         let projector =
-            VitsLinguisticProjector::from_config(crate::vits_config::test_vits_config())
+            VitsLinguisticProjector::from_config(crate::vits_config::test_imported_vits_config())
                 .expect("VITS projector");
 
         assert_eq!(projector.symbol_id("'"), Some(3));
