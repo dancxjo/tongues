@@ -26,8 +26,8 @@ use crate::{
 use crate::{LinguisticProjector, ModelInputContract};
 
 const DEFAULT_MAX_OUTPUT_FRAMES: usize = 65_536;
-const STREAM_LATENT_FRAMES: usize = 32;
-const STREAM_CONTEXT_FRAMES: usize = 64;
+const STREAM_LATENT_FRAMES: usize = 64;
+const STREAM_CONTEXT_FRAMES: usize = 32;
 
 #[derive(Module, Debug)]
 struct SpeakerEmbedding<B: Backend> {
@@ -385,7 +385,7 @@ mod tests {
 
         for name in ["p225", "p226"] {
             let mut plan = utterance_plan_from_text(SpeechRequest {
-                text: "A clear day.".into(),
+                text: "Tea.".into(),
                 variety: "en-US".into(),
             })
             .expect("native linguistic plan");

@@ -925,16 +925,33 @@ mod tests {
         let input = Tensor::ones([2, 4, 3], &device);
         let mask = Tensor::ones([2, 1, 3], &device);
         let speaker = Tensor::ones([2, 3, 1], &device);
+        let noise = Tensor::ones([2, 2, 3], &device);
 
         let first = predictor
-            .reverse_seeded(input.clone(), mask.clone(), Some(speaker.clone()), 0.8, 71)
+            .reverse_with_noise(
+                input.clone(),
+                mask.clone(),
+                Some(speaker.clone()),
+                noise.clone(),
+                0.8,
+            )
             .expect("first");
         let second = predictor
-            .reverse_seeded(input, mask, Some(speaker), 0.8, 71)
+            .reverse_with_noise(
+                input.clone(),
+                mask.clone(),
+                Some(speaker.clone()),
+                noise,
+                0.8,
+            )
             .expect("second");
+        let seeded = predictor
+            .reverse_seeded(input, mask, Some(speaker), 0.8, 71)
+            .expect("seeded");
 
         assert_eq!(first.dims(), [2, 1, 3]);
         assert_close(&values(first), &values(second), 1e-6);
+        assert!(values(seeded).iter().all(|value| value.is_finite()));
     }
 
     #[test]
