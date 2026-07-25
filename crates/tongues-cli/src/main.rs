@@ -1312,6 +1312,10 @@ enum CommonPhoneCommands {
         #[arg(long)]
         lr: Option<f64>,
 
+        /// Dropout rate
+        #[arg(long)]
+        dropout: Option<f64>,
+
         /// Random seed
         #[arg(long)]
         seed: Option<u64>,
@@ -7570,6 +7574,7 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             epochs,
             batch_frames,
             lr,
+            dropout,
             seed,
             device,
         } => {
@@ -7587,6 +7592,9 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             }
             if let Some(lr) = lr {
                 config.learning_rate = lr;
+            }
+            if let Some(dropout) = dropout {
+                config.dropout = dropout;
             }
             if let Some(seed) = seed {
                 config.seed = seed;

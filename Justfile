@@ -186,7 +186,7 @@ common-phone-smoke:
     #!/usr/bin/env bash
     set -euo pipefail
     fixture="/tmp/tongues-common-phone-fixture"
-    rm -rf "$fixture" /tmp/tongues-common-phone-mini /tmp/tongues-common-phone-mini-model
+    rm -rf "$fixture" /tmp/tongues-common-phone-mini /tmp/tongues-common-phone-mini-model /tmp/tongues-common-phone-mini-train-eval.json
     mkdir -p "$fixture/audio"
     python3 - <<'PY' "$fixture"
     import json, math, struct, sys, wave
@@ -218,7 +218,25 @@ common-phone-smoke:
     PY
     cargo run --bin tongues -- common-phone prepare --input "$fixture" --out /tmp/tongues-common-phone-mini
     cargo run --bin tongues -- common-phone show --data /tmp/tongues-common-phone-mini --index 0
-    cargo run --bin tongues -- common-phone train --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --task frames2phones --epochs 1 --device cpu
+    cargo run --bin tongues -- common-phone train --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --task frames2phones --epochs 100 --dropout 0 --lr 0.003 --device cpu
+    cargo run --bin tongues -- common-phone eval --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --split train --task frames2phones --samples 2 > /tmp/tongues-common-phone-mini-train-eval.json
+    python3 - <<'PY' /tmp/tongues-common-phone-mini-train-eval.json
+    import json, sys
+    with open(sys.argv[1], encoding="utf-8") as f:
+        report = json.load(f)
+    nonempty = [sample for sample in report["samples"] if sample["phone_prediction"]]
+    blank_ratio = report["blank_ratio"]
+    raw = report.get("raw_argmax", {})
+    print(json.dumps({
+        "split": report["split"],
+        "blank_ratio": blank_ratio,
+        "mean_prediction_length": report["mean_prediction_length"],
+        "raw_argmax": raw,
+        "samples": report["samples"],
+    }, ensure_ascii=False, indent=2))
+    if blank_ratio >= 1.0 or not nonempty:
+        raise SystemExit("Common Phone tiny overfit failed: train split decoded only blanks")
+    PY
     cargo run --bin tongues -- common-phone eval --data /tmp/tongues-common-phone-mini --model /tmp/tongues-common-phone-mini-model --split valid --task frames2phones
 
 # Forward a model-family command to the tongues CLI
@@ -274,9 +292,44 @@ archive:
         echo "Archived generated data, runs, and models to $archive_dir"
     fi
 
-# Synthesize speech using StyleTTS2 or ONNX speech backends
+# Synthesize speech using any configured backend
 speak *args:
     cargo run --bin tongues -- speak "$@"
+
+# Play a shuffled sentence through every built-in speech backend
+speech-demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    sentences=(
+        "Morning light rested on the cedar trees while the kettle began to sing."
+        "A clear river curved through the valley beneath a patient summer sky."
+        "Fresh bread cooled by the window as music drifted in from the garden."
+        "The old observatory opened its dome to a field of quiet stars."
+        "Rain polished the streets, and every lamp made a small golden harbor."
+        "Beyond the orchard, a train carried warm letters toward the coast."
+        "She found a blue feather on the path and tucked it into her notebook."
+        "At dusk, the library windows glowed softly above the sleeping square."
+    )
+    mapfile -t shuffled < <(printf '%s\n' "${sentences[@]}" | shuf)
+    index=0
+
+    play() {
+        local label="$1"
+        local backend="$2"
+        shift 2
+        local sentence="${shuffled[$index]}"
+        index=$((index + 1))
+        printf '\n== %s ==\n%s\n' "$label" "$sentence"
+        cargo run -q --bin tongues -- speak --backend "$backend" "$@" "$sentence"
+    }
+
+    play "Burn components: SpeedySpeech + HiFi-GAN" burn
+    play "Burn end-to-end: VITS speaker p225" vits --speaker p225
+    play "Burn end-to-end: VITS speaker p226" vits --speaker p226
+    play "ONNX compatibility voice" onnx
+    play "StyleTTS2" styletts2
+    play "Deterministic mock backend" mock
 
 # Demonstrate the speaking library across every built-in language variety
 speaking *args:

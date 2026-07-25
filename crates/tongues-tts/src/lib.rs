@@ -24,7 +24,11 @@ use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 pub mod burn_acoustic;
 pub mod burn_hifigan;
 pub mod burn_speedy_speech;
+pub mod burn_vits;
 pub mod burn_vits_decoder;
+pub mod burn_vits_duration;
+pub mod burn_vits_flow;
+pub mod burn_vits_text;
 pub mod burn_vocoder;
 pub mod components;
 pub mod model_config;
@@ -38,8 +42,19 @@ pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_speedy_speech::{
     ResidualConvConfig, SpeedySpeech, SpeedySpeechConfig, SpeedySpeechError, SpeedySpeechOutput,
 };
+pub use burn_vits::BurnVitsSpeech;
 pub use burn_vits_decoder::{
     VitsWaveformDecoder, VitsWaveformDecoderConfig, VitsWaveformDecoderError,
+};
+pub use burn_vits_duration::{
+    StochasticDurationConfig, StochasticDurationError, StochasticDurationPredictor,
+};
+pub use burn_vits_flow::{
+    ceil_durations, expand_prior_statistics, CeiledDurations, ExpandedPrior, ResidualCouplingFlow,
+    ResidualCouplingFlowConfig, VitsFlowError,
+};
+pub use burn_vits_text::{
+    VitsTextPriorConfig, VitsTextPriorEncoder, VitsTextPriorError, VitsTextPriorOutput,
 };
 pub use burn_vocoder::BurnHifiganVocoder;
 pub use components::{

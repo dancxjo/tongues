@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
 use burn::module::{AutodiffModule, Module};
-use burn::nn::loss::{CTCLossConfig, Reduction};
+use burn::nn::loss::{CTCLossConfig, CrossEntropyLossConfig, Reduction};
 use burn::nn::{Dropout, DropoutConfig, Linear, LinearConfig};
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
@@ -34,6 +34,8 @@ pub const DEFAULT_MEL_BINS: usize = 80;
 pub const COMPACT_AUDIO_EXTRA_BINS: usize = 7;
 pub const DEFAULT_COMPACT_AUDIO_FEATURE_BINS: usize =
     DEFAULT_MEL_BINS + DEFAULT_MEL_BINS + COMPACT_AUDIO_EXTRA_BINS;
+pub const DEFAULT_TEMPORAL_CONTEXT_RADIUS: usize = 2;
+pub const POSITION_FEATURE_BINS: usize = 2;
 pub const CTC_BLANK: &str = "<blank>";
 pub const UNK: &str = "<unk>";
 pub const NONE: &str = "none";
@@ -93,7 +95,9 @@ pub struct CommonPhoneTrainConfig {
     pub seed: u64,
     pub hidden_dim: usize,
     pub dropout: f64,
+    pub temporal_context_radius: usize,
     pub phone_ctc_loss_weight: f32,
+    pub phone_frame_loss_weight: f32,
     pub feature_bundle_ctc_loss_weight: f32,
     pub phoneme_ctc_loss_weight: f32,
     pub feature_axis_ctc_loss_weight: f32,
@@ -109,7 +113,9 @@ impl Default for CommonPhoneTrainConfig {
             seed: 42,
             hidden_dim: 128,
             dropout: 0.1,
+            temporal_context_radius: DEFAULT_TEMPORAL_CONTEXT_RADIUS,
             phone_ctc_loss_weight: 1.0,
+            phone_frame_loss_weight: 0.25,
             feature_bundle_ctc_loss_weight: 0.5,
             phoneme_ctc_loss_weight: 0.5,
             feature_axis_ctc_loss_weight: 0.35,
@@ -146,11 +152,25 @@ pub struct ModelConfig {
     pub input_feature_bins: usize,
     pub hidden_dim: usize,
     pub dropout: f64,
+    #[serde(default)]
+    pub temporal_context_radius: usize,
+    #[serde(default)]
+    pub position_feature_bins: usize,
     pub frame_hz: u32,
     pub phone_vocab_size: usize,
     pub phoneme_vocab_size: usize,
     pub feature_bundle_vocab_size: usize,
     pub feature_axis_vocab_sizes: BTreeMap<String, usize>,
+}
+
+impl ModelConfig {
+    fn model_input_bins(&self) -> usize {
+        let context_frames = self.temporal_context_radius.saturating_mul(2) + 1;
+        self.input_feature_bins
+            .saturating_mul(context_frames)
+            .saturating_add(self.position_feature_bins)
+            .max(1)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,6 +346,7 @@ pub struct EvalReport {
     pub edit_distance: usize,
     pub exact_sequence_accuracy: f64,
     pub blank_ratio: f64,
+    pub raw_argmax: RawArgmaxReport,
     pub mean_prediction_length: f64,
     pub mean_target_length: f64,
     pub phone_token_error_rate: Option<f64>,
@@ -336,6 +357,15 @@ pub struct EvalReport {
     pub unknown_phone_symbols: BTreeMap<String, usize>,
     pub language_distribution: BTreeMap<String, usize>,
     pub samples: Vec<GreedySample>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawArgmaxReport {
+    pub total_frames: usize,
+    pub blank_frames: usize,
+    pub nonblank_frames: usize,
+    pub blank_id: u32,
+    pub counts: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -796,6 +826,8 @@ fn train_cpu(
         input_feature_bins: feature_bins,
         hidden_dim: config.hidden_dim,
         dropout: config.dropout,
+        temporal_context_radius: config.temporal_context_radius,
+        position_feature_bins: POSITION_FEATURE_BINS,
         frame_hz: train_rows
             .first()
             .map(|row| row.frame_hz)
@@ -876,6 +908,7 @@ fn train_cpu(
             config,
             data,
             train_rows,
+            &model_config,
             &phone_vocab,
             &phoneme_vocab,
             &feature_bundle_vocab,
@@ -891,6 +924,7 @@ fn train_cpu(
             &eval_model,
             data,
             valid_rows,
+            &model_config,
             &phone_vocab,
             &phoneme_vocab,
             &feature_bundle_vocab,
@@ -981,6 +1015,7 @@ pub fn evaluate(
         &model,
         data,
         &rows,
+        &model_config,
         &phone_vocab,
         &phoneme_vocab,
         &feature_bundle_vocab,
@@ -1085,6 +1120,7 @@ impl CommonPhoneLiveDecoder {
         let device = NdArrayDevice::Cpu;
         let frames = features.len().max(1);
         let bins = self.model_config.input_feature_bins.max(1);
+        let model_bins = self.model_config.model_input_bins();
         let mut values = Vec::with_capacity(frames * bins);
         for frame in features {
             for bin in 0..bins {
@@ -1094,8 +1130,17 @@ impl CommonPhoneLiveDecoder {
         if values.is_empty() {
             values.resize(bins, 0.0);
         }
+        let values = expand_temporal_context(
+            &values,
+            features.len(),
+            bins,
+            frames,
+            bins,
+            self.model_config.temporal_context_radius,
+            self.model_config.position_feature_bins,
+        );
         let input = Tensor::<CpuInferBackend, 3>::from_data(
-            TensorData::new(values, [1, frames, bins]),
+            TensorData::new(values, [1, frames, model_bins]),
             &device,
         );
         let output = self.model.forward(input);
@@ -1262,7 +1307,7 @@ struct CommonPhoneForward<B: Backend> {
 impl ModelConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> CommonPhoneModel<B> {
         CommonPhoneModel {
-            input: LinearConfig::new(self.input_feature_bins, self.hidden_dim).init(device),
+            input: LinearConfig::new(self.model_input_bins(), self.hidden_dim).init(device),
             hidden: LinearConfig::new(self.hidden_dim, self.hidden_dim).init(device),
             dropout: DropoutConfig::new(self.dropout).init(),
             phone: LinearConfig::new(self.hidden_dim, self.phone_vocab_size).init(device),
@@ -1305,6 +1350,7 @@ struct CommonPhoneBatch<B: Backend> {
     input_lengths: Tensor<B, 1, Int>,
     phone_targets: Tensor<B, 2, Int>,
     phone_target_lengths: Tensor<B, 1, Int>,
+    phone_frame_targets: Tensor<B, 2, Int>,
     phoneme_targets: Tensor<B, 2, Int>,
     phoneme_target_lengths: Tensor<B, 1, Int>,
     feature_bundle_targets: Tensor<B, 2, Int>,
@@ -1317,6 +1363,7 @@ fn train_epoch_cpu<R: rand::Rng>(
     config: &CommonPhoneTrainConfig,
     data_dir: &Path,
     rows: &[CommonPhoneRow],
+    model_config: &ModelConfig,
     phone_vocab: &Vocab,
     phoneme_vocab: &Vocab,
     feature_bundle_vocab: &Vocab,
@@ -1343,6 +1390,7 @@ fn train_epoch_cpu<R: rand::Rng>(
         let batch = make_common_phone_batch::<CpuTrainBackend>(
             data_dir,
             &batch_rows,
+            model_config,
             phone_vocab,
             phoneme_vocab,
             feature_bundle_vocab,
@@ -1401,13 +1449,16 @@ fn common_phone_loss<B: Backend>(
     batch: CommonPhoneBatch<B>,
     config: &CommonPhoneTrainConfig,
 ) -> Tensor<B, 1> {
+    let phone_logits = output.phone_logits;
     let phone = ctc_loss(
-        output.phone_logits,
+        phone_logits.clone(),
         batch.phone_targets,
         batch.input_lengths.clone(),
         batch.phone_target_lengths,
         0,
     ) * config.phone_ctc_loss_weight;
+    let phone_frame =
+        ce_loss(phone_logits, batch.phone_frame_targets, 0) * config.phone_frame_loss_weight;
     let feature = ctc_loss(
         output.feature_bundle_logits,
         batch.feature_bundle_targets,
@@ -1423,11 +1474,26 @@ fn common_phone_loss<B: Backend>(
         0,
     ) * config.phoneme_ctc_loss_weight;
     match config.task {
-        CommonPhoneTask::Frames2Phones => phone,
+        CommonPhoneTask::Frames2Phones => phone + phone_frame,
         CommonPhoneTask::Frames2Features => feature,
         CommonPhoneTask::Frames2Phonemes => phoneme,
-        CommonPhoneTask::Multitask => phone + feature + phoneme,
+        CommonPhoneTask::Multitask => phone + phone_frame + feature + phoneme,
     }
+}
+
+fn ce_loss<B: Backend>(
+    logits: Tensor<B, 3>,
+    labels: Tensor<B, 2, Int>,
+    pad: usize,
+) -> Tensor<B, 1> {
+    let [batch, frames, classes] = logits.dims();
+    let ce = CrossEntropyLossConfig::new()
+        .with_pad_tokens((pad != usize::MAX).then_some(vec![pad]))
+        .init::<B>(&logits.device());
+    ce.forward(
+        logits.reshape([batch * frames, classes]),
+        labels.reshape([batch * frames]),
+    )
 }
 
 fn ctc_loss<B: Backend>(
@@ -1477,6 +1543,7 @@ fn batch_indices_by_frames(
 fn make_common_phone_batch<B: Backend>(
     data_dir: &Path,
     rows: &[CommonPhoneRow],
+    model_config: &ModelConfig,
     phone_vocab: &Vocab,
     phoneme_vocab: &Vocab,
     feature_bundle_vocab: &Vocab,
@@ -1488,39 +1555,39 @@ fn make_common_phone_batch<B: Backend>(
         .max()
         .unwrap_or(1)
         .max(1);
-    let frame_dim = rows
+    let source_frame_dim = rows
         .iter()
         .map(|row| row.frame_dim)
         .max()
         .unwrap_or(1)
         .max(1);
-    let mut frames = Vec::with_capacity(rows.len() * max_frames * frame_dim);
+    let frame_dim = model_config.input_feature_bins.max(source_frame_dim).max(1);
+    let model_frame_dim = model_config.model_input_bins();
+    let mut frames = Vec::with_capacity(rows.len() * max_frames * model_frame_dim);
     let mut input_lengths = Vec::with_capacity(rows.len());
     let mut phone_sequences = Vec::new();
+    let mut phone_frame_targets = Vec::with_capacity(rows.len() * max_frames);
     let mut phoneme_sequences = Vec::new();
     let mut feature_bundle_sequences = Vec::new();
     for row in rows {
         let (frame_count, bins, values) = read_feature_file(&data_dir.join(&row.feature_path))?;
         input_lengths.push(frame_count.min(max_frames).max(1) as i32);
-        for frame in 0..max_frames {
-            let start = frame * bins;
-            for bin in 0..frame_dim {
-                frames.push(
-                    values
-                        .get(start + bin)
-                        .copied()
-                        .filter(|_| frame < frame_count && bin < bins)
-                        .unwrap_or(0.0),
-                );
-            }
-        }
-        phone_sequences.push(ctc_target_within_input(
-            row.phones
-                .iter()
-                .map(|token| phone_vocab.get_id(token).max(1) as i32)
-                .collect(),
+        frames.extend(expand_temporal_context(
+            &values,
             frame_count,
+            bins,
+            max_frames,
+            frame_dim,
+            model_config.temporal_context_radius,
+            model_config.position_feature_bins,
         ));
+        let phone_ids = row
+            .phones
+            .iter()
+            .map(|token| phone_vocab.get_id(token).max(1) as i32)
+            .collect::<Vec<_>>();
+        phone_frame_targets.extend(aligned_frame_targets(&phone_ids, frame_count, max_frames));
+        phone_sequences.push(ctc_target_within_input(phone_ids, frame_count));
         phoneme_sequences.push(ctc_target_within_input(
             row.phonemes
                 .iter()
@@ -1544,7 +1611,7 @@ fn make_common_phone_batch<B: Backend>(
         pad_compact_targets(feature_bundle_sequences, 1);
     Ok(CommonPhoneBatch {
         frames: Tensor::<B, 3>::from_data(
-            TensorData::new(frames, [rows.len(), max_frames, frame_dim]),
+            TensorData::new(frames, [rows.len(), max_frames, model_frame_dim]),
             device,
         ),
         input_lengths: Tensor::<B, 1, Int>::from_data(
@@ -1557,6 +1624,10 @@ fn make_common_phone_batch<B: Backend>(
         ),
         phone_target_lengths: Tensor::<B, 1, Int>::from_data(
             TensorData::new(phone_target_lengths, [rows.len()]),
+            device,
+        ),
+        phone_frame_targets: Tensor::<B, 2, Int>::from_data(
+            TensorData::new(phone_frame_targets, [rows.len(), max_frames]),
             device,
         ),
         phoneme_targets: Tensor::<B, 2, Int>::from_data(
@@ -1600,6 +1671,74 @@ fn pad_compact_targets(
     (padded, lengths, width)
 }
 
+fn aligned_frame_targets(targets: &[i32], frame_count: usize, max_frames: usize) -> Vec<i32> {
+    let mut labels = vec![0; max_frames];
+    if targets.is_empty() || frame_count == 0 {
+        return labels;
+    }
+    let real_frames = frame_count.min(max_frames).max(1);
+    for (frame, label) in labels.iter_mut().take(real_frames).enumerate() {
+        let target_index = (frame * targets.len()) / real_frames;
+        *label = targets[target_index.min(targets.len() - 1)];
+    }
+    labels
+}
+
+fn expand_temporal_context(
+    values: &[f32],
+    frame_count: usize,
+    source_bins: usize,
+    output_frames: usize,
+    output_bins: usize,
+    radius: usize,
+    position_bins: usize,
+) -> Vec<f32> {
+    let context_frames = radius.saturating_mul(2) + 1;
+    let mut expanded =
+        Vec::with_capacity(output_frames * (output_bins * context_frames + position_bins));
+    let last_real_frame = frame_count.saturating_sub(1);
+    for frame in 0..output_frames {
+        for offset in 0..context_frames {
+            let source_frame = if frame >= frame_count {
+                frame
+            } else {
+                let shifted = frame as isize + offset as isize - radius as isize;
+                shifted.clamp(0, last_real_frame as isize) as usize
+            };
+            let start = source_frame * source_bins;
+            for bin in 0..output_bins {
+                expanded.push(
+                    values
+                        .get(start + bin)
+                        .copied()
+                        .filter(|_| source_frame < frame_count && bin < source_bins)
+                        .unwrap_or(0.0),
+                );
+            }
+        }
+        if position_bins > 0 {
+            let denom = frame_count.saturating_sub(1).max(1) as f32;
+            let normalized = if frame < frame_count {
+                frame as f32 / denom
+            } else {
+                0.0
+            };
+            expanded.push(normalized);
+            if position_bins > 1 {
+                expanded.push(if frame < frame_count {
+                    1.0 - normalized
+                } else {
+                    0.0
+                });
+            }
+            for _ in 2..position_bins {
+                expanded.push(0.0);
+            }
+        }
+    }
+    expanded
+}
+
 fn ctc_target_within_input(mut sequence: Vec<i32>, input_len: usize) -> Vec<i32> {
     sequence.truncate(input_len.max(1));
     sequence
@@ -1610,6 +1749,7 @@ fn evaluate_model_cpu(
     model: &CommonPhoneModel<CpuInferBackend>,
     data_dir: &Path,
     rows: &[CommonPhoneRow],
+    model_config: &ModelConfig,
     phone_vocab: &Vocab,
     phoneme_vocab: &Vocab,
     feature_bundle_vocab: &Vocab,
@@ -1621,11 +1761,17 @@ fn evaluate_model_cpu(
     let mut stats = EvalStats::default();
     let mut samples = Vec::new();
     let mut language_distribution = BTreeMap::new();
+    let report_vocab = match task {
+        CommonPhoneTask::Frames2Phones | CommonPhoneTask::Multitask => phone_vocab,
+        CommonPhoneTask::Frames2Features => feature_bundle_vocab,
+        CommonPhoneTask::Frames2Phonemes => phoneme_vocab,
+    };
     for row in rows {
         *language_distribution.entry(row.lang.clone()).or_insert(0) += 1;
         let batch = make_common_phone_batch::<CpuInferBackend>(
             data_dir,
             std::slice::from_ref(row),
+            model_config,
             phone_vocab,
             phoneme_vocab,
             feature_bundle_vocab,
@@ -1651,6 +1797,9 @@ fn evaluate_model_cpu(
         };
         stats.frame_predictions += ids.len();
         stats.blank_predictions += ids.iter().filter(|&&id| id == 0).count();
+        for id in &ids {
+            *stats.raw_argmax_counts.entry(*id).or_insert(0) += 1;
+        }
         let pred_ids = ctc_greedy_decode(&ids, 0);
         let prediction = pred_ids
             .iter()
@@ -1676,6 +1825,7 @@ fn evaluate_model_cpu(
         edit_distance: stats.edits,
         exact_sequence_accuracy: stats.exact_accuracy(),
         blank_ratio: stats.blank_ratio(),
+        raw_argmax: stats.raw_argmax_report(report_vocab),
         mean_prediction_length: stats.mean_prediction_length(),
         mean_target_length: stats.mean_target_length(),
         phone_token_error_rate: (task == CommonPhoneTask::Frames2Phones
@@ -1736,6 +1886,7 @@ struct EvalStats {
     prediction_tokens: usize,
     frame_predictions: usize,
     blank_predictions: usize,
+    raw_argmax_counts: BTreeMap<u32, usize>,
 }
 
 impl EvalStats {
@@ -1785,6 +1936,26 @@ impl EvalStats {
             0.0
         } else {
             self.target_tokens as f64 / self.examples as f64
+        }
+    }
+
+    fn raw_argmax_report(&self, vocab: &Vocab) -> RawArgmaxReport {
+        let counts = self
+            .raw_argmax_counts
+            .iter()
+            .map(|(id, count)| {
+                let token = vocab.get_token(*id);
+                (format!("{id}:{token}"), *count)
+            })
+            .collect();
+        RawArgmaxReport {
+            total_frames: self.frame_predictions,
+            blank_frames: self.blank_predictions,
+            nonblank_frames: self
+                .frame_predictions
+                .saturating_sub(self.blank_predictions),
+            blank_id: 0,
+            counts,
         }
     }
 }

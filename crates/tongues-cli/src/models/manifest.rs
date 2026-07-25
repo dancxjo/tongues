@@ -55,6 +55,7 @@ pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
 pub const DEFAULT_VOICE_MODEL_ID: &str = "voice-ljspeech-high";
 pub const DEFAULT_ACOUSTIC_MODEL_ID: &str = "speedy-speech-ljspeech";
 pub const DEFAULT_NEURAL_VOCODER_ID: &str = "hifigan-v2-ljspeech";
+pub const DEFAULT_END_TO_END_SPEECH_MODEL_ID: &str = "vits-vctk";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
@@ -538,7 +539,7 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         ],
     },
     ModelBundle {
-        id: "vits-vctk",
+        id: DEFAULT_END_TO_END_SPEECH_MODEL_ID,
         display_name: "VITS VCTK",
         kind: ModelKind::EndToEndSpeech,
         primary_asset_id: "coqui-vits-vctk-release",

@@ -124,6 +124,7 @@ pub struct SpeakCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum SpeakBackend {
     Burn,
+    Vits,
     Mock,
     Styletts2,
     Onnx,
@@ -235,11 +236,13 @@ type BurnBackend = speech::SpeechPipeline<
     speech::BurnSpeedySpeechAcoustic<NdArray<f32>>,
     speech::VocoderDecoder<speech::BurnHifiganVocoder<NdArray<f32>>>,
 >;
+type VitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
 
 #[allow(dead_code)]
 enum BackendInstance {
     Burn(Box<BurnBackend>),
+    Vits(Box<VitsBackend>),
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
@@ -285,6 +288,39 @@ impl BackendInstance {
                 Ok(SpeechSynthesisArtifact {
                     sample_rate_hz: waveform.contract.sample_rate_hz,
                     pcm: waveform.samples,
+                    timings: Vec::new(),
+                })
+            }
+            Self::Vits(ref mut backend) => {
+                anyhow::ensure!(
+                    options.speed.is_finite() && options.speed > 0.0,
+                    "--speed must be finite and positive"
+                );
+                let request = speech::SpeechSynthesisRequest {
+                    plan: plan.clone(),
+                    options: speech::SynthesisOptions {
+                        speaker_id: options.speaker_id,
+                        split_sentences: true,
+                        length_scale: Some((1.0 / options.speed) as f32),
+                        noise_scale: None,
+                        noise_w: None,
+                    },
+                };
+                let mut pcm = Vec::new();
+                speech::SpeechSynthesisEngine::synthesize_plan_streaming(
+                    backend.as_mut(),
+                    &request,
+                    &mut |chunk: speech::AudioChunk| {
+                        pcm.extend(&chunk.pcm_mono_f32);
+                        if let Some(ref mut cb) = on_audio {
+                            cb(&chunk.pcm_mono_f32);
+                        }
+                        Ok(())
+                    },
+                )?;
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: speech::SpeechSynthesisEngine::sample_rate_hz(backend.as_ref()),
+                    pcm,
                     timings: Vec::new(),
                 })
             }
@@ -480,6 +516,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 
     let backend_label = match command.backend {
         SpeakBackend::Burn => "burn",
+        SpeakBackend::Vits => "vits",
         SpeakBackend::Mock => "mock",
         SpeakBackend::Styletts2 => "styletts2",
         SpeakBackend::Onnx => "onnx",
@@ -487,6 +524,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 
     let target_sample_rate = match command.backend {
         SpeakBackend::Burn => 22_050,
+        SpeakBackend::Vits => 22_050,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => 22050,
@@ -514,6 +552,20 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
                 speech::SpeechPipeline::new(acoustic, speech::VocoderDecoder::new(vocoder))
                     .context("Burn speech components are incompatible")?,
             ))
+        }
+        SpeakBackend::Vits => {
+            let checkpoint = crate::models::ensure_model_available(
+                crate::models::DEFAULT_END_TO_END_SPEECH_MODEL_ID,
+            )?;
+            let config = component_config_path(&checkpoint)?;
+            let speakers = checkpoint
+                .parent()
+                .context("VITS checkpoint path has no parent directory")?
+                .join("speaker_ids.json");
+            let backend =
+                speech::BurnVitsSpeech::load(config, checkpoint, speakers, NdArrayDevice::Cpu)
+                    .context("failed to load Burn VITS speech model")?;
+            BackendInstance::Vits(Box::new(backend))
         }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
@@ -653,7 +705,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
         let artifact = backend.synthesize(&plan, &options, cb_arg, &command)?;
 
         let backend_symbols = match command.backend {
-            SpeakBackend::Burn => format_phones(&phonemicized),
+            SpeakBackend::Burn | SpeakBackend::Vits => format_phones(&phonemicized),
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
                 let styletts2_plan = prepare_styletts2_plan(
                     &plan,
@@ -712,7 +764,7 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 
         println!("chunks:");
         match command.backend {
-            SpeakBackend::Burn => {
+            SpeakBackend::Burn | SpeakBackend::Vits => {
                 println!("  1: {}", format_phones(&phonemicized));
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
@@ -816,6 +868,22 @@ pub fn run_speak(command: SpeakCommand) -> Result<()> {
 fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     if matches!(command.backend, SpeakBackend::Burn) {
         println!("speakers: <none> (single-speaker acoustic model)");
+        return Ok(());
+    }
+    if matches!(command.backend, SpeakBackend::Vits) {
+        let checkpoint = crate::models::ensure_model_available(
+            crate::models::DEFAULT_END_TO_END_SPEECH_MODEL_ID,
+        )?;
+        let config = speech::VitsInferenceConfig::from_file(component_config_path(&checkpoint)?)?;
+        let speaker_path = checkpoint
+            .parent()
+            .context("VITS checkpoint path has no parent directory")?
+            .join("speaker_ids.json");
+        let catalog = speech::SpeakerCatalog::from_file(speaker_path, config.network.num_speakers)?;
+        println!("speakers:");
+        for speaker in catalog.available_names() {
+            println!("  {speaker}");
+        }
         return Ok(());
     }
     anyhow::ensure!(
