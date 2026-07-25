@@ -13,9 +13,9 @@ use crate::{
     SpeechModelFamily, SpeechSynthesisRequest, SpeedySpeech, SpeedySpeechConfig,
 };
 
-/// Burn-native adapter for the released Coqui SpeedySpeech acoustic checkpoint.
+/// Burn-native adapter for a released SpeedySpeech acoustic checkpoint.
 ///
-/// The shared input remains Tongues' linguistic plan. Coqui's checkpoint-local
+/// The shared input remains Tongues' linguistic plan. Checkpoint-local
 /// character IDs exist only between this adapter's projector and model.
 pub struct BurnSpeedySpeechAcoustic<B: Backend> {
     model: SpeedySpeech<B>,
@@ -32,9 +32,9 @@ impl<B: Backend> BurnSpeedySpeechAcoustic<B> {
     ) -> Result<Self> {
         let config_path = config_path.as_ref();
         let source = fs::read_to_string(config_path)
-            .with_context(|| format!("failed to read Coqui config {}", config_path.display()))?;
+            .with_context(|| format!("failed to read model config {}", config_path.display()))?;
         let root: Value = json5::from_str(&source)
-            .with_context(|| format!("invalid Coqui config {}", config_path.display()))?;
+            .with_context(|| format!("invalid model config {}", config_path.display()))?;
         let model_config =
             SpeedySpeechConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
         let projector = PhonemeVocabularyProjector::from_json5_str(&source)?;

@@ -9,7 +9,7 @@ use crate::{
     SpectrogramContract, SpectrogramLayout, Waveform, WaveformContract,
 };
 
-/// Burn-native Coqui HiFi-GAN adapter at the shared acoustic boundary.
+/// Burn-native HiFi-GAN adapter at the shared acoustic boundary.
 pub struct BurnHifiganVocoder<B: Backend> {
     generator: HifiganGenerator<B>,
     input_contract: SpectrogramContract,

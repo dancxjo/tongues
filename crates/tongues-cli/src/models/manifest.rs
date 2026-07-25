@@ -53,8 +53,8 @@ pub const DEFAULT_FACE_MODEL_ID: &str = "face-insightface-buffalo-l";
 pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-large-v3-turbo";
 pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
 pub const DEFAULT_VOICE_MODEL_ID: &str = "voice-ljspeech-high";
-pub const DEFAULT_ACOUSTIC_MODEL_ID: &str = "coqui-speedy-speech-ljspeech";
-pub const DEFAULT_NEURAL_VOCODER_ID: &str = "coqui-hifigan-v2-ljspeech";
+pub const DEFAULT_ACOUSTIC_MODEL_ID: &str = "speedy-speech-ljspeech";
+pub const DEFAULT_NEURAL_VOCODER_ID: &str = "hifigan-v2-ljspeech";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
@@ -513,27 +513,37 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
     },
     ModelBundle {
         id: DEFAULT_ACOUSTIC_MODEL_ID,
-        display_name: "Coqui SpeedySpeech LJSpeech",
+        display_name: "SpeedySpeech LJSpeech",
         kind: ModelKind::AcousticModel,
         primary_asset_id: "coqui-speedy-speech-ljspeech-release",
         required_asset_ids: &["coqui-speedy-speech-ljspeech-release"],
-        aliases: &["speedy-speech", "speedyspeech", "coqui-speedy-speech"],
+        aliases: &[
+            "speedy-speech",
+            "speedyspeech",
+            "coqui-speedy-speech",
+            "coqui-speedy-speech-ljspeech",
+        ],
     },
     ModelBundle {
         id: DEFAULT_NEURAL_VOCODER_ID,
-        display_name: "Coqui HiFi-GAN v2 LJSpeech",
+        display_name: "HiFi-GAN v2 LJSpeech",
         kind: ModelKind::NeuralVocoder,
         primary_asset_id: "coqui-hifigan-v2-ljspeech-release",
         required_asset_ids: &["coqui-hifigan-v2-ljspeech-release"],
-        aliases: &["hifigan-v2", "hifigan", "coqui-hifigan"],
+        aliases: &[
+            "hifigan-v2",
+            "hifigan",
+            "coqui-hifigan",
+            "coqui-hifigan-v2-ljspeech",
+        ],
     },
     ModelBundle {
-        id: "coqui-vits-vctk",
-        display_name: "Coqui VITS VCTK",
+        id: "vits-vctk",
+        display_name: "VITS VCTK",
         kind: ModelKind::EndToEndSpeech,
         primary_asset_id: "coqui-vits-vctk-release",
         required_asset_ids: &["coqui-vits-vctk-release"],
-        aliases: &["vctk-vits", "vits-vctk", "coqui-vctk"],
+        aliases: &["vctk-vits", "coqui-vctk", "coqui-vits-vctk"],
     },
 ];
 
@@ -677,9 +687,9 @@ mod tests {
     #[test]
     fn coqui_archives_have_integrity_and_registered_entrypoints() {
         for (bundle_id, member_count) in [
-            ("coqui-speedy-speech-ljspeech", 2),
-            ("coqui-hifigan-v2-ljspeech", 2),
-            ("coqui-vits-vctk", 3),
+            ("speedy-speech-ljspeech", 2),
+            ("hifigan-v2-ljspeech", 2),
+            ("vits-vctk", 3),
         ] {
             let bundle = find_bundle(bundle_id).expect("bundle");
             let asset = bundle_primary_asset(bundle).expect("asset");

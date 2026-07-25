@@ -64,8 +64,8 @@ pub const AMY_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voi
 pub const AMY_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json";
 pub const LJSPEECH_HIGH_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx";
 pub const LJSPEECH_HIGH_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json";
-pub const COQUI_DEFAULT_TTS_MODEL_NAME: &str = "tts_models/en/ljspeech/tacotron2-DDC";
-pub const COQUI_DEFAULT_VOCODER_MODEL_NAME: &str = "vocoder_models/en/ljspeech/hifigan_v2";
+pub const DEFAULT_TTS_CATALOG_MODEL: &str = "tts_models/en/ljspeech/tacotron2-DDC";
+pub const DEFAULT_VOCODER_CATALOG_MODEL: &str = "vocoder_models/en/ljspeech/hifigan_v2";
 pub const DEFAULT_WIKTIONARY_FALLBACK_MODEL_DIR: &str =
     "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
 
@@ -2195,11 +2195,11 @@ mod tests {
     #[test]
     fn runnable_default_voice_tracks_coqui_ljspeech_default() {
         assert_eq!(
-            COQUI_DEFAULT_TTS_MODEL_NAME,
+            DEFAULT_TTS_CATALOG_MODEL,
             "tts_models/en/ljspeech/tacotron2-DDC"
         );
         assert_eq!(
-            COQUI_DEFAULT_VOCODER_MODEL_NAME,
+            DEFAULT_VOCODER_CATALOG_MODEL,
             "vocoder_models/en/ljspeech/hifigan_v2"
         );
         assert_eq!(

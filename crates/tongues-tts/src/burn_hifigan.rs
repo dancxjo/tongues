@@ -1,16 +1,16 @@
-//! Native Burn implementation of Coqui's HiFi-GAN generator.
+//! Native Burn implementation of a HiFi-GAN generator.
 //!
-//! The module layout deliberately follows Coqui's
-//! `TTS/vocoder/models/hifigan_generator.py`. In particular, the fields named
+//! The module layout deliberately follows a published
+//! `TTS/vocoder/models/hifigan_generator.py` checkpoint hierarchy. The fields named
 //! `conv_pre`, `ups`, `resblocks`, `conv_post`, `convs1`, and `convs2`, plus
 //! the `weight_g`, `weight_v`, and `bias` parameters below, produce the same
-//! paths as the older weight-normalized Coqui PyTorch checkpoints when used
+//! paths as older weight-normalized PyTorch checkpoints when used
 //! with Burn's `PytorchStore`.
 //!
 //! Configuration can be deserialized with Burn's [`Config`] implementation
 //! when the parent has emitted ordinary JSON. [`HifiganGeneratorConfig::from_json_value`]
-//! is also provided for a parent that has already parsed JSON5 and wants Coqui
-//! defaults applied before model construction.
+//! is also provided for a parent that has already parsed JSON5 and wants
+//! checkpoint-compatible defaults applied before model construction.
 
 use std::fmt;
 
@@ -67,7 +67,7 @@ fn same_padding(kernel_size: usize, dilation: usize) -> usize {
     (kernel_size * dilation - dilation) / 2
 }
 
-/// Configuration for Coqui's first HiFi-GAN residual-block variant.
+/// Configuration for the first HiFi-GAN residual-block variant.
 #[derive(Config, Debug, PartialEq)]
 pub struct ResBlock1Config {
     pub channels: usize,
@@ -203,7 +203,7 @@ impl<B: Backend> WeightNormConv1d<B> {
     }
 }
 
-/// A weight-normalized transposed 1-D convolution with Coqui checkpoint names.
+/// A weight-normalized transposed 1-D convolution with checkpoint-compatible names.
 ///
 /// PyTorch transposed-convolution weights are laid out
 /// `[channels_in, channels_out, kernel_size]`. Weight norm still normalizes
@@ -272,7 +272,7 @@ fn weight_norm_dim_zero<B: Backend>(weight: Tensor<B, 3>) -> Tensor<B, 3> {
     weight.powf_scalar(2.0).sum_dims(&[1usize, 2usize]).sqrt()
 }
 
-/// Coqui HiFi-GAN residual block type 1.
+/// HiFi-GAN residual block type 1.
 #[derive(Module, Debug)]
 pub struct ResBlock1<B: Backend> {
     pub convs1: Vec<WeightNormConv1d<B>>,
@@ -291,9 +291,9 @@ impl<B: Backend> ResBlock1<B> {
     }
 }
 
-/// Configurable Coqui HiFi-GAN generator parameters.
+/// Configurable HiFi-GAN generator parameters.
 ///
-/// This native module currently accepts Coqui `resblock_type = "1"`. That is
+/// This native module currently accepts `resblock_type = "1"`. That is
 /// the architecture required by the published LJSpeech HiFi-GAN v2 model and
 /// keeps the checkpoint path `resblocks.N.convs{1,2}.N.*` exact, without an
 /// enum-variant segment that would require `PytorchStore` key remapping.
@@ -322,9 +322,9 @@ pub struct HifiganGeneratorConfig {
 impl HifiganGeneratorConfig {
     /// Builds a config from ordinary JSON produced by a JSON5-aware parent.
     ///
-    /// Coqui's constructor defaults are applied for fields omitted from its
+    /// Common constructor defaults are applied for fields omitted from the
     /// model JSON. The parent remains responsible for selecting the generator
-    /// object from any larger Coqui configuration document.
+    /// object from a larger configuration document.
     pub fn from_json_value(value: &Value) -> Result<Self, HifiganError> {
         let object = value
             .as_object()
@@ -537,7 +537,7 @@ impl HifiganGeneratorConfig {
     }
 }
 
-/// Burn-native Coqui HiFi-GAN waveform generator.
+/// Burn-native HiFi-GAN waveform generator.
 #[derive(Module, Debug)]
 pub struct HifiganGenerator<B: Backend> {
     pub conv_pre: WeightNormConv1d<B>,
@@ -616,7 +616,7 @@ impl<B: Backend> HifiganGenerator<B> {
         Ok(self.conv_post.forward(output).tanh())
     }
 
-    /// Coqui inference with replicate padding on the feature-frame axis.
+    /// Inference with replicate padding on the feature-frame axis.
     pub fn inference(&self, input: Tensor<B, 3>) -> Result<Tensor<B, 3>, HifiganError> {
         self.inference_with_conditioning(input, None)
     }

@@ -1,7 +1,7 @@
-//! Native Burn implementation of Coqui's released LJSpeech SpeedySpeech model.
+//! Native Burn implementation of the released LJSpeech SpeedySpeech model.
 //!
 //! The release named `tts_models/en/ljspeech/speedy-speech` is configured as a
-//! residual-convolution SpeedySpeech model through Coqui's `ForwardTTS`
+//! residual-convolution SpeedySpeech model through the reference `ForwardTTS`
 //! container. This module therefore follows the published checkpoint rather
 //! than the older, subsequently removed standalone container:
 //!
@@ -43,15 +43,15 @@ impl fmt::Display for SpeedySpeechError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(message) => {
-                write!(formatter, "invalid Coqui SpeedySpeech config: {message}")
+                write!(formatter, "invalid SpeedySpeech config: {message}")
             }
             Self::InvalidInput(message) => {
-                write!(formatter, "invalid Coqui SpeedySpeech input: {message}")
+                write!(formatter, "invalid SpeedySpeech input: {message}")
             }
             Self::Checkpoint(message) => {
                 write!(
                     formatter,
-                    "unable to load Coqui SpeedySpeech checkpoint: {message}"
+                    "unable to load SpeedySpeech checkpoint: {message}"
                 )
             }
         }
@@ -159,7 +159,7 @@ impl SpeedySpeechConfig {
         }
     }
 
-    /// Parse the model-specific values from a Coqui `config.json` value.
+    /// Parse the model-specific values from a compatible `config.json` value.
     ///
     /// The caller may use JSON5 before invoking this method when the source
     /// file contains comments.
@@ -446,7 +446,7 @@ fn conv1d<B: Backend>(
         .init(device)
 }
 
-/// Coqui's `Conv1d -> uneven zero pad -> ReLU -> BatchNorm1d` layer.
+/// Checkpoint-compatible `Conv1d -> uneven zero pad -> ReLU -> BatchNorm1d`.
 #[derive(Module, Debug)]
 pub struct Conv1dBn<B: Backend> {
     pub conv1d: Conv1d<B>,
@@ -728,7 +728,7 @@ impl<B: Backend> Decoder<B> {
     }
 }
 
-/// Coqui's channel-axis layer normalization with checkpoint names `gamma`/`beta`.
+/// Channel-axis layer normalization with checkpoint names `gamma`/`beta`.
 #[derive(Module, Debug)]
 pub struct ChannelLayerNorm<B: Backend> {
     pub gamma: Param<Tensor<B, 3>>,
@@ -918,13 +918,13 @@ impl<B: Backend> AlignmentNetwork<B> {
 /// Burn tensors returned by deterministic acoustic inference.
 #[derive(Debug)]
 pub struct SpeedySpeechOutput<B: Backend> {
-    /// Mel spectrogram in Coqui's `[batch, frames, mel_channels]` layout.
+    /// Mel spectrogram in `[batch, frames, mel_channels]` layout.
     pub mel: Tensor<B, 3>,
     /// Rounded per-token durations in `[batch, tokens]` layout.
     pub durations: Tensor<B, 2>,
 }
 
-/// Native Burn acoustic model matching Coqui's published checkpoint hierarchy.
+/// Native Burn acoustic model matching the published checkpoint hierarchy.
 #[derive(Module, Debug)]
 pub struct SpeedySpeech<B: Backend> {
     pub emb: Embedding<B>,
@@ -942,7 +942,7 @@ pub struct SpeedySpeech<B: Backend> {
 }
 
 impl<B: Backend> SpeedySpeech<B> {
-    /// Load the unmodified Coqui `.pth` checkpoint directly through Burn Store.
+    /// Load the unmodified `.pth` checkpoint directly through Burn Store.
     pub fn load_checkpoint(mut self, path: impl AsRef<Path>) -> Result<Self, SpeedySpeechError> {
         let mut store = PytorchStore::from_file(path.as_ref())
             .with_top_level_key("model")
