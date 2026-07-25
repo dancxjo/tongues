@@ -21,13 +21,18 @@ use tongues_core::Vocab;
 use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
+pub mod burn_acoustic;
 pub mod burn_hifigan;
+pub mod burn_speedy_speech;
 pub mod burn_vocoder;
 pub mod components;
 pub mod coqui;
 pub mod coqui_projector;
 
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
+pub use burn_speedy_speech::{
+    ResidualConvConfig, SpeedySpeech, SpeedySpeechConfig, SpeedySpeechError, SpeedySpeechOutput,
+};
 pub use burn_vocoder::BurnHifiganVocoder;
 pub use components::{
     AcousticArtifact, AcousticModel, AcousticOutputContract, CodecContract, CodecDecoder,
@@ -426,11 +431,8 @@ impl WiktionaryFallbackPredictor {
 }
 
 fn wiktionary_language_for_variety(variety: &str) -> &'static str {
-    if variety.starts_with("en") {
-        "eng"
-    } else {
-        "eng"
-    }
+    let _ = variety;
+    "eng"
 }
 
 fn wiktionary_variety_for_speaking_variety(variety: &str) -> Option<&'static str> {
@@ -1529,8 +1531,8 @@ fn parse_u32(value: &Value, field: &'static str) -> Result<u32> {
     let number = value
         .as_u64()
         .with_context(|| format!("invalid voice config field `{field}`: expected integer"))?;
-    Ok(u32::try_from(number)
-        .with_context(|| format!("invalid voice config field `{field}`: exceeds u32"))?)
+    u32::try_from(number)
+        .with_context(|| format!("invalid voice config field `{field}`: exceeds u32"))
 }
 
 fn parse_optional_f32(root: &Value, paths: &[&[&str]], field: &'static str) -> Result<Option<f32>> {
@@ -2338,3 +2340,4 @@ mod tests {
         config
     }
 }
+pub use burn_acoustic::BurnSpeedySpeechAcoustic;

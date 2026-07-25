@@ -46,6 +46,26 @@ pub struct CoquiAudioConfig {
 }
 
 impl CoquiAudioConfig {
+    pub fn from_json5_str(source: &str) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct Config {
+            audio: CoquiAudioConfig,
+        }
+
+        let config: Config =
+            json5::from_str(source).context("failed to parse Coqui audio config")?;
+        config.audio.mel_contract()?;
+        Ok(config.audio)
+    }
+
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("failed to read Coqui config {}", path.display()))?;
+        Self::from_json5_str(&source)
+            .with_context(|| format!("invalid Coqui audio config {}", path.display()))
+    }
+
     pub fn mel_contract(&self) -> Result<SpectrogramContract> {
         ensure!(
             self.preemphasis.is_finite() && (0.0..1.0).contains(&self.preemphasis),

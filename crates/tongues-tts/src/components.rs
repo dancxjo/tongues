@@ -273,7 +273,9 @@ impl Waveform {
     pub fn validate(&self) -> Result<()> {
         self.contract.validate()?;
         ensure!(
-            self.samples.len() % usize::from(self.contract.channels) == 0,
+            self.samples
+                .len()
+                .is_multiple_of(usize::from(self.contract.channels)),
             "waveform sample count {} is not divisible by {} channels",
             self.samples.len(),
             self.contract.channels
