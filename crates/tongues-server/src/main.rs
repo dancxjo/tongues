@@ -2470,10 +2470,10 @@ async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoRespon
     let admission = state.speech_admission.clone();
     match tokio::task::spawn_blocking(move || {
         let _phase_reset = SpeechPhaseReset(Arc::clone(&phase));
-        phase.store(SPEECH_PHASE_RELOADING, Ordering::Release);
         let mut service = registry
             .lock()
             .map_err(|_| "resident speech registry lock is poisoned")?;
+        phase.store(SPEECH_PHASE_RELOADING, Ordering::Release);
         service.engines.clear();
         service.failures.clear();
         phase.store(SPEECH_PHASE_IDLE, Ordering::Release);
