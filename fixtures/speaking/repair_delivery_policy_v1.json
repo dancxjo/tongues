@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "cutoff-and-repeat",
+      "variety": "en-US-GA",
+      "detection": {
+        "heard_by_listener": true,
+        "cause": "pronunciation",
+        "reparandum": { "start_word": 2, "end_word": 3 },
+        "repair_span": { "start_word": 2, "end_word": 3 },
+        "continuation": { "start_word": 3, "end_word": 5 },
+        "anchors": [
+          { "word_index": 1, "source": "morphology" },
+          { "word_index": 2, "source": "morphology" }
+        ]
+      },
+      "expected_mode": "cutoff_and_repeat",
+      "expected_anchor_word": 2
+    },
+    {
+      "id": "repetition-retrace",
+      "variety": "en-US-GA",
+      "detection": {
+        "heard_by_listener": true,
+        "cause": "morphology",
+        "reparandum": { "start_word": 3, "end_word": 4 },
+        "repair_span": { "start_word": 3, "end_word": 5 },
+        "continuation": { "start_word": 5, "end_word": 7 },
+        "anchors": [
+          { "word_index": 2, "source": "morphology" },
+          { "word_index": 3, "source": "morphology" }
+        ]
+      },
+      "expected_mode": "word_phrase_retrace",
+      "expected_anchor_word": 3
+    },
+    {
+      "id": "lexical-replacement",
+      "variety": "es-ES",
+      "detection": {
+        "heard_by_listener": true,
+        "cause": "lexical_choice",
+        "reparandum": { "start_word": 4, "end_word": 5 },
+        "repair_span": { "start_word": 4, "end_word": 6 },
+        "continuation": { "start_word": 6, "end_word": 8 },
+        "anchors": [
+          { "word_index": 4, "source": "morphology" }
+        ]
+      },
+      "expected_mode": "i_mean_replacement",
+      "expected_anchor_word": 4
+    },
+    {
+      "id": "phrase-restart",
+      "variety": "en-US-GA",
+      "detection": {
+        "heard_by_listener": true,
+        "cause": "sentence_boundary",
+        "reparandum": { "start_word": 5, "end_word": 7 },
+        "repair_span": { "start_word": 5, "end_word": 8 },
+        "continuation": { "start_word": 8, "end_word": 10 },
+        "anchors": [
+          { "word_index": 3, "source": "prosody" },
+          { "word_index": 5, "source": "morphology" }
+        ]
+      },
+      "expected_mode": "clause_restart",
+      "expected_anchor_word": 3
+    },
+    {
+      "id": "clause-restart",
+      "variety": "en-US-GA",
+      "detection": {
+        "heard_by_listener": true,
+        "cause": "syntax",
+        "reparandum": { "start_word": 6, "end_word": 9 },
+        "repair_span": { "start_word": 4, "end_word": 9 },
+        "continuation": { "start_word": 9, "end_word": 11 },
+        "anchors": [
+          { "word_index": 1, "source": "syntax" },
+          { "word_index": 4, "source": "prosody" },
+          { "word_index": 6, "source": "morphology" }
+        ]
+      },
+      "expected_mode": "clause_restart",
+      "expected_anchor_word": 1
+    }
+  ]
+}
