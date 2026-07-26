@@ -495,12 +495,38 @@ enum Commands {
     Phonemes {
         /// The text to phonemize
         text: String,
+
+        /// Linguistic variety used by the canonical pronunciation pipeline
+        #[arg(long, default_value = "en-US")]
+        variety: String,
     },
 
     /// Phonemize text into a narrow IPA phone sequence
     Phones {
         /// The text to phonemize
         text: String,
+
+        /// Linguistic variety used by the canonical pronunciation pipeline
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+    },
+
+    /// Inspect every stage of the canonical pronunciation pipeline
+    Pronunciation {
+        /// The text to analyze
+        text: String,
+
+        /// Linguistic variety used by the canonical pronunciation pipeline
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+
+        /// Disable casual-style realization rules
+        #[arg(long)]
+        careful_style: bool,
+
+        /// Print the versioned structured analysis as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage local models
@@ -2014,8 +2040,14 @@ fn main() -> Result<()> {
             varieties,
             format,
         } => cmd_speaking_demo(mode, &varieties, format),
-        Commands::Phonemes { text } => cmd_phonemes(&text),
-        Commands::Phones { text } => cmd_phones(&text),
+        Commands::Phonemes { text, variety } => cmd_phonemes(&text, &variety),
+        Commands::Phones { text, variety } => cmd_phones(&text, &variety),
+        Commands::Pronunciation {
+            text,
+            variety,
+            careful_style,
+            json,
+        } => cmd_pronunciation(&text, &variety, careful_style, json),
         Commands::Models { command } => models::run(command),
     }
 }
@@ -9643,89 +9675,49 @@ fn print_speaking_demo_text(reports: &[serde_json::Value]) {
     }
 }
 
-fn cmd_phonemes(text: &str) -> Result<()> {
-    use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
-
-    let variety = VarietyId("en-US".to_string());
-    let phonemicizer = phonemicizer_for_variety(&variety)
-        .map_err(|e| anyhow::anyhow!("Failed to load phonemicizer: {e}"))?;
-    let phonemicized = phonemicizer
-        .phonemicize(&PhonemicizeRequest {
+fn canonical_pronunciation(
+    text: &str,
+    variety: &str,
+    careful_style: bool,
+) -> Result<speaking::PronunciationAnalysis> {
+    speaking::analyze_pronunciation(&speaking::PhonemicizeRequest {
             text: text.to_string(),
-            variety,
-            style: None,
+            variety: speaking::VarietyId(variety.to_string()),
+            style: careful_style.then_some(speaking::PhonemicizeStyle {
+                careful_style: true,
+            }),
         })
-        .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
+        .map_err(|error| anyhow::anyhow!("Failed to analyze pronunciation: {error}"))
+}
 
-    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
-    for syllable in phonemicized.syllables.iter() {
-        if let Some(first_phone) = syllable.phones.first() {
-            if let Some(word_idx) = token_word_index(&first_phone.features) {
-                if let Some(last_word) = words.last_mut() {
-                    if last_word.0 == word_idx {
-                        last_word.1.push(syllable.clone());
-                        continue;
-                    }
-                }
-                words.push((word_idx, vec![syllable.clone()]));
-            }
-        }
-    }
-
-    let mut ipa_words = Vec::new();
-    for (_, word_syllables) in words {
-        let ipa = syllables_to_phonemes_ipa(
-            &word_syllables,
-            &phonemicized.phonemes,
-            &phonemicized.variety,
-        );
-        if !ipa.is_empty() {
-            ipa_words.push(ipa);
-        }
-    }
-
-    println!("/{}/", ipa_words.join(" "));
+fn cmd_phonemes(text: &str, variety: &str) -> Result<()> {
+    let analysis = canonical_pronunciation(text, variety, false)?;
+    println!("/{}/", analysis.broad_phonemes);
     Ok(())
 }
 
-fn cmd_phones(text: &str) -> Result<()> {
-    use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
+fn cmd_phones(text: &str, variety: &str) -> Result<()> {
+    let analysis = canonical_pronunciation(text, variety, false)?;
+    println!("[{}]", analysis.realized_phones);
+    Ok(())
+}
 
-    let variety = VarietyId("en-US".to_string());
-    let phonemicizer = phonemicizer_for_variety(&variety)
-        .map_err(|e| anyhow::anyhow!("Failed to load phonemicizer: {e}"))?;
-    let phonemicized = phonemicizer
-        .phonemicize(&PhonemicizeRequest {
-            text: text.to_string(),
-            variety,
-            style: None,
-        })
-        .map_err(|e| anyhow::anyhow!("Failed to phonemicize: {:?}", e))?;
-
-    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
-    for syllable in phonemicized.syllables.iter() {
-        if let Some(first_phone) = syllable.phones.first() {
-            if let Some(word_idx) = token_word_index(&first_phone.features) {
-                if let Some(last_word) = words.last_mut() {
-                    if last_word.0 == word_idx {
-                        last_word.1.push(syllable.clone());
-                        continue;
-                    }
-                }
-                words.push((word_idx, vec![syllable.clone()]));
-            }
-        }
+fn cmd_pronunciation(text: &str, variety: &str, careful_style: bool, json: bool) -> Result<()> {
+    let analysis = canonical_pronunciation(text, variety, careful_style)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&analysis)?);
+        return Ok(());
     }
-
-    let mut ipa_words = Vec::new();
-    for (_, word_syllables) in words {
-        let ipa = syllables_to_ipa_formatted(&word_syllables);
-        if !ipa.is_empty() {
-            ipa_words.push(ipa);
-        }
+    println!("normalized text: {}", analysis.normalized_text);
+    println!("broad phonemes: /{}/", analysis.broad_phonemes);
+    println!("realized phones: [{}]", analysis.realized_phones);
+    println!("trace:");
+    for step in &analysis.trace {
+        println!(
+            "  {}: {:?} -> {:?} ({}, confidence {:.3})",
+            step.stage, step.before, step.after, step.method, step.confidence
+        );
     }
-
-    println!("[{}]", ipa_words.join(" "));
     Ok(())
 }
 
