@@ -1,9 +1,14 @@
 //! MelGAN and MultiBand-MelGAN training hooks.
 //!
 //! [`MelganTrainer`] and [`MultibandMelganTrainer`] own a generator and a
-//! multi-scale discriminator and implement [`BurnVocoderTrainingHooks`].  Both
-//! follow the MelGAN training schedule (Kumar et al., 2019):
+//! multi-scale discriminator and implement [`BurnVocoderTrainingHooks`]. Both
+//! default to updating generator and discriminator once per batch, while also
+//! supporting a deterministic discriminator-then-generator cycle.
 //!
+//! - **Default (`EveryBatch`)**: compute generator and discriminator losses for
+//!   the same batch and return [`VocoderTrainingPhase::Joint`].
+//! - **Alternating (`Cycle { discriminator_steps: 1, generator_steps: 1 }`)**:
+//!   discriminator, generator, discriminator, generator, ...
 //! - **Generator step**: generate waveform, compute adversarial + feature-
 //!   matching losses.
 //! - **Discriminator step**: compute LSGAN discriminator loss on real vs. fake.
@@ -24,7 +29,7 @@ use crate::burn_vocoder_losses::{
 };
 use crate::burn_vocoder_training::{
     BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
-    VocoderTrainingPhase,
+    VocoderAdversarialUpdateSchedule, VocoderTrainingPhase, VocoderTrainingProgress,
 };
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -63,6 +68,7 @@ fn generator_output<B: Backend>(
     target_waveform: Tensor<B, 3>,
     predicted_waveform: Tensor<B, 3>,
     loss_weights: &LossWeightsHolder,
+    progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
     let weights = loss_weights.to_weights();
     let real = target_waveform.clone().detach();
@@ -91,6 +97,7 @@ fn generator_output<B: Backend>(
     let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_zero, recon_loss, &weights);
 
     Ok(BurnVocoderTrainingOutput {
+        progress,
         phase: VocoderTrainingPhase::Generator,
         predicted_waveform,
         discriminator_outputs: None,
@@ -103,6 +110,7 @@ fn discriminator_output<B: Backend>(
     msd: &MultiScaleDiscriminator<B>,
     target_waveform: Tensor<B, 3>,
     predicted_waveform: Tensor<B, 3>,
+    progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
     let msd_real = msd.forward(target_waveform);
     let msd_fake = msd.forward(predicted_waveform.clone().detach());
@@ -110,11 +118,37 @@ fn discriminator_output<B: Backend>(
     let disc_loss = adversarial_discriminator_loss(msd_real.scores(), msd_fake.scores());
 
     Ok(BurnVocoderTrainingOutput {
+        progress,
         phase: VocoderTrainingPhase::Discriminator,
         predicted_waveform,
         discriminator_outputs: None,
         generator_loss: None,
         discriminator_loss: Some(disc_loss),
+    })
+}
+
+fn joint_output<B: Backend>(
+    msd: &MultiScaleDiscriminator<B>,
+    target_waveform: Tensor<B, 3>,
+    predicted_waveform: Tensor<B, 3>,
+    loss_weights: &LossWeightsHolder,
+    progress: VocoderTrainingProgress,
+) -> Result<BurnVocoderTrainingOutput<B>> {
+    let generator = generator_output(
+        msd,
+        target_waveform.clone(),
+        predicted_waveform.clone(),
+        loss_weights,
+        progress,
+    )?;
+    let discriminator = discriminator_output(msd, target_waveform, predicted_waveform, progress)?;
+    Ok(BurnVocoderTrainingOutput {
+        progress,
+        phase: VocoderTrainingPhase::Joint,
+        predicted_waveform: generator.predicted_waveform,
+        discriminator_outputs: None,
+        generator_loss: generator.generator_loss,
+        discriminator_loss: discriminator.discriminator_loss,
     })
 }
 
@@ -125,7 +159,7 @@ fn discriminator_output<B: Backend>(
 pub struct MelganTrainer<B: Backend> {
     pub generator: MelganGenerator<B>,
     pub msd: MultiScaleDiscriminator<B>,
-    disc_update_interval: u64,
+    adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: LossWeightsHolder,
 }
 
@@ -135,19 +169,24 @@ impl<B: Backend> MelganTrainer<B> {
         generator: MelganGenerator<B>,
         device: &B::Device,
         loss_weights: VocoderLossWeights,
-        disc_update_interval: u64,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
     ) -> Self {
         Self {
             msd: MultiScaleDiscriminator::new(device),
             generator,
-            disc_update_interval: disc_update_interval.max(1),
+            adversarial_schedule,
             loss_weights: LossWeightsHolder::new(&loss_weights),
         }
     }
 
     /// Construct a trainer with MelGAN paper default loss weights.
     pub fn with_defaults(generator: MelganGenerator<B>, device: &B::Device) -> Self {
-        Self::new(generator, device, VocoderLossWeights::melgan(), 1)
+        Self::new(
+            generator,
+            device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::EveryBatch,
+        )
     }
 
     fn generate(&self, conditioning_mel: Tensor<B, 3>) -> Result<Tensor<B, 3>> {
@@ -161,11 +200,7 @@ impl<B: Backend> MelganTrainer<B> {
 
 impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
     fn training_phase(&self, global_step: u64) -> VocoderTrainingPhase {
-        if global_step % self.disc_update_interval == 0 {
-            VocoderTrainingPhase::Discriminator
-        } else {
-            VocoderTrainingPhase::Generator
-        }
+        self.adversarial_schedule.training_phase(global_step)
     }
 
     fn training_forward(
@@ -174,16 +209,25 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
         global_step: u64,
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let predicted = self.generate(batch.conditioning_mel)?;
-        match self.training_phase(global_step) {
-            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => generator_output(
+        let progress = self.adversarial_schedule.progress(global_step);
+        match progress.phase {
+            VocoderTrainingPhase::Generator => generator_output(
                 &self.msd,
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                progress,
             ),
             VocoderTrainingPhase::Discriminator => {
-                discriminator_output(&self.msd, batch.target_waveform, predicted)
+                discriminator_output(&self.msd, batch.target_waveform, predicted, progress)
             }
+            VocoderTrainingPhase::Joint => joint_output(
+                &self.msd,
+                batch.target_waveform,
+                predicted,
+                &self.loss_weights,
+                progress,
+            ),
         }
     }
 }
@@ -198,7 +242,7 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
 pub struct MultibandMelganTrainer<B: Backend> {
     pub generator: MultibandMelganGenerator<B>,
     pub msd: MultiScaleDiscriminator<B>,
-    disc_update_interval: u64,
+    adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: LossWeightsHolder,
 }
 
@@ -208,19 +252,24 @@ impl<B: Backend> MultibandMelganTrainer<B> {
         generator: MultibandMelganGenerator<B>,
         device: &B::Device,
         loss_weights: VocoderLossWeights,
-        disc_update_interval: u64,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
     ) -> Self {
         Self {
             msd: MultiScaleDiscriminator::new(device),
             generator,
-            disc_update_interval: disc_update_interval.max(1),
+            adversarial_schedule,
             loss_weights: LossWeightsHolder::new(&loss_weights),
         }
     }
 
     /// Construct a trainer with MelGAN paper default loss weights.
     pub fn with_defaults(generator: MultibandMelganGenerator<B>, device: &B::Device) -> Self {
-        Self::new(generator, device, VocoderLossWeights::melgan(), 1)
+        Self::new(
+            generator,
+            device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::EveryBatch,
+        )
     }
 
     /// Generate full-bandwidth waveform via PQMF synthesis.
@@ -234,11 +283,7 @@ impl<B: Backend> MultibandMelganTrainer<B> {
 
 impl<B: Backend> BurnVocoderTrainingHooks<B> for MultibandMelganTrainer<B> {
     fn training_phase(&self, global_step: u64) -> VocoderTrainingPhase {
-        if global_step % self.disc_update_interval == 0 {
-            VocoderTrainingPhase::Discriminator
-        } else {
-            VocoderTrainingPhase::Generator
-        }
+        self.adversarial_schedule.training_phase(global_step)
     }
 
     fn training_forward(
@@ -247,16 +292,25 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MultibandMelganTrainer<B> {
         global_step: u64,
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let predicted = self.generate(batch.conditioning_mel)?;
-        match self.training_phase(global_step) {
-            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => generator_output(
+        let progress = self.adversarial_schedule.progress(global_step);
+        match progress.phase {
+            VocoderTrainingPhase::Generator => generator_output(
                 &self.msd,
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                progress,
             ),
             VocoderTrainingPhase::Discriminator => {
-                discriminator_output(&self.msd, batch.target_waveform, predicted)
+                discriminator_output(&self.msd, batch.target_waveform, predicted, progress)
             }
+            VocoderTrainingPhase::Joint => joint_output(
+                &self.msd,
+                batch.target_waveform,
+                predicted,
+                &self.loss_weights,
+                progress,
+            ),
         }
     }
 }
@@ -303,9 +357,16 @@ mod tests {
         let gen = tiny_melgan_config(1)
             .init::<TestBackend>(&device)
             .expect("generator");
-        let trainer = MelganTrainer::new(gen, &device, VocoderLossWeights::melgan(), 2);
+        let trainer = MelganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
+        );
 
-        // Step 1 → generator phase (interval 2 → step 0 is disc, step 1 is gen).
         // upsample = 2×2 = 4; 3 frames × 4 = 12 samples.
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 1).expect("forward");
@@ -329,7 +390,15 @@ mod tests {
         let gen = tiny_melgan_config(1)
             .init::<TestBackend>(&device)
             .expect("generator");
-        let trainer = MelganTrainer::with_defaults(gen, &device);
+        let trainer = MelganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
+        );
         // upsample = 2×2 = 4; 3 frames × 4 = 12 samples.
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 0).expect("forward");
@@ -353,7 +422,15 @@ mod tests {
         let gen = tiny_melgan_config(4)
             .init_multiband::<TestBackend>(PqmfConfig::default(), &device)
             .expect("generator");
-        let trainer = MultibandMelganTrainer::with_defaults(gen, &device);
+        let trainer = MultibandMelganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
+        );
         // batch with samples = (frames + 2*padding) * upsample * subbands
         // (3 + 4) * 4 * 4 = 112
         let batch = make_batch(1, 3, 4, 112, &device);
@@ -372,12 +449,20 @@ mod tests {
     }
 
     #[test]
-    fn melgan_phase_schedule_respects_disc_interval() {
+    fn melgan_phase_schedule_respects_documented_cycle() {
         let device = NdArrayDevice::Cpu;
         let gen = tiny_melgan_config(1)
             .init::<TestBackend>(&device)
             .expect("generator");
-        let trainer = MelganTrainer::new(gen, &device, VocoderLossWeights::melgan(), 3);
+        let trainer = MelganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::melgan(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 2,
+            },
+        );
         assert_eq!(
             trainer.training_phase(0),
             VocoderTrainingPhase::Discriminator
@@ -388,5 +473,39 @@ mod tests {
             trainer.training_phase(3),
             VocoderTrainingPhase::Discriminator
         );
+    }
+
+    #[test]
+    fn default_schedule_returns_both_losses() {
+        let device = NdArrayDevice::Cpu;
+        TestBackend::seed(&device, 13);
+        let gen = tiny_melgan_config(1)
+            .init::<TestBackend>(&device)
+            .expect("generator");
+        let trainer = MelganTrainer::with_defaults(gen, &device);
+        let batch = make_batch(1, 3, 4, 12, &device);
+        let output = trainer.training_forward(batch, 0).expect("forward");
+        assert_eq!(output.phase, VocoderTrainingPhase::Joint);
+        assert!(output.generator_loss.is_some());
+        assert!(output.discriminator_loss.is_some());
+        assert_eq!(output.progress.generator_updates, 1);
+        assert_eq!(output.progress.discriminator_updates, 1);
+    }
+
+    #[test]
+    fn multiband_default_schedule_returns_both_losses() {
+        let device = NdArrayDevice::Cpu;
+        TestBackend::seed(&device, 14);
+        let gen = tiny_melgan_config(4)
+            .init_multiband::<TestBackend>(PqmfConfig::default(), &device)
+            .expect("generator");
+        let trainer = MultibandMelganTrainer::with_defaults(gen, &device);
+        let batch = make_batch(1, 3, 4, 112, &device);
+        let output = trainer.training_forward(batch, 0).expect("forward");
+        assert_eq!(output.phase, VocoderTrainingPhase::Joint);
+        assert!(output.generator_loss.is_some());
+        assert!(output.discriminator_loss.is_some());
+        assert_eq!(output.progress.generator_updates, 1);
+        assert_eq!(output.progress.discriminator_updates, 1);
     }
 }

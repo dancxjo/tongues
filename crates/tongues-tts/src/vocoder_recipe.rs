@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::burn_hifigan::HifiganGeneratorConfig;
 use crate::burn_melgan::{MelganGeneratorConfig, PqmfConfig};
 use crate::burn_vocoder_losses::VocoderLossWeights;
+use crate::burn_vocoder_training::VocoderAdversarialUpdateSchedule;
 
 /// Identifies the schema version so saved recipes can be validated on load.
 pub const RECIPE_SCHEMA_VERSION: u32 = 1;
@@ -65,9 +66,19 @@ pub struct VocoderTrainingHyperparams {
     pub max_steps: u64,
     /// How many audio samples per training segment.
     pub segment_size: usize,
-    /// Number of steps between discriminator weight updates when alternating.
-    /// Set to 1 to update discriminator every step.
-    #[serde(default = "default_disc_interval")]
+    /// Shared adversarial update schedule.
+    ///
+    /// - `EveryBatch` updates generator and discriminator once per batch.
+    /// - `Cycle { discriminator_steps: 1, generator_steps: 1 }` alternates
+    ///   discriminator and generator batches.
+    /// - `Cycle { discriminator_steps: 1, generator_steps: 2 }` runs
+    ///   discriminator, generator, generator, then repeats.
+    #[serde(default)]
+    pub adversarial_schedule: VocoderAdversarialUpdateSchedule,
+    /// Legacy interval-based schedule retained for backward-compatible recipe
+    /// loading. New recipes should leave this at `0` and use
+    /// [`Self::adversarial_schedule`] instead.
+    #[serde(default)]
     pub discriminator_update_interval: u64,
     /// Number of steps between checkpoint saves (0 = every epoch).
     #[serde(default)]
@@ -85,10 +96,6 @@ fn default_beta2() -> f64 {
     0.99
 }
 
-fn default_disc_interval() -> u64 {
-    1
-}
-
 fn default_eval_interval() -> u64 {
     1000
 }
@@ -103,9 +110,33 @@ impl Default for VocoderTrainingHyperparams {
             batch_size: 16,
             max_steps: 0,
             segment_size: 8192,
-            discriminator_update_interval: 1,
+            adversarial_schedule: VocoderAdversarialUpdateSchedule::EveryBatch,
+            discriminator_update_interval: 0,
             checkpoint_interval_steps: 0,
             eval_interval_steps: 1000,
+        }
+    }
+}
+
+impl VocoderTrainingHyperparams {
+    /// Resolve the schedule that training code should apply.
+    ///
+    /// Legacy recipes may still carry `discriminator_update_interval`; a value
+    /// of `1` is mapped to `EveryBatch` so the default no longer starves the
+    /// generator, while larger values become a deterministic
+    /// discriminator-then-generator cycle.
+    pub fn resolved_adversarial_schedule(&self) -> VocoderAdversarialUpdateSchedule {
+        if self.discriminator_update_interval == 0 {
+            return self.adversarial_schedule;
+        }
+
+        if self.discriminator_update_interval == 1 {
+            VocoderAdversarialUpdateSchedule::EveryBatch
+        } else {
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: self.discriminator_update_interval - 1,
+            }
         }
     }
 }
@@ -481,6 +512,30 @@ mod tests {
         assert_eq!(rt.feature_matching, sw.feature_matching);
         assert_eq!(rt.mel_spectrogram, sw.mel_spectrogram);
         assert_eq!(rt.waveform_reconstruction, sw.waveform_reconstruction);
+    }
+
+    #[test]
+    fn default_hyperparams_update_both_parameter_groups_per_batch() {
+        let hyperparams = VocoderTrainingHyperparams::default();
+        assert_eq!(
+            hyperparams.resolved_adversarial_schedule(),
+            VocoderAdversarialUpdateSchedule::EveryBatch
+        );
+    }
+
+    #[test]
+    fn legacy_discriminator_interval_maps_to_deterministic_cycle() {
+        let hyperparams = VocoderTrainingHyperparams {
+            discriminator_update_interval: 3,
+            ..VocoderTrainingHyperparams::default()
+        };
+        assert_eq!(
+            hyperparams.resolved_adversarial_schedule(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 2,
+            }
+        );
     }
 
     #[test]
