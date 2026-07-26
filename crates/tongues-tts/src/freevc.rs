@@ -627,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the licensed FreeVC speaker_encoder.pt artifact"]
+    #[ignore = "requires the licensed FreeVC speaker_encoder.pt artifact; run scripts/speech-conformance.sh (freevc family)"]
     fn published_speaker_encoder_loads_and_separates_fixtures() {
         let checkpoint =
             std::env::var("TONGUES_FREEVC_SPEAKER_CHECKPOINT").expect("speaker checkpoint");
@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the complete licensed FreeVC24 artifact set"]
+    #[ignore = "requires the complete licensed FreeVC24 artifact set; run scripts/speech-conformance.sh (freevc family)"]
     fn published_artifacts_convert_without_python() {
         let model_dir = std::env::var("TONGUES_FREEVC_MODEL_DIR").expect("FreeVC model directory");
         let source = std::env::var("TONGUES_FREEVC_SOURCE_WAV").expect("source WAV");

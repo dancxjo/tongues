@@ -721,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the pinned published Coqui speaker encoder"]
+    #[ignore = "requires the pinned published Coqui speaker encoder; run scripts/speech-conformance.sh (yourtts family)"]
     fn published_resnet_encodes_reference_audio_when_available() {
         let config_path = std::env::var_os("TONGUES_TEST_COQUI_SPEAKER_CONFIG")
             .expect("TONGUES_TEST_COQUI_SPEAKER_CONFIG is required");

@@ -1626,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact; run scripts/speech-conformance.sh (glow-tts family)"]
     fn published_glow_checkpoint_synthesizes() {
         let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")
             .expect("TONGUES_TEST_GLOW_CONFIG is required");
@@ -1846,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an external SC-GlowTTS artifact with affirmative license evidence"]
+    #[ignore = "requires an external SC-GlowTTS artifact with affirmative license evidence; not part of the standard conformance lane"]
     fn external_sc_glow_checkpoint_synthesizes() {
         let config_path = std::env::var_os("TONGUES_TEST_SC_GLOW_CONFIG")
             .expect("TONGUES_TEST_SC_GLOW_CONFIG is required");

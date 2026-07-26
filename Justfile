@@ -311,6 +311,10 @@ speak *args:
 speech-benchmark *args:
     scripts/speech-benchmark.sh "$@"
 
+# Run artifact-backed speech conformance for all locally available families
+speech-conformance *args:
+    scripts/speech-conformance.sh "$@"
+
 # Play shuffled sentences through resident speech backends, preferring CUDA
 speech-demo *args:
     @cargo run -q -p xtask -- speech-demo "$@"

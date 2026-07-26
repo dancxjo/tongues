@@ -3018,7 +3018,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact; run scripts/speech-conformance.sh (glow-tts family)"]
     fn published_glow_tts_fixture_uses_common_importer() {
         let options = fixture_options("TONGUES_TEST_GLOW_CONFIG", "TONGUES_TEST_GLOW_CHECKPOINT")
             .expect("TONGUES_TEST_GLOW_CONFIG and TONGUES_TEST_GLOW_CHECKPOINT are required");
