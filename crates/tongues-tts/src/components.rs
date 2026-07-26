@@ -17,6 +17,8 @@ pub enum NativeSpeechComponentKind {
     Acoustic,
     Vocoder,
     Voice,
+    /// Native training hooks that are not part of any synthesis path.
+    Trainer,
     Test,
 }
 
@@ -197,11 +199,127 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         readiness: NativeSpeechComponentReadiness::Experimental,
         explanation: "Native PQMF vocoder inference exists; its artifact is not registered in a compatible complete synthesis path.",
     },
+    NativeSpeechComponent {
+        id: "align-tts",
+        display_name: "Align-TTS",
+        architecture: "align-tts",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native encoder, duration predictor, expansion, and mel decoding exist; no verified catalog artifact or complete synthesis path is registered.",
+    },
+    NativeSpeechComponent {
+        id: "xtts-v2",
+        display_name: "XTTS v2",
+        architecture: "xtts-v2",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Experimental,
+        explanation: "Native Burn GPT-conditioned codec TTS inference exists; weights require separate Coqui license terms and no catalog artifact is claimed.",
+    },
+    NativeSpeechComponent {
+        id: "hifigan-trainer",
+        display_name: "HiFi-GAN Trainer",
+        architecture: "hifigan-trainer",
+        kind: NativeSpeechComponentKind::Trainer,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native HiFi-GAN generator/MPD/MSD training hooks; not part of any synthesis path.",
+    },
+    NativeSpeechComponent {
+        id: "melgan-trainer",
+        display_name: "MelGAN Trainer",
+        architecture: "melgan-trainer",
+        kind: NativeSpeechComponentKind::Trainer,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native MelGAN generator/discriminator training hooks; not part of any synthesis path.",
+    },
+    NativeSpeechComponent {
+        id: "multiband-melgan-trainer",
+        display_name: "MultiBand-MelGAN Trainer",
+        architecture: "multiband-melgan-trainer",
+        kind: NativeSpeechComponentKind::Trainer,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native MultiBand-MelGAN generator/discriminator training hooks with PQMF bank; not part of any synthesis path.",
+    },
+    NativeSpeechComponent {
+        id: "vits-trainer",
+        display_name: "VITS Trainer",
+        architecture: "vits-trainer",
+        kind: NativeSpeechComponentKind::Trainer,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native VITS end-to-end adversarial training hooks including posterior encoder and discriminators; not part of any synthesis path.",
+    },
 ];
 
 pub fn native_speech_components() -> &'static [NativeSpeechComponent] {
     NATIVE_SPEECH_COMPONENTS
 }
+
+/// Classification table for every public `burn_*` implementation module in
+/// `tongues-tts`, plus the non-`burn_*` native modules that provide concrete
+/// speech functionality (`freevc`, `speaker_encoder`).
+///
+/// Each row is `(module_name, component_ids)` where:
+/// - `component_ids` is a slice of `NativeSpeechComponent::id` values from
+///   [`NATIVE_SPEECH_COMPONENTS`] that the module provides; and
+/// - an **empty slice** marks the module as internal infrastructure that is
+///   intentionally absent from the public inventory.
+///
+/// Tests verify bidirectional consistency between this table and
+/// [`NATIVE_SPEECH_COMPONENTS`]: every classified component ID must exist in
+/// the inventory, and every inventory entry must be claimed by at least one
+/// module row or appear in [`PLANNED_SPEECH_COMPONENT_IDS`].
+///
+/// **Developer contract**: when adding a new `burn_something.rs` module, add a
+/// row here.  If the slice is non-empty the components must also be added to
+/// [`NATIVE_SPEECH_COMPONENTS`]; omitting the row will cause
+/// [`every_inventory_entry_has_a_module_classification`] to fail.
+pub const IMPLEMENTATION_MODULE_CLASSIFICATION: &[(&str, &[&str])] = &[
+    // ── shared contracts / adapters / pipeline wrappers (internal) ──────────
+    ("burn_acoustic",            &[]),
+    ("burn_acoustic_training",   &[]),
+    ("burn_align_tts_pipeline",  &[]),
+    ("burn_fast_pitch_acoustic", &[]),
+    ("burn_fast_pitch_pipeline", &[]),
+    ("burn_glow_tts_acoustic",   &[]),
+    ("burn_glow_tts_pipeline",   &[]),
+    ("burn_pipeline",            &[]),
+    ("burn_tacotron_acoustic",   &[]),
+    ("burn_variance_acoustic",   &[]),
+    ("burn_vits_decoder",        &[]),
+    ("burn_vits_duration",       &[]),
+    ("burn_vits_flow",           &[]),
+    ("burn_vits_text",           &[]),
+    ("burn_vocoder",             &[]),
+    ("burn_vocoder_discriminators", &[]),
+    ("burn_vocoder_losses",      &[]),
+    ("burn_vocoder_training",    &[]),
+    // ── concrete inference models ────────────────────────────────────────────
+    ("burn_align_tts",     &["align-tts"]),
+    ("burn_delightful_tts",&["delightfultts"]),
+    ("burn_fast_pitch",    &["fastpitch"]),
+    ("burn_fastspeech",    &["fastspeech", "fastspeech2"]),
+    ("burn_glow_tts",      &["glow-tts", "sc-glowtts"]),
+    ("burn_hifigan",       &["hifigan"]),
+    ("burn_melgan",        &["melgan", "multiband-melgan"]),
+    ("burn_speedy_speech", &["speedy-speech"]),
+    ("burn_tacotron",      &["tacotron2", "tacotron2-ddc", "capacitron", "capacitron-ddc"]),
+    ("burn_vits",          &["vits", "yourtts"]),
+    ("burn_xtts",          &["xtts-v2"]),
+    // ── non-burn_* native modules ────────────────────────────────────────────
+    ("freevc",          &["freevc"]),
+    ("speaker_encoder", &["speaker-encoder"]),
+    // ── training hooks ───────────────────────────────────────────────────────
+    ("burn_hifigan_trainer", &["hifigan-trainer"]),
+    ("burn_melgan_trainer",  &["melgan-trainer", "multiband-melgan-trainer"]),
+    ("burn_vits_training",   &["vits-trainer"]),
+];
+
+/// Component IDs in [`NATIVE_SPEECH_COMPONENTS`] that correspond to planned or
+/// externally-backed implementations without a native `burn_*` source module.
+/// Entries here are exempt from the module-classification completeness check.
+pub const PLANNED_SPEECH_COMPONENT_IDS: &[&str] = &[
+    // Causal append-only streaming renderer under evaluation; no source module yet.
+    "pocket-tts-causal",
+];
 
 /// Runtime used for neural inference.
 ///
@@ -1443,5 +1561,48 @@ mod tests {
             pocket.readiness,
             NativeSpeechComponentReadiness::Experimental
         );
+    }
+
+    /// Verifies that every component ID claimed by an implementation module
+    /// actually exists in [`NATIVE_SPEECH_COMPONENTS`].
+    ///
+    /// This test will fail when a developer adds a row to
+    /// [`IMPLEMENTATION_MODULE_CLASSIFICATION`] with a component ID that has
+    /// not yet been added to the inventory.
+    #[test]
+    fn every_classified_module_maps_to_existing_inventory_entries() {
+        for (module, ids) in super::IMPLEMENTATION_MODULE_CLASSIFICATION {
+            for id in *ids {
+                assert!(
+                    super::NATIVE_SPEECH_COMPONENTS.iter().any(|c| c.id == *id),
+                    "module `{module}` is classified as providing component `{id}`, \
+                     but that id is missing from NATIVE_SPEECH_COMPONENTS"
+                );
+            }
+        }
+    }
+
+    /// Verifies that every entry in [`NATIVE_SPEECH_COMPONENTS`] is either
+    /// claimed by a module row in [`IMPLEMENTATION_MODULE_CLASSIFICATION`] or
+    /// explicitly listed in [`PLANNED_SPEECH_COMPONENT_IDS`].
+    ///
+    /// This test fails when a new component is added to the inventory without a
+    /// corresponding module record, making it impossible for new implementations
+    /// to slip through without classification.
+    #[test]
+    fn every_inventory_entry_has_a_module_classification() {
+        for component in super::NATIVE_SPEECH_COMPONENTS {
+            let has_module = super::IMPLEMENTATION_MODULE_CLASSIFICATION
+                .iter()
+                .any(|(_, ids)| ids.contains(&component.id));
+            let is_planned = super::PLANNED_SPEECH_COMPONENT_IDS.contains(&component.id);
+            assert!(
+                has_module || is_planned,
+                "component `{}` is in NATIVE_SPEECH_COMPONENTS but is not claimed by any \
+                 row in IMPLEMENTATION_MODULE_CLASSIFICATION and is not in \
+                 PLANNED_SPEECH_COMPONENT_IDS; add it to the appropriate list",
+                component.id
+            );
+        }
     }
 }

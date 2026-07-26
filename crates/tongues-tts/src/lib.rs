@@ -187,6 +187,7 @@ pub use components::{
     NeuralVocoder, ReferenceEncoder, Spectrogram, SpectrogramContract, SpectrogramDomain,
     SpectrogramKind, SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode,
     SpectrogramScale, SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
+    IMPLEMENTATION_MODULE_CLASSIFICATION, PLANNED_SPEECH_COMPONENT_IDS,
 };
 pub use d_vectors::{
     l2_normalize as normalize_embedding, DVectorCatalog, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
