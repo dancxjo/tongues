@@ -2330,7 +2330,10 @@ fn resident_engine_key(
             "{backend}-{}-{device_key}",
             speech_model_id(&resolve_mortar_home(), backend, payload.model.as_deref(),)?
         ),
-        "styletts2" => "styletts2-en-us".into(),
+        "styletts2" => format!(
+            "styletts2-{}-{device_key}",
+            speech_model_id(&resolve_mortar_home(), backend, payload.model.as_deref(),)?
+        ),
         "mock" => format!("mock-{}", payload.sample_rate_hz.unwrap_or(24_000)),
         _ => format!("{backend}-{device_key}"),
     })
@@ -2632,12 +2635,13 @@ fn load_onnx_provider(
 fn load_styletts2_provider(
     home: &FsPath,
     _device: tongues_tts::ResolvedSpeechDevice,
-    _payload: &SpeakRequest,
+    payload: &SpeakRequest,
     capabilities: tongues_tts::BackendCapabilities,
 ) -> anyhow::Result<ResidentSpeechBackend> {
+    let model_dir = styletts2_model_dir(home, payload.model.as_deref())?;
     Ok(Box::new(styletts2::StyleTts2Synthesizer::new(
         capabilities,
-        styletts2::StyleTts2OnnxBackend::from_model_dir(home.join("models/styletts2/en-us"))?,
+        styletts2::StyleTts2OnnxBackend::from_model_dir(model_dir)?,
     )))
 }
 
@@ -2716,6 +2720,13 @@ fn registered_speech_compositions_at(
                 .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
                 .map(fairseq_registered_composition),
         );
+        compositions.extend(
+            catalog
+                .entries
+                .iter()
+                .filter(|entry| is_styletts2_catalog_entry(entry) && entry.id != "styletts2-en-us")
+                .map(styletts2_registered_composition),
+        );
     }
     compositions
 }
@@ -2738,6 +2749,59 @@ fn fairseq_registered_composition(
         pipeline,
         recommended: entry.id == "fairseq-mms-vits-eng",
     }
+}
+
+fn styletts2_registered_composition(
+    entry: &tongues_tts::ModelCatalogEntry,
+) -> tongues_tts::RegisteredSpeechComposition {
+    let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
+        format!("projector/{}", entry.id),
+        entry.id.clone(),
+        vec!["style-reference-encoder".into()],
+    );
+    tongues_tts::RegisteredSpeechComposition {
+        id: pipeline
+            .canonical_id()
+            .expect("StyleTTS2-family end-to-end pipeline must be valid"),
+        display_name: entry.display_name.clone(),
+        backend: "styletts2".into(),
+        model: entry.id.clone(),
+        pipeline,
+        recommended: entry.id == "styletts2-en-us",
+    }
+}
+
+fn is_styletts2_catalog_entry(entry: &tongues_tts::ModelCatalogEntry) -> bool {
+    entry.architecture.eq_ignore_ascii_case("styletts2")
+        || entry
+            .compatible_with
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case("styletts2-onnx"))
+}
+
+fn styletts2_catalog_entry(model: &str) -> anyhow::Result<tongues_tts::ModelCatalogEntry> {
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )?;
+    let entry = catalog
+        .find(model)
+        .with_context(|| format!("unknown catalog model `{model}`"))?;
+    anyhow::ensure!(
+        is_styletts2_catalog_entry(entry),
+        "catalog model `{model}` is not a StyleTTS2-family checkpoint"
+    );
+    Ok(entry.clone())
+}
+
+fn styletts2_model_dir(home: &FsPath, model: Option<&str>) -> anyhow::Result<PathBuf> {
+    let model = speech_model_id(home, "styletts2", model)?;
+    let entry = styletts2_catalog_entry(&model)?;
+    entry
+        .artifacts
+        .iter()
+        .map(|artifact| home.join(&artifact.install_path))
+        .find_map(|path| path.parent().map(|parent| parent.to_path_buf()))
+        .with_context(|| format!("catalog model `{model}` has no installable model directory"))
 }
 
 fn resolve_registered_pipeline(
@@ -2765,6 +2829,10 @@ fn resolve_legacy_composition(
             .find(&model)
             .context("resolved Fairseq MMS model disappeared from the catalog")?;
         return Ok(fairseq_registered_composition(entry));
+    }
+    if backend == "styletts2" {
+        let entry = styletts2_catalog_entry(&model)?;
+        return Ok(styletts2_registered_composition(&entry));
     }
     registered_speech_compositions_at(home)
         .into_iter()
@@ -2824,9 +2892,8 @@ fn speech_model_id(
         "vits" => Some("vits-vctk"),
         "yourtts" => Some("yourtts-multilingual"),
         "freevc" => Some("freevc24-vctk"),
-        "styletts2" => Some("styletts2-en-us"),
         "mock" => Some("deterministic-mock"),
-        "onnx" | "fairseq" => None,
+        "onnx" | "fairseq" | "styletts2" => None,
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     };
     if let Some(expected) = fixed_model {
@@ -2851,6 +2918,12 @@ fn speech_model_id(
             entry.provenance.format == "fairseq-mms-vits",
             "catalog model `{requested}` is not a Fairseq MMS VITS checkpoint"
         );
+        return Ok(entry.id.clone());
+    }
+
+    if backend == "styletts2" {
+        let requested = requested_model.unwrap_or("styletts2-en-us");
+        let entry = styletts2_catalog_entry(requested)?;
         return Ok(entry.id.clone());
     }
 
@@ -3189,35 +3262,91 @@ fn speech_backend_capabilities(
             capability_tier: tongues_tts::CapabilityTier::Unassigned,
             revision_capable: false,
         },
-        "styletts2" => tongues_tts::BackendCapabilities {
-            backend: "styletts2".into(),
-            model: "styletts2-en-us".into(),
-            family: tongues_tts::SpeechModelFamily::CrossLingualVoiceClone,
-            varieties: general_american(),
-            languages: tongues_tts::LanguageCapabilities::unsupported(),
-            speakers: unsupported_speakers(),
-            styles: tongues_tts::StyleCapabilities {
-                names: tongues_tts::CapabilityValue::Any,
-                reference_audio: true,
-                embedding_dimensions: Some(STYLE_VECTOR_DIMS),
-            },
-            reference_audio: tongues_tts::ReferenceAudioCapabilities {
-                speaker: true,
-                style: true,
-                source: false,
-                ..Default::default()
-            },
-            speed: true,
-            pitch: Default::default(),
-            energy: Default::default(),
-            durations: false,
-            seed: true,
-            devices,
-            output: output(24_000),
-            provenance: Vec::new(),
-            capability_tier: tongues_tts::CapabilityTier::TierC,
-            revision_capable: false,
-        },
+        "styletts2" => {
+            let model = speech_model_id(home, backend, model)?;
+            let entry = styletts2_catalog_entry(&model).ok();
+            let varieties = entry.as_ref().map_or_else(general_american, |entry| {
+                let ids = entry
+                    .varieties
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                if ids.is_empty() {
+                    general_american()
+                } else {
+                    speech_variety_capabilities(&ids)
+                }
+            });
+            let languages = entry.as_ref().map_or_else(
+                tongues_tts::LanguageCapabilities::unsupported,
+                |entry| tongues_tts::LanguageCapabilities {
+                    values: if entry.languages.is_empty() {
+                        tongues_tts::CapabilityValue::Unsupported
+                    } else {
+                        tongues_tts::CapabilityValue::Listed(
+                            entry
+                                .languages
+                                .iter()
+                                .map(|tag| tongues_tts::NamedCapability::new(tag, tag))
+                                .collect(),
+                        )
+                    },
+                    required: false,
+                    numeric_ids: false,
+                },
+            );
+            let speakers = entry.as_ref().map_or_else(unsupported_speakers, |entry| {
+                let values = entry
+                    .speakers
+                    .names
+                    .iter()
+                    .map(|name| tongues_tts::NamedCapability::new(name, name))
+                    .collect::<Vec<_>>();
+                tongues_tts::SpeakerCapabilities {
+                    values: if values.is_empty() {
+                        tongues_tts::CapabilityValue::Unsupported
+                    } else {
+                        tongues_tts::CapabilityValue::Listed(values)
+                    },
+                    required: false,
+                    numeric_ids: false,
+                }
+            });
+            tongues_tts::BackendCapabilities {
+                backend: "styletts2".into(),
+                model,
+                family: tongues_tts::SpeechModelFamily::CrossLingualVoiceClone,
+                varieties,
+                languages,
+                speakers,
+                styles: tongues_tts::StyleCapabilities {
+                    names: tongues_tts::CapabilityValue::Any,
+                    reference_audio: true,
+                    embedding_dimensions: Some(STYLE_VECTOR_DIMS),
+                },
+                reference_audio: tongues_tts::ReferenceAudioCapabilities {
+                    speaker: true,
+                    style: true,
+                    source: false,
+                    ..Default::default()
+                },
+                speed: true,
+                pitch: Default::default(),
+                energy: Default::default(),
+                durations: false,
+                seed: true,
+                devices,
+                output: output(
+                    entry
+                        .as_ref()
+                        .and_then(|entry| entry.sample_rate_hz)
+                        .unwrap_or(24_000),
+                ),
+                provenance: Vec::new(),
+                capability_tier: tongues_tts::CapabilityTier::TierC,
+                revision_capable: false,
+            }
+        }
         "mock" => tongues_tts::BackendCapabilities {
             backend: "mock".into(),
             model: "deterministic-mock".into(),
@@ -4301,6 +4430,30 @@ fn speech_studio_discovery(
             }
             continue;
         }
+        if provider.id == "styletts2" {
+            if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
+                &tongues_tts::private_catalog_paths_from_environment(),
+            ) {
+                for entry in catalog
+                    .entries
+                    .iter()
+                    .filter(|entry| is_styletts2_catalog_entry(entry))
+                {
+                    paths.push(discover_speech_path(
+                        home,
+                        provider.id,
+                        &entry.id,
+                        &entry.display_name,
+                        entry.id == "styletts2-en-us",
+                        device,
+                        &catalog,
+                        &verification,
+                        loaded,
+                    ));
+                }
+                continue;
+            }
+        }
         let model =
             speech_model_id(home, provider.id, None).unwrap_or_else(|_| "unavailable".into());
         paths.push(discover_speech_path(
@@ -4502,6 +4655,11 @@ fn add_pipeline_pseudo_components(
     components: &mut Vec<SpeechComponentDiscovery>,
     registered: &[tongues_tts::RegisteredSpeechComposition],
 ) {
+    let styletts2_paths = registered
+        .iter()
+        .filter(|composition| composition.backend == "styletts2")
+        .map(|composition| composition.model.clone())
+        .collect::<Vec<_>>();
     for descriptor in tongues_tts::registered_speech_pipeline_components() {
         if let Some(component) = components
             .iter_mut()
@@ -4586,7 +4744,11 @@ fn add_pipeline_pseudo_components(
             explanation:
                 "Reference-conditioned end-to-end compatibility engine exposed as a spanning block."
                     .into(),
-            compatible_paths: vec!["styletts2-en-us".into()],
+            compatible_paths: if styletts2_paths.is_empty() {
+                vec!["styletts2-en-us".into()]
+            } else {
+                styletts2_paths.clone()
+            },
             catalog: Vec::new(),
             install_command: None,
         });
@@ -4658,7 +4820,11 @@ fn add_pipeline_pseudo_components(
             readiness: "runtime".into(),
             statuses: vec!["Registered".into()],
             explanation: "StyleTTS2 speaker and style reference conditioning.".into(),
-            compatible_paths: vec!["styletts2-en-us".into()],
+            compatible_paths: if styletts2_paths.is_empty() {
+                vec!["styletts2-en-us".into()]
+            } else {
+                styletts2_paths
+            },
             catalog: Vec::new(),
             install_command: None,
         });
@@ -4740,7 +4906,7 @@ fn speech_path_catalog_ids(
         "fairseq" => vec![speech_model_id(home, backend, model)?],
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
-        "styletts2" => vec!["styletts2-en-us".into()],
+        "styletts2" => vec![speech_model_id(home, backend, model)?],
         "onnx" => vec![model
             .filter(|model| !model.trim().is_empty())
             .map(str::to_string)
@@ -4803,7 +4969,7 @@ fn speech_path_components(
         "styletts2" => (
             None,
             None,
-            Some("styletts2-en-us".into()),
+            Some(model.into()),
             vec!["styletts2".into()],
         ),
         "onnx" => (None, None, Some(model.into()), vec![model.into()]),
@@ -5652,7 +5818,8 @@ fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
         "fairseq" => model,
         "yourtts" => "YourTTS Multilingual",
         "freevc" => "FreeVC24 Voice Conversion",
-        "styletts2" => "StyleTTS2 en-US",
+        "styletts2" if model == "styletts2-en-us" => "StyleTTS2 en-US",
+        "styletts2" => model,
         "mock" => "Deterministic Mock",
         _ => model,
     }
@@ -5743,8 +5910,15 @@ fn speech_backend_installation_error(
             ]
         }
         "styletts2" => {
-            let paths =
-                styletts2::StyleTts2OnnxPaths::from_model_dir(home.join("models/styletts2/en-us"));
+            let model = match speech_model_id(home, backend, model) {
+                Ok(model) => model,
+                Err(error) => return Some(error.to_string()),
+            };
+            let model_dir = match styletts2_model_dir(home, Some(&model)) {
+                Ok(path) => path,
+                Err(error) => return Some(error.to_string()),
+            };
+            let paths = styletts2::StyleTts2OnnxPaths::from_model_dir(model_dir);
             vec![
                 paths.diffusion,
                 paths.style_encoder,
@@ -5950,7 +6124,7 @@ fn speech_engine_matches_path(engine: &str, backend: &str, model: &str) -> bool 
     }
     match backend {
         "onnx" => engine.starts_with(&format!("onnx-{model}-")),
-        "styletts2" => engine == "styletts2-en-us",
+        "styletts2" => engine.starts_with(&format!("styletts2-{model}-")),
         "mock" => engine.starts_with("mock-"),
         _ => engine.starts_with(&format!("{backend}-")),
     }
@@ -7448,6 +7622,17 @@ mod tests {
             resident_engine_key("onnx", tongues_tts::ResolvedSpeechDevice::Cpu, &ryan).unwrap(),
             "onnx-voice-ryan-medium-cpu"
         );
+        let style_alias: SpeakRequest = serde_json::from_value(json!({
+            "text": "Style alias resident speech.",
+            "backend": "styletts2",
+            "model": "styletts2"
+        }))
+        .expect("Style request");
+        assert_eq!(
+            resident_engine_key("styletts2", tongues_tts::ResolvedSpeechDevice::Cpu, &style_alias)
+                .unwrap(),
+            "styletts2-styletts2-en-us-cpu"
+        );
     }
 
     #[test]
@@ -7461,9 +7646,14 @@ mod tests {
             speech_model_id(home, "fairseq", Some("tts_models/eng/fairseq/vits")).unwrap(),
             "fairseq-mms-vits-eng"
         );
+        assert_eq!(
+            speech_model_id(home, "styletts2", Some("styletts2")).unwrap(),
+            "styletts2-en-us"
+        );
         assert!(speech_model_id(home, "onnx", Some("voice-unknown")).is_err());
         assert!(speech_model_id(home, "vits", Some("voice-amy-medium")).is_err());
         assert!(speech_model_id(home, "fairseq", Some("vits-vctk")).is_err());
+        assert!(speech_model_id(home, "styletts2", Some("voice-amy-medium")).is_err());
     }
 
     #[test]
