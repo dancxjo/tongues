@@ -15,13 +15,16 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tongues_interpretation::{InterpretationConfig, DEFAULT_MEL_BINS, DEFAULT_SAMPLE_RATE_HZ};
-use tongues_neural::{write_manifest, ModelArtifactManifest, TrainState};
+use tongues_neural::{write_manifest, ModelArtifactManifest};
 
 pub const FAMILY: &str = "emotions";
 pub const ARCHITECTURE: &str = "pooled-log-mel-softmax";
 pub const DEFAULT_DATASET_ID: &str = "emotion-cuts-v0";
 pub const DEFAULT_SOURCE_MANIFEST: &str = "datasets/emotions/labels.jsonl";
+pub const EMOTION_TRAIN_STATE_SCHEMA_VERSION: u32 = 1;
+const EMOTION_SHUFFLE_SCHEME: &str = "sha256-seed-and-epoch-v1";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmotionPrepareConfig {
@@ -77,6 +80,83 @@ impl Default for EmotionTrainConfig {
             seed: 0,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmotionTrainMode {
+    New,
+    Resume,
+    Restart,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrainProgress {
+    Started {
+        mode: EmotionTrainMode,
+        start_epoch: usize,
+        max_epochs: usize,
+    },
+    Epoch {
+        epoch: usize,
+        train_loss: f32,
+        validation_loss: f32,
+        validation_accuracy: f32,
+        best_epoch: usize,
+        patience: usize,
+    },
+    EarlyStopped {
+        epoch: usize,
+        patience: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmotionResumeConfig {
+    pub learning_rate: f32,
+    pub weight_decay: f32,
+    pub batch_size: usize,
+    pub early_stopping_patience: usize,
+    pub seed: u64,
+}
+
+impl From<&EmotionTrainConfig> for EmotionResumeConfig {
+    fn from(config: &EmotionTrainConfig) -> Self {
+        Self {
+            learning_rate: config.learning_rate,
+            weight_decay: config.weight_decay,
+            batch_size: config.batch_size,
+            early_stopping_patience: config.early_stopping_patience,
+            seed: config.seed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmotionTrainState {
+    pub schema_version: u32,
+    pub current_epoch: usize,
+    pub best_epoch: usize,
+    pub best_val_loss: f32,
+    pub best_val_accuracy: f32,
+    pub patience: usize,
+    pub shuffle_seed: u64,
+    pub shuffle_scheme: String,
+    pub next_shuffle_epoch: usize,
+    pub effective_config: EmotionResumeConfig,
+    pub requested_max_epochs: usize,
+    pub data_identity: String,
+    pub model_config: EmotionModelConfig,
+    pub epoch_checkpoint: String,
+    pub best_checkpoint: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmotionTrainReport {
+    pub mode: EmotionTrainMode,
+    pub completed_epoch: usize,
+    pub best_epoch: usize,
+    pub best_loss: f32,
+    pub best_accuracy: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -309,7 +389,22 @@ pub fn prepare_dataset_with_progress(
     Ok(report)
 }
 
-pub fn train(data: &Path, out: &Path, config: &EmotionTrainConfig) -> Result<f32> {
+pub fn train(
+    data: &Path,
+    out: &Path,
+    config: &EmotionTrainConfig,
+    mode: EmotionTrainMode,
+) -> Result<EmotionTrainReport> {
+    train_with_progress(data, out, config, mode, |_| {})
+}
+
+pub fn train_with_progress(
+    data: &Path,
+    out: &Path,
+    config: &EmotionTrainConfig,
+    mode: EmotionTrainMode,
+    mut progress: impl FnMut(TrainProgress),
+) -> Result<EmotionTrainReport> {
     validate_train_config(config)?;
     fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
     let train_rows = read_examples(&data.join("train.jsonl"))?;
@@ -327,6 +422,30 @@ pub fn train(data: &Path, out: &Path, config: &EmotionTrainConfig) -> Result<f32
         mel_bins: feature_dims / 2,
         feature_kind: train_rows[0].feature_kind.clone(),
     };
+    let data_identity = emotion_data_identity(data)?;
+    let effective_config = EmotionResumeConfig::from(config);
+
+    let resume = match mode {
+        EmotionTrainMode::New => {
+            anyhow::ensure!(
+                !emotion_training_artifacts_exist(out)?,
+                "emotion training artifacts already exist in {}; use --resume to continue them or --restart to deliberately replace them",
+                out.display()
+            );
+            None
+        }
+        EmotionTrainMode::Resume => Some(load_emotion_resume(
+            out,
+            &effective_config,
+            &data_identity,
+            &model_config,
+        )?),
+        EmotionTrainMode::Restart => {
+            remove_emotion_training_artifacts(out)?;
+            None
+        }
+    };
+
     write_json_file_atomic(&out.join("model_config.json"), &model_config)?;
     write_json_file_atomic(&out.join("train_config.json"), config)?;
     write_manifest(
@@ -334,50 +453,114 @@ pub fn train(data: &Path, out: &Path, config: &EmotionTrainConfig) -> Result<f32
         &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, data.display().to_string()),
     )?;
 
-    let mut model = EmotionModel {
-        config: model_config,
-        weights: vec![vec![0.0; feature_dims]; labels.len()],
-        bias: vec![0.0; labels.len()],
-        mean,
-        std,
-    };
-    let mut rng = StdRng::seed_from_u64(config.seed);
-    let mut best_loss = f32::INFINITY;
-    let mut patience = 0usize;
+    let (mut model, start_epoch, mut best_epoch, mut best_loss, mut best_accuracy, mut patience) =
+        if let Some((state, model)) = resume {
+            restore_best_model(out, &state)?;
+            (
+                model,
+                state.current_epoch + 1,
+                state.best_epoch,
+                state.best_val_loss,
+                state.best_val_accuracy,
+                state.patience,
+            )
+        } else {
+            (
+                EmotionModel {
+                    config: model_config.clone(),
+                    weights: vec![vec![0.0; feature_dims]; labels.len()],
+                    bias: vec![0.0; labels.len()],
+                    mean,
+                    std,
+                },
+                1,
+                0,
+                f32::INFINITY,
+                0.0,
+                0,
+            )
+        };
 
-    for epoch in 1..=config.epochs {
-        let train_loss = train_epoch(&mut model, &train_rows, config, &mut rng);
+    anyhow::ensure!(
+        start_epoch <= config.epochs,
+        "emotion run in {} already completed epoch {}; --epochs must be greater than {} to resume",
+        out.display(),
+        start_epoch.saturating_sub(1),
+        start_epoch.saturating_sub(1)
+    );
+    progress(TrainProgress::Started {
+        mode,
+        start_epoch,
+        max_epochs: config.epochs,
+    });
+
+    let mut completed_epoch = start_epoch - 1;
+    for epoch in start_epoch..=config.epochs {
+        let mut epoch_rng = emotion_epoch_rng(config.seed, epoch);
+        let train_loss = train_epoch(&mut model, &train_rows, config, &mut epoch_rng);
         let report = evaluate_model(&model, &valid_rows, "valid");
+        anyhow::ensure!(
+            train_loss.is_finite() && report.loss.is_finite() && report.accuracy.is_finite(),
+            "non-finite emotion training metric at epoch {epoch}; no checkpoint was published"
+        );
         let epoch_path = out.join(format!("model-epoch-{epoch}.json"));
         write_json_file_atomic(&epoch_path, &model)?;
-        let state = TrainState {
-            current_epoch: epoch,
-            best_val_loss: best_loss.min(report.loss),
-            best_epoch: None,
-            best_exact_match: Some(report.accuracy),
-            early_stop_metric: "val_loss".to_string(),
-        };
-        write_json_file_atomic(&out.join("train_state.json"), &state)?;
-        println!(
-            "Epoch {epoch} | train_loss={train_loss:.4} val_loss={:.4} val_acc={:.3}",
-            report.loss, report.accuracy
-        );
+
         if report.loss < best_loss {
             best_loss = report.loss;
+            best_accuracy = report.accuracy;
+            best_epoch = epoch;
             patience = 0;
-            write_json_file_atomic(&out.join("model.json"), &model)?;
+            copy_file_atomic(&epoch_path, &out.join("model.json"))?;
         } else {
             patience += 1;
-            if patience >= config.early_stopping_patience {
-                println!(
-                    "Early stopping after epoch {epoch}: validation loss did not improve for {} epochs",
-                    config.early_stopping_patience
-                );
-                break;
-            }
+        }
+
+        let state = EmotionTrainState {
+            schema_version: EMOTION_TRAIN_STATE_SCHEMA_VERSION,
+            current_epoch: epoch,
+            best_epoch,
+            best_val_loss: best_loss,
+            best_val_accuracy: best_accuracy,
+            patience,
+            shuffle_seed: config.seed,
+            shuffle_scheme: EMOTION_SHUFFLE_SCHEME.to_string(),
+            next_shuffle_epoch: epoch + 1,
+            effective_config: effective_config.clone(),
+            requested_max_epochs: config.epochs,
+            data_identity: data_identity.clone(),
+            model_config: model_config.clone(),
+            epoch_checkpoint: epoch_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            best_checkpoint: format!("model-epoch-{best_epoch}.json"),
+        };
+        write_json_file_atomic(&out.join(format!("train_state-epoch-{epoch}.json")), &state)?;
+        write_json_file_atomic(&out.join("train_state.json"), &state)?;
+        completed_epoch = epoch;
+        progress(TrainProgress::Epoch {
+            epoch,
+            train_loss,
+            validation_loss: report.loss,
+            validation_accuracy: report.accuracy,
+            best_epoch,
+            patience,
+        });
+        if patience >= config.early_stopping_patience {
+            progress(TrainProgress::EarlyStopped { epoch, patience });
+            break;
         }
     }
-    Ok(best_loss)
+
+    Ok(EmotionTrainReport {
+        mode,
+        completed_epoch,
+        best_epoch,
+        best_loss,
+        best_accuracy,
+    })
 }
 
 pub fn evaluate(model_dir: &Path, data: &Path, split: &str) -> Result<EvalReport> {
@@ -774,6 +957,199 @@ fn write_readme(out: &Path, config: &EmotionPrepareConfig, labels: &[String]) ->
     fs::write(out.join("README.md"), text).context("writing emotions README")
 }
 
+fn emotion_data_identity(data: &Path) -> Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(b"tongues-emotions-data-v1\0");
+    for name in ["train.jsonl", "valid.jsonl"] {
+        let path = data.join(name);
+        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        digest.update(name.as_bytes());
+        digest.update([0]);
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn emotion_epoch_rng(seed: u64, epoch: usize) -> StdRng {
+    let mut digest = Sha256::new();
+    digest.update(b"tongues-emotions-shuffle-v1\0");
+    digest.update(seed.to_le_bytes());
+    digest.update((epoch as u64).to_le_bytes());
+    let bytes: [u8; 32] = digest.finalize().into();
+    StdRng::from_seed(bytes)
+}
+
+fn emotion_training_artifacts_exist(out: &Path) -> Result<bool> {
+    if !out.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(out).with_context(|| format!("reading {}", out.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if is_emotion_training_artifact(&name) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_emotion_training_artifact(name: &str) -> bool {
+    matches!(
+        name,
+        "manifest.json"
+            | "model.json"
+            | "model.json.part"
+            | "model_config.json"
+            | "model_config.json.part"
+            | "train_config.json"
+            | "train_config.json.part"
+            | "train_state.json"
+            | "train_state.json.part"
+    ) || (name.starts_with("model-epoch-")
+        && (name.ends_with(".json") || name.ends_with(".json.part")))
+        || (name.starts_with("train_state-epoch-")
+            && (name.ends_with(".json") || name.ends_with(".json.part")))
+}
+
+fn remove_emotion_training_artifacts(out: &Path) -> Result<()> {
+    if !out.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(out).with_context(|| format!("reading {}", out.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if is_emotion_training_artifact(&name.to_string_lossy()) {
+            fs::remove_file(entry.path())
+                .with_context(|| format!("removing {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn load_emotion_resume(
+    out: &Path,
+    effective_config: &EmotionResumeConfig,
+    data_identity: &str,
+    model_config: &EmotionModelConfig,
+) -> Result<(EmotionTrainState, EmotionModel)> {
+    let mut epochs = Vec::new();
+    if out.exists() {
+        for entry in fs::read_dir(out).with_context(|| format!("reading {}", out.display()))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(epoch) = parse_epoch_state_name(&name) {
+                epochs.push(epoch);
+            }
+        }
+    }
+    epochs.sort_unstable_by(|a, b| b.cmp(a));
+
+    for epoch in epochs {
+        let state_path = out.join(format!("train_state-epoch-{epoch}.json"));
+        let model_path = out.join(format!("model-epoch-{epoch}.json"));
+        if !model_path.is_file() {
+            continue;
+        }
+        let Ok(state) = read_json_file::<EmotionTrainState>(&state_path) else {
+            continue;
+        };
+        if state.current_epoch != epoch
+            || state.epoch_checkpoint != format!("model-epoch-{epoch}.json")
+        {
+            continue;
+        }
+        validate_resume_compatibility(out, &state, effective_config, data_identity, model_config)?;
+        let model = read_json_file::<EmotionModel>(&model_path)?;
+        anyhow::ensure!(
+            model.config == *model_config,
+            "cannot resume emotion training in {}: epoch {} model metadata does not match the prepared data; migrate the run or use a new output directory (or --restart to replace it)",
+            out.display(),
+            epoch
+        );
+        return Ok((state, model));
+    }
+
+    if emotion_training_artifacts_exist(out)? {
+        anyhow::bail!(
+            "cannot resume emotion training in {}: no complete versioned epoch checkpoint was found; this may be a legacy or incomplete run. Migrate it or use a new output directory (or --restart to replace it)",
+            out.display()
+        );
+    }
+    anyhow::bail!(
+        "cannot resume emotion training in {}: no prior run exists; omit --resume to start a new run",
+        out.display()
+    )
+}
+
+fn parse_epoch_state_name(name: &str) -> Option<usize> {
+    name.strip_prefix("train_state-epoch-")?
+        .strip_suffix(".json")?
+        .parse()
+        .ok()
+}
+
+fn validate_resume_compatibility(
+    out: &Path,
+    state: &EmotionTrainState,
+    effective_config: &EmotionResumeConfig,
+    data_identity: &str,
+    model_config: &EmotionModelConfig,
+) -> Result<()> {
+    let compatible = state.schema_version == EMOTION_TRAIN_STATE_SCHEMA_VERSION
+        && state.effective_config == *effective_config
+        && state.data_identity == data_identity
+        && state.model_config == *model_config
+        && state.shuffle_seed == effective_config.seed
+        && state.shuffle_scheme == EMOTION_SHUFFLE_SCHEME
+        && state.next_shuffle_epoch == state.current_epoch + 1;
+    anyhow::ensure!(
+        compatible,
+        "cannot resume emotion training in {}: saved state schema, data, or effective training configuration is incompatible. Migrate the run or use a new output directory (or --restart to replace it)",
+        out.display()
+    );
+    Ok(())
+}
+
+fn restore_best_model(out: &Path, state: &EmotionTrainState) -> Result<()> {
+    let expected = format!("model-epoch-{}.json", state.best_epoch);
+    anyhow::ensure!(
+        state.best_checkpoint == expected,
+        "cannot resume emotion training in {}: best checkpoint metadata is inconsistent; migrate the run or use a new output directory",
+        out.display()
+    );
+    let best_path = out.join(&state.best_checkpoint);
+    anyhow::ensure!(
+        best_path.is_file(),
+        "cannot resume emotion training in {}: recorded best checkpoint {} is missing; migrate the run or use a new output directory",
+        out.display(),
+        best_path.display()
+    );
+    copy_file_atomic(&best_path, &out.join("model.json"))
+}
+
+fn copy_file_atomic(source: &Path, destination: &Path) -> Result<()> {
+    let bytes = fs::read(source).with_context(|| format!("reading {}", source.display()))?;
+    let part = destination.with_extension(format!(
+        "{}.part",
+        destination
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("json")
+    ));
+    let mut file = File::create(&part).with_context(|| format!("creating {}", part.display()))?;
+    file.write_all(&bytes)
+        .with_context(|| format!("writing {}", part.display()))?;
+    file.flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", part.display()))?;
+    fs::rename(&part, destination)
+        .with_context(|| format!("renaming {} to {}", part.display(), destination.display()))
+}
+
 fn write_json_file_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -790,6 +1166,7 @@ fn write_json_file_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         .with_context(|| format!("writing {}", part.display()))?;
     writeln!(writer)?;
     writer.flush()?;
+    writer.get_ref().sync_all()?;
     fs::rename(&part, path)
         .with_context(|| format!("renaming {} to {}", part.display(), path.display()))
 }
@@ -851,6 +1228,9 @@ fn samples_to_ms(samples: usize, sample_rate: u32) -> u64 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn softmax_sums_to_one() {
@@ -904,5 +1284,230 @@ mod tests {
                 + usize::from(split.test.contains(&group));
             assert_eq!(placements, 1);
         }
+    }
+
+    #[test]
+    fn interrupted_resume_matches_uninterrupted_training() {
+        let root = test_dir("resume-determinism");
+        let data = root.join("data");
+        let resumed = root.join("resumed");
+        let uninterrupted = root.join("uninterrupted");
+        write_training_fixture(&data);
+
+        let first_config = fixture_train_config(2);
+        train(&data, &resumed, &first_config, EmotionTrainMode::New).unwrap();
+        let interrupted_state: EmotionTrainState =
+            read_json_file(&resumed.join("train_state.json")).unwrap();
+
+        let resumed_config = fixture_train_config(4);
+        let mut events = Vec::new();
+        let resumed_report = train_with_progress(
+            &data,
+            &resumed,
+            &resumed_config,
+            EmotionTrainMode::Resume,
+            |event| events.push(event),
+        )
+        .unwrap();
+        let uninterrupted_report = train(
+            &data,
+            &uninterrupted,
+            &resumed_config,
+            EmotionTrainMode::New,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            events.first(),
+            Some(TrainProgress::Started {
+                mode: EmotionTrainMode::Resume,
+                start_epoch: 3,
+                max_epochs: 4
+            })
+        ));
+        let resumed_model: EmotionModel =
+            read_json_file(&resumed.join("model-epoch-4.json")).unwrap();
+        let uninterrupted_model: EmotionModel =
+            read_json_file(&uninterrupted.join("model-epoch-4.json")).unwrap();
+        assert_eq!(resumed_model, uninterrupted_model);
+        assert_eq!(resumed_report.best_epoch, uninterrupted_report.best_epoch);
+        assert_eq!(resumed_report.best_loss, uninterrupted_report.best_loss);
+        assert_eq!(interrupted_state.next_shuffle_epoch, 3);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn best_epoch_identifies_the_model_copied_to_model_json() {
+        let root = test_dir("best-model");
+        let data = root.join("data");
+        let out = root.join("model");
+        write_training_fixture(&data);
+
+        train(&data, &out, &fixture_train_config(5), EmotionTrainMode::New).unwrap();
+        let state: EmotionTrainState = read_json_file(&out.join("train_state.json")).unwrap();
+        let best: EmotionModel = read_json_file(&out.join("model.json")).unwrap();
+        let checkpoint: EmotionModel =
+            read_json_file(&out.join(format!("model-epoch-{}.json", state.best_epoch))).unwrap();
+
+        assert_eq!(
+            state.best_checkpoint,
+            format!("model-epoch-{}.json", state.best_epoch)
+        );
+        assert_eq!(best, checkpoint);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incompatible_resume_rejects_config_and_data_changes() {
+        let root = test_dir("incompatible-resume");
+        let data = root.join("data");
+        let out = root.join("model");
+        write_training_fixture(&data);
+        let config = fixture_train_config(2);
+        train(&data, &out, &config, EmotionTrainMode::New).unwrap();
+
+        let mut changed_config = fixture_train_config(3);
+        changed_config.learning_rate *= 0.5;
+        let config_error = train(&data, &out, &changed_config, EmotionTrainMode::Resume)
+            .unwrap_err()
+            .to_string();
+        assert!(config_error.contains("incompatible"));
+        assert!(config_error.contains("new output directory"));
+
+        let mut rows = read_examples(&data.join("train.jsonl")).unwrap();
+        rows[0].features[0] += 1.0;
+        write_examples(&data.join("train.jsonl"), &rows);
+        let data_error = train(
+            &data,
+            &out,
+            &fixture_train_config(3),
+            EmotionTrainMode::Resume,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(data_error.contains("incompatible"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resume_uses_latest_complete_model_and_state_pair() {
+        let root = test_dir("incomplete-recovery");
+        let data = root.join("data");
+        let out = root.join("model");
+        write_training_fixture(&data);
+        train(&data, &out, &fixture_train_config(2), EmotionTrainMode::New).unwrap();
+        fs::remove_file(out.join("model-epoch-2.json")).unwrap();
+
+        let mut events = Vec::new();
+        train_with_progress(
+            &data,
+            &out,
+            &fixture_train_config(3),
+            EmotionTrainMode::Resume,
+            |event| events.push(event),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            events.first(),
+            Some(TrainProgress::Started {
+                mode: EmotionTrainMode::Resume,
+                start_epoch: 2,
+                ..
+            })
+        ));
+        assert!(out.join("model-epoch-2.json").is_file());
+        assert!(out.join("model-epoch-3.json").is_file());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_runs_require_explicit_resume_or_restart() {
+        let root = test_dir("explicit-mode");
+        let data = root.join("data");
+        let out = root.join("model");
+        write_training_fixture(&data);
+        train(&data, &out, &fixture_train_config(2), EmotionTrainMode::New).unwrap();
+
+        let error = train(&data, &out, &fixture_train_config(3), EmotionTrainMode::New)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--resume"));
+        assert!(error.contains("--restart"));
+
+        let report = train(
+            &data,
+            &out,
+            &fixture_train_config(1),
+            EmotionTrainMode::Restart,
+        )
+        .unwrap();
+        assert_eq!(report.mode, EmotionTrainMode::Restart);
+        assert_eq!(report.completed_epoch, 1);
+        assert!(!out.join("model-epoch-2.json").exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn fixture_train_config(epochs: usize) -> EmotionTrainConfig {
+        EmotionTrainConfig {
+            learning_rate: 0.02,
+            weight_decay: 1e-4,
+            batch_size: 2,
+            epochs,
+            early_stopping_patience: 20,
+            seed: 17,
+        }
+    }
+
+    fn write_training_fixture(data: &Path) {
+        fs::create_dir_all(data).unwrap();
+        let row = |id: &str, emotion: &str, label_id: usize, features: Vec<f32>| EmotionExample {
+            id: id.to_string(),
+            emotion: emotion.to_string(),
+            label_id,
+            source_path: format!("{id}.wav"),
+            start_ms: 0,
+            duration_ms: 100,
+            sample_rate_hz: 16_000,
+            feature_kind: "pooled-log-mel-mean-std/2bins".to_string(),
+            features,
+        };
+        let train_rows = vec![
+            row("happy-a", "happy", 0, vec![1.0, 0.8, 0.2, 0.1]),
+            row("sad-a", "sad", 1, vec![-1.0, -0.8, -0.2, -0.1]),
+            row("happy-b", "happy", 0, vec![0.9, 1.1, 0.1, 0.2]),
+            row("sad-b", "sad", 1, vec![-0.9, -1.1, -0.1, -0.2]),
+            row("happy-c", "happy", 0, vec![1.2, 0.7, 0.3, 0.0]),
+            row("sad-c", "sad", 1, vec![-1.2, -0.7, -0.3, 0.0]),
+        ];
+        let valid_rows = vec![
+            row("happy-valid", "happy", 0, vec![1.0, 0.9, 0.2, 0.1]),
+            row("sad-valid", "sad", 1, vec![-1.0, -0.9, -0.2, -0.1]),
+        ];
+        write_examples(&data.join("train.jsonl"), &train_rows);
+        write_examples(&data.join("valid.jsonl"), &valid_rows);
+    }
+
+    fn write_examples(path: &Path, rows: &[EmotionExample]) {
+        let file = File::create(path).unwrap();
+        let mut writer = BufWriter::new(file);
+        for row in rows {
+            serde_json::to_writer(&mut writer, row).unwrap();
+            writeln!(writer).unwrap();
+        }
+        writer.flush().unwrap();
+    }
+
+    fn test_dir(slug: &str) -> PathBuf {
+        let sequence = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "tongues-emotions-{slug}-{}-{sequence}",
+            std::process::id()
+        ))
     }
 }

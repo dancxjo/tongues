@@ -1513,6 +1513,14 @@ enum EmotionCommands {
         /// Random seed
         #[arg(long)]
         seed: Option<u64>,
+
+        /// Continue the newest complete compatible epoch checkpoint
+        #[arg(long, conflicts_with = "restart")]
+        resume: bool,
+
+        /// Deliberately replace existing emotion training artifacts
+        #[arg(long, conflicts_with = "resume")]
+        restart: bool,
     },
 
     /// Evaluate an emotion classifier
@@ -8457,6 +8465,8 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
             learning_rate,
             patience,
             seed,
+            resume,
+            restart,
         } => {
             let mut config = tongues_emotions::EmotionTrainConfig::default();
             if let Some(epochs) = epochs {
@@ -8488,10 +8498,58 @@ fn run_emotions_command(command: EmotionCommands) -> Result<()> {
                 format_count(config.batch_size),
                 config.learning_rate
             );
-            let best_loss = tongues_emotions::train(&data, &out, &config)?;
+            let mode = if resume {
+                tongues_emotions::EmotionTrainMode::Resume
+            } else if restart {
+                tongues_emotions::EmotionTrainMode::Restart
+            } else {
+                tongues_emotions::EmotionTrainMode::New
+            };
+            let report = tongues_emotions::train_with_progress(
+                &data,
+                &out,
+                &config,
+                mode,
+                |event| {
+                    match event {
+                        tongues_emotions::TrainProgress::Started {
+                            mode,
+                            start_epoch,
+                            max_epochs,
+                        } => {
+                            let status = match mode {
+                                tongues_emotions::EmotionTrainMode::New => "new",
+                                tongues_emotions::EmotionTrainMode::Resume => "resumed",
+                                tongues_emotions::EmotionTrainMode::Restart => {
+                                    "deliberately restarted"
+                                }
+                            };
+                            println!(
+                                "Emotion training run: {status}; starting epoch {start_epoch} of {max_epochs}"
+                            );
+                        }
+                        tongues_emotions::TrainProgress::Epoch {
+                            epoch,
+                            train_loss,
+                            validation_loss,
+                            validation_accuracy,
+                            best_epoch,
+                            patience,
+                        } => println!(
+                            "Epoch {epoch} | train_loss={train_loss:.4} val_loss={validation_loss:.4} val_acc={validation_accuracy:.3} best_epoch={best_epoch} patience={patience}"
+                        ),
+                        tongues_emotions::TrainProgress::EarlyStopped { epoch, patience } => println!(
+                            "Early stopping after epoch {epoch}: validation loss did not improve for {patience} epochs"
+                        ),
+                    }
+                },
+            )?;
             println!(
-                "Emotion training complete. Best validation loss: {:.4}",
-                best_loss
+                "Emotion training complete at epoch {}. Best epoch: {} validation loss: {:.4} accuracy: {:.3}",
+                report.completed_epoch,
+                report.best_epoch,
+                report.best_loss,
+                report.best_accuracy
             );
             Ok(())
         }

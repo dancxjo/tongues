@@ -62,7 +62,8 @@ Before training starts the CLI prints the checkpoint paths:
 
 | File | Purpose |
 |---|---|
-| `train_state.json` | Current epoch, best loss, and metric state. |
+| `train_state.json` | Latest complete epoch, best metrics, patience, shuffle position, config, and data identity. |
+| `train_state-epoch-N.json` | State paired with one durable epoch checkpoint for recovery. |
 | `model-epoch-N.json` | Per-epoch checkpoint. |
 | `model.json` | Best validation-loss model. |
 | `model_config.json` | Labels and feature dimensions. |
@@ -72,6 +73,31 @@ Training uses precomputed pooled log-mel features from `prepare`, so each epoch
 updates a compact linear classifier instead of decoding WAV files again. If the
 run stops before `--epochs`, early stopping ended training after `--patience`
 epochs without validation-loss improvement.
+
+A directory with no training artifacts starts a new run. Continue an interrupted
+compatible run explicitly:
+
+```sh
+just emotions train \
+  --data datasets/emotions/v0 \
+  --out models/emotions/v0 \
+  --epochs 100 \
+  --resume
+```
+
+Use `--restart` instead to deliberately replace the emotion training artifacts
+in that output directory. Without either flag, existing artifacts are rejected
+instead of being silently resumed or overwritten. Resume also rejects changes
+to the prepared train/validation data, learning rate, weight decay, batch size,
+patience, or seed with a migration/new-output-directory message.
+
+Shuffling uses a documented seed-and-epoch derivation, so the next epoch does
+not depend on an opaque in-memory RNG snapshot. For the same build, platform,
+data, and effective config, resumed training is expected to match an
+uninterrupted run exactly; the regression fixture uses zero tolerance. Epoch
+weights and their paired state are atomically renamed after a file sync. Resume
+scans backward for the latest complete pair, while `model.json` is copied from
+the checkpoint named by `best_epoch`.
 
 ## Evaluate And Infer
 

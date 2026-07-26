@@ -8,6 +8,7 @@ anyhow.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tongues-audio = { path = "../tongues-audio" }
 tongues-interpretation = { path = "../tongues-interpretation" }
 tongues-neural = { path = "../tongues-neural" }
