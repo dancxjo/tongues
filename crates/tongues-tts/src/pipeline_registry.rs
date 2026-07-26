@@ -8,7 +8,7 @@ use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::components::AudioDecoder;
-use crate::{AcousticOutputContract, NativeSpeechComponentReadiness};
+use crate::{AcousticOutputContract, CapabilityTier, NativeSpeechComponentReadiness};
 
 pub const TEXT_INPUT_COMPONENT_ID: &str = "text";
 pub const WAV_OUTPUT_COMPONENT_ID: &str = "wav";
@@ -174,6 +174,18 @@ pub struct RegisteredSpeechComposition {
     pub model: String,
     pub pipeline: SpeechPipelineSelection,
     pub recommended: bool,
+    /// Portable capability tier for this composition.
+    ///
+    /// Tier A: low-latency conversational (revision-capable, streaming).
+    /// Tier B: language coverage (committed-phrase, offline preprocessing).
+    /// Tier C: expressive accelerated (reference-conditioned, high-parameter).
+    /// Unassigned: under evaluation or no tier confirmed yet.
+    #[serde(default)]
+    pub capability_tier: CapabilityTier,
+    /// Whether this pipeline supports suffix regeneration (revision-capable).
+    /// All Tier A pipelines set this to `true`.
+    #[serde(default)]
+    pub revision_capable: bool,
 }
 
 impl RegisteredSpeechComposition {
@@ -194,12 +206,22 @@ impl RegisteredSpeechComposition {
             model: model.into(),
             pipeline,
             recommended,
+            capability_tier: CapabilityTier::Unassigned,
+            revision_capable: false,
         }
+    }
+
+    fn with_tier(mut self, tier: CapabilityTier) -> Self {
+        self.revision_capable = tier.is_revision_tier();
+        self.capability_tier = tier;
+        self
     }
 }
 
 pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
     vec![
+        // --- Tier A: low-latency conversational ---
+        // SpeedySpeech + HiFi-GAN: lean native path
         RegisteredSpeechComposition::new(
             "SpeedySpeech → HiFi-GAN",
             "burn",
@@ -210,7 +232,9 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
                 "hifigan-v2-ljspeech",
             ),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierA),
+        // FastPitch + HiFi-GAN: canonical Tier A, revision-capable
         RegisteredSpeechComposition::new(
             "FastPitch → HiFi-GAN",
             "fastpitch",
@@ -221,7 +245,10 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
                 "hifigan-v2-ljspeech",
             ),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierA),
+        // Glow-TTS + MultiBand-MelGAN: lean path; Tier A candidacy
+        // pending measured suffix-regeneration confirmation.
         RegisteredSpeechComposition::new(
             "Glow-TTS → pinned standardizer → MultiBand-MelGAN",
             "glow",
@@ -232,14 +259,19 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
                 "glow-standardized-multiband-melgan-ljspeech",
             ),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierA),
+        // --- Tier B: language coverage ---
+        // Native VITS: committed-phrase, no suffix revision
         RegisteredSpeechComposition::new(
             "VITS VCTK",
             "vits",
             "vits-vctk",
             SpeechPipelineSelection::end_to_end("projector/vits-vctk", "vits-vctk", Vec::new()),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierB),
+        // YourTTS: multilingual committed-phrase coverage
         RegisteredSpeechComposition::new(
             "YourTTS Multilingual",
             "yourtts",
@@ -250,7 +282,9 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
                 vec!["speaker-encoder".into()],
             ),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierB),
+        // --- Unassigned: voice conversion (not a TTS tier) ---
         RegisteredSpeechComposition::new(
             "FreeVC24 Voice Conversion",
             "freevc",
@@ -262,6 +296,8 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
             ),
             true,
         ),
+        // --- Tier C: expressive accelerated ---
+        // StyleTTS2: reference-conditioned; warmup measured separately
         RegisteredSpeechComposition::new(
             "StyleTTS2 English",
             "styletts2",
@@ -272,7 +308,9 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
                 vec!["style-reference-encoder".into()],
             ),
             true,
-        ),
+        )
+        .with_tier(CapabilityTier::TierC),
+        // --- Unassigned: deterministic mock for testing ---
         RegisteredSpeechComposition::new(
             "Deterministic Mock",
             "mock",
@@ -748,5 +786,101 @@ mod tests {
         assert!(incompatible.reason.contains("waveform contract mismatch"));
         assert!(incompatible.reason.contains("24000"));
         assert!(incompatible.reason.contains("22050"));
+    }
+
+    #[test]
+    fn fastpitch_hifigan_is_canonical_tier_a_and_revision_capable() {
+        let compositions = registered_speech_compositions();
+        let fastpitch = compositions
+            .iter()
+            .find(|c| c.backend == "fastpitch")
+            .expect("FastPitch composition must be registered");
+        assert_eq!(
+            fastpitch.capability_tier,
+            CapabilityTier::TierA,
+            "FastPitch + HiFi-GAN must be Tier A"
+        );
+        assert!(
+            fastpitch.revision_capable,
+            "FastPitch + HiFi-GAN must declare revision_capable"
+        );
+    }
+
+    #[test]
+    fn speedy_speech_is_tier_a_and_vits_is_tier_b() {
+        let compositions = registered_speech_compositions();
+        let speedy = compositions
+            .iter()
+            .find(|c| c.backend == "burn")
+            .expect("SpeedySpeech composition must be registered");
+        assert_eq!(
+            speedy.capability_tier,
+            CapabilityTier::TierA,
+            "SpeedySpeech + HiFi-GAN must be Tier A"
+        );
+
+        let vits = compositions
+            .iter()
+            .find(|c| c.backend == "vits")
+            .expect("VITS composition must be registered");
+        assert_eq!(
+            vits.capability_tier,
+            CapabilityTier::TierB,
+            "VITS must be Tier B"
+        );
+        assert!(
+            !vits.revision_capable,
+            "VITS must not declare revision_capable"
+        );
+    }
+
+    #[test]
+    fn styletts2_is_tier_c_and_freevc_is_unassigned() {
+        let compositions = registered_speech_compositions();
+        let styletts2 = compositions
+            .iter()
+            .find(|c| c.backend == "styletts2")
+            .expect("StyleTTS2 composition must be registered");
+        assert_eq!(
+            styletts2.capability_tier,
+            CapabilityTier::TierC,
+            "StyleTTS2 must be Tier C"
+        );
+
+        let freevc = compositions
+            .iter()
+            .find(|c| c.backend == "freevc")
+            .expect("FreeVC composition must be registered");
+        assert_eq!(
+            freevc.capability_tier,
+            CapabilityTier::Unassigned,
+            "FreeVC (voice conversion) must be Unassigned"
+        );
+    }
+
+    #[test]
+    fn tier_a_compositions_are_revision_capable() {
+        let compositions = registered_speech_compositions();
+        for composition in &compositions {
+            if composition.capability_tier == CapabilityTier::TierA {
+                assert!(
+                    composition.revision_capable,
+                    "Tier A composition `{}` must declare revision_capable",
+                    composition.display_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capability_tier_serializes_with_snake_case_keys() {
+        let v = serde_json::to_value(CapabilityTier::TierA).expect("serialize tier");
+        assert_eq!(v, "tier_a");
+        let v = serde_json::to_value(CapabilityTier::TierB).expect("serialize tier");
+        assert_eq!(v, "tier_b");
+        let v = serde_json::to_value(CapabilityTier::TierC).expect("serialize tier");
+        assert_eq!(v, "tier_c");
+        let v = serde_json::to_value(CapabilityTier::Unassigned).expect("serialize tier");
+        assert_eq!(v, "unassigned");
     }
 }

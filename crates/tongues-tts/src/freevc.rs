@@ -497,6 +497,8 @@ where
                 "microsoft/unilm WavLM".into(),
                 "OlaWod/FreeVC".into(),
             ],
+            capability_tier: crate::CapabilityTier::Unassigned,
+            revision_capable: false,
         }
     }
 

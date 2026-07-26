@@ -197,6 +197,73 @@ pub struct OutputAudioContract {
     pub streaming: bool,
 }
 
+/// Portable real-time speech capability tier.
+///
+/// Tiers describe the rendering contract a pipeline promises — they are
+/// hardware-neutral and provider-neutral. Placement decisions, fallback
+/// order, and resident-memory budget are downstream concerns that live
+/// outside Tongues (e.g. in Netherwick).
+///
+/// Incremental output, low first-audio latency, and low total real-time
+/// factor are separate properties: a pipeline may satisfy one without
+/// satisfying all three. Tier membership captures the combination that
+/// matters for conversational or high-coverage use cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityTier {
+    /// Low-latency conversational pipelines.
+    ///
+    /// These are revision-capable, streaming, and target bounded startup and
+    /// sustained real-time synthesis on a documented CPU target.
+    /// Canonical: FastPitch + HiFi-GAN. Also: SpeedySpeech + HiFi-GAN,
+    /// SpeedySpeech + MultiBand-MelGAN, compact ONNX VITS bundles.
+    TierA,
+    /// Language-coverage pipelines.
+    ///
+    /// Optimised for short committed phrases with explicit offline preprocessing.
+    /// Whole-utterance rendering is represented honestly; it does not imply
+    /// internal suffix revision. Native VITS and Fairseq MMS VITS belong here.
+    TierB,
+    /// Expressive accelerated pipelines.
+    ///
+    /// Reference-conditioned or high-parameter models whose measured quality
+    /// justifies additional startup and memory cost. XTTS v2, StyleTTS2, and
+    /// YourTTS participate when their measured capabilities confirm the trade-off.
+    /// Reference processing and model warmup are measured separately from
+    /// steady-state synthesis.
+    TierC,
+    /// No tier has been assigned.
+    ///
+    /// Used for models under evaluation, voice-conversion pipelines, and any
+    /// composition whose measured performance has not yet been confirmed.
+    Unassigned,
+}
+
+impl CapabilityTier {
+    /// Human-readable label for the tier.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TierA => "Tier A — low-latency conversational",
+            Self::TierB => "Tier B — language coverage",
+            Self::TierC => "Tier C — expressive accelerated",
+            Self::Unassigned => "Unassigned",
+        }
+    }
+
+    /// Return `true` when the tier implies revision-safe (suffix-regeneration)
+    /// capability. Tier A pipelines must support suffix regeneration; Tier B
+    /// and Tier C pipelines do not require it.
+    pub const fn is_revision_tier(self) -> bool {
+        matches!(self, Self::TierA)
+    }
+}
+
+impl Default for CapabilityTier {
+    fn default() -> Self {
+        Self::Unassigned
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendCapabilities {
     /// Stable implementation identifier used by API and CLI requests.
@@ -223,6 +290,18 @@ pub struct BackendCapabilities {
     pub output: OutputAudioContract,
     #[serde(default)]
     pub provenance: Vec<String>,
+    /// Portable capability tier describing this backend's rendering contract.
+    ///
+    /// Callers can use this field to discover tier membership without
+    /// backend-specific application logic. Defaults to [`CapabilityTier::Unassigned`]
+    /// for models that have not yet been evaluated.
+    #[serde(default)]
+    pub capability_tier: CapabilityTier,
+    /// Whether this pipeline supports suffix regeneration (revision-capable
+    /// rendering). Tier A pipelines set this to `true`; Tier B and Tier C
+    /// pipelines should declare it explicitly based on their measured behaviour.
+    #[serde(default)]
+    pub revision_capable: bool,
 }
 
 impl BackendCapabilities {
@@ -1194,6 +1273,8 @@ mod tests {
                 streaming: true,
             },
             provenance: Vec::new(),
+            capability_tier: CapabilityTier::Unassigned,
+            revision_capable: false,
         }
     }
 

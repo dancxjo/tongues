@@ -2911,6 +2911,8 @@ fn speech_backend_capabilities(
             devices,
             output: output(22_050),
             provenance: vec!["Published Coqui release artifacts".into()],
+            capability_tier: tongues_tts::CapabilityTier::TierA,
+            revision_capable: true,
         },
         "fastpitch" => tongues_tts::BackendCapabilities {
             backend: "fastpitch".into(),
@@ -2933,6 +2935,8 @@ fn speech_backend_capabilities(
             devices,
             output: output(22_050),
             provenance: vec!["Published Coqui release artifacts".into()],
+            capability_tier: tongues_tts::CapabilityTier::TierA,
+            revision_capable: true,
         },
         "glow" => tongues_tts::BackendCapabilities {
             backend: "glow".into(),
@@ -2954,6 +2958,8 @@ fn speech_backend_capabilities(
                 "Published Coqui Glow-TTS and MultiBand-MelGAN release artifacts".into(),
                 tongues_tts::GLOW_MULTIBAND_STANDARDIZER_ID.into(),
             ],
+            capability_tier: tongues_tts::CapabilityTier::TierA,
+            revision_capable: true,
         },
         "vits" => {
             let catalog = tongues_tts::SpeakerCatalog::from_file(
@@ -2998,6 +3004,8 @@ fn speech_backend_capabilities(
                 devices,
                 output: output(22_050),
                 provenance: vec!["Published Coqui release artifact".into()],
+                capability_tier: tongues_tts::CapabilityTier::TierB,
+                revision_capable: false,
             }
         }
         "fairseq" => {
@@ -3086,6 +3094,8 @@ fn speech_backend_capabilities(
                 devices,
                 output: output(16_000),
                 provenance: vec!["Published Coqui YourTTS release artifact".into()],
+                capability_tier: tongues_tts::CapabilityTier::TierB,
+                revision_capable: false,
             }
         }
         "onnx" => {
@@ -3141,6 +3151,8 @@ fn speech_backend_capabilities(
                         .unwrap_or(22_050),
                 ),
                 provenance: vec!["Piper-compatible ONNX import".into()],
+                capability_tier: tongues_tts::CapabilityTier::TierA,
+                revision_capable: false,
             }
         }
         "freevc" => tongues_tts::BackendCapabilities {
@@ -3174,6 +3186,8 @@ fn speech_backend_capabilities(
                 "microsoft/unilm WavLM".into(),
                 "coqui-ai/TTS FreeVC24 artifact".into(),
             ],
+            capability_tier: tongues_tts::CapabilityTier::Unassigned,
+            revision_capable: false,
         },
         "styletts2" => tongues_tts::BackendCapabilities {
             backend: "styletts2".into(),
@@ -3201,6 +3215,8 @@ fn speech_backend_capabilities(
             devices,
             output: output(24_000),
             provenance: Vec::new(),
+            capability_tier: tongues_tts::CapabilityTier::TierC,
+            revision_capable: false,
         },
         "mock" => tongues_tts::BackendCapabilities {
             backend: "mock".into(),
@@ -3219,6 +3235,8 @@ fn speech_backend_capabilities(
             devices,
             output: output(mock_sample_rate_hz),
             provenance: vec!["Tongues deterministic test backend".into()],
+            capability_tier: tongues_tts::CapabilityTier::Unassigned,
+            revision_capable: false,
         },
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })
@@ -3267,6 +3285,10 @@ fn fairseq_backend_capabilities(
             streaming: true,
         },
         provenance: vec![entry.provenance.source.clone()],
+        // Fairseq MMS VITS pipelines are Tier B: committed-phrase, offline
+        // grapheme preprocessing; whole-utterance rendering only.
+        capability_tier: tongues_tts::CapabilityTier::TierB,
+        revision_capable: false,
     }
 }
 
@@ -4106,6 +4128,8 @@ fn discover_speech_path(
                 streaming: false,
             },
             provenance: Vec::new(),
+            capability_tier: tongues_tts::CapabilityTier::Unassigned,
+            revision_capable: false,
         });
     let catalog_ids = speech_path_catalog_ids(home, backend, Some(model)).unwrap_or_default();
     let catalog_entries = catalog_ids
