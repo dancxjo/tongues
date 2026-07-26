@@ -2099,7 +2099,15 @@ fn validate_runtime_shapes(
                     .context("ResNet speaker encoder checkpoint shape validation failed")?;
             }
         }
-        ParsedConfig::Xtts { model, .. } => validate_xtts_shapes(model, tensors)?,
+        ParsedConfig::Xtts { model, .. } => {
+            validate_xtts_shapes(model, tensors)?;
+            crate::burn_xtts::validate_xtts_checkpoint::<NdArray<f32>>(
+                model,
+                checkpoint_path,
+                &NdArrayDevice::Cpu,
+            )
+            .context("XTTS checkpoint runtime loading failed")?;
+        }
     }
     Ok(())
 }
@@ -2759,8 +2767,7 @@ mod tests {
     fn xtts_pickle_profile_allows_only_known_inert_config_classes() {
         let pickle = b"\x80\x02cTTS.tts.models.xtts\nXttsArgs\n)\x81.";
         scan_pickle_program(pickle, true).expect("known XTTS config dataclass");
-        let dataset =
-            b"\x80\x02cTTS.config.shared_configs\nBaseDatasetConfig\n)\x81.";
+        let dataset = b"\x80\x02cTTS.config.shared_configs\nBaseDatasetConfig\n)\x81.";
         scan_pickle_program(dataset, true).expect("published XTTS dataset config dataclass");
         let error =
             scan_pickle_program(pickle, false).expect_err("generic tensor scan must stay strict");

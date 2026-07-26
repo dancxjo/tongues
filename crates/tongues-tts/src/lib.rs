@@ -141,7 +141,9 @@ pub use burn_vocoder::{
     BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
     BurnVocoder,
 };
-pub use burn_xtts::{BurnXtts, XttsConditioning, XttsGenerationControls};
+pub use burn_xtts::{
+    xtts_language_has_native_cleaner, BurnXtts, XttsConditioning, XttsGenerationControls,
+};
 pub use components::{
     native_speech_components, AcousticArtifact, AcousticModel, AcousticOutputContract,
     CodecContract, CodecDecoder, CodecDecoderAdapter, CodecTokenSequence, ConditioningEmbedding,

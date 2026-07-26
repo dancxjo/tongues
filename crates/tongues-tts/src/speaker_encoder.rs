@@ -302,7 +302,8 @@ impl<B: Backend> CoquiResNetSpeakerEncoder<B> {
         }
     }
 
-    pub fn projection_dim(&self) -> usize {
+    #[cfg(test)]
+    fn projection_dim(&self) -> usize {
         self.projection_dim
     }
 }

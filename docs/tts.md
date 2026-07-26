@@ -12,6 +12,7 @@ front-end integration.
 | `fastpitch` | `tongues-tts` on Burn | controllable FastPitch acoustic model -> selectable native vocoder | active |
 | `glow` | `tongues-tts` on Burn | Glow-TTS -> pinned per-bin standardizer -> MultiBand-MelGAN | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
+| `xtts` | `tongues-tts` on Burn | XTTS v2 GPT -> native HiFi decoder with reference voice conditioning | active local-package path |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
 | `mock` | deterministic local backend | synthetic waveform for integration tests | active test path |
@@ -52,23 +53,64 @@ rather than a successful truncated synthesis. Released configs that require
 prenet dropout at inference keep that behavior even on non-autodiff Burn
 backends.
 
-XTTS v2 package import is recognized as a separate `xtts_v2` architecture.
+XTTS v2 is a native `xtts_v2` architecture and an active `xtts` CLI backend.
 The importer validates the checkpoint's GPT text/audio embeddings, transformer
-layer count, conditioning perceiver, HiFi decoder, and speaker encoder. It also
-validates `vocab.json` special and language tokens against the declared text
-vocabulary, records the 24 kHz output contract and declared model languages,
-and copies the tokenizer into the checksummed package. The Rust tokenizer
-accepts text only after the XTTS language-specific cleaner boundary, so number
-expansion and Chinese/Japanese/Korean transliteration cannot silently use an
-incomplete approximation. Native GPT generation, reference conditioning, and
-HiFi decoding are still being implemented; `xtts` is therefore not advertised
-as a CLI synthesis backend yet.
+layer count, conditioning perceiver, HiFi decoder, and speaker encoder, then
+loads the converted checkpoint through the complete Burn graph before accepting
+the package. It also validates `vocab.json` special and language tokens against
+the declared text vocabulary, records the 24 kHz output contract and declared
+model languages, and copies the tokenizer into the checksummed package. Import
+and inference do not execute Python.
 
-The native stream assembler is available to that backend work now. It consumes
-the cumulative waveform produced as GPT code latents grow, emits only the
-newly stable suffix, crossfades the recomputed 1,024-sample overlap, and flushes
-the withheld tail on finalization. Tests require concatenated chunks to equal
-one-shot output exactly when cumulative decoder prefixes agree.
+The runtime performs speaker and GPT reference conditioning, cached GPT-2
+autoregressive generation, seeded top-k/top-p sampling, and HiFi waveform
+decoding. Speaker-conditioning entries are cached by canonical reference path,
+file size, and modification time. The engine implements the same
+`SpeechSynthesisEngine` and `PlanEngineBackend` contracts as other native
+backends; the unified request's `reference_audio.speaker` field becomes a
+backend-neutral speaker reference rather than an XTTS-specific public type.
+
+Use a locally imported package and an explicit checkpoint-local language:
+
+```sh
+cargo run --release --bin tongues -- speak \
+  --backend xtts \
+  --model /path/to/xtts-v2-package \
+  --model-language en \
+  --voice-wav /path/to/reference.wav \
+  --seed 17 \
+  --output xtts.wav \
+  "Hello, my friend."
+```
+
+The native cleaner currently advertises the published Latin- and
+Cyrillic-script language entries. Arabic, Chinese, Japanese, and Korean remain
+unadvertised until their upstream-compatible transliterators are native, and
+digits must be spelled out so language-specific number expansion cannot be
+silently approximated.
+
+Streaming consumes cumulative waveforms as GPT code latents grow, emits only
+the newly stable suffix, crossfades the recomputed 1,024-sample overlap, and
+flushes the withheld tail in a final ordered chunk. Sink errors stop generation
+immediately. Profiling separates reference conditioning, first autoregressive
+code, remaining autoregressive generation, each waveform decode, and stream
+assembly; this keeps conditioning cost, first-playable latency, steady RTF, and
+overlap recomputation observable independently.
+
+Run the two-language, two-reference and streaming-equivalence gate with:
+
+```sh
+TONGUES_XTTS_PACKAGE=/path/to/xtts-v2-package \
+TONGUES_XTTS_REFERENCE_A=/path/to/reference-a.wav \
+TONGUES_XTTS_REFERENCE_B=/path/to/reference-b.wav \
+TONGUES_XTTS_CUDA_DEVICE=0 \
+  scripts/xtts-conformance.sh
+```
+
+Set `TONGUES_XTTS_CPU=1` for the retained CPU path. The harness validates
+English and French with both clips, decodes each WAV, records process peak
+resident memory and structured native timings, and requires the concatenated
+streaming WAV to equal one-shot decoding for the same seed.
 
 ## Safe Coqui package import
 
