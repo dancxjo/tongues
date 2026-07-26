@@ -334,7 +334,10 @@ pub(super) fn phonotactics() -> Phonotactics {
 }
 
 pub(super) fn connected_speech() -> Vec<ConnectedSpeechRule> {
-    vec![ConnectedSpeechRule::LinkingR { phone: "ɹ".into() }]
+    vec![ConnectedSpeechRule::LinkingR {
+        phone: "ɹ".into(),
+        intrusive_after_phones: ["ə", "ɑː", "ɔː"].map(str::to_string).to_vec(),
+    }]
 }
 
 pub(super) fn adapt_orthographic_units(units: &mut [OrthographicUnitPronunciation]) {

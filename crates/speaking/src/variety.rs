@@ -219,6 +219,8 @@ pub enum ConnectedSpeechRule {
     },
     LinkingR {
         phone: String,
+        #[serde(default)]
+        intrusive_after_phones: Vec<String>,
     },
     Liaison {
         #[serde(default)]

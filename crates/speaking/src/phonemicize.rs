@@ -2150,17 +2150,28 @@ fn apply_declared_connected_speech(
                     phones.pop();
                 }
             }
-            ConnectedSpeechRule::LinkingR { phone } => {
+            ConnectedSpeechRule::LinkingR {
+                phone,
+                intrusive_after_phones,
+            } => {
+                let final_phone = final_phone_symbol(phones);
+                let has_historical_final_r = previous_word.is_some_and(word_has_historical_final_r);
+                let permits_intrusive_r = previous_word.is_some()
+                    && final_phone.is_some_and(|symbol| {
+                        intrusive_after_phones
+                            .iter()
+                            .any(|candidate| candidate == symbol)
+                    });
                 if next_is_vowel
-                    && previous_word.is_some_and(word_has_historical_final_r)
-                    && final_phone_symbol(phones) != Some(phone.as_str())
+                    && (has_historical_final_r || permits_intrusive_r)
+                    && final_phone != Some(phone.as_str())
                 {
-                    phones.push(connected_speech_phone_token(
-                        variety,
-                        phone,
-                        "connected-speech linking r",
-                        0.95,
-                    ));
+                    let method = if has_historical_final_r {
+                        "connected-speech linking r"
+                    } else {
+                        "connected-speech intrusive r"
+                    };
+                    phones.push(connected_speech_phone_token(variety, phone, method, 0.95));
                 }
             }
             ConnectedSpeechRule::Liaison { entries } => {
@@ -4907,6 +4918,37 @@ mod tests {
                 .filter(|symbol| symbol != "|")
                 .collect::<Vec<_>>(),
             ["f", "ɑː", "n", "ɔː", "θ"]
+        );
+    }
+
+    #[test]
+    fn rp_intrusive_r_resolves_vowel_hiatus() {
+        let before_vowel = VarietyDataPhonemicizer
+            .phonemicize(&request("umbrella up", "en-GB-RP"))
+            .expect("intrusive r phrase");
+        let before_consonant = VarietyDataPhonemicizer
+            .phonemicize(&request("umbrella stand", "en-GB-RP"))
+            .expect("phrase without intrusive r");
+
+        assert_eq!(
+            phone_symbols(&before_vowel)
+                .into_iter()
+                .filter(|symbol| symbol != "|")
+                .collect::<Vec<_>>(),
+            ["ə", "m", "b", "ɹ", "e", "l", "ə", "ɹ", "ʌ", "p"]
+        );
+        assert_eq!(
+            phone_symbols(&before_consonant)
+                .into_iter()
+                .filter(|symbol| symbol != "|")
+                .collect::<Vec<_>>(),
+            ["ə", "m", "b", "ɹ", "e", "l", "ə", "s", "t", "æ", "n", "d"]
+        );
+        assert!(
+            before_vowel
+                .phones
+                .iter()
+                .any(|phone| { phone.provenance.method == "connected-speech intrusive r" })
         );
     }
 
