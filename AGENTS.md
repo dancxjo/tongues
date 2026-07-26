@@ -1,5 +1,9 @@
 # Agent Notes
 
+## Branches During Simultaneous Work
+
+When multiple agents or people are working in this repository simultaneously, generally keep work on the current branch instead of creating a new branch. A shared worktree means branch switches affect everyone, so only create or switch branches when the user explicitly requests it or the collaborators have coordinated the change.
+
 ## Status Updates For Long-Running Commands
 
 Long-running prepare/train paths should make progress visible and durable. Do not leave users staring at one spinner message while work accumulates only in memory.
