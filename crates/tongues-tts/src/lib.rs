@@ -87,6 +87,7 @@ pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
 pub mod vits_recipe;
+pub mod vits_trainer;
 pub mod vocoder_recipe;
 pub mod wavlm;
 pub mod xtts;
@@ -284,7 +285,10 @@ pub use tacotron_config::{
     DEFAULT_TACOTRON_MAX_DECODER_STEPS,
 };
 pub use tts_ledger::{LedgerEntry, LedgerError, TtsPlaybackLedger};
-pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
+pub use vits_config::{
+    load_vits_training_model_config, VitsInferenceConfig, VitsNetworkConfig,
+    VitsTrainingModelConfig,
+};
 pub use vits_projector::VitsLinguisticProjector;
 pub use vits_recipe::{
     initialize_vits_run_with_progress, publish_vits_checkpoint, render_model_card,
@@ -294,6 +298,10 @@ pub use vits_recipe::{
     VitsTrainingBackend, VitsTrainingManifest, VitsTrainingProgress, VitsTrainingRecipe,
     VitsTrainingState, VITS_TRAINING_MANIFEST_SCHEMA_VERSION, VITS_TRAINING_RECIPE_SCHEMA_VERSION,
     VITS_TRAINING_STATE_SCHEMA_VERSION,
+};
+pub use vits_trainer::{
+    evaluate_vits, export_vits, load_vits_examples, train_vits, VitsEvaluationReport,
+    VitsPreparedExample, VitsTrainOptions, VitsTrainingReport,
 };
 pub use vocoder_recipe::{
     HifiganTrainingRecipe, MelganTrainingRecipe, RecipeMelContract, SerializableLossWeights,

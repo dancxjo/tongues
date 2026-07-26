@@ -73,6 +73,33 @@ pub struct VitsInferenceConfig {
     pub audio: AudioFeatureConfig,
 }
 
+/// Tokenizer and graph metadata needed by the native training preparer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VitsTrainingModelConfig {
+    pub inference: VitsInferenceConfig,
+    pub vocabulary: Vec<String>,
+    pub use_phonemes: bool,
+    pub phoneme_language: Option<String>,
+    pub add_blank: bool,
+}
+
+pub fn load_vits_training_model_config(
+    path: impl AsRef<Path>,
+) -> Result<VitsTrainingModelConfig> {
+    let path = path.as_ref();
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("failed to read VITS config {}", path.display()))?;
+    let imported = ImportedVitsConfig::from_json5_str(&source)
+        .with_context(|| format!("invalid VITS config {}", path.display()))?;
+    Ok(VitsTrainingModelConfig {
+        inference: imported.inference_config(),
+        vocabulary: imported.vocabulary(),
+        use_phonemes: imported.use_phonemes,
+        phoneme_language: imported.phoneme_language,
+        add_blank: imported.add_blank,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ImportedVitsConfig {
     pub(crate) model: String,

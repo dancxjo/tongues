@@ -212,6 +212,60 @@ pub struct VitsInferenceExport<B: Backend> {
 }
 
 impl<B: Backend> VitsInferenceExport<B> {
+    /// Construct a randomly initialized graph for from-scratch training.
+    pub fn init_random(config: &VitsInferenceConfig, device: &B::Device) -> Result<Self> {
+        config.validate()?;
+        ensure!(
+            !config.network.use_d_vector_file,
+            "native VITS training currently requires learned speaker IDs; reference d-vector fine-tuning is not yet supported"
+        );
+        let network = &config.network;
+        let text_config = VitsTextPriorConfig::from_model_config(config)?;
+        let mut duration_config =
+            StochasticDurationConfig::new(text_config.encoder_channels(), 192, 3);
+        let speaker_channels = if network.use_speaker_embedding {
+            network.speaker_embedding_channels
+        } else {
+            0
+        };
+        duration_config.conditioning_channels = if network.condition_dp_on_speaker {
+            speaker_channels
+        } else {
+            0
+        };
+        duration_config.language_conditioning_channels = text_config.language_embedding_channels;
+        let flow_config = ResidualCouplingFlowConfig {
+            channels: network.hidden_channels,
+            hidden_channels: network.hidden_channels,
+            kernel_size: network.kernel_size_flow,
+            dilation_rate: network.dilation_rate_flow,
+            num_layers: network.num_layers_flow,
+            num_flows: 4,
+            conditioning_channels: speaker_channels,
+        };
+        let decoder_config = VitsWaveformDecoderConfig::from_model_config(config)?;
+        Ok(Self {
+            text_encoder: text_config.init(device)?,
+            duration_predictor: duration_config.init(device)?,
+            flow: flow_config.init(device)?,
+            waveform_decoder: decoder_config.init(device)?,
+            emb_g: network.use_speaker_embedding.then(|| {
+                EmbeddingConfig::new(
+                    network.num_speakers as usize,
+                    network.speaker_embedding_channels,
+                )
+                .init(device)
+            }),
+            emb_l: network.use_language_embedding.then(|| {
+                EmbeddingConfig::new(
+                    network.num_languages as usize,
+                    network.embedded_language_dim,
+                )
+                .init(device)
+            }),
+        })
+    }
+
     /// Restore all inference-side parameters from a published Coqui VITS
     /// checkpoint. Training-only posterior/discriminator modules are
     /// intentionally constructed separately.
@@ -437,7 +491,7 @@ pub struct VitsTrainableGenerator<B: Backend> {
     pub posterior_encoder: VitsPosteriorEncoder<B>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VitsTrainingBatch<B: Backend> {
     pub token_ids: Tensor<B, 2, Int>,
     pub token_lengths: Vec<usize>,
@@ -463,6 +517,27 @@ pub struct VitsTrainingForward<B: Backend> {
 }
 
 impl<B: Backend> VitsTrainableGenerator<B> {
+    pub fn init_random(config: &VitsInferenceConfig, device: &B::Device) -> Result<Self> {
+        let conditioning_channels = if config.network.use_speaker_embedding {
+            config.network.speaker_embedding_channels
+        } else {
+            0
+        };
+        Ok(Self {
+            inference: VitsInferenceExport::init_random(config, device)?,
+            posterior_encoder: VitsPosteriorEncoderConfig {
+                input_channels: config.network.out_channels,
+                latent_channels: config.network.hidden_channels,
+                hidden_channels: config.network.hidden_channels,
+                kernel_size: config.network.kernel_size_posterior_encoder,
+                dilation_rate: config.network.dilation_rate_posterior_encoder,
+                num_layers: config.network.num_layers_posterior_encoder,
+                conditioning_channels,
+            }
+            .init(device)?,
+        })
+    }
+
     pub fn training_forward(
         &self,
         batch: VitsTrainingBatch<B>,
@@ -581,6 +656,13 @@ impl<B: Backend> VitsDiscriminators<B> {
         Self {
             multi_period: MultiPeriodDiscriminator::new(device),
             multi_scale: MultiScaleDiscriminator::new(device),
+        }
+    }
+
+    pub fn new_fixture(device: &B::Device) -> Self {
+        Self {
+            multi_period: MultiPeriodDiscriminator::new_fixture(device),
+            multi_scale: MultiScaleDiscriminator::new_fixture(device),
         }
     }
 

@@ -16,6 +16,7 @@ pub mod models;
 mod speak;
 mod speech_corpus;
 mod styletts2_cmds;
+mod vits_cmds;
 
 use std::fs;
 use std::io::{BufRead, Read, Write};
@@ -160,6 +161,12 @@ enum Commands {
     SpeechCorpus {
         #[command(subcommand)]
         command: speech_corpus::SpeechCorpusCommands,
+    },
+
+    /// Initialize, train, resume, evaluate, and export native VITS models
+    Vits {
+        #[command(subcommand)]
+        command: vits_cmds::VitsCommands,
     },
 
     /// Train and run the lexical grapheme/phoneme seq2seq model family
@@ -1924,6 +1931,7 @@ fn main() -> Result<()> {
         Commands::SpeechCorpus { command } => {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
         }
+        Commands::Vits { command } => vits_cmds::run(command, device_arg),
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
@@ -2117,6 +2125,10 @@ fn command_needs_device(command: &Commands) -> bool {
                 | InterpretationCommands::Stream { .. }
         ),
         Commands::CommonPhone { .. } => false,
+        Commands::Vits { command } => !matches!(
+            command,
+            vits_cmds::VitsCommands::Initialize { .. }
+        ),
         Commands::SentenceParser { command } => matches!(
             command,
             SentenceParserCommands::Train { .. }

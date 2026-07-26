@@ -92,6 +92,27 @@ impl<B: Backend> PeriodSubDiscriminator<B> {
         }
     }
 
+    pub(crate) fn new_fixture(period: usize, device: &B::Device) -> Self {
+        let channel_pairs = [(1, 4), (4, 8), (8, 16)];
+        let convs = channel_pairs
+            .iter()
+            .map(|&(c_in, c_out)| {
+                Conv2dConfig::new([c_in, c_out], [3, 1])
+                    .with_stride([2, 1])
+                    .with_padding(PaddingConfig2d::Explicit(1, 0, 1, 0))
+                    .init(device)
+            })
+            .collect();
+        let conv_post = Conv2dConfig::new([16, 1], [3, 1])
+            .with_padding(PaddingConfig2d::Explicit(1, 0, 1, 0))
+            .init(device);
+        Self {
+            convs,
+            conv_post,
+            period,
+        }
+    }
+
     /// Run the sub-discriminator.
     ///
     /// `waveform` must be shaped `[batch, 1, samples]`.
@@ -143,6 +164,12 @@ impl<B: Backend> MultiPeriodDiscriminator<B> {
             .map(|&period| PeriodSubDiscriminator::new(period, device))
             .collect();
         Self { sub_discriminators }
+    }
+
+    pub(crate) fn new_fixture(device: &B::Device) -> Self {
+        Self {
+            sub_discriminators: vec![PeriodSubDiscriminator::new_fixture(2, device)],
+        }
     }
 
     /// Forward pass over `[batch, 1, samples]`.
@@ -210,6 +237,30 @@ impl<B: Backend> ScaleSubDiscriminator<B> {
         }
     }
 
+    pub(crate) fn new_fixture(device: &B::Device) -> Self {
+        let conv_pre = Conv1dConfig::new(1, 4, 5)
+            .with_padding(PaddingConfig1d::Explicit(2, 2))
+            .init(device);
+        let convs = vec![
+            Conv1dConfig::new(4, 8, 5)
+                .with_stride(2)
+                .with_padding(PaddingConfig1d::Explicit(2, 2))
+                .init(device),
+            Conv1dConfig::new(8, 16, 5)
+                .with_stride(2)
+                .with_padding(PaddingConfig1d::Explicit(2, 2))
+                .init(device),
+        ];
+        let conv_post = Conv1dConfig::new(16, 1, 3)
+            .with_padding(PaddingConfig1d::Explicit(1, 1))
+            .init(device);
+        Self {
+            conv_pre,
+            convs,
+            conv_post,
+        }
+    }
+
     /// Run the sub-discriminator over `[batch, 1, samples]`.
     pub fn forward(&self, waveform: Tensor<B, 3>) -> SubDiscriminatorOutput<B> {
         let mut x = leaky_relu(self.conv_pre.forward(waveform), LRELU_SLOPE);
@@ -240,6 +291,12 @@ impl<B: Backend> MultiScaleDiscriminator<B> {
     pub fn new(device: &B::Device) -> Self {
         let sub_discriminators = (0..3).map(|_| ScaleSubDiscriminator::new(device)).collect();
         Self { sub_discriminators }
+    }
+
+    pub(crate) fn new_fixture(device: &B::Device) -> Self {
+        Self {
+            sub_discriminators: vec![ScaleSubDiscriminator::new_fixture(device)],
+        }
     }
 
     /// Forward pass over `[batch, 1, samples]` at three scales.
