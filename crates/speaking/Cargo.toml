@@ -11,6 +11,7 @@ warnings = "allow"
 anyhow = { workspace = true }
 arpabet_cmudict = "=2.0.0"
 serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
 dirs = "6"
 isolang = { workspace = true }
 langtag = { workspace = true }
@@ -21,6 +22,3 @@ whisper-cpp-plus = { workspace = true, optional = true }
 [features]
 default = []
 asr-whisper = ["dep:whisper-cpp-plus"]
-
-[dev-dependencies]
-serde_json = { workspace = true }

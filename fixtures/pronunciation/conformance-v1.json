@@ -54,6 +54,140 @@
       }
     },
     {
+      "id": "en-us-city-flapping",
+      "input_text": "city",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "city"
+        },
+        "lexical_candidates": {
+          "required": ["sɪtiː"]
+        },
+        "broad_phonemes": {
+          "required": "ˈsɪ.tiː"
+        },
+        "broad_phoneme_ids": {
+          "required": "s ɪ t iː"
+        },
+        "realized_phones": {
+          "required": "ˈsɪ.ɾiː"
+        },
+        "connected_speech": {
+          "required": "ˈsɪ.tiː ↘ ."
+        },
+        "required_trace_methods": ["american_english_intervocalic_flapping"]
+      }
+    },
+    {
+      "id": "en-us-pretty-flapping",
+      "input_text": "pretty",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "pretty"
+        },
+        "lexical_candidates": {
+          "required": ["pɹɪtiː"]
+        },
+        "broad_phonemes": {
+          "required": "ˈpɹɪ.tiː"
+        },
+        "broad_phoneme_ids": {
+          "required": "p ɹ ɪ t iː"
+        },
+        "realized_phones": {
+          "required": "ˈpɹɪ.ɾiː"
+        },
+        "connected_speech": {
+          "required": "ˈpɹɪ.tiː ↘ ."
+        },
+        "required_trace_methods": ["american_english_intervocalic_flapping"]
+      }
+    },
+    {
+      "id": "en-us-butter-flapping",
+      "input_text": "butter",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "butter"
+        },
+        "lexical_candidates": {
+          "required": ["bətɚ"]
+        },
+        "broad_phonemes": {
+          "required": "ˈbə.tɚ"
+        },
+        "broad_phoneme_ids": {
+          "required": "b ʌ t ɝ"
+        },
+        "realized_phones": {
+          "required": "ˈbʌ.ɾɚ"
+        },
+        "connected_speech": {
+          "required": "ˈbə.tɚ ↘ ."
+        },
+        "required_trace_methods": [
+          "american_english_stressed_ah_primary_strut_allophone",
+          "american_english_intervocalic_flapping",
+          "american_english_unstressed_er_nucleus_reduction"
+        ]
+      }
+    },
+    {
+      "id": "en-us-writing-flapping",
+      "input_text": "writing",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "writing"
+        },
+        "lexical_candidates": {
+          "required": ["ɹaɪtɪŋ"]
+        },
+        "broad_phonemes": {
+          "required": "ˈɹaɪ.tɪŋ"
+        },
+        "broad_phoneme_ids": {
+          "required": "ɹ aɪ t ɪ ŋ"
+        },
+        "realized_phones": {
+          "required": "ˈɹaɪ.ɾɪŋ"
+        },
+        "connected_speech": {
+          "required": "ˈɹaɪ.tɪŋ ↘ ."
+        },
+        "required_trace_methods": ["american_english_intervocalic_flapping"]
+      }
+    },
+    {
+      "id": "en-us-riding-d-flapping",
+      "input_text": "riding",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "riding"
+        },
+        "lexical_candidates": {
+          "required": ["ɹaɪdɪŋ"]
+        },
+        "broad_phonemes": {
+          "required": "ˈɹaɪ.dɪŋ"
+        },
+        "broad_phoneme_ids": {
+          "required": "ɹ aɪ d ɪ ŋ"
+        },
+        "realized_phones": {
+          "required": "ˈɹaɪ.ɾɪŋ"
+        },
+        "connected_speech": {
+          "required": "ˈɹaɪ.dɪŋ ↘ ."
+        },
+        "required_trace_methods": ["american_english_intervocalic_d_flapping"]
+      }
+    },
+    {
       "id": "en-us-careful-blocks-flapping",
       "input_text": "water",
       "variety": "en-US",
@@ -78,6 +212,152 @@
           "required": "ˈwɔ.tɚ ↘ ."
         },
         "required_trace_methods": ["american_english_unstressed_er_nucleus_reduction"]
+      }
+    },
+    {
+      "id": "en-us-attack-no-flap-before-stress",
+      "input_text": "attack",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "attack"
+        },
+        "lexical_candidates": {
+          "required": ["ətæk"]
+        },
+        "broad_phonemes": {
+          "required": "əˈtæk"
+        },
+        "broad_phoneme_ids": {
+          "required": "ʌ t æ k"
+        },
+        "realized_phones": {
+          "required": "əˈtʰæk"
+        },
+        "connected_speech": {
+          "required": "əˈtæk ↘ ."
+        },
+        "required_trace_methods": [
+          "american_english_unstressed_ah_nucleus_reduction",
+          "american_english_aspirated_t_stressed_onset"
+        ]
+      }
+    },
+    {
+      "id": "en-us-about-schwa-reduction",
+      "input_text": "about",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "about"
+        },
+        "lexical_candidates": {
+          "required": ["əbaʊt"]
+        },
+        "broad_phonemes": {
+          "required": "əˈbaʊt"
+        },
+        "broad_phoneme_ids": {
+          "required": "ʌ b aʊ t"
+        },
+        "realized_phones": {
+          "required": "əˈbaʊt"
+        },
+        "connected_speech": {
+          "required": "əˈbaʊt ↘ ."
+        },
+        "required_trace_methods": ["american_english_unstressed_ah_nucleus_reduction"]
+      }
+    },
+    {
+      "id": "en-us-button-reduced-vowel-control",
+      "input_text": "button",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "button"
+        },
+        "lexical_candidates": {
+          "required": ["bətən"]
+        },
+        "broad_phonemes": {
+          "required": "ˈbə.tən"
+        },
+        "broad_phoneme_ids": {
+          "required": "b ʌ t ʌ n"
+        },
+        "realized_phones": {
+          "required": "ˈbʌ.ɾən"
+        },
+        "connected_speech": {
+          "required": "ˈbə.tən ↘ ."
+        },
+        "required_trace_methods": [
+          "american_english_stressed_ah_primary_strut_allophone",
+          "american_english_intervocalic_flapping",
+          "american_english_unstressed_ah_nucleus_reduction"
+        ]
+      }
+    },
+    {
+      "id": "en-us-bottle-dark-l-control",
+      "input_text": "bottle",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "bottle"
+        },
+        "lexical_candidates": {
+          "required": ["bɑtəl"]
+        },
+        "broad_phonemes": {
+          "required": "ˈbɑ.təl"
+        },
+        "broad_phoneme_ids": {
+          "required": "b ɑ t ʌ l"
+        },
+        "realized_phones": {
+          "required": "ˈbɑ.ɾəɫ"
+        },
+        "connected_speech": {
+          "required": "ˈbɑ.təl ↘ ."
+        },
+        "required_trace_methods": [
+          "american_english_intervocalic_flapping",
+          "american_english_unstressed_ah_nucleus_reduction",
+          "american_english_dark_l_elsewhere"
+        ]
+      }
+    },
+    {
+      "id": "en-us-at-all-word-boundary-control",
+      "input_text": "at all",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "at all"
+        },
+        "lexical_candidates": {
+          "required": ["ət", "ɔl"]
+        },
+        "broad_phonemes": {
+          "required": "ət ˈɔl"
+        },
+        "broad_phoneme_ids": {
+          "required": "ʌ t ɔ l"
+        },
+        "realized_phones": {
+          "required": "ətʰ ˈɔɫ"
+        },
+        "connected_speech": {
+          "required": "ət | ˈɔl ↘ ."
+        },
+        "required_trace_methods": [
+          "english weak at",
+          "american_english_unstressed_ah_nucleus_reduction",
+          "american_english_aspirated_t_stressed_onset",
+          "american_english_dark_l_elsewhere"
+        ]
       }
     },
     {

@@ -12,6 +12,8 @@ use crate::{
 
 pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
 pub const PRONUNCIATION_CONFORMANCE_SCHEMA_VERSION: u32 = 1;
+const PRONUNCIATION_CONFORMANCE_CORPUS_JSON: &str =
+    include_str!("../../../fixtures/pronunciation/conformance-v1.json");
 
 /// Versioned pronunciation diagnostics.
 ///
@@ -411,16 +413,18 @@ where
     })
 }
 
+pub fn load_pronunciation_conformance_corpus()
+-> Result<PronunciationConformanceCorpus, serde_json::Error> {
+    serde_json::from_str(PRONUNCIATION_CONFORMANCE_CORPUS_JSON)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::PhonemicizeStyle;
 
     fn corpus() -> PronunciationConformanceCorpus {
-        serde_json::from_str(include_str!(
-            "../../../fixtures/pronunciation/conformance-v1.json"
-        ))
-        .expect("pronunciation conformance corpus")
+        load_pronunciation_conformance_corpus().expect("pronunciation conformance corpus")
     }
 
     #[test]

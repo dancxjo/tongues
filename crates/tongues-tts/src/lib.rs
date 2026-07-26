@@ -2544,6 +2544,70 @@ mod tests {
     }
 
     #[test]
+    fn speech_plan_entrypoint_matches_the_core_conformance_corpus() -> Result<()> {
+        let corpus = speaking::load_pronunciation_conformance_corpus()?;
+        for case in corpus.cases {
+            if case.careful_style {
+                continue;
+            }
+            let analysis = speaking::analyze_pronunciation(&speaking::PhonemicizeRequest {
+                text: case.input_text.clone(),
+                variety: speaking::VarietyId(case.variety.clone()),
+                style: None,
+            })?;
+            let plan = utterance_plan_from_text(SpeechRequest {
+                text: case.input_text.clone(),
+                variety: case.variety.clone(),
+            })?;
+            assert_eq!(plan.variety, analysis.plan.variety, "{}", case.id);
+            assert_eq!(
+                plan.intended_text, analysis.plan.intended_text,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.intended_morphemes, analysis.plan.intended_morphemes,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.intended_phonemes, analysis.plan.intended_phonemes,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_phones, analysis.plan.target_phones,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_syllables, analysis.plan.target_syllables,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.boundaries, analysis.plan.boundaries, "{}", case.id);
+            assert_eq!(
+                plan.target_prosody, analysis.plan.target_prosody,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_acoustics, analysis.plan.target_acoustics,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.speaker, analysis.plan.speaker, "{}", case.id);
+            assert_eq!(
+                plan.speaker_reference, analysis.plan.speaker_reference,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.style, analysis.plan.style, "{}", case.id);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn wiktionary_default_fallback_pronounces_netherwick() -> Result<()> {
         let model_dir = default_wiktionary_fallback_model_dir();
         if !model_dir.join("model.bin").is_file() {
