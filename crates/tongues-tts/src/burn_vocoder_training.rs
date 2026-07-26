@@ -1,9 +1,67 @@
 //! Shared tensor contract between native vocoders and the model-neutral trainer.
 
 use anyhow::Result;
+use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::Tensor;
 use serde::{Deserialize, Serialize};
+
+use crate::AudioFeatureConfig;
+
+/// Module-safe geometry for the complete differentiable mel objective.
+#[derive(Module, Debug, Clone)]
+pub struct VocoderMelLossConfig {
+    fft_size: usize,
+    win_length: usize,
+    hop_length: usize,
+    sample_rate: u32,
+    num_mels: usize,
+    mel_fmin: f32,
+    mel_fmax: f32,
+}
+
+impl VocoderMelLossConfig {
+    pub fn from_audio(config: &AudioFeatureConfig) -> Self {
+        Self {
+            fft_size: config.fft_size,
+            win_length: config.win_length,
+            hop_length: config.hop_length,
+            sample_rate: config.sample_rate,
+            num_mels: config.num_mels,
+            mel_fmin: config.mel_fmin,
+            mel_fmax: config
+                .mel_fmax
+                .unwrap_or(config.sample_rate as f32 / 2.0),
+        }
+    }
+
+    pub(crate) fn audio_config(&self) -> AudioFeatureConfig {
+        AudioFeatureConfig {
+            fft_size: self.fft_size,
+            win_length: self.win_length,
+            hop_length: self.hop_length,
+            sample_rate: self.sample_rate,
+            preemphasis: 0.0,
+            log_func: "np.log".into(),
+            num_mels: self.num_mels,
+            mel_fmin: self.mel_fmin,
+            mel_fmax: Some(self.mel_fmax),
+            spec_gain: 1.0,
+            signal_norm: false,
+            min_level_db: -100.0,
+            ref_level_db: Some(20.0),
+            symmetric_norm: true,
+            max_norm: 4.0,
+            clip_norm: true,
+            stats_path: None,
+            stats_sha256: None,
+            do_amp_to_db_mel: true,
+            stft_pad_mode: "reflect".into(),
+            centered: true,
+            stft_manual_padding: None,
+        }
+    }
+}
 
 /// Which parameter group a vocoder training step is intended to update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -715,7 +715,7 @@ fn optional_ids<B: Backend>(
     )))
 }
 
-fn differentiable_mel<B: Backend>(
+pub(crate) fn differentiable_mel<B: Backend>(
     waveform: Tensor<B, 3>,
     audio: &crate::AudioFeatureConfig,
 ) -> Result<Tensor<B, 3>> {

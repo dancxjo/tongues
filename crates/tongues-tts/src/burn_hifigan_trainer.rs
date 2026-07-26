@@ -26,7 +26,7 @@
 //!   3. Compute LSGAN discriminator loss (real→1, fake→0).
 //!   4. Return discriminator loss in [`BurnVocoderTrainingOutput::discriminator_loss`].
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::Tensor;
@@ -54,6 +54,7 @@ pub struct HifiganTrainer<B: Backend> {
     pub msd: MultiScaleDiscriminator<B>,
     adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: VocoderLossWeightsHolder,
+    mel_loss: Option<crate::VocoderMelLossConfig>,
 }
 
 /// A non-`Module` wrapper for [`VocoderLossWeights`] so the trainer can carry
@@ -100,7 +101,20 @@ impl<B: Backend> HifiganTrainer<B> {
             generator,
             adversarial_schedule,
             loss_weights: VocoderLossWeightsHolder::new(&loss_weights),
+            mel_loss: None,
         }
+    }
+
+    pub fn new_complete(
+        generator: HifiganGenerator<B>,
+        device: &B::Device,
+        loss_weights: VocoderLossWeights,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
+        audio: &crate::AudioFeatureConfig,
+    ) -> Self {
+        let mut trainer = Self::new(generator, device, loss_weights, adversarial_schedule);
+        trainer.mel_loss = Some(crate::VocoderMelLossConfig::from_audio(audio));
+        trainer
     }
 
     /// Construct a trainer with HiFi-GAN paper default loss weights.
@@ -152,13 +166,24 @@ impl<B: Backend> HifiganTrainer<B> {
         fake_fmaps.extend(msd_fake.feature_maps());
         let fm_loss = feature_matching_loss(real_fmaps, fake_fmaps);
 
-        // Mel loss is omitted here because it requires a Burn-native STFT.
-        // The caller can compute it externally using the returned predicted_waveform
-        // and `burn_vocoder_losses::mel_spectrogram_loss`.
-        let mel_zero = Tensor::zeros_like(&adv_loss);
-        let recon_zero = Tensor::zeros_like(&adv_loss);
         let weights = self.loss_weights.to_weights();
-        let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_zero, recon_zero, &weights);
+        let mel_loss = if weights.mel_spectrogram > 0.0 {
+            let config = self
+                .mel_loss
+                .as_ref()
+                .context("enabled HiFi-GAN mel loss requires a differentiable mel contract")?
+                .audio_config();
+            let target_mel =
+                crate::vits_trainer::differentiable_mel(target_waveform.clone(), &config)?;
+            let generated_mel =
+                crate::vits_trainer::differentiable_mel(predicted_waveform.clone(), &config)?;
+            crate::mel_spectrogram_loss(target_mel, generated_mel)
+        } else {
+            Tensor::zeros_like(&adv_loss)
+        };
+        let recon_zero = Tensor::zeros_like(&adv_loss);
+        let gen_loss =
+            combined_generator_loss(adv_loss, fm_loss, mel_loss, recon_zero, &weights);
 
         Ok(BurnVocoderTrainingOutput {
             progress,

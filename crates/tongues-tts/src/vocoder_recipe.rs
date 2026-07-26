@@ -61,6 +61,9 @@ pub struct VocoderTrainingHyperparams {
     pub adam_beta2: f64,
     /// Training batch size.
     pub batch_size: usize,
+    /// Maximum completed epochs.
+    #[serde(default = "default_epochs")]
+    pub epochs: u64,
     /// Maximum number of training steps (0 = unlimited).
     #[serde(default)]
     pub max_steps: u64,
@@ -86,10 +89,23 @@ pub struct VocoderTrainingHyperparams {
     /// Number of steps between evaluation audio writes.
     #[serde(default = "default_eval_interval")]
     pub eval_interval_steps: u64,
+    /// Multiplicative learning-rate decay after each completed epoch.
+    #[serde(default = "default_scheduler_gamma")]
+    pub scheduler_gamma: f64,
+    /// Learning-rate floor after scheduler decay.
+    #[serde(default = "default_minimum_learning_rate")]
+    pub minimum_learning_rate: f64,
+    /// Per-parameter gradient norm clipping. `None` disables clipping.
+    #[serde(default = "default_gradient_clip_norm")]
+    pub gradient_clip_norm: Option<f64>,
 }
 
 fn default_beta1() -> f64 {
     0.8
+}
+
+fn default_epochs() -> u64 {
+    1_000
 }
 
 fn default_beta2() -> f64 {
@@ -100,6 +116,18 @@ fn default_eval_interval() -> u64 {
     1000
 }
 
+fn default_scheduler_gamma() -> f64 {
+    0.999
+}
+
+fn default_minimum_learning_rate() -> f64 {
+    1.0e-6
+}
+
+fn default_gradient_clip_norm() -> Option<f64> {
+    Some(1_000.0)
+}
+
 impl Default for VocoderTrainingHyperparams {
     fn default() -> Self {
         Self {
@@ -108,12 +136,16 @@ impl Default for VocoderTrainingHyperparams {
             adam_beta1: 0.8,
             adam_beta2: 0.99,
             batch_size: 16,
+            epochs: default_epochs(),
             max_steps: 0,
             segment_size: 8192,
             adversarial_schedule: VocoderAdversarialUpdateSchedule::EveryBatch,
             discriminator_update_interval: 0,
             checkpoint_interval_steps: 0,
             eval_interval_steps: 1000,
+            scheduler_gamma: default_scheduler_gamma(),
+            minimum_learning_rate: default_minimum_learning_rate(),
+            gradient_clip_norm: default_gradient_clip_norm(),
         }
     }
 }
@@ -424,6 +456,15 @@ pub struct VocoderTrainingState {
     /// Human-readable timestamp of the last checkpoint (ISO 8601, UTC).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub saved_at: Option<String>,
+    /// Exact next batch within the current epoch.
+    #[serde(default)]
+    pub batch_in_epoch: usize,
+    /// Current scheduler-controlled generator learning rate.
+    #[serde(default)]
+    pub generator_learning_rate: f64,
+    /// Current scheduler-controlled discriminator learning rate.
+    #[serde(default)]
+    pub discriminator_learning_rate: f64,
 }
 
 impl VocoderTrainingState {
@@ -434,6 +475,9 @@ impl VocoderTrainingState {
             epoch: 0,
             best_loss: f64::INFINITY,
             saved_at: None,
+            batch_in_epoch: 0,
+            generator_learning_rate: 0.0,
+            discriminator_learning_rate: 0.0,
         }
     }
 
@@ -491,6 +535,9 @@ mod tests {
             epoch: 3,
             best_loss: 0.42,
             saved_at: Some("2025-01-01T00:00:00Z".into()),
+            batch_in_epoch: 0,
+            generator_learning_rate: 2.0e-4,
+            discriminator_learning_rate: 2.0e-4,
         };
         let json = state.to_json().expect("serialise");
         let reloaded = VocoderTrainingState::from_json(&json).expect("deserialise");

@@ -16,7 +16,7 @@
 //! MultiBand-MelGAN additionally applies the PQMF synthesis bank so that the
 //! discriminator always sees full-bandwidth audio.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::Tensor;
@@ -68,6 +68,7 @@ fn generator_output<B: Backend>(
     target_waveform: Tensor<B, 3>,
     predicted_waveform: Tensor<B, 3>,
     loss_weights: &LossWeightsHolder,
+    mel_config: Option<&crate::VocoderMelLossConfig>,
     progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
     let weights = loss_weights.to_weights();
@@ -93,8 +94,19 @@ fn generator_output<B: Backend>(
         Tensor::zeros_like(&adv_loss)
     };
 
-    let mel_zero = Tensor::zeros_like(&adv_loss);
-    let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_zero, recon_loss, &weights);
+    let mel_loss = if weights.mel_spectrogram > 0.0 {
+        let config = mel_config
+            .context("enabled MelGAN mel loss requires a differentiable mel contract")?
+            .audio_config();
+        let target_mel =
+            crate::vits_trainer::differentiable_mel(real.clone(), &config)?;
+        let generated_mel =
+            crate::vits_trainer::differentiable_mel(predicted_waveform.clone(), &config)?;
+        crate::mel_spectrogram_loss(target_mel, generated_mel)
+    } else {
+        Tensor::zeros_like(&adv_loss)
+    };
+    let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_loss, recon_loss, &weights);
 
     Ok(BurnVocoderTrainingOutput {
         progress,
@@ -132,6 +144,7 @@ fn joint_output<B: Backend>(
     target_waveform: Tensor<B, 3>,
     predicted_waveform: Tensor<B, 3>,
     loss_weights: &LossWeightsHolder,
+    mel_config: Option<&crate::VocoderMelLossConfig>,
     progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
     let generator = generator_output(
@@ -139,6 +152,7 @@ fn joint_output<B: Backend>(
         target_waveform.clone(),
         predicted_waveform.clone(),
         loss_weights,
+        mel_config,
         progress,
     )?;
     let discriminator = discriminator_output(msd, target_waveform, predicted_waveform, progress)?;
@@ -161,6 +175,7 @@ pub struct MelganTrainer<B: Backend> {
     pub msd: MultiScaleDiscriminator<B>,
     adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: LossWeightsHolder,
+    mel_loss: Option<crate::VocoderMelLossConfig>,
 }
 
 impl<B: Backend> MelganTrainer<B> {
@@ -176,7 +191,20 @@ impl<B: Backend> MelganTrainer<B> {
             generator,
             adversarial_schedule,
             loss_weights: LossWeightsHolder::new(&loss_weights),
+            mel_loss: None,
         }
+    }
+
+    pub fn new_complete(
+        generator: MelganGenerator<B>,
+        device: &B::Device,
+        loss_weights: VocoderLossWeights,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
+        audio: &crate::AudioFeatureConfig,
+    ) -> Self {
+        let mut trainer = Self::new(generator, device, loss_weights, adversarial_schedule);
+        trainer.mel_loss = Some(crate::VocoderMelLossConfig::from_audio(audio));
+        trainer
     }
 
     /// Construct a trainer with MelGAN paper default loss weights.
@@ -216,6 +244,7 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                self.mel_loss.as_ref(),
                 progress,
             ),
             VocoderTrainingPhase::Discriminator => {
@@ -226,6 +255,7 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                self.mel_loss.as_ref(),
                 progress,
             ),
         }
@@ -244,6 +274,7 @@ pub struct MultibandMelganTrainer<B: Backend> {
     pub msd: MultiScaleDiscriminator<B>,
     adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: LossWeightsHolder,
+    mel_loss: Option<crate::VocoderMelLossConfig>,
 }
 
 impl<B: Backend> MultibandMelganTrainer<B> {
@@ -259,6 +290,7 @@ impl<B: Backend> MultibandMelganTrainer<B> {
             generator,
             adversarial_schedule,
             loss_weights: LossWeightsHolder::new(&loss_weights),
+            mel_loss: None,
         }
     }
 
@@ -270,6 +302,18 @@ impl<B: Backend> MultibandMelganTrainer<B> {
             VocoderLossWeights::melgan(),
             VocoderAdversarialUpdateSchedule::EveryBatch,
         )
+    }
+
+    pub fn new_complete(
+        generator: MultibandMelganGenerator<B>,
+        device: &B::Device,
+        loss_weights: VocoderLossWeights,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
+        audio: &crate::AudioFeatureConfig,
+    ) -> Self {
+        let mut trainer = Self::new(generator, device, loss_weights, adversarial_schedule);
+        trainer.mel_loss = Some(crate::VocoderMelLossConfig::from_audio(audio));
+        trainer
     }
 
     /// Generate full-bandwidth waveform via PQMF synthesis.
@@ -299,6 +343,7 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MultibandMelganTrainer<B> {
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                self.mel_loss.as_ref(),
                 progress,
             ),
             VocoderTrainingPhase::Discriminator => {
@@ -309,6 +354,7 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MultibandMelganTrainer<B> {
                 batch.target_waveform,
                 predicted,
                 &self.loss_weights,
+                self.mel_loss.as_ref(),
                 progress,
             ),
         }

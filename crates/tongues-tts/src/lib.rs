@@ -177,7 +177,8 @@ pub use burn_vocoder_losses::{
 };
 pub use burn_vocoder_training::{
     BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
-    VocoderAdversarialUpdateSchedule, VocoderTrainingPhase, VocoderTrainingProgress,
+    VocoderAdversarialUpdateSchedule, VocoderMelLossConfig, VocoderTrainingPhase,
+    VocoderTrainingProgress,
 };
 pub use burn_xtts::{
     xtts_language_has_native_cleaner, BurnXtts, XttsConditioning, XttsGenerationControls,
