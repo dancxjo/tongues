@@ -50,6 +50,7 @@ pub mod burn_vits_duration;
 pub mod burn_vits_flow;
 pub mod burn_vits_text;
 pub mod burn_vocoder;
+pub mod burn_vocoder_training;
 pub mod burn_xtts;
 mod checkpoint;
 pub mod components;
@@ -140,6 +141,10 @@ pub use burn_vits_text::{
 pub use burn_vocoder::{
     BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
     BurnVocoder,
+};
+pub use burn_vocoder_training::{
+    BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
+    VocoderTrainingPhase,
 };
 pub use burn_xtts::{
     xtts_language_has_native_cleaner, BurnXtts, XttsConditioning, XttsGenerationControls,
