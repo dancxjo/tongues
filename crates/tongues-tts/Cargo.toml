@@ -27,3 +27,6 @@ zip = { workspace = true }
 [features]
 default = ["onnx-tts"]
 onnx-tts = ["dep:ort", "ort/cuda"]
+
+[dev-dependencies]
+tempfile = "3"

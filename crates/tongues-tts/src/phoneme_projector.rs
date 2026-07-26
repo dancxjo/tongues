@@ -50,8 +50,15 @@ pub struct PhonemeVocabularyProjector {
     vocabulary: Vec<char>,
     symbol_to_id: BTreeMap<char, i64>,
     blank_id: Option<i64>,
+    bos_id: Option<i64>,
+    eos_id: Option<i64>,
     contract: ModelInputContract,
 }
+
+const RESERVED_PAD: char = '\u{e000}';
+const RESERVED_EOS: char = '\u{e001}';
+const RESERVED_BOS: char = '\u{e002}';
+const RESERVED_BLANK: char = '\u{e003}';
 
 impl PhonemeVocabularyProjector {
     pub fn from_json5_str(source: &str) -> Result<Self> {
@@ -98,19 +105,25 @@ impl PhonemeVocabularyProjector {
             symbols.sort_unstable();
         }
 
-        prepend_special(&mut symbols, config.characters.blank.as_deref());
-        prepend_special(&mut symbols, config.characters.bos.as_deref());
-        prepend_special(&mut symbols, config.characters.eos.as_deref());
-        prepend_special(&mut symbols, config.characters.pad.as_deref());
+        prepend_special(
+            &mut symbols,
+            config.characters.blank.as_deref(),
+            RESERVED_BLANK,
+        );
+        prepend_special(&mut symbols, config.characters.bos.as_deref(), RESERVED_BOS);
+        prepend_special(&mut symbols, config.characters.eos.as_deref(), RESERVED_EOS);
+        prepend_special(&mut symbols, config.characters.pad.as_deref(), RESERVED_PAD);
         symbols.extend(config.characters.punctuations.chars());
-        let blank_id = (allow_duplicates && config.add_blank && config.characters.blank.is_none())
-            .then(|| {
-                let id = i64::try_from(symbols.len()).expect("vocabulary size already validated");
-                // Old Coqui text processing appends a synthetic blank ID at
-                // `len(phonemes)` without assigning it a printable symbol.
-                symbols.push('\0');
-                id
-            });
+        let synthetic_blank_id = (allow_duplicates
+            && config.add_blank
+            && config.characters.blank.is_none())
+        .then(|| {
+            let id = i64::try_from(symbols.len()).expect("vocabulary size already validated");
+            // Old Coqui text processing appends a synthetic blank ID at
+            // `len(phonemes)` without assigning it a printable symbol.
+            symbols.push('\0');
+            id
+        });
 
         let mut symbol_to_id = BTreeMap::new();
         for (id, symbol) in symbols.iter().copied().enumerate() {
@@ -122,6 +135,16 @@ impl PhonemeVocabularyProjector {
             );
         }
         ensure!(!symbols.is_empty(), "phoneme vocabulary must not be empty");
+        let id_for_special = |value: Option<&str>, reserved| {
+            value
+                .and_then(|value| special_char(Some(value)).or(Some(reserved)))
+                .and_then(|symbol| symbol_to_id.get(&symbol).copied())
+        };
+        let blank_id = synthetic_blank_id
+            .or_else(|| id_for_special(config.characters.blank.as_deref(), RESERVED_BLANK))
+            .or_else(|| id_for_special(config.characters.pad.as_deref(), RESERVED_PAD));
+        let bos_id = id_for_special(config.characters.bos.as_deref(), RESERVED_BOS);
+        let eos_id = id_for_special(config.characters.eos.as_deref(), RESERVED_EOS);
 
         let variety = config
             .phoneme_language
@@ -150,6 +173,8 @@ impl PhonemeVocabularyProjector {
             vocabulary: symbols,
             symbol_to_id,
             blank_id,
+            bos_id,
+            eos_id,
             contract,
         })
     }
@@ -180,16 +205,9 @@ impl PhonemeVocabularyProjector {
             .collect::<Result<Vec<_>>>()?;
 
         if self.config.add_blank {
-            let blank_id = match self.blank_id {
-                Some(id) => id,
-                None => {
-                    let blank = special_char(self.config.characters.blank.as_deref())
-                        .or_else(|| special_char(self.config.characters.pad.as_deref()))
-                        .context("add_blank requires a blank or pad symbol")?;
-                    self.symbol_id(blank)
-                        .context("model blank symbol is absent from the vocabulary")?
-                }
-            };
+            let blank_id = self
+                .blank_id
+                .context("add_blank requires a blank or pad symbol")?;
             let mut interspersed = vec![blank_id; ids.len() * 2 + 1];
             for (slot, id) in interspersed.iter_mut().skip(1).step_by(2).zip(ids) {
                 *slot = id;
@@ -197,12 +215,11 @@ impl PhonemeVocabularyProjector {
             ids = interspersed;
         }
         if self.config.enable_eos_bos_chars {
-            let bos = special_char(self.config.characters.bos.as_deref())
-                .context("BOS/EOS mode requires a BOS symbol")?;
-            let eos = special_char(self.config.characters.eos.as_deref())
-                .context("BOS/EOS mode requires an EOS symbol")?;
-            ids.insert(0, self.symbol_id(bos).context("BOS symbol is absent")?);
-            ids.push(self.symbol_id(eos).context("EOS symbol is absent")?);
+            ids.insert(
+                0,
+                self.bos_id.context("BOS/EOS mode requires a BOS symbol")?,
+            );
+            ids.push(self.eos_id.context("BOS/EOS mode requires an EOS symbol")?);
         }
         Ok(ids)
     }
@@ -225,8 +242,9 @@ impl LinguisticProjector for PhonemeVocabularyProjector {
     }
 }
 
-fn prepend_special(vocabulary: &mut Vec<char>, symbol: Option<&str>) {
-    if let Some(symbol) = special_char(symbol) {
+fn prepend_special(vocabulary: &mut Vec<char>, symbol: Option<&str>, reserved: char) {
+    if symbol.is_some() {
+        let symbol = special_char(symbol).unwrap_or(reserved);
         vocabulary.insert(0, symbol);
     }
 }
@@ -506,6 +524,32 @@ mod tests {
         assert_eq!(projector.vocabulary().len(), 9);
         assert_eq!(projector.blank_id, Some(8));
         assert_eq!(projector.symbol_id('\''), Some(6));
+    }
+
+    #[test]
+    fn modern_multicharacter_specials_preserve_checkpoint_ids() {
+        let source = CONFIG
+            .replace("\"add_blank\": false", "\"add_blank\": true")
+            .replace(
+                "\"enable_eos_bos_chars\": false",
+                "\"enable_eos_bos_chars\": true",
+            )
+            .replace("\"pad\": \"_\"", "\"pad\": \"<PAD>\"")
+            .replace("\"eos\": \"~\"", "\"eos\": \"<EOS>\"")
+            .replace("\"bos\": \"^\"", "\"bos\": \"<BOS>\"")
+            .replace("\"blank\": null", "\"blank\": \"<BLNK>\"");
+        let projector =
+            PhonemeVocabularyProjector::from_json5_str(&source).expect("modern projector");
+
+        assert_eq!(projector.vocabulary().len(), 13);
+        assert_eq!(projector.blank_id, Some(3));
+        assert_eq!(projector.bos_id, Some(2));
+        assert_eq!(projector.eos_id, Some(1));
+        assert_eq!(projector.symbol_id('k'), Some(4));
+
+        let projected = projector.project(&plan()).expect("projection");
+        assert_eq!(projected.projected_symbols, "tɚ ʃ");
+        assert_eq!(projected.ids, vec![2, 3, 5, 3, 6, 3, 12, 3, 7, 3, 1]);
     }
 
     #[test]

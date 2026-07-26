@@ -148,6 +148,24 @@ pub struct BurnHifiganVocoder<B: Backend> {
 }
 
 impl<B: Backend> BurnHifiganVocoder<B> {
+    pub fn from_generator(
+        config: HifiganBundleConfig,
+        generator: HifiganGenerator<B>,
+        device: B::Device,
+    ) -> Result<Self> {
+        let input_contract = config.input_contract()?;
+        ensure!(
+            input_contract.layout == SpectrogramLayout::FramesByBins,
+            "Burn HiFi-GAN adapter requires frame-major shared spectrograms"
+        );
+        Ok(Self {
+            generator,
+            output_contract: WaveformContract::mono(input_contract.sample_rate_hz),
+            input_contract,
+            device,
+        })
+    }
+
     pub fn load(
         config_path: impl AsRef<Path>,
         checkpoint_path: impl AsRef<Path>,
@@ -204,12 +222,12 @@ impl<B: Backend> BurnHifiganVocoder<B> {
             started,
             Some("hifigan"),
         );
-        Ok(Self {
-            generator,
-            input_contract,
-            output_contract,
-            device,
-        })
+        let vocoder = Self::from_generator(config, generator, device)?;
+        ensure!(
+            vocoder.output_contract == output_contract && vocoder.input_contract == input_contract,
+            "HiFi-GAN constructed contracts changed during loading"
+        );
+        Ok(vocoder)
     }
 
     pub fn generator(&self) -> &HifiganGenerator<B> {

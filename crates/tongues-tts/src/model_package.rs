@@ -1640,7 +1640,16 @@ fn ignored_training_fields(
         .map(|key| key.to_string())
         .collect::<Vec<_>>();
     match architecture {
-        ModelPackageArchitecture::AlignTts => {}
+        ModelPackageArchitecture::AlignTts => ignored.retain(|path| {
+            !matches!(
+                path.as_str(),
+                "phase_start_steps"
+                    | "ssim_alpha"
+                    | "spec_loss_alpha"
+                    | "dur_loss_alpha"
+                    | "mdn_alpha"
+            )
+        }),
         ModelPackageArchitecture::FastPitch => ignored.extend(
             [
                 "model_args.detach_duration_predictor",
@@ -3007,6 +3016,52 @@ mod tests {
         assert_eq!(inspection.architecture, ModelPackageArchitecture::GlowTts);
         assert_eq!(inspection.audio.expect("audio").mel_bins, Some(80));
         assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn licensed_align_tts_fixture_imports_to_a_native_package() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/speech/align-tts-mpl-fixture");
+        let output = tempfile::tempdir().expect("package output");
+        let options = CoquiImportOptions::new(
+            fixture.join("config.json"),
+            fixture.join("model_file.pth"),
+            output.path().join("package"),
+            "MPL-2.0",
+            "https://github.com/coqui-ai/TTS/tree/0cf3265a4686d7e856bd472cdaf1572d61cab2b8",
+        );
+        let manifest = import_coqui_model(&options).expect("Align-TTS import");
+        assert_eq!(manifest.architecture, ModelPackageArchitecture::AlignTts);
+        assert_eq!(manifest.license.expression, "MPL-2.0");
+        assert_eq!(manifest.audio.expect("audio").mel_bins, Some(80));
+        assert_eq!(manifest.tensor_count, 59);
+        assert!(!manifest.ignored_training_fields.iter().any(|field| {
+            matches!(
+                field.as_str(),
+                "phase_start_steps"
+                    | "ssim_alpha"
+                    | "spec_loss_alpha"
+                    | "dur_loss_alpha"
+                    | "mdn_alpha"
+            )
+        }));
+        let neutral_config: Value = serde_json::from_str(
+            &fs::read_to_string(output.path().join("package/model.json")).expect("neutral config"),
+        )
+        .expect("neutral config JSON");
+        assert_eq!(
+            neutral_config["parameters"]["model"]["training"]["phase_start_steps"],
+            json!([10, 20, 30, 40])
+        );
+        assert_eq!(
+            neutral_config["parameters"]["model"]["training"]["mdn_alpha"],
+            json!(1.0)
+        );
+        let opened = open_model_package(output.path().join("package")).expect("native package");
+        assert_eq!(
+            opened.manifest.architecture,
+            ModelPackageArchitecture::AlignTts
+        );
     }
 
     #[test]
