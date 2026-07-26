@@ -9,6 +9,7 @@ burn = { workspace = true }
 burn-store = { version = "0.21", default-features = false, features = ["std", "pytorch", "safetensors"] }
 dirs = { workspace = true }
 json5 = "0.4"
+rand = { workspace = true }
 ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-rustls", "api-23"] }
 safetensors = "0.7"
 serde = { workspace = true }

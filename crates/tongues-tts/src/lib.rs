@@ -50,6 +50,7 @@ pub mod burn_vits_duration;
 pub mod burn_vits_flow;
 pub mod burn_vits_text;
 pub mod burn_vocoder;
+pub mod burn_xtts;
 mod checkpoint;
 pub mod components;
 pub mod d_vectors;
@@ -140,6 +141,7 @@ pub use burn_vocoder::{
     BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
     BurnVocoder,
 };
+pub use burn_xtts::{BurnXtts, XttsConditioning, XttsGenerationControls};
 pub use components::{
     native_speech_components, AcousticArtifact, AcousticModel, AcousticOutputContract,
     CodecContract, CodecDecoder, CodecDecoderAdapter, CodecTokenSequence, ConditioningEmbedding,

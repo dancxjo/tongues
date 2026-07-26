@@ -2643,7 +2643,7 @@ fn allowed_pickle_global(module: &str, name: &str, allow_xtts_config: bool) -> b
             ("TTS.tts.models.xtts", "XttsAudioConfig")
                 | ("TTS.tts.models.xtts", "XttsArgs")
                 | ("TTS.tts.configs.xtts_config", "XttsConfig")
-                | ("TTS.tts.configs.shared_configs", "BaseDatasetConfig")
+                | ("TTS.config.shared_configs", "BaseDatasetConfig")
         ))
 }
 
@@ -2759,6 +2759,9 @@ mod tests {
     fn xtts_pickle_profile_allows_only_known_inert_config_classes() {
         let pickle = b"\x80\x02cTTS.tts.models.xtts\nXttsArgs\n)\x81.";
         scan_pickle_program(pickle, true).expect("known XTTS config dataclass");
+        let dataset =
+            b"\x80\x02cTTS.config.shared_configs\nBaseDatasetConfig\n)\x81.";
+        scan_pickle_program(dataset, true).expect("published XTTS dataset config dataclass");
         let error =
             scan_pickle_program(pickle, false).expect_err("generic tensor scan must stay strict");
         assert!(error.to_string().contains("XttsArgs"));

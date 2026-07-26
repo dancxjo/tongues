@@ -181,8 +181,11 @@ impl XttsV2Config {
             gpt_n_model_channels: usize_field(args, "gpt_n_model_channels")?,
             gpt_n_heads: usize_field(args, "gpt_n_heads")?,
             gpt_number_text_tokens,
-            gpt_start_text_token: configured_start,
-            gpt_stop_text_token: configured_stop,
+            // Published XTTS v2 configs leave these null and resolve them
+            // from vocab.json at load time. Persist the resolved IDs in the
+            // neutral package so runtime never needs to guess them.
+            gpt_start_text_token: Some(configured_start.unwrap_or(tokenizer.start_token_id())),
+            gpt_stop_text_token: Some(configured_stop.unwrap_or(tokenizer.stop_token_id())),
             gpt_num_audio_tokens: usize_field(args, "gpt_num_audio_tokens")?,
             gpt_start_audio_token: u32_field(args, "gpt_start_audio_token")?,
             gpt_stop_audio_token: u32_field(args, "gpt_stop_audio_token")?,
