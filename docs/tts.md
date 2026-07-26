@@ -13,6 +13,7 @@ front-end integration.
 | `glow` | `tongues-tts` on Burn | Glow-TTS -> pinned per-bin standardizer -> MultiBand-MelGAN | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
 | `xtts` | `tongues-tts` on Burn | XTTS v2 GPT -> native HiFi decoder with reference voice conditioning | active local-package path |
+| `pocket-tts` | planned native `tongues-tts` integration | Kyutai Pocket TTS causal append-only text/audio generator with stateful streaming | evaluation track |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
 | `mock` | deterministic local backend | synthetic waveform for integration tests | active test path |
@@ -119,6 +120,37 @@ streaming WAV to equal one-shot decoding for the same seed. It also writes
 `xtts-benchmark.json` with reference preparation, GPT first-code latency,
 stable first-audio latency, steady RTF, overlap-recompute decode cost, and
 separate peak RAM/GPU-memory fields.
+
+## Pocket TTS causal streaming evaluation track
+
+Pocket TTS is tracked as an **evaluation-only causal renderer** until its
+streaming semantics, artifact provenance, and native parity are proven. This is
+specifically append-only causal generation (stateful text/audio continuation),
+not sentence chunking and not ledger-level suffix replacement.
+
+Evidence and architecture requirements:
+
+- pin upstream code/model revision, config/tokenizer/voice assets, license
+  evidence, checksum, and size in offline-verifiable metadata;
+- treat upstream Python as an oracle fixture only while measuring cold/warm
+  first-audio latency, steady RTF, CPU threads, memory, cancellation, and long
+  incremental text behavior across the six declared languages;
+- document recurrent/cache state, chunk boundaries, withheld/finalized tails,
+  and explicit behavior when text is appended during active synthesis;
+- decompose provider-neutral ports for plan projection/tokenization, causal text
+  encoder state, acoustic/token generator state, reference conditioning, decoder
+  waveform chunks, stability/finalization, and cancellation/disposal.
+
+Integration guardrails are explicit:
+
+- append-only causal generation is **not** revision-safe replacement;
+- revision-safe replacement of unplayed audio remains enforced by
+  `TtsPlaybackLedger` and `RevisionWaveformAssembler`;
+- predicted-but-unobserved emissions must remain unplayable until committed in
+  the shared ledger;
+- Pocket TTS promotion is gated on measurable first-audio or steady-state
+  advantage over the canonical FastPitch + HiFi-GAN Tier A path without raising
+  premature commitment or audible repair.
 
 ## Safe Coqui package import
 
