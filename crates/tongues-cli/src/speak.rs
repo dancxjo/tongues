@@ -646,6 +646,7 @@ impl BackendInstance {
                     speaker: true,
                     style: true,
                     source: false,
+                    ..Default::default()
                 },
                 speed: true,
                 pitch: speech::PitchCapabilities::default(),
@@ -996,6 +997,7 @@ fn vits_cli_capabilities(
             speaker: is_yourtts,
             style: false,
             source: false,
+            ..Default::default()
         },
         speed: true,
         pitch: speech::PitchCapabilities::default(),

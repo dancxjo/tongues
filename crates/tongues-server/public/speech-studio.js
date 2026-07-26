@@ -13,7 +13,11 @@
         emotions: [],
         audioUrl: null,
         runtimeTimer: null,
+        runtimePollController: null,
+        runtimePollGeneration: 0,
+        verificationGeneration: 0,
     };
+    const VERIFICATION_CONCURRENCY = 3;
 
     const pathKey = (path) => `${path.backend}::${path.model}`;
     const selectedPath = () => state.discovery?.paths.find((path) => pathKey(path) === state.pathKey);
@@ -35,6 +39,14 @@
     const controlsForPath = (path, group) => (
         (path?.controls || []).filter((control) => control.group === group)
     );
+    const pendingVerificationIds = (discovery) => (
+        [...new Set((discovery?.verification_ids || []).filter(Boolean))]
+    );
+    const preservesVerificationProgress = (current, updated) => {
+        if (!current) return true;
+        const currentPending = new Set(pendingVerificationIds(current));
+        return pendingVerificationIds(updated).every((id) => currentPending.has(id));
+    };
 
     function parseNumberArray(source, positiveIntegers = false) {
         if (!String(source || '').trim()) return null;
@@ -597,12 +609,51 @@
         }
     }
 
-    async function loadRuntime() {
-        const response = await fetch('/api/speech/runtime', { cache: 'no-store' });
+    async function loadRuntime(signal) {
+        const response = await fetch('/api/speech/runtime', { cache: 'no-store', signal });
         if (!response.ok) throw new Error(await response.text());
         const runtime = await response.json();
         renderRuntime(runtime);
         return runtime;
+    }
+
+    function stopRuntimePolling() {
+        state.runtimePollGeneration += 1;
+        if (state.runtimeTimer != null) {
+            window.clearTimeout(state.runtimeTimer);
+            state.runtimeTimer = null;
+        }
+        state.runtimePollController?.abort();
+        state.runtimePollController = null;
+    }
+
+    function startRuntimePolling() {
+        stopRuntimePolling();
+        const generation = state.runtimePollGeneration;
+        const poll = async () => {
+            if (generation !== state.runtimePollGeneration) return;
+            const controller = new AbortController();
+            state.runtimePollController = controller;
+            try {
+                await loadRuntime(controller.signal);
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    showError(
+                        `Runtime status unavailable: ${error.message}`,
+                        byId('speech-runtime-errors'),
+                    );
+                }
+            } finally {
+                if (state.runtimePollController === controller) {
+                    state.runtimePollController = null;
+                }
+                if (generation === state.runtimePollGeneration) {
+                    // Delay from completion so slow runtime requests never overlap.
+                    state.runtimeTimer = window.setTimeout(poll, 750);
+                }
+            }
+        };
+        poll();
     }
 
     function metadataItem(label, value) {
@@ -672,11 +723,13 @@
             : [];
     }
 
-    async function refreshDiscovery() {
-        const response = await fetch('/api/speech/models', { cache: 'no-store' });
-        if (!response.ok) throw new Error(await response.text());
+    function acceptDiscovery(discovery, allowVerificationReset = false) {
+        if (
+            !allowVerificationReset
+            && !preservesVerificationProgress(state.discovery, discovery)
+        ) return false;
         const previous = state.pathKey;
-        state.discovery = await response.json();
+        state.discovery = discovery;
         if (!(state.discovery.paths || []).some((path) => pathKey(path) === previous)) {
             const initial = selectInitialPath(state.discovery);
             state.pathKey = initial ? pathKey(initial) : '';
@@ -684,6 +737,63 @@
         renderPathSelector();
         renderInventory();
         renderSelectedPath();
+        return true;
+    }
+
+    async function verifyDiscovery(generation, discovery) {
+        const ids = pendingVerificationIds(discovery);
+        let cursor = 0;
+        const failures = [];
+        const verifyNext = async () => {
+            while (generation === state.verificationGeneration && cursor < ids.length) {
+                const modelId = ids[cursor];
+                cursor += 1;
+                try {
+                    const response = await fetch(
+                        `/api/speech/models/verify/${encodeURIComponent(modelId)}`,
+                        { cache: 'no-store' },
+                    );
+                    if (!response.ok) throw new Error(await response.text());
+                    const updated = await response.json();
+                    if (generation === state.verificationGeneration) {
+                        acceptDiscovery(updated);
+                    }
+                } catch (error) {
+                    failures.push(`${modelId}: ${error.message}`);
+                }
+            }
+        };
+        await Promise.all(Array.from(
+            { length: Math.min(VERIFICATION_CONCURRENCY, ids.length) },
+            verifyNext,
+        ));
+        if (generation === state.verificationGeneration && ids.length) {
+            try {
+                const response = await fetch('/api/speech/models', { cache: 'no-store' });
+                if (!response.ok) throw new Error(await response.text());
+                acceptDiscovery(await response.json());
+            } catch (error) {
+                failures.push(`final refresh: ${error.message}`);
+            }
+        }
+        if (generation === state.verificationGeneration && failures.length) {
+            showError(`Some model verification requests failed: ${failures.join(' · ')}`);
+        }
+    }
+
+    async function refreshDiscovery(waitForVerification = true) {
+        const generation = state.verificationGeneration + 1;
+        state.verificationGeneration = generation;
+        const response = await fetch('/api/speech/models', { cache: 'no-store' });
+        if (!response.ok) throw new Error(await response.text());
+        const discovery = await response.json();
+        if (discovery.error && !(discovery.paths || []).length) {
+            throw new Error(discovery.error);
+        }
+        acceptDiscovery(discovery, true);
+        const verification = verifyDiscovery(generation, discovery);
+        if (waitForVerification) await verification;
+        else verification.catch((error) => showError(`Speech verification failed: ${error.message}`));
     }
 
     async function init() {
@@ -693,17 +803,7 @@
         const submit = byId('submit-btn');
         try {
             await loadAuxiliaryDiscovery();
-            const response = await fetch('/api/speech/models', { cache: 'no-store' });
-            if (!response.ok) throw new Error(await response.text());
-            state.discovery = await response.json();
-            if (state.discovery.error && !state.discovery.paths.length) {
-                throw new Error(state.discovery.error);
-            }
-            const initial = selectInitialPath(state.discovery);
-            state.pathKey = initial ? pathKey(initial) : '';
-            renderPathSelector();
-            renderInventory();
-            renderSelectedPath();
+            await refreshDiscovery(false);
         } catch (error) {
             showError(`Speech discovery failed: ${error.message}`);
             submit.disabled = true;
@@ -806,7 +906,7 @@
             submit.classList.add('loading');
             byId('speech-submit-status').textContent = 'Synthesis in progress.';
             byId('result-container').classList.add('hidden');
-            state.runtimeTimer = window.setInterval(() => loadRuntime().catch(() => {}), 750);
+            startRuntimePolling();
             try {
                 const response = await fetch('/api/speak', {
                     method: 'POST',
@@ -831,8 +931,7 @@
                 showError(`Synthesis failed: ${error.message}`);
                 byId('speech-submit-status').textContent = 'Speech synthesis failed.';
             } finally {
-                window.clearInterval(state.runtimeTimer);
-                state.runtimeTimer = null;
+                stopRuntimePolling();
                 submit.classList.remove('loading');
                 submit.disabled = !selectedPath()?.runnable;
                 loadRuntime().catch((error) => {
@@ -855,6 +954,8 @@
         init,
         parseNumberArray,
         pathKey,
+        pendingVerificationIds,
+        preservesVerificationProgress,
         selectInitialPath,
         varietiesForPath,
     };

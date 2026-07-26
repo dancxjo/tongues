@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 
 const studio = require('./speech-studio.js');
+const studioSource = fs.readFileSync(require.resolve('./speech-studio.js'), 'utf8');
 
 function fixturePath(overrides = {}) {
     return {
@@ -45,6 +47,35 @@ test('selects a complete runnable path and keeps unavailable inventory visible',
     const discovery = { paths: [unavailable, fixturePath()] };
     assert.equal(studio.selectInitialPath(discovery).backend, 'fastpitch');
     assert.equal(studio.availablePaths(discovery).length, 2);
+});
+
+test('deduplicates pending catalog verification calls', () => {
+    assert.deepEqual(studio.pendingVerificationIds({
+        verification_ids: [
+            'fastpitch-ljspeech',
+            'hifigan-v2-ljspeech',
+            'fastpitch-ljspeech',
+        ],
+    }), ['fastpitch-ljspeech', 'hifigan-v2-ljspeech']);
+    assert.deepEqual(studio.pendingVerificationIds({}), []);
+});
+
+test('rejects stale snapshots that would undo concurrent verification progress', () => {
+    const current = { verification_ids: ['vits-vctk'] };
+    assert.equal(studio.preservesVerificationProgress(current, {
+        verification_ids: [],
+    }), true);
+    assert.equal(studio.preservesVerificationProgress(current, {
+        verification_ids: ['vits-vctk', 'voice-amy-medium'],
+    }), false);
+});
+
+test('runtime polling waits for each request instead of using an overlapping interval', () => {
+    assert.doesNotMatch(studioSource, /setInterval\s*\(/);
+    assert.match(
+        studioSource,
+        /await loadRuntime\(controller\.signal\)[\s\S]*window\.setTimeout\(poll, 750\)/,
+    );
 });
 
 test('filters varieties from the selected path capability', () => {

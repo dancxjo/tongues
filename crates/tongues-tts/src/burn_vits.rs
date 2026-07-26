@@ -862,11 +862,13 @@ impl<B: Backend> SpeechSynthesisEngine for BurnVitsSpeech<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use burn::backend::ndarray::{NdArray, NdArrayDevice};
-    use speaking::SpeakerId;
+    use speaking::{SpeakerId, SpeakerReference, SpeakerReferenceSource};
 
     use super::*;
-    use crate::{utterance_plan_from_text, SpeechRequest, SynthesisOptions};
+    use crate::{cosine_similarity, utterance_plan_from_text, SpeechRequest, SynthesisOptions};
 
     type TestBackend = NdArray<f32>;
 
@@ -978,6 +980,228 @@ mod tests {
         assert_eq!(waveform.contract.sample_rate_hz, 16_000);
         assert!(!waveform.samples.is_empty());
         assert!(waveform.samples.iter().all(|sample| sample.is_finite()));
+    }
+
+    fn required_env(name: &str) -> std::ffi::OsString {
+        std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required"))
+    }
+
+    fn json_f32_array(value: &serde_json::Value) -> Vec<f32> {
+        value
+            .as_array()
+            .expect("JSON float array")
+            .iter()
+            .map(|value| value.as_f64().expect("JSON float") as f32)
+            .collect()
+    }
+
+    fn assert_embedding_parity(
+        label: &str,
+        actual: &ConditioningEmbedding,
+        expected: &serde_json::Value,
+    ) {
+        const ABSOLUTE_TOLERANCE: f32 = 3.0e-4;
+        const COSINE_TOLERANCE: f32 = 1.0e-4;
+
+        let expected = ConditioningEmbedding {
+            contract: actual.contract.clone(),
+            values: json_f32_array(expected),
+        };
+        expected.validate().expect("valid golden embedding");
+        assert_eq!(actual.values.len(), expected.values.len());
+        let (max_index, max_absolute_error) = actual
+            .values
+            .iter()
+            .zip(&expected.values)
+            .enumerate()
+            .map(|(index, (actual, expected))| (index, (actual - expected).abs()))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .expect("non-empty embedding");
+        let cosine = cosine_similarity(actual, &expected).expect("embedding cosine");
+        assert!(
+            max_absolute_error <= ABSOLUTE_TOLERANCE,
+            "{label} embedding maximum error is {max_absolute_error} at index {max_index}, tolerance {ABSOLUTE_TOLERANCE}; cosine {cosine}"
+        );
+        assert!(
+            1.0 - cosine <= COSINE_TOLERANCE,
+            "{label} embedding cosine {cosine} is below {}",
+            1.0 - COSINE_TOLERANCE
+        );
+    }
+
+    fn assert_waveform_parity(label: &str, actual: &Waveform, expected: &serde_json::Value) {
+        const RMS_ABSOLUTE_TOLERANCE: f32 = 5.0e-4;
+        const SAMPLE_ABSOLUTE_TOLERANCE: f32 = 2.0e-3;
+
+        assert_eq!(
+            actual.contract.sample_rate_hz,
+            expected["sample_rate_hz"].as_u64().expect("sample rate") as u32
+        );
+        assert_eq!(actual.contract.channels, 1);
+        assert_eq!(
+            actual.samples.len(),
+            expected["samples"].as_u64().expect("sample count") as usize,
+            "{label} sample count"
+        );
+        assert!(actual.samples.iter().all(|sample| sample.is_finite()));
+        let rms = (actual
+            .samples
+            .iter()
+            .map(|sample| sample * sample)
+            .sum::<f32>()
+            / actual.samples.len() as f32)
+            .sqrt();
+        let expected_rms = expected["rms"].as_f64().expect("waveform RMS") as f32;
+        assert!(
+            (rms - expected_rms).abs() <= RMS_ABSOLUTE_TOLERANCE,
+            "{label} waveform RMS differs: native {rms}, Coqui {expected_rms}, tolerance {RMS_ABSOLUTE_TOLERANCE}"
+        );
+        for probe in expected["probes"].as_array().expect("waveform probes") {
+            let probe = probe.as_array().expect("waveform probe");
+            let index = probe[0].as_u64().expect("sample index") as usize;
+            let expected = probe[1].as_f64().expect("sample") as f32;
+            let actual = actual.samples[index];
+            assert!(
+                (actual - expected).abs() <= SAMPLE_ABSOLUTE_TOLERANCE,
+                "{label} waveform[{index}] differs: native {actual}, Coqui {expected}, tolerance {SAMPLE_ABSOLUTE_TOLERANCE}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires pinned YourTTS artifacts and pinned Coqui reference evidence; run scripts/speech-conformance.sh"]
+    fn published_yourtts_conformance() {
+        let reference: serde_json::Value = serde_json::from_slice(
+            &fs::read(required_env("TONGUES_TEST_COQUI_REFERENCE"))
+                .expect("read Coqui reference evidence"),
+        )
+        .expect("parse Coqui reference evidence");
+        let yourtts = &reference["yourtts"];
+        assert_eq!(yourtts["noise_scale"].as_f64(), Some(0.0));
+        assert_eq!(yourtts["duration_noise_scale"].as_f64(), Some(0.0));
+        assert_eq!(yourtts["embedding_dimensions"].as_u64(), Some(512));
+
+        let reference_wav = PathBuf::from(required_env("TONGUES_TEST_YOURTTS_REFERENCE_WAV"));
+        let mut engine = BurnVitsSpeech::<TestBackend>::load_your_tts(
+            required_env("TONGUES_TEST_YOURTTS_CONFIG"),
+            required_env("TONGUES_TEST_YOURTTS_CHECKPOINT"),
+            required_env("TONGUES_TEST_YOURTTS_SPEAKERS"),
+            required_env("TONGUES_TEST_YOURTTS_LANGUAGES"),
+            required_env("TONGUES_TEST_COQUI_SPEAKER_CONFIG"),
+            required_env("TONGUES_TEST_COQUI_SPEAKER_MODEL"),
+            NdArrayDevice::Cpu,
+            SpeakerEmbeddingCachePolicy::Memory { max_entries: 2 },
+        )
+        .expect("published YourTTS graph");
+
+        let verification = &yourtts["verification"];
+        let same_clips = verification["same_speaker"]["clips"]
+            .as_array()
+            .expect("same-speaker clips");
+        let different_clips = verification["different_speaker"]["clips"]
+            .as_array()
+            .expect("different-speaker clips");
+        let catalog = engine.d_vector_catalog().expect("d-vector catalog");
+        let same = cosine_similarity(
+            &catalog
+                .embedding_for_clip(same_clips[0].as_str().expect("clip"))
+                .expect("same-speaker clip one"),
+            &catalog
+                .embedding_for_clip(same_clips[1].as_str().expect("clip"))
+                .expect("same-speaker clip two"),
+        )
+        .expect("same-speaker cosine");
+        let different = cosine_similarity(
+            &catalog
+                .embedding_for_clip(different_clips[0].as_str().expect("clip"))
+                .expect("different-speaker clip one"),
+            &catalog
+                .embedding_for_clip(different_clips[1].as_str().expect("clip"))
+                .expect("different-speaker clip two"),
+        )
+        .expect("different-speaker cosine");
+        assert!(
+            (same
+                - verification["same_speaker"]["cosine"]
+                    .as_f64()
+                    .expect("same cosine") as f32)
+                .abs()
+                <= 1.0e-6
+        );
+        assert!(
+            (different
+                - verification["different_speaker"]["cosine"]
+                    .as_f64()
+                    .expect("different cosine") as f32)
+                .abs()
+                <= 1.0e-6
+        );
+        assert!(same > different);
+
+        for case in yourtts["cases"].as_array().expect("YourTTS cases") {
+            let label = case["id"].as_str().expect("case ID");
+            let text = case["text"].as_str().expect("case text");
+            let variety = case["variety"].as_str().expect("case variety");
+            let language = case["language"].as_str().expect("case language");
+            let speaker = &case["speaker"];
+            let mut plan = utterance_plan_from_text(SpeechRequest {
+                text: text.into(),
+                variety: variety.into(),
+            })
+            .expect("native linguistic plan");
+            let actual_embedding = match speaker["kind"].as_str().expect("speaker kind") {
+                "named" => {
+                    let name = speaker["name"].as_str().expect("speaker name");
+                    plan.speaker = Some(SpeakerId(name.into()));
+                    engine
+                        .d_vector_catalog()
+                        .expect("d-vector catalog")
+                        .resolve(name)
+                        .expect("named golden embedding")
+                }
+                "reference_wav" => {
+                    plan.speaker_reference = Some(SpeakerReference {
+                        description: Some("pinned LJSpeech reference fixture".into()),
+                        source: SpeakerReferenceSource::ReferenceAudio {
+                            uri: reference_wav.display().to_string(),
+                        },
+                    });
+                    engine
+                        .reference_encoder
+                        .as_mut()
+                        .expect("native reference encoder")
+                        .encode_path(&reference_wav)
+                        .expect("native reference embedding")
+                }
+                kind => panic!("unknown conformance speaker kind {kind}"),
+            };
+            assert_embedding_parity(label, &actual_embedding, &case["embedding"]);
+
+            let projected = engine
+                .projected_input(&plan)
+                .expect("YourTTS checkpoint projection");
+            let expected_tokens = case["token_ids"]
+                .as_array()
+                .expect("token IDs")
+                .iter()
+                .map(|value| value.as_i64().expect("token ID"))
+                .collect::<Vec<_>>();
+            assert_eq!(projected.ids, expected_tokens, "{label} token IDs");
+
+            let waveform = engine
+                .synthesize(&SpeechSynthesisRequest {
+                    plan,
+                    options: SynthesisOptions {
+                        model_language: Some(language.into()),
+                        noise_scale: Some(0.0),
+                        noise_w: Some(0.0),
+                        seed: Some(27),
+                        ..SynthesisOptions::default()
+                    },
+                })
+                .expect("YourTTS conformance synthesis");
+            assert_waveform_parity(label, &waveform, &case["waveform"]);
+        }
     }
 
     fn json_numbers(value: &serde_json::Value) -> Vec<f32> {

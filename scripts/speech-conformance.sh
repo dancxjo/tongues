@@ -19,6 +19,7 @@ vocoder_dir="$model_root/ljspeech/hifigan-v2"
 multiband_dir="$model_root/ljspeech/multiband-melgan"
 melgan_model="$model_root/ljspeech/melgan/linda_johnson.pt"
 vits_dir="$model_root/vctk/vits"
+yourtts_dir="${TONGUES_YOURTTS_MODEL_ROOT:-$data_root/mortar-sea/models/speech/coqui/multilingual/yourtts}"
 output_dir="${TONGUES_CONFORMANCE_OUTPUT:-$repo_root/target/speech-conformance}"
 image="${TONGUES_COQUI_REFERENCE_IMAGE:-tongues-coqui-reference}"
 
@@ -36,6 +37,12 @@ required_artifacts=(
     "$vits_dir/config.json"
     "$vits_dir/model_file.pth"
     "$vits_dir/speaker_ids.json"
+    "$yourtts_dir/config.json"
+    "$yourtts_dir/model_file.pth.tar"
+    "$yourtts_dir/speakers.json"
+    "$yourtts_dir/language_ids.json"
+    "$yourtts_dir/model_se.pth.tar"
+    "$yourtts_dir/config_se.json"
 )
 for artifact in "${required_artifacts[@]}"; do
     if [[ ! -f "$artifact" ]]; then
@@ -54,12 +61,15 @@ docker build --tag "$image" --file tools/speech-conformance/Dockerfile .
 echo "Generating Coqui stage evidence: $reference.part"
 docker run --rm \
     --volume "$model_root:/models:ro" \
+    --volume "$yourtts_dir:/yourtts:ro" \
     --volume "$repo_root:/workspace" \
     --volume "$output_dir:/evidence" \
     "$image" \
     --model-root /models \
+    --yourtts-root /yourtts \
+    --reference-wav-output /evidence/yourtts-reference.wav \
     --output /evidence/coqui-reference.json.part
-mv "$reference.part" "$reference"
+mv --force "$reference.part" "$reference"
 echo "Reference evidence committed atomically: $reference"
 
 tokenization="$output_dir/coqui-v0.6.1-tokenization.json"
@@ -89,7 +99,7 @@ if ! cmp --silent "$tokenization.part" "$tokenization.expected.part"; then
     diff -u "$tokenization.expected.part" "$tokenization.part" || true
     exit 1
 fi
-mv "$tokenization.part" "$tokenization"
+mv --force "$tokenization.part" "$tokenization"
 rm "$tokenization.expected.part"
 echo "Pinned tokenizer fixture matched: $tokenization"
 
@@ -111,6 +121,20 @@ env \
     TONGUES_TEST_COQUI_REFERENCE="$reference" \
     cargo test --release -p tongues-tts \
         burn_vits::tests::published_checkpoint_stage_parity \
+        -- --ignored --exact --nocapture
+
+echo "Checking multilingual YourTTS, speaker embeddings, reference WAV, and waveforms: $reference"
+env \
+    TONGUES_TEST_YOURTTS_CONFIG="$yourtts_dir/config.json" \
+    TONGUES_TEST_YOURTTS_CHECKPOINT="$yourtts_dir/model_file.pth.tar" \
+    TONGUES_TEST_YOURTTS_SPEAKERS="$yourtts_dir/speakers.json" \
+    TONGUES_TEST_YOURTTS_LANGUAGES="$yourtts_dir/language_ids.json" \
+    TONGUES_TEST_COQUI_SPEAKER_CONFIG="$yourtts_dir/config_se.json" \
+    TONGUES_TEST_COQUI_SPEAKER_MODEL="$yourtts_dir/model_se.pth.tar" \
+    TONGUES_TEST_YOURTTS_REFERENCE_WAV="$output_dir/yourtts-reference.wav" \
+    TONGUES_TEST_COQUI_REFERENCE="$reference" \
+    cargo test --release -p tongues-tts \
+        burn_vits::tests::published_yourtts_conformance \
         -- --ignored --exact --nocapture
 
 echo "Comparing native FastPitch duration, pitch, and mel stages: $reference"

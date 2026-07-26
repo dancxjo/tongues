@@ -163,6 +163,12 @@ pub struct ReferenceAudioCapabilities {
     pub speaker: bool,
     pub style: bool,
     pub source: bool,
+    #[serde(default)]
+    pub speaker_required: bool,
+    #[serde(default)]
+    pub style_required: bool,
+    #[serde(default)]
+    pub source_required: bool,
 }
 
 /// Discoverable token-level controls exposed by pitch-conditioned acoustic
@@ -224,28 +230,31 @@ impl BackendCapabilities {
         &self,
         request: &UnifiedSynthesisRequest,
     ) -> Result<(), SynthesisContractError> {
-        if request.text.trim().is_empty() {
+        let voice_conversion = self.family == SpeechModelFamily::VoiceConversion;
+        if !voice_conversion && request.text.trim().is_empty() {
             return Err(SynthesisContractError::InvalidRequest {
                 field: "text",
                 reason: "must not be empty".into(),
             });
         }
-        if request.variety.trim().is_empty() {
+        if !voice_conversion && request.variety.trim().is_empty() {
             return Err(SynthesisContractError::InvalidRequest {
                 field: "variety",
                 reason: "must not be empty".into(),
             });
         }
-        let variety_supported = self.varieties.contains(&request.variety)
-            || speaking::canonical_variety_id(&request.variety)
-                .is_some_and(|canonical| self.varieties.contains(&canonical.0));
-        if !variety_supported {
-            return Err(unsupported_value(
-                &self.backend,
-                "variety",
-                &request.variety,
-                self.varieties.available(),
-            ));
+        if !voice_conversion || !request.variety.trim().is_empty() {
+            let variety_supported = self.varieties.contains(&request.variety)
+                || speaking::canonical_variety_id(&request.variety)
+                    .is_some_and(|canonical| self.varieties.contains(&canonical.0));
+            if !variety_supported {
+                return Err(unsupported_value(
+                    &self.backend,
+                    "variety",
+                    &request.variety,
+                    self.varieties.available(),
+                ));
+            }
         }
         if !request.speed.is_finite() || request.speed <= 0.0 {
             return Err(SynthesisContractError::InvalidRequest {
@@ -530,6 +539,30 @@ impl BackendCapabilities {
             request.reference_audio.source.as_deref(),
             self.reference_audio.source,
         )?;
+        for (feature, value, required) in [
+            (
+                "reference_audio.speaker",
+                request.reference_audio.speaker.as_deref(),
+                self.reference_audio.speaker_required,
+            ),
+            (
+                "reference_audio.style",
+                request.reference_audio.style.as_deref(),
+                self.reference_audio.style_required,
+            ),
+            (
+                "reference_audio.source",
+                request.reference_audio.source.as_deref(),
+                self.reference_audio.source_required,
+            ),
+        ] {
+            if required && value.is_none() {
+                return Err(SynthesisContractError::MissingRequiredFeature {
+                    backend: self.backend.clone(),
+                    feature,
+                });
+            }
+        }
         Ok(())
     }
 }
@@ -761,6 +794,16 @@ pub struct SynthesisTiming {
     pub elapsed_ms: f64,
 }
 
+/// Original properties of an audio input used during synthesis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InputAudioMetadata {
+    pub role: String,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub frames: u64,
+    pub rms_dbfs: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SynthesisMetadata {
     pub backend: String,
@@ -770,6 +813,8 @@ pub struct SynthesisMetadata {
     pub frames: u64,
     pub audio_seconds: f64,
     pub streaming: bool,
+    #[serde(default)]
+    pub input_audio: Vec<InputAudioMetadata>,
     #[serde(default)]
     pub timings: Vec<SynthesisTiming>,
 }
@@ -1041,6 +1086,7 @@ impl<E: SpeechSynthesisEngine + Send> SynthesizerBackend for PlanEngineBackend<E
                 frames,
                 audio_seconds: frames as f64 / sample_rate_hz as f64,
                 streaming: request.streaming,
+                input_audio: Vec::new(),
                 timings,
             },
         })

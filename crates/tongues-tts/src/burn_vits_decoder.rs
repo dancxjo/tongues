@@ -64,6 +64,15 @@ pub struct VitsWaveformDecoderConfig {
 }
 
 impl VitsWaveformDecoderConfig {
+    pub fn from_generator_config(
+        generator: HifiganGeneratorConfig,
+    ) -> Result<Self, VitsWaveformDecoderError> {
+        generator
+            .validate()
+            .map_err(VitsWaveformDecoderError::Generator)?;
+        Ok(Self { generator })
+    }
+
     pub fn from_model_config(
         config: &VitsInferenceConfig,
     ) -> Result<Self, VitsWaveformDecoderError> {
@@ -155,17 +164,38 @@ pub struct VitsWaveformDecoder<B: Backend> {
 impl<B: Backend> VitsWaveformDecoder<B> {
     /// Loads only the `waveform_decoder` subtree from a full VITS checkpoint.
     pub fn load_checkpoint(
-        mut self,
+        self,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<Self, VitsWaveformDecoderError> {
+        self.load_checkpoint_subtree(checkpoint_path, "waveform_decoder")
+    }
+
+    pub(crate) fn load_checkpoint_subtree(
+        mut self,
+        checkpoint_path: impl AsRef<Path>,
+        subtree: &str,
+    ) -> Result<Self, VitsWaveformDecoderError> {
+        let (predicate, prefix) = match subtree {
+            "waveform_decoder" => (
+                waveform_decoder_tensor as fn(&str, &str) -> bool,
+                r"^waveform_decoder\.",
+            ),
+            "dec" => (freevc_decoder_tensor as fn(&str, &str) -> bool, r"^dec\."),
+            other => {
+                return Err(VitsWaveformDecoderError::Checkpoint(format!(
+                    "unsupported decoder checkpoint subtree `{other}`"
+                )));
+            }
+        };
         let result = crate::checkpoint::load_pytorch_layout_checkpoint(
             &mut self.generator,
             checkpoint_path.as_ref(),
             crate::checkpoint::CheckpointLoadOptions {
                 top_level_key: Some("model"),
-                predicate: Some(waveform_decoder_tensor),
+                predicate: Some(predicate),
                 key_remappings: vec![
-                    (r"^waveform_decoder\.".into(), String::new()),
+                    (prefix.into(), String::new()),
+                    (r"^cond\.".into(), "cond_layer.".into()),
                     (
                         r"^(conv_pre|conv_post)\.weight$".into(),
                         "$1.weight_v".into(),
@@ -188,7 +218,7 @@ impl<B: Backend> VitsWaveformDecoder<B> {
         let unexpected_unused = result
             .unused
             .iter()
-            .filter(|path| waveform_decoder_tensor(path, ""))
+            .filter(|path| predicate(path, ""))
             .cloned()
             .collect::<Vec<_>>();
         if missing != expected_missing || !result.errors.is_empty() || !unexpected_unused.is_empty()
@@ -272,6 +302,11 @@ fn waveform_decoder_tensor(path: &str, _container: &str) -> bool {
     ]
     .iter()
     .any(|prefix| path.starts_with(prefix))
+}
+
+fn freevc_decoder_tensor(path: &str, _container: &str) -> bool {
+    path.strip_prefix("dec.")
+        .is_some_and(|path| path.starts_with("cond.") || waveform_decoder_tensor(path, ""))
 }
 
 fn weight_norm_dim_zero<B: Backend>(weight: Tensor<B, 3>) -> Tensor<B, 3> {

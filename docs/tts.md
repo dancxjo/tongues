@@ -351,6 +351,13 @@ does not carry a separate hard-coded speaker list. The older
 view. Linguistic varieties are independently enumerated from the shared
 variety data registry at `GET /api/linguistic/varieties`.
 
+Discovery itself is lightweight. Its `verification_ids` list names catalog
+entries whose installed artifacts have not been checked in the current server
+session. `GET /api/speech/models/verify/{model_id}` verifies one entry and
+returns an updated discovery snapshot. Speech Studio runs up to three of these
+bounded requests concurrently and renders readiness progressively instead of
+holding one response open while every model archive is hashed.
+
 Force CPU execution with the global CLI flag:
 
 ```sh
@@ -572,6 +579,10 @@ zero acoustic/duration noise. Conformance covers:
   input;
 - VITS token IDs, speaker rows p225, p330, and p376, duration expansion, text
   prior, reverse flow, and integrated waveform decoder;
+- multilingual YourTTS across two synthesized language IDs and three speaker selections,
+  including a real reference WAV through the native speaker encoder and full
+  synthesis; the exact embedding and waveform limits are documented in
+  [Published YourTTS conformance](yourtts-conformance.md);
 - the registered ONNX voice through an actual CLI synthesis;
 - mono/22.05 kHz validity, bounded duration and levels, non-silent RMS/mean,
   peak, sample count, deterministic probes, and wall-clock timing.

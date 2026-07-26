@@ -148,7 +148,7 @@ fn forward_layer<B: Backend>(layer: &[SeBasicBlock<B>], mut input: Tensor<B, 4>)
 
 /// Coqui's ResNet H/ASP encoder with checkpoint-compatible module names.
 #[derive(Module, Debug)]
-pub struct CoquiResNetSpeakerEncoder<B: Backend> {
+pub(crate) struct CoquiResNetSpeakerEncoder<B: Backend> {
     conv1: Conv2d<B>,
     bn1: BatchNorm<B>,
     layer1: Vec<SeBasicBlock<B>>,

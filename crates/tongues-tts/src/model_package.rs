@@ -21,15 +21,15 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
+use crate::speaker_encoder::CoquiResNetSpeakerEncoder;
 use crate::vits_config::ImportedVitsConfig;
 use crate::{
-    AudioFeatureConfig, BurnVitsSpeech, CoquiResNetSpeakerEncoder, DVectorCatalog,
-    DelightfulTtsConfig, FastPitchConfig, FastSpeechConfig, FastSpeechVariant, GlowTts,
-    GlowTtsInferenceConfig, HifiganBundleConfig, LanguageCatalog, MelganBundleConfig,
-    MelganVariant, PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog,
-    SpeedySpeechConfig, StochasticGlowTts, TacotronArchitecture, TacotronGraphemeProjector,
-    TacotronInferenceConfig, VitsInferenceConfig, XttsV2Config,
-    COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+    AudioFeatureConfig, BurnVitsSpeech, DVectorCatalog, DelightfulTtsConfig, FastPitchConfig,
+    FastSpeechConfig, FastSpeechVariant, GlowTts, GlowTtsInferenceConfig, HifiganBundleConfig,
+    LanguageCatalog, MelganBundleConfig, MelganVariant, PhonemeTokenizerConfig,
+    PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig, StochasticGlowTts,
+    TacotronArchitecture, TacotronGraphemeProjector, TacotronInferenceConfig, VitsInferenceConfig,
+    XttsV2Config, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;

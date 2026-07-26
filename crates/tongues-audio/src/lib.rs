@@ -334,8 +334,8 @@ pub struct StftConfig {
 
 impl StftConfig {
     pub fn validate(&self) -> Result<()> {
-        if self.fft_size == 0 || !self.fft_size.is_power_of_two() {
-            return Err(invalid("FFT size must be a non-zero power of two"));
+        if self.fft_size == 0 {
+            return Err(invalid("FFT size must be positive"));
         }
         if self.window_size == 0 || self.window_size > self.fft_size {
             return Err(invalid("window size must be in 1..=FFT size"));

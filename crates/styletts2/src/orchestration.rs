@@ -168,6 +168,7 @@ impl SynthesizerBackend for StyleTts2Synthesizer {
                 frames,
                 audio_seconds: frames as f64 / f64::from(output.sample_rate_hz),
                 streaming: request.streaming,
+                input_audio: Vec::new(),
                 timings,
             },
         })
