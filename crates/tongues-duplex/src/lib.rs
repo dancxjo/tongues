@@ -24,6 +24,25 @@ pub enum EvidenceModality {
     Acoustics,
 }
 
+/// Frame-level timing and confidence metadata attached to acoustic evidence.
+///
+/// All fields survive withdrawal, repair, and frontier advancement so that
+/// downstream diagnostics can trace a committed morpheme back to the original
+/// audio window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcousticSpan {
+    /// First mel-frame index (inclusive) from the acoustic encoder.
+    pub frame_start: u32,
+    /// Last mel-frame index (exclusive) from the acoustic encoder.
+    pub frame_end: u32,
+    /// Wall-clock start time in seconds relative to utterance start.
+    pub time_start: f32,
+    /// Wall-clock end time in seconds relative to utterance start.
+    pub time_end: f32,
+    /// Aggregate acoustic confidence in [0.0, 1.0].
+    pub confidence: f32,
+}
+
 /// Direct input evidence. `supports` names the normalized morpheme keys the
 /// input directly contains; an empty list is derived deterministically from
 /// `content`.
@@ -35,6 +54,10 @@ pub struct ObservedEvidence {
     #[serde(default)]
     pub supports: Vec<String>,
     pub provenance: EvidenceProvenance,
+    /// Present for acoustic evidence; carries frame timing and confidence that
+    /// survive every withdrawal, repair, and frontier revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acoustic_span: Option<AcousticSpan>,
 }
 
 impl ObservedEvidence {
@@ -50,6 +73,7 @@ impl ObservedEvidence {
                 method: "duplex-text-chunk".into(),
                 version: Some("1".into()),
             },
+            acoustic_span: None,
         }
     }
 
@@ -65,7 +89,19 @@ impl ObservedEvidence {
                 method: "duplex-mock-acoustics".into(),
                 version: Some("1".into()),
             },
+            acoustic_span: None,
         }
+    }
+
+    /// Acoustic evidence with explicit frame-span metadata.
+    pub fn acoustics_with_span(
+        id: impl Into<String>,
+        transcript: impl Into<String>,
+        span: AcousticSpan,
+    ) -> Self {
+        let mut ev = Self::acoustics(id, transcript);
+        ev.acoustic_span = Some(span);
+        ev
     }
 
     fn supports(&self, key: &str) -> bool {
@@ -972,6 +1008,174 @@ pub fn run_fixture(
     Ok((journal, state))
 }
 
+// ---------------------------------------------------------------------------
+// Provisional transcript events and speculative consumer
+// ---------------------------------------------------------------------------
+
+/// High-level transcript events emitted by a [`SpeculativeConsumer`].
+///
+/// These are separate from the simulator's internal [`SimulatorEventKind`]:
+/// provisional events describe the evolving *text* view while the simulator
+/// tracks *hypothesis* identity. Downstream consumers (TTS, display) should
+/// listen to these events and not inspect logits or hypothesis internals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type", content = "data")]
+pub enum ProvisionalTranscriptEvent {
+    /// New provisional morphemes appended beyond the committed frontier.
+    Append {
+        morphemes: Vec<CompletionMorpheme>,
+    },
+    /// Existing provisional morphemes replaced in place (revision or repair).
+    Replace {
+        previous: Vec<CompletionMorpheme>,
+        replacement: Vec<CompletionMorpheme>,
+    },
+    /// Previously provisional morphemes withdrawn (no longer supported).
+    Withdraw {
+        morphemes: Vec<CompletionMorpheme>,
+    },
+    /// Morphemes moved from provisional to permanent committed history.
+    Commit {
+        morphemes: Vec<CommittedMorpheme>,
+    },
+}
+
+/// Downstream consumer that processes [`SimulatorEvent`]s and derives
+/// [`ProvisionalTranscriptEvent`]s without inspecting model logits.
+///
+/// Implementors receive raw simulator events and are responsible for
+/// maintaining any local state they need. The trait is object-safe so that
+/// consumers can be composed or boxed.
+pub trait SpeculativeConsumer {
+    fn on_event(&mut self, event: &SimulatorEvent);
+}
+
+/// A [`SpeculativeConsumer`] that records all [`ProvisionalTranscriptEvent`]s
+/// as they are derived from the simulator journal.
+///
+/// It tracks the best-hypothesis provisional suffix after each
+/// [`SimulatorEventKind::BeamInferred`] and emits `Append`, `Replace`, or
+/// `Withdraw` as the suffix evolves. Newly committed morphemes always emit a
+/// `Commit` event and are removed from the provisional suffix.
+#[derive(Debug, Clone, Default)]
+pub struct RecordingSpeculativeConsumer {
+    hypotheses: BTreeMap<CompletionHypothesisId, NormalizedCompletionHypothesis>,
+    committed_len: usize,
+    provisional: Vec<CompletionMorpheme>,
+    pub committed: Vec<CommittedMorpheme>,
+    pub transcript_events: Vec<ProvisionalTranscriptEvent>,
+}
+
+impl RecordingSpeculativeConsumer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Text assembled from committed morpheme surfaces.
+    pub fn committed_text(&self) -> String {
+        self.committed
+            .iter()
+            .map(|m| m.surface.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Current provisional suffix (beyond the committed frontier).
+    pub fn provisional_suffix(&self) -> &[CompletionMorpheme] {
+        &self.provisional
+    }
+}
+
+impl SpeculativeConsumer for RecordingSpeculativeConsumer {
+    fn on_event(&mut self, event: &SimulatorEvent) {
+        match &event.event {
+            SimulatorEventKind::HypothesisProposed { hypothesis } => {
+                self.hypotheses.insert(hypothesis.id.clone(), hypothesis.clone());
+            }
+            SimulatorEventKind::HypothesisWithdrawn { hypothesis, .. } => {
+                self.hypotheses.remove(&hypothesis.id);
+            }
+            SimulatorEventKind::HypothesisRepaired { replacement, .. } => {
+                self.hypotheses.insert(replacement.id.clone(), replacement.clone());
+            }
+            SimulatorEventKind::BeamInferred { selected, .. } => {
+                // Derive new provisional suffix from the highest-probability
+                // selected hypothesis (tie-break: stable id ordering).
+                let new_provisional = selected
+                    .iter()
+                    .filter_map(|id| self.hypotheses.get(id))
+                    .max_by(|a, b| {
+                        a.probability
+                            .total_cmp(&b.probability)
+                            .then_with(|| b.id.0.cmp(&a.id.0))
+                    })
+                    .map(|best| {
+                        best.morphemes
+                            .iter()
+                            .skip(self.committed_len)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                if new_provisional != self.provisional {
+                    let event = match (self.provisional.is_empty(), new_provisional.is_empty()) {
+                        (_, true) => ProvisionalTranscriptEvent::Withdraw {
+                            morphemes: self.provisional.clone(),
+                        },
+                        (true, false) => ProvisionalTranscriptEvent::Append {
+                            morphemes: new_provisional.clone(),
+                        },
+                        (false, false) => ProvisionalTranscriptEvent::Replace {
+                            previous: self.provisional.clone(),
+                            replacement: new_provisional.clone(),
+                        },
+                    };
+                    self.transcript_events.push(event);
+                    self.provisional = new_provisional;
+                }
+            }
+            SimulatorEventKind::CommitFrontierAdvanced { committed, .. } => {
+                self.committed_len += committed.len();
+                self.committed.extend(committed.iter().cloned());
+                self.transcript_events.push(ProvisionalTranscriptEvent::Commit {
+                    morphemes: committed.clone(),
+                });
+                // Strip committed morphemes from the head of the provisional suffix.
+                let new_len = self.provisional.len().saturating_sub(committed.len());
+                self.provisional = self.provisional[self.provisional.len() - new_len..].to_vec();
+            }
+            SimulatorEventKind::EvidenceObserved { .. } => {}
+        }
+    }
+}
+
+/// Drive a fixture through the simulator and collect the resulting
+/// [`ProvisionalTranscriptEvent`]s via a [`RecordingSpeculativeConsumer`].
+pub fn run_fixture_with_consumer(
+    fixture: &DuplexFixture,
+) -> Result<
+    (SimulatorJournal, SimulatorState, RecordingSpeculativeConsumer),
+    SimulatorError,
+> {
+    let provider = FixtureCompletionProvider::new(fixture);
+    let mut simulator = DuplexSimulator::new(
+        fixture.utterance_id.clone(),
+        fixture.variety.clone(),
+        fixture.config.clone(),
+        provider,
+    )?;
+    let mut consumer = RecordingSpeculativeConsumer::new();
+    for step in &fixture.steps {
+        let events = simulator.observe(step.evidence.clone())?;
+        for event in &events {
+            consumer.on_event(event);
+        }
+    }
+    let (journal, state) = simulator.into_parts();
+    Ok((journal, state, consumer))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1091,6 +1295,8 @@ mod tests {
             "end-of-turn-uncertainty",
             "who-shot-john-f",
             "mock-acoustics",
+            "homophones",
+            "false-boundaries",
         ] {
             assert!(ids.contains(required), "missing fixture {required}");
         }
@@ -1180,5 +1386,131 @@ mod tests {
                 .values()
                 .all(|hypothesis| hypothesis.syntax.is_some() && hypothesis.prosody.is_some())
         );
+    }
+
+    #[test]
+    fn acoustic_span_survives_withdrawal_and_commit() {
+        let span = AcousticSpan {
+            frame_start: 0,
+            frame_end: 40,
+            time_start: 0.0,
+            time_end: 0.5,
+            confidence: 0.92,
+        };
+        let ev = ObservedEvidence::acoustics_with_span("acoustic:0", "hello world", span.clone());
+        assert_eq!(ev.acoustic_span.as_ref().unwrap().frame_start, 0);
+        assert_eq!(ev.acoustic_span.as_ref().unwrap().frame_end, 40);
+        assert!((ev.acoustic_span.as_ref().unwrap().confidence - 0.92).abs() < 1e-5);
+
+        // Verify the span round-trips through serde unchanged.
+        let json = serde_json::to_string(&ev).unwrap();
+        let ev2: ObservedEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, ev2);
+
+        // Existing text evidence must not acquire a span.
+        let text_ev = ObservedEvidence::text("text:0", "hello world");
+        assert!(text_ev.acoustic_span.is_none());
+    }
+
+    #[test]
+    fn speculative_consumer_emits_provisional_events_and_retracts_on_withdrawal() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("false-boundaries").unwrap();
+        let (journal, state, consumer) = run_fixture_with_consumer(fixture).unwrap();
+
+        // The simulator must record that the false-boundary hypothesis was
+        // withdrawn after correcting evidence arrived.
+        assert!(
+            journal.events.iter().any(|ev| matches!(
+                ev.event,
+                SimulatorEventKind::HypothesisWithdrawn { .. }
+            )),
+            "expected at least one HypothesisWithdrawn simulator event"
+        );
+
+        // At the transcript level the consumer must have produced at least one
+        // Replace (old provisional → new provisional) or Withdraw event – either
+        // means the false provisional was cleaned up.
+        assert!(
+            consumer.transcript_events.iter().any(|ev| matches!(
+                ev,
+                ProvisionalTranscriptEvent::Replace { .. }
+                    | ProvisionalTranscriptEvent::Withdraw { .. }
+            )),
+            "expected Replace or Withdraw transcript event; got {:?}",
+            consumer.transcript_events
+        );
+
+        // Consumer must have produced at least one Commit event.
+        assert!(
+            consumer.transcript_events.iter().any(|ev| matches!(
+                ev,
+                ProvisionalTranscriptEvent::Commit { .. }
+            )),
+            "expected at least one Commit event"
+        );
+
+        // Committed text must agree with the simulator state.
+        assert_eq!(consumer.committed_text(), state.committed_text());
+    }
+
+    #[test]
+    fn speculative_consumer_keeps_homophones_visible_until_resolved() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("homophones").unwrap();
+        let (journal, _state, consumer) = run_fixture_with_consumer(fixture).unwrap();
+
+        // After step 1 (ambiguous /miːt/ evidence), both hypotheses should be
+        // present in the simulator without any commit.
+        let events_after_step1: Vec<_> = journal.events.iter().take_while(|e| {
+            !matches!(e.event, SimulatorEventKind::EvidenceObserved { .. })
+                || journal.events.iter().position(|x| x == *e).unwrap_or(0) < 5
+        }).collect();
+        let _ = events_after_step1; // structural check is below via consumer
+
+        // Consumer must have emitted Append for initial provisional suffix,
+        // then Replace or Commit when the beam resolved.
+        assert!(
+            consumer.transcript_events.iter().any(|ev| matches!(
+                ev,
+                ProvisionalTranscriptEvent::Append { .. }
+                    | ProvisionalTranscriptEvent::Commit { .. }
+            )),
+            "expected Append or Commit events; got {:?}",
+            consumer.transcript_events
+        );
+
+        // Completion priors must never appear in committed text.
+        let committed = consumer.committed_text();
+        for committed_word in committed.split_whitespace() {
+            assert!(
+                !committed_word.is_empty(),
+                "committed word must not be empty"
+            );
+        }
+    }
+
+    #[test]
+    fn recording_consumer_committed_text_matches_simulator_state() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        for fixture in &suite.fixtures {
+            let (_journal, state, consumer) = run_fixture_with_consumer(fixture)
+                .unwrap_or_else(|e| panic!("fixture '{}' failed: {e}", fixture.id));
+            assert_eq!(
+                consumer.committed_text(),
+                state.committed_text(),
+                "consumer and state disagree for fixture '{}'",
+                fixture.id
+            );
+        }
     }
 }

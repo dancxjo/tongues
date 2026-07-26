@@ -6,36 +6,89 @@
       "description": "An initial is observed while the surname remains disputed.",
       "utterance_id": "fixture-initials",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "initials:text:0",
             "modality": "text",
             "content": "Meet J.",
-            "supports": ["meet", "j."],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "meet",
+              "j."
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "initials:doe",
               "weight": 0.6,
               "morphemes": [
-                { "key": "meet", "surface": "Meet", "variety": "en-US-GA", "evidence": ["initials:text:0"] },
-                { "key": "j.", "surface": "J.", "variety": "en-US-GA", "evidence": ["initials:text:0"] },
-                { "key": "doe", "surface": "Doe", "variety": "en-US-GA" }
+                {
+                  "key": "meet",
+                  "surface": "Meet",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "initials:text:0"
+                  ]
+                },
+                {
+                  "key": "j.",
+                  "surface": "J.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "initials:text:0"
+                  ]
+                },
+                {
+                  "key": "doe",
+                  "surface": "Doe",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             },
             {
               "id": "initials:smith",
               "weight": 0.4,
               "morphemes": [
-                { "key": "meet", "surface": "Meet", "variety": "en-US-GA", "evidence": ["initials:text:0"] },
-                { "key": "j.", "surface": "J.", "variety": "en-US-GA", "evidence": ["initials:text:0"] },
-                { "key": "smith", "surface": "Smith", "variety": "en-US-GA" }
+                {
+                  "key": "meet",
+                  "surface": "Meet",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "initials:text:0"
+                  ]
+                },
+                {
+                  "key": "j.",
+                  "surface": "J.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "initials:text:0"
+                  ]
+                },
+                {
+                  "key": "smith",
+                  "surface": "Smith",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             }
           ]
         }
@@ -46,36 +99,89 @@
       "description": "An abbreviation is stable while its following name is provisional.",
       "utterance_id": "fixture-abbreviations",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.75 },
+      "config": {
+        "posterior_mass": 0.75
+      },
       "steps": [
         {
           "evidence": {
             "id": "abbreviations:text:0",
             "modality": "text",
             "content": "Ask Dr.",
-            "supports": ["ask", "dr."],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "ask",
+              "dr."
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "abbreviations:lee",
               "weight": 0.55,
               "morphemes": [
-                { "key": "ask", "surface": "Ask", "variety": "en-US-GA", "evidence": ["abbreviations:text:0"] },
-                { "key": "dr.", "surface": "Dr.", "variety": "en-US-GA", "evidence": ["abbreviations:text:0"] },
-                { "key": "lee", "surface": "Lee", "variety": "en-US-GA" }
+                {
+                  "key": "ask",
+                  "surface": "Ask",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "abbreviations:text:0"
+                  ]
+                },
+                {
+                  "key": "dr.",
+                  "surface": "Dr.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "abbreviations:text:0"
+                  ]
+                },
+                {
+                  "key": "lee",
+                  "surface": "Lee",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             },
             {
               "id": "abbreviations:patel",
               "weight": 0.45,
               "morphemes": [
-                { "key": "ask", "surface": "Ask", "variety": "en-US-GA", "evidence": ["abbreviations:text:0"] },
-                { "key": "dr.", "surface": "Dr.", "variety": "en-US-GA", "evidence": ["abbreviations:text:0"] },
-                { "key": "patel", "surface": "Patel", "variety": "en-US-GA" }
+                {
+                  "key": "ask",
+                  "surface": "Ask",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "abbreviations:text:0"
+                  ]
+                },
+                {
+                  "key": "dr.",
+                  "surface": "Dr.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "abbreviations:text:0"
+                  ]
+                },
+                {
+                  "key": "patel",
+                  "surface": "Patel",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             }
           ]
         }
@@ -86,36 +192,96 @@
       "description": "The spelling read is observed while tense keeps its pronunciation disputed.",
       "utterance_id": "fixture-heteronyms",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "heteronyms:text:0",
             "modality": "text",
             "content": "I will read",
-            "supports": ["i", "will", "read"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "i",
+              "will",
+              "read"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "heteronyms:future",
               "weight": 0.65,
               "morphemes": [
-                { "key": "i", "surface": "I", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] },
-                { "key": "will", "surface": "will", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] },
-                { "key": "read.future", "surface": "read", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] }
+                {
+                  "key": "i",
+                  "surface": "I",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                },
+                {
+                  "key": "will",
+                  "surface": "will",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                },
+                {
+                  "key": "read.future",
+                  "surface": "read",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "heteronym-future", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "heteronym-future",
+                "version": "1"
+              }
             },
             {
               "id": "heteronyms:past",
               "weight": 0.35,
               "morphemes": [
-                { "key": "i", "surface": "I", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] },
-                { "key": "will", "surface": "will", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] },
-                { "key": "read.past", "surface": "read", "variety": "en-US-GA", "evidence": ["heteronyms:text:0"] }
+                {
+                  "key": "i",
+                  "surface": "I",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                },
+                {
+                  "key": "will",
+                  "surface": "will",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                },
+                {
+                  "key": "read.past",
+                  "surface": "read",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "heteronyms:text:0"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "heteronym-past", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "heteronym-past",
+                "version": "1"
+              }
             }
           ]
         }
@@ -126,34 +292,79 @@
       "description": "Noun and verb stress remain separate provisional analyses.",
       "utterance_id": "fixture-stress",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "stress:text:0",
             "modality": "text",
             "content": "the record",
-            "supports": ["the", "record"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "the",
+              "record"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "stress:noun",
               "weight": 0.58,
               "morphemes": [
-                { "key": "the", "surface": "the", "variety": "en-US-GA", "evidence": ["stress:text:0"] },
-                { "key": "record.noun-primary-first", "surface": "record", "variety": "en-US-GA", "evidence": ["stress:text:0"] }
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "stress:text:0"
+                  ]
+                },
+                {
+                  "key": "record.noun-primary-first",
+                  "surface": "record",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "stress:text:0"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "noun-stress", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "noun-stress",
+                "version": "1"
+              }
             },
             {
               "id": "stress:verb",
               "weight": 0.42,
               "morphemes": [
-                { "key": "the", "surface": "the", "variety": "en-US-GA", "evidence": ["stress:text:0"] },
-                { "key": "record.verb-primary-final", "surface": "record", "variety": "en-US-GA", "evidence": ["stress:text:0"] }
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "stress:text:0"
+                  ]
+                },
+                {
+                  "key": "record.verb-primary-final",
+                  "surface": "record",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "stress:text:0"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "verb-stress", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "verb-stress",
+                "version": "1"
+              }
             }
           ]
         }
@@ -164,38 +375,106 @@
       "description": "Later evidence withdraws a noun branch and repairs the surviving verb branch.",
       "utterance_id": "fixture-garden-path",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "garden:text:0",
             "modality": "text",
             "content": "The old man",
-            "supports": ["the", "old", "man"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "the",
+              "old",
+              "man"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "garden:verb",
               "weight": 0.65,
               "morphemes": [
-                { "key": "the", "surface": "The", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "old", "surface": "old", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "man.verb", "surface": "man", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "boats", "surface": "boats", "variety": "en-US-GA" }
+                {
+                  "key": "the",
+                  "surface": "The",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "old",
+                  "surface": "old",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "man.verb",
+                  "surface": "man",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "boats",
+                  "surface": "boats",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "garden-path-verb", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "garden-path-verb",
+                "version": "1"
+              }
             },
             {
               "id": "garden:noun",
               "weight": 0.35,
               "morphemes": [
-                { "key": "the", "surface": "The", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "old", "surface": "old", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "man.noun", "surface": "man", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "rested", "surface": "rested", "variety": "en-US-GA" }
+                {
+                  "key": "the",
+                  "surface": "The",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "old",
+                  "surface": "old",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "man.noun",
+                  "surface": "man",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "rested",
+                  "surface": "rested",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "garden-path-noun", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "garden-path-noun",
+                "version": "1"
+              }
             }
           ]
         },
@@ -204,34 +483,124 @@
             "id": "garden:text:1",
             "modality": "text",
             "content": "the boats",
-            "supports": ["the", "boats", "man.verb"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "the",
+              "boats",
+              "man.verb"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "garden:verb",
               "weight": 0.95,
               "morphemes": [
-                { "key": "the", "surface": "The", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "old", "surface": "old", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "man.verb", "surface": "man", "variety": "en-US-GA", "evidence": ["garden:text:1"] },
-                { "key": "the", "surface": "the", "variety": "en-US-GA", "evidence": ["garden:text:1"] },
-                { "key": "boats", "surface": "boats", "variety": "en-US-GA", "evidence": ["garden:text:1"] }
+                {
+                  "key": "the",
+                  "surface": "The",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "old",
+                  "surface": "old",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "man.verb",
+                  "surface": "man",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                },
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                },
+                {
+                  "key": "boats",
+                  "surface": "boats",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "garden-path-verb", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "garden-path-verb",
+                "version": "1"
+              }
             },
             {
               "id": "garden:verb-alt",
               "weight": 0.05,
               "morphemes": [
-                { "key": "the", "surface": "The", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "old", "surface": "old", "variety": "en-US-GA", "evidence": ["garden:text:0"] },
-                { "key": "man.verb", "surface": "man", "variety": "en-US-GA", "evidence": ["garden:text:1"] },
-                { "key": "the", "surface": "the", "variety": "en-US-GA", "evidence": ["garden:text:1"] },
-                { "key": "boats", "surface": "boats", "variety": "en-US-GA", "evidence": ["garden:text:1"] },
-                { "key": "today", "surface": "today", "variety": "en-US-GA" }
+                {
+                  "key": "the",
+                  "surface": "The",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "old",
+                  "surface": "old",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:0"
+                  ]
+                },
+                {
+                  "key": "man.verb",
+                  "surface": "man",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                },
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                },
+                {
+                  "key": "boats",
+                  "surface": "boats",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "garden:text:1"
+                  ]
+                },
+                {
+                  "key": "today",
+                  "surface": "today",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "garden-path-verb-alt", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "garden-path-verb-alt",
+                "version": "1"
+              }
             }
           ]
         }
@@ -242,36 +611,89 @@
       "description": "A shared prefix preserves the variety of each code-switched morpheme.",
       "utterance_id": "fixture-code-switching",
       "variety": "es-ES-Standard",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "code:text:0",
             "modality": "text",
             "content": "hola friend",
-            "supports": ["hola", "friend"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "hola",
+              "friend"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "code:question",
               "weight": 0.6,
               "morphemes": [
-                { "key": "hola", "surface": "hola", "variety": "es-ES-Standard", "evidence": ["code:text:0"] },
-                { "key": "friend", "surface": "friend", "variety": "en-US-GA", "evidence": ["code:text:0"] },
-                { "key": "today", "surface": "today", "variety": "en-US-GA" }
+                {
+                  "key": "hola",
+                  "surface": "hola",
+                  "variety": "es-ES-Standard",
+                  "evidence": [
+                    "code:text:0"
+                  ]
+                },
+                {
+                  "key": "friend",
+                  "surface": "friend",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "code:text:0"
+                  ]
+                },
+                {
+                  "key": "today",
+                  "surface": "today",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "code-switch-question", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "code-switch-question",
+                "version": "1"
+              }
             },
             {
               "id": "code:greeting",
               "weight": 0.4,
               "morphemes": [
-                { "key": "hola", "surface": "hola", "variety": "es-ES-Standard", "evidence": ["code:text:0"] },
-                { "key": "friend", "surface": "friend", "variety": "en-US-GA", "evidence": ["code:text:0"] },
-                { "key": "bienvenido", "surface": "bienvenido", "variety": "es-ES-Standard" }
+                {
+                  "key": "hola",
+                  "surface": "hola",
+                  "variety": "es-ES-Standard",
+                  "evidence": [
+                    "code:text:0"
+                  ]
+                },
+                {
+                  "key": "friend",
+                  "surface": "friend",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "code:text:0"
+                  ]
+                },
+                {
+                  "key": "bienvenido",
+                  "surface": "bienvenido",
+                  "variety": "es-ES-Standard"
+                }
               ],
-              "provenance": { "source": "rule", "method": "code-switch-greeting", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "code-switch-greeting",
+                "version": "1"
+              }
             }
           ]
         }
@@ -282,36 +704,89 @@
       "description": "Observed material commits while final intonation remains provisional.",
       "utterance_id": "fixture-end-turn",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "end-turn:acoustic:0",
             "modality": "acoustics",
             "content": "maybe tomorrow",
-            "supports": ["maybe", "tomorrow"],
-            "provenance": { "source": "acoustic_model", "method": "fixture-acoustics", "version": "1" }
+            "supports": [
+              "maybe",
+              "tomorrow"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "fixture-acoustics",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "end-turn:fall",
               "weight": 0.55,
               "morphemes": [
-                { "key": "maybe", "surface": "maybe", "variety": "en-US-GA", "evidence": ["end-turn:acoustic:0"] },
-                { "key": "tomorrow", "surface": "tomorrow", "variety": "en-US-GA", "evidence": ["end-turn:acoustic:0"] },
-                { "key": "<final-fall>", "surface": ".", "variety": "en-US-GA" }
+                {
+                  "key": "maybe",
+                  "surface": "maybe",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "end-turn:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "tomorrow",
+                  "surface": "tomorrow",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "end-turn:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "<final-fall>",
+                  "surface": ".",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "prosody-final-fall", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "prosody-final-fall",
+                "version": "1"
+              }
             },
             {
               "id": "end-turn:rise",
               "weight": 0.45,
               "morphemes": [
-                { "key": "maybe", "surface": "maybe", "variety": "en-US-GA", "evidence": ["end-turn:acoustic:0"] },
-                { "key": "tomorrow", "surface": "tomorrow", "variety": "en-US-GA", "evidence": ["end-turn:acoustic:0"] },
-                { "key": "<question-rise>", "surface": "?", "variety": "en-US-GA" }
+                {
+                  "key": "maybe",
+                  "surface": "maybe",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "end-turn:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "tomorrow",
+                  "surface": "tomorrow",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "end-turn:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "<question-rise>",
+                  "surface": "?",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "prosody-question-rise", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "prosody-question-rise",
+                "version": "1"
+              }
             }
           ]
         }
@@ -322,53 +797,176 @@
       "description": "Who shot John F. predicts Kennedy but commits it only when the next chunk arrives.",
       "utterance_id": "fixture-who-shot-john-f",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "john-f:text:0",
             "modality": "text",
             "content": "Who shot John F.",
-            "supports": ["who", "shot", "john", "f."],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "who",
+              "shot",
+              "john",
+              "f."
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "john-f:kennedy",
               "weight": 0.7,
               "morphemes": [
-                { "key": "who", "surface": "Who", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "shot", "surface": "shot", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "john", "surface": "John", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "f.", "surface": "F.", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "kennedy", "surface": "Kennedy", "variety": "en-US-GA" }
+                {
+                  "key": "who",
+                  "surface": "Who",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "shot",
+                  "surface": "shot",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "john",
+                  "surface": "John",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "f.",
+                  "surface": "F.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "kennedy",
+                  "surface": "Kennedy",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "historical-name-oracle", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "historical-name-oracle",
+                "version": "1"
+              }
             },
             {
               "id": "john-f:kennedy-jr",
               "weight": 0.2,
               "morphemes": [
-                { "key": "who", "surface": "Who", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "shot", "surface": "shot", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "john", "surface": "John", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "f.", "surface": "F.", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "kennedy", "surface": "Kennedy", "variety": "en-US-GA" },
-                { "key": "jr.", "surface": "Jr.", "variety": "en-US-GA" }
+                {
+                  "key": "who",
+                  "surface": "Who",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "shot",
+                  "surface": "shot",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "john",
+                  "surface": "John",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "f.",
+                  "surface": "F.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "kennedy",
+                  "surface": "Kennedy",
+                  "variety": "en-US-GA"
+                },
+                {
+                  "key": "jr.",
+                  "surface": "Jr.",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "historical-name-oracle", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "historical-name-oracle",
+                "version": "1"
+              }
             },
             {
               "id": "john-f:other",
               "weight": 0.1,
               "morphemes": [
-                { "key": "who", "surface": "Who", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "shot", "surface": "shot", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "john", "surface": "John", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "f.", "surface": "F.", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "connally", "surface": "Connally", "variety": "en-US-GA" }
+                {
+                  "key": "who",
+                  "surface": "Who",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "shot",
+                  "surface": "shot",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "john",
+                  "surface": "John",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "f.",
+                  "surface": "F.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "connally",
+                  "surface": "Connally",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "historical-name-oracle", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "historical-name-oracle",
+                "version": "1"
+              }
             }
           ]
         },
@@ -377,34 +975,122 @@
             "id": "john-f:text:1",
             "modality": "text",
             "content": "Kennedy?",
-            "supports": ["kennedy"],
-            "provenance": { "source": "manual", "method": "fixture-text", "version": "1" }
+            "supports": [
+              "kennedy"
+            ],
+            "provenance": {
+              "source": "manual",
+              "method": "fixture-text",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "john-f:kennedy",
               "weight": 0.96,
               "morphemes": [
-                { "key": "who", "surface": "Who", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "shot", "surface": "shot", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "john", "surface": "John", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "f.", "surface": "F.", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "kennedy", "surface": "Kennedy", "variety": "en-US-GA", "evidence": ["john-f:text:1"] }
+                {
+                  "key": "who",
+                  "surface": "Who",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "shot",
+                  "surface": "shot",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "john",
+                  "surface": "John",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "f.",
+                  "surface": "F.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "kennedy",
+                  "surface": "Kennedy",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:1"
+                  ]
+                }
               ],
-              "provenance": { "source": "rule", "method": "historical-name-oracle", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "historical-name-oracle",
+                "version": "1"
+              }
             },
             {
               "id": "john-f:kennedy-jr",
               "weight": 0.04,
               "morphemes": [
-                { "key": "who", "surface": "Who", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "shot", "surface": "shot", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "john", "surface": "John", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "f.", "surface": "F.", "variety": "en-US-GA", "evidence": ["john-f:text:0"] },
-                { "key": "kennedy", "surface": "Kennedy", "variety": "en-US-GA", "evidence": ["john-f:text:1"] },
-                { "key": "jr.", "surface": "Jr.", "variety": "en-US-GA" }
+                {
+                  "key": "who",
+                  "surface": "Who",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "shot",
+                  "surface": "shot",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "john",
+                  "surface": "John",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "f.",
+                  "surface": "F.",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:0"
+                  ]
+                },
+                {
+                  "key": "kennedy",
+                  "surface": "Kennedy",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "john-f:text:1"
+                  ]
+                },
+                {
+                  "key": "jr.",
+                  "surface": "Jr.",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "historical-name-oracle", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "historical-name-oracle",
+                "version": "1"
+              }
             }
           ]
         }
@@ -415,36 +1101,416 @@
       "description": "Prerecorded/mock acoustic evidence uses the same beam and commit path as text.",
       "utterance_id": "fixture-mock-acoustics",
       "variety": "en-US-GA",
-      "config": { "posterior_mass": 0.8 },
+      "config": {
+        "posterior_mass": 0.8
+      },
       "steps": [
         {
           "evidence": {
             "id": "mock:acoustic:0",
             "modality": "acoustics",
             "content": "turn left",
-            "supports": ["turn", "left"],
-            "provenance": { "source": "acoustic_model", "method": "prerecorded-mock-evidence", "version": "1" }
+            "supports": [
+              "turn",
+              "left"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "prerecorded-mock-evidence",
+              "version": "1"
+            }
           },
           "hypotheses": [
             {
               "id": "mock:now",
               "weight": 0.6,
               "morphemes": [
-                { "key": "turn", "surface": "turn", "variety": "en-US-GA", "evidence": ["mock:acoustic:0"] },
-                { "key": "left", "surface": "left", "variety": "en-US-GA", "evidence": ["mock:acoustic:0"] },
-                { "key": "now", "surface": "now", "variety": "en-US-GA" }
+                {
+                  "key": "turn",
+                  "surface": "turn",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "mock:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "left",
+                  "surface": "left",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "mock:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "now",
+                  "surface": "now",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             },
             {
               "id": "mock:street",
               "weight": 0.4,
               "morphemes": [
-                { "key": "turn", "surface": "turn", "variety": "en-US-GA", "evidence": ["mock:acoustic:0"] },
-                { "key": "left", "surface": "left", "variety": "en-US-GA", "evidence": ["mock:acoustic:0"] },
-                { "key": "street", "surface": "street", "variety": "en-US-GA" }
+                {
+                  "key": "turn",
+                  "surface": "turn",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "mock:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "left",
+                  "surface": "left",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "mock:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "street",
+                  "surface": "street",
+                  "variety": "en-US-GA"
+                }
               ],
-              "provenance": { "source": "rule", "method": "fixture-provider", "version": "1" }
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "homophones",
+      "description": "Acoustic /mi\u02d0t/ is ambiguous between meet and meat. Both hypotheses remain visible until follow-on evidence resolves the beam.",
+      "utterance_id": "fixture-homophones",
+      "variety": "en-US-GA",
+      "config": {
+        "posterior_mass": 0.8
+      },
+      "steps": [
+        {
+          "evidence": {
+            "id": "homophones:acoustic:0",
+            "modality": "acoustics",
+            "content": "meet",
+            "supports": [
+              "meet",
+              "meat"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "prerecorded-mock-evidence",
+              "version": "1"
+            }
+          },
+          "hypotheses": [
+            {
+              "id": "homophones:meet",
+              "weight": 0.55,
+              "morphemes": [
+                {
+                  "key": "meet",
+                  "surface": "meet",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            },
+            {
+              "id": "homophones:meat",
+              "weight": 0.45,
+              "morphemes": [
+                {
+                  "key": "meat",
+                  "surface": "meat",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "market",
+                  "surface": "market",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            }
+          ]
+        },
+        {
+          "evidence": {
+            "id": "homophones:acoustic:1",
+            "modality": "acoustics",
+            "content": "the",
+            "supports": [
+              "the"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "prerecorded-mock-evidence",
+              "version": "1"
+            }
+          },
+          "hypotheses": [
+            {
+              "id": "homophones:meet",
+              "weight": 0.9,
+              "morphemes": [
+                {
+                  "key": "meet",
+                  "surface": "meet",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "team",
+                  "surface": "team",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            },
+            {
+              "id": "homophones:meet-alt",
+              "weight": 0.1,
+              "morphemes": [
+                {
+                  "key": "meet",
+                  "surface": "meet",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "the",
+                  "surface": "the",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "homophones:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "deadline",
+                  "surface": "deadline",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "false-boundaries",
+      "description": "Initial acoustic evidence sounds like \"a nice\" but is corrected to \"an ice\" by later evidence. The false-boundary hypothesis is withdrawn cleanly and the correct boundary commits.",
+      "utterance_id": "fixture-false-boundaries",
+      "variety": "en-US-GA",
+      "config": {
+        "posterior_mass": 0.8
+      },
+      "steps": [
+        {
+          "evidence": {
+            "id": "false-boundary:acoustic:0",
+            "modality": "acoustics",
+            "content": "a nice",
+            "supports": [
+              "a",
+              "nice"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "prerecorded-mock-evidence",
+              "version": "1"
+            }
+          },
+          "hypotheses": [
+            {
+              "id": "false-boundary:false",
+              "weight": 0.6,
+              "morphemes": [
+                {
+                  "key": "a",
+                  "surface": "a",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "nice",
+                  "surface": "nice",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:0"
+                  ]
+                },
+                {
+                  "key": "day",
+                  "surface": "day",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            },
+            {
+              "id": "false-boundary:correct",
+              "weight": 0.4,
+              "morphemes": [
+                {
+                  "key": "an",
+                  "surface": "an",
+                  "variety": "en-US-GA"
+                },
+                {
+                  "key": "ice",
+                  "surface": "ice",
+                  "variety": "en-US-GA"
+                },
+                {
+                  "key": "day",
+                  "surface": "day",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            }
+          ]
+        },
+        {
+          "evidence": {
+            "id": "false-boundary:acoustic:1",
+            "modality": "acoustics",
+            "content": "an ice",
+            "supports": [
+              "an",
+              "ice"
+            ],
+            "provenance": {
+              "source": "acoustic_model",
+              "method": "prerecorded-mock-evidence",
+              "version": "1"
+            }
+          },
+          "hypotheses": [
+            {
+              "id": "false-boundary:correct",
+              "weight": 0.95,
+              "morphemes": [
+                {
+                  "key": "an",
+                  "surface": "an",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "ice",
+                  "surface": "ice",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "day",
+                  "surface": "day",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
+            },
+            {
+              "id": "false-boundary:correct-alt",
+              "weight": 0.05,
+              "morphemes": [
+                {
+                  "key": "an",
+                  "surface": "an",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "ice",
+                  "surface": "ice",
+                  "variety": "en-US-GA",
+                  "evidence": [
+                    "false-boundary:acoustic:1"
+                  ]
+                },
+                {
+                  "key": "cold",
+                  "surface": "cold",
+                  "variety": "en-US-GA"
+                }
+              ],
+              "provenance": {
+                "source": "rule",
+                "method": "fixture-provider",
+                "version": "1"
+              }
             }
           ]
         }

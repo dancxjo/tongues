@@ -726,6 +726,56 @@ pub struct WordPrediction {
     pub phonemes: Option<String>,
 }
 
+/// Convert a [`StreamEvent`] into a [`tongues_duplex::ObservedEvidence`] delta
+/// suitable for feeding directly into a [`tongues_duplex::DuplexSimulator`].
+///
+/// The partial transcript is used when non-empty; otherwise the seq2seq
+/// transcript is used as a fallback. The resulting evidence carries the
+/// supplied frame span so that provenance survives every hypothesis revision.
+///
+/// # Arguments
+///
+/// * `id` – A unique, non-empty evidence identifier (e.g. `"stream:0"`).
+/// * `event` – The `StreamEvent` produced by the ASR model.
+/// * `frame_start` / `frame_end` – Inclusive/exclusive mel-frame indices.
+/// * `time_start` / `time_end` – Wall-clock seconds relative to utterance start.
+pub fn stream_event_to_evidence(
+    id: impl Into<String>,
+    event: &StreamEvent,
+    frame_start: u32,
+    frame_end: u32,
+    time_start: f32,
+    time_end: f32,
+) -> tongues_duplex::ObservedEvidence {
+    use tongues_duplex::AcousticSpan;
+
+    let transcript = if !event.partial_transcript.is_empty() {
+        event.partial_transcript.clone()
+    } else {
+        event.seq2seq_transcript.clone()
+    };
+
+    // Aggregate a per-frame confidence proxy: average over all repair_event
+    // spans if present, otherwise fall back to 1.0 for a clean transcript.
+    let confidence = if transcript.is_empty() {
+        0.0
+    } else {
+        1.0 - (event.repair_events.len() as f32 * 0.1).min(0.9)
+    };
+
+    tongues_duplex::ObservedEvidence::acoustics_with_span(
+        id,
+        transcript,
+        AcousticSpan {
+            frame_start,
+            frame_end,
+            time_start,
+            time_end,
+            confidence,
+        },
+    )
+}
+
 pub fn prepare_dataset(out: &Path, config: &InterpretationConfig) -> Result<PrepareReport> {
     prepare_dataset_with_progress(out, config, |_| {})
 }

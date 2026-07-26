@@ -19,6 +19,7 @@ speaking = { path = "../speaking" }
 tar = "0.4"
 tongues-core = { path = "../tongues-core" }
 tongues-audio = { path = "../tongues-audio" }
+tongues-duplex = { path = "../tongues-duplex" }
 tongues-neural = { path = "../tongues-neural" }
 tongues-wiktionary = { path = "../tongues-wiktionary" }
 ureq = { workspace = true }
