@@ -223,6 +223,17 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
             true,
         ),
         RegisteredSpeechComposition::new(
+            "Glow-TTS → pinned standardizer → MultiBand-MelGAN",
+            "glow",
+            "glow-tts-ljspeech+standardizer+multiband-melgan",
+            SpeechPipelineSelection::acoustic(
+                "projector/glow-tts-ljspeech",
+                "glow-tts-ljspeech",
+                "glow-standardized-multiband-melgan-ljspeech",
+            ),
+            true,
+        ),
+        RegisteredSpeechComposition::new(
             "VITS VCTK",
             "vits",
             "vits-vctk",
@@ -375,6 +386,32 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
                     .into(),
         },
         SpeechPipelineComponent {
+            id: "glow-tts-ljspeech".into(),
+            display_name: "Glow-TTS LJSpeech".into(),
+            architecture: "glow-tts".into(),
+            stage: SpeechPipelineStage::AcousticModel,
+            spans: Vec::new(),
+            readiness: NativeSpeechComponentReadiness::Runtime,
+            accepts: vec![port(
+                "model_tokens",
+                "tokens/glow-tts-ljspeech",
+                "Checkpoint-private projected tokens.",
+            )],
+            produces: vec![port(
+                "mel_spectrogram",
+                "mel/glow-tts-ljspeech-log10-v1",
+                "Unstandardized 80-bin Glow-TTS LJSpeech mel features.",
+            )],
+            controls: vec![
+                "speed".into(),
+                "durations".into(),
+                "noise_scale".into(),
+                "seed".into(),
+            ],
+            explanation: "Native flow acoustic inference with a checkpoint-exact mel contract."
+                .into(),
+        },
+        SpeechPipelineComponent {
             id: "hifigan-v2-ljspeech".into(),
             display_name: "HiFi-GAN v2 LJSpeech".into(),
             architecture: "hifigan-v2".into(),
@@ -385,6 +422,25 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
             produces: vec![waveform.clone()],
             controls: Vec::new(),
             explanation: "Native waveform decoder for its exact published mel contract.".into(),
+        },
+        SpeechPipelineComponent {
+            id: "glow-standardized-multiband-melgan-ljspeech".into(),
+            display_name: "Glow-TTS standardizer → MultiBand-MelGAN".into(),
+            architecture: "spectrogram-standardizer+multiband-melgan".into(),
+            stage: SpeechPipelineStage::Vocoder,
+            spans: Vec::new(),
+            readiness: NativeSpeechComponentReadiness::Runtime,
+            accepts: vec![port(
+                "mel_spectrogram",
+                "mel/glow-tts-ljspeech-log10-v1",
+                "Unstandardized Glow-TTS features with exact matching analysis geometry.",
+            )],
+            produces: vec![waveform.clone()],
+            controls: Vec::new(),
+            explanation: format!(
+                "Named `{}` per-bin conversion pinned to scale_stats.npy, followed by native MultiBand-MelGAN.",
+                crate::GLOW_MULTIBAND_STANDARDIZER_ID
+            ),
         },
         SpeechPipelineComponent {
             id: "speaker-encoder".into(),

@@ -24,6 +24,13 @@ pub enum EvidenceState {
     CommittedMaterial,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceFinality {
+    Provisional,
+    Final,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "anchor", content = "id")]
 pub enum EvidenceAnchor {
@@ -49,6 +56,8 @@ pub struct EvidencePayload {
     pub phones: Vec<PhoneToken>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prosody: Option<ProsodyTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finality: Option<EvidenceFinality>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

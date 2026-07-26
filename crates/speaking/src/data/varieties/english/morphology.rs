@@ -219,16 +219,14 @@ pub fn decompose_word(variety: &LinguisticVariety, word: &str) -> Option<Vec<Mor
     for (morpheme_id, morpheme) in right_affixes {
         {
             let suffix_trimmed = morpheme.form.trim_start_matches('-');
-            let minimum_stem_chars = if morpheme.kind == MorphemeKind::Suffix
-                && matches!(suffix_trimmed, "s" | "ed")
-            {
-                2
-            } else {
-                1
-            };
+            let minimum_stem_chars =
+                if morpheme.kind == MorphemeKind::Suffix && matches!(suffix_trimmed, "s" | "ed") {
+                    2
+                } else {
+                    1
+                };
             if word_lower.ends_with(suffix_trimmed)
-                && word_lower.chars().count()
-                    >= suffix_trimmed.chars().count() + minimum_stem_chars
+                && word_lower.chars().count() >= suffix_trimmed.chars().count() + minimum_stem_chars
             {
                 let stem = &word_lower[..word_lower.len() - suffix_trimmed.len()];
 

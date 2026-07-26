@@ -35,7 +35,9 @@ const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference
 const VITS_SPEAKER_RELATIVE_PATH: &str = "models/speech/coqui/en/vctk/vits/speaker_ids.json";
 const SPEEDY_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/speedy-speech";
 const FASTPITCH_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/fast-pitch";
+const GLOW_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/glow-tts";
 const HIFIGAN_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/hifigan-v2";
+const MULTIBAND_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/multiband-melgan";
 const VITS_RELATIVE_DIR: &str = "models/speech/coqui/en/vctk/vits";
 const YOURTTS_RELATIVE_DIR: &str = "models/speech/coqui/multilingual/yourtts";
 const FREEVC_RELATIVE_DIR: &str = "models/speech/coqui/multilingual/freevc24";
@@ -2376,6 +2378,10 @@ const RESIDENT_BACKEND_PROVIDERS: &[ResidentBackendProvider] = &[
         load: load_fastpitch_provider,
     },
     ResidentBackendProvider {
+        id: "glow",
+        load: load_glow_provider,
+    },
+    ResidentBackendProvider {
         id: "vits",
         load: load_vits_provider,
     },
@@ -2448,6 +2454,30 @@ fn load_fastpitch_provider(
                 capabilities,
                 device,
                 load_resident_fastpitch::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
+            )))
+        }
+    }
+}
+
+fn load_glow_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_glow::<NdArray<f32>>(home, NdArrayDevice::Cpu)?,
+            )))
+        }
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_glow::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
             )))
         }
     }
@@ -2772,6 +2802,7 @@ fn speech_model_id(
     let fixed_model = match backend {
         "burn" => Some("speedyspeech-ljspeech+hifigan-v2"),
         "fastpitch" => Some("fastpitch-ljspeech+hifigan-v2"),
+        "glow" => Some("glow-tts-ljspeech+standardizer+multiband-melgan"),
         "vits" => Some("vits-vctk"),
         "yourtts" => Some("yourtts-multilingual"),
         "freevc" => Some("freevc24-vctk"),
@@ -2884,6 +2915,27 @@ fn speech_backend_capabilities(
             devices,
             output: output(22_050),
             provenance: vec!["Published Coqui release artifacts".into()],
+        },
+        "glow" => tongues_tts::BackendCapabilities {
+            backend: "glow".into(),
+            model: "glow-tts-ljspeech+standardizer+multiband-melgan".into(),
+            family: tongues_tts::SpeechModelFamily::AcousticModel,
+            varieties: general_american(),
+            languages: tongues_tts::LanguageCapabilities::unsupported(),
+            speakers: unsupported_speakers(),
+            styles: unsupported_styles(),
+            reference_audio: Default::default(),
+            speed: true,
+            pitch: Default::default(),
+            energy: Default::default(),
+            durations: true,
+            seed: true,
+            devices,
+            output: output(22_050),
+            provenance: vec![
+                "Published Coqui Glow-TTS and MultiBand-MelGAN release artifacts".into(),
+                tongues_tts::GLOW_MULTIBAND_STANDARDIZER_ID.into(),
+            ],
         },
         "vits" => {
             let catalog = tongues_tts::SpeakerCatalog::from_file(
@@ -3235,6 +3287,44 @@ where
         device,
     )?;
     tongues_tts::BurnFastPitchPipeline::new(acoustic, vocoder)
+}
+
+fn load_resident_glow<B: burn::tensor::backend::Backend>(
+    home: &FsPath,
+    device: B::Device,
+) -> anyhow::Result<
+    tongues_tts::BurnGlowTtsPipeline<
+        B,
+        tongues_tts::BurnStandardizingVocoder<B, tongues_tts::BurnMultibandMelganVocoder<B>>,
+    >,
+>
+where
+    B::Device: Clone,
+{
+    let acoustic_dir = home.join(GLOW_RELATIVE_DIR);
+    let vocoder_dir = home.join(MULTIBAND_RELATIVE_DIR);
+    let acoustic = tongues_tts::BurnGlowTtsAcoustic::load(
+        acoustic_dir.join("config.json"),
+        acoustic_dir.join("model_file.pth.tar"),
+        device.clone(),
+    )?;
+    let tongues_tts::AcousticOutputContract::Spectrogram(source_contract) =
+        tongues_tts::AcousticModel::output_contract(&acoustic)
+    else {
+        anyhow::bail!("Glow-TTS did not declare a spectrogram output");
+    };
+    let vocoder = tongues_tts::BurnMultibandMelganVocoder::load(
+        vocoder_dir.join("config.json"),
+        vocoder_dir.join("model_file.pth"),
+        device.clone(),
+    )?;
+    let converter = tongues_tts::BurnStandardizingVocoder::new(
+        vocoder,
+        tongues_tts::FeatureStandardizationConfig::glow_multiband()?,
+        source_contract,
+        device,
+    )?;
+    tongues_tts::BurnGlowTtsPipeline::new(acoustic, converter)
 }
 
 fn load_resident_vits<B: burn::tensor::backend::Backend>(
@@ -3799,6 +3889,7 @@ async fn project_speech_request(Json(request): Json<SpeechProjectionRequest>) ->
     let relative_dir = match backend.as_str() {
         "burn" => SPEEDY_RELATIVE_DIR,
         "fastpitch" => FASTPITCH_RELATIVE_DIR,
+        "glow" => GLOW_RELATIVE_DIR,
         "vits" => VITS_RELATIVE_DIR,
         "yourtts" => YOURTTS_RELATIVE_DIR,
         _ => {
@@ -4255,7 +4346,12 @@ fn speech_pipeline_compatibility(
         "fastpitch-ljspeech",
         "glow-tts-ljspeech",
     ];
-    let vocoders = ["hifigan-v2-ljspeech", "multiband-melgan-ljspeech", "melgan"];
+    let vocoders = [
+        "hifigan-v2-ljspeech",
+        "glow-standardized-multiband-melgan-ljspeech",
+        "multiband-melgan-ljspeech",
+        "melgan",
+    ];
     for acoustic in acoustic_models {
         for vocoder in vocoders {
             let registered_pair = registered.iter().any(|composition| {
@@ -4264,6 +4360,11 @@ fn speech_pipeline_compatibility(
             });
             let reason = if registered_pair {
                 "Construction validates an exact match across mel layout, bins, hop size, frequency bounds, log scale, filter bank, and normalization.".into()
+            } else if vocoder == "glow-standardized-multiband-melgan-ljspeech" {
+                format!(
+                    "This path is restricted to Glow-TTS and applies the named `{}` conversion.",
+                    tongues_tts::GLOW_MULTIBAND_STANDARDIZER_ID
+                )
             } else if vocoder == "multiband-melgan-ljspeech" {
                 "The vocoder requires its published standardized/PQMF feature contract; this acoustic model does not emit that exact normalization identity.".into()
             } else if vocoder == "melgan" {
@@ -4445,7 +4546,7 @@ fn add_pipeline_pseudo_components(
     }
     for component in components.iter_mut() {
         match component.id.as_str() {
-            "speedy-speech-ljspeech" | "fastpitch-ljspeech" | "glow-tts-ljspeech" => {
+            "speedy-speech-ljspeech" | "fastpitch-ljspeech" => {
                 component.accepts = vec![tongues_tts::SpeechPortContract {
                     kind: "model_tokens".into(),
                     key: format!("tokens/{}", component.id),
@@ -4454,6 +4555,17 @@ fn add_pipeline_pseudo_components(
                 component.produces = vec![mel_port(
                     "mel/coqui-ljspeech-neutral-v1",
                     "80-bin LJSpeech mel features with the complete published analysis contract.",
+                )];
+            }
+            "glow-tts-ljspeech" => {
+                component.accepts = vec![tongues_tts::SpeechPortContract {
+                    kind: "model_tokens".into(),
+                    key: "tokens/glow-tts-ljspeech".into(),
+                    summary: "Checkpoint-private projected tokens.".into(),
+                }];
+                component.produces = vec![mel_port(
+                    "mel/glow-tts-ljspeech-log10-v1",
+                    "Unstandardized 80-bin Glow-TTS LJSpeech mel features.",
                 )];
             }
             "hifigan-v2-ljspeech" => {
@@ -4467,6 +4579,13 @@ fn add_pipeline_pseudo_components(
                 component.accepts = vec![mel_port(
                     "mel/coqui-ljspeech-standardized-pqmf-v1",
                     "Standardized 80-bin mel features tied to the published statistics artifact.",
+                )];
+                component.produces = vec![waveform_port()];
+            }
+            "glow-standardized-multiband-melgan-ljspeech" => {
+                component.accepts = vec![mel_port(
+                    "mel/glow-tts-ljspeech-log10-v1",
+                    "Glow-TTS features accepted by the pinned named standardizer.",
                 )];
                 component.produces = vec![waveform_port()];
             }
@@ -4494,6 +4613,10 @@ fn speech_path_catalog_ids(
             "hifigan-v2-ljspeech".into(),
         ],
         "fastpitch" => vec!["fastpitch-ljspeech".into(), "hifigan-v2-ljspeech".into()],
+        "glow" => vec![
+            "glow-tts-ljspeech".into(),
+            "multiband-melgan-ljspeech".into(),
+        ],
         "vits" => vec!["vits-vctk".into()],
         "fairseq" => vec![speech_model_id(home, backend, model)?],
         "yourtts" => vec!["yourtts-multilingual".into()],
@@ -4524,6 +4647,16 @@ fn speech_path_components(
             Some("hifigan-v2-ljspeech".into()),
             None,
             vec!["fastpitch".into(), "hifigan".into()],
+        ),
+        "glow" => (
+            Some("glow-tts-ljspeech".into()),
+            Some("glow-standardized-multiband-melgan-ljspeech".into()),
+            None,
+            vec![
+                "glow-tts".into(),
+                tongues_tts::GLOW_MULTIBAND_STANDARDIZER_ID.into(),
+                "multiband-melgan".into(),
+            ],
         ),
         "vits" => (None, None, Some("vits-vctk".into()), vec!["vits".into()]),
         "fairseq" => (
@@ -4572,6 +4705,16 @@ fn speech_path_is_loaded(backend: &str, model: &str, loaded: &[String]) -> bool 
 }
 
 fn speech_vocoder_compatibility(backend: &str) -> Vec<SpeechCompatibility> {
+    if backend == "glow" {
+        return vec![SpeechCompatibility {
+            component_id: "glow-standardized-multiband-melgan-ljspeech".into(),
+            compatible: true,
+            reason: format!(
+                "The named `{}` conversion applies the checksum-pinned published statistics before MultiBand-MelGAN.",
+                tongues_tts::GLOW_MULTIBAND_STANDARDIZER_ID
+            ),
+        }];
+    }
     if !matches!(backend, "burn" | "fastpitch") {
         return Vec::new();
     }
@@ -5373,6 +5516,7 @@ fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
     match backend {
         "burn" => "SpeedySpeech + HiFi-GAN",
         "fastpitch" => "FastPitch + HiFi-GAN",
+        "glow" => "Glow-TTS + standardizer + MultiBand-MelGAN",
         "vits" => "VITS VCTK",
         "fairseq" => model,
         "yourtts" => "YourTTS Multilingual",
@@ -5400,6 +5544,13 @@ fn speech_backend_installation_error(
             home.join(FASTPITCH_RELATIVE_DIR).join("model_file.pth"),
             home.join(HIFIGAN_RELATIVE_DIR).join("config.json"),
             home.join(HIFIGAN_RELATIVE_DIR).join("model_file.pth"),
+        ],
+        "glow" => vec![
+            home.join(GLOW_RELATIVE_DIR).join("config.json"),
+            home.join(GLOW_RELATIVE_DIR).join("model_file.pth.tar"),
+            home.join(MULTIBAND_RELATIVE_DIR).join("config.json"),
+            home.join(MULTIBAND_RELATIVE_DIR).join("model_file.pth"),
+            home.join(MULTIBAND_RELATIVE_DIR).join("scale_stats.npy"),
         ],
         "vits" => vec![
             home.join(VITS_RELATIVE_DIR).join("config.json"),

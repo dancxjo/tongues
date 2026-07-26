@@ -10,6 +10,11 @@
     "text": "Morning light rested on the cedar trees while the kettle began to sing.",
     "token_ids": [14, 43, 77, 15, 63, 33, 129, 13, 3, 63, 21, 129, 77, 50, 20, 21, 63, 6, 129, 43, 15, 129, 30, 48, 129, 20, 10, 6, 49, 129, 21, 77, 10, 27, 129, 24, 3, 63, 13, 129, 30, 48, 129, 12, 50, 21, 48, 13, 129, 4, 63, 55, 28, 15, 129, 21, 48, 129, 20, 63, 33, 125]
   },
+  "glow_tts": {
+    "checkpoint_symbols": "mˈɔːɹnɪŋ lˈaɪt ɹˈɛstᵻd ɔnðə sˈiːdɚ tɹˈiːz wˌaɪl ðə kˈɛɾəl bɪɡˈæn tə sˈɪŋ.",
+    "text": "Morning light rested on the cedar trees while the kettle began to sing.",
+    "token_ids": [14, 108, 43, 110, 77, 15, 63, 33, 128, 13, 108, 3, 63, 21, 128, 77, 108, 50, 20, 21, 116, 6, 128, 43, 15, 30, 48, 128, 20, 108, 10, 110, 6, 49, 128, 21, 77, 108, 10, 110, 27, 128, 24, 109, 3, 63, 13, 128, 30, 48, 128, 12, 108, 50, 81, 48, 13, 128, 4, 63, 55, 108, 28, 15, 128, 21, 48, 128, 20, 108, 63, 33, 124]
+  },
   "speedy_speech_hifigan": {
     "checkpoint_symbols": "mɔɹnɪŋ laɪt ɹɛstɪd ɔn ðə sidɚ tɹiz waɪl ðə kɛtəl bɪɡæn tə sɪŋ.",
     "text": "Morning light rested on the cedar trees while the kettle began to sing.",

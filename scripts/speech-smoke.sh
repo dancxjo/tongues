@@ -183,6 +183,7 @@ run_selected_case() {
 }
 
 run_selected_case burn --backend burn
+run_selected_case glow --backend glow --timings --benchmark-runs 2 --seed 27
 run_selected_case vits-p225 --backend vits --speaker p225
 run_selected_case vits-p330 --backend vits --speaker p330
 run_selected_case onnx --backend onnx

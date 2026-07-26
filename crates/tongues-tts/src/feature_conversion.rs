@@ -215,4 +215,23 @@ mod tests {
             "8c4a45b935563157509ddbff09f59e4ffea35e1d07f3bbf87ec21484cb275c4a"
         );
     }
+
+    #[test]
+    fn glow_conversion_matches_pinned_reference_probes() {
+        let config = FeatureStandardizationConfig::glow_multiband().expect("config");
+        for (bin, mel, expected) in [
+            (0, -2.2727494_f32, 0.7144379_f32),
+            (79, -4.1605105, -1.3568813),
+            (0, -2.3858812, 0.38489646),
+            (0, -2.5310504, -0.03796704),
+            (0, -3.1077003, -1.7176903),
+            (79, -3.9948568, -1.180381),
+        ] {
+            let actual = (mel - config.mean[bin]) / config.scale[bin];
+            assert!(
+                (actual - expected).abs() <= 2.0e-5,
+                "standardized probe mismatch for bin {bin}: actual={actual}, expected={expected}"
+            );
+        }
+    }
 }

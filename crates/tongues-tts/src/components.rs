@@ -66,8 +66,8 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         display_name: "Glow-TTS",
         architecture: "glow-tts",
         kind: NativeSpeechComponentKind::Acoustic,
-        readiness: NativeSpeechComponentReadiness::Experimental,
-        explanation: "Native acoustic inference and import support; no complete synthesis path is registered.",
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native acoustic inference composed through a named, package-pinned feature standardizer and MultiBand-MelGAN.",
     },
     NativeSpeechComponent {
         id: "sc-glowtts",
@@ -75,7 +75,7 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         architecture: "sc-glowtts",
         kind: NativeSpeechComponentKind::Acoustic,
         readiness: NativeSpeechComponentReadiness::ImportOnly,
-        explanation: "Stochastic-duration Glow-TTS import support; no catalog artifact or complete synthesis path is registered.",
+        explanation: "Speaker-conditioned deterministic-duration import/runtime support for user-supplied packages with affirmative artifact terms; no catalog artifact is claimed.",
     },
     NativeSpeechComponent {
         id: "tacotron2",

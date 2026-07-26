@@ -297,6 +297,7 @@ mod tests {
     use burn::backend::ndarray::{NdArray, NdArrayDevice};
 
     use super::*;
+    use crate::{utterance_plan_from_text, SpeechRequest, SynthesisOptions};
 
     type TestBackend = NdArray<f32>;
 
@@ -316,5 +317,56 @@ mod tests {
             AcousticOutputContract::Spectrogram(_)
         ));
         assert!(backend.conditioning_contracts().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    fn published_acoustic_backend_covers_input_matrix() {
+        let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")
+            .expect("TONGUES_TEST_GLOW_CONFIG is required");
+        let checkpoint_path = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_GLOW_CHECKPOINT is required");
+        let mut backend = BurnGlowTtsAcoustic::<TestBackend>::load(
+            config_path,
+            checkpoint_path,
+            NdArrayDevice::Cpu,
+        )
+        .expect("published acoustic backend");
+        for (label, text) in [
+            ("short", "Hi."),
+            ("ordinary", "Morning light rested on cedar trees."),
+            (
+                "long",
+                "Morning light rested on the cedar trees while the kettle began to sing, and beyond the windows the quiet neighborhood slowly woke beneath a pale summer sky.",
+            ),
+            ("repeated", "Never never never, very very quietly."),
+            (
+                "punctuation",
+                "Wait—what? Yes: commas, pauses; questions, and exclamations!",
+            ),
+        ] {
+            let request = SpeechSynthesisRequest {
+                plan: utterance_plan_from_text(SpeechRequest {
+                    text: text.into(),
+                    variety: "en-US".into(),
+                })
+                .unwrap_or_else(|error| panic!("{label} plan: {error:#}")),
+                options: SynthesisOptions {
+                    seed: Some(27),
+                    ..Default::default()
+                },
+            };
+            let artifact = backend
+                .synthesize(&request)
+                .unwrap_or_else(|error| panic!("{label} inference: {error:#}"));
+            let AcousticArtifact::Spectrogram(spectrogram) = artifact else {
+                panic!("{label} did not emit a spectrogram");
+            };
+            assert!(spectrogram.frames > 0, "{label}");
+            assert!(
+                spectrogram.values.iter().all(|value| value.is_finite()),
+                "{label}"
+            );
+        }
     }
 }

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "utterance_id": "fixture-json",
+  "variety": "en-US-GA",
+  "chunks": ["talkat", "iveness", " "],
+  "expected_delta_types": ["append", "split", "finalize", "finalize", "finalize"],
+  "expected_surfaces": ["talk", "ative", "ness"]
+}

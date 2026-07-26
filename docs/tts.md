@@ -10,6 +10,7 @@ front-end integration.
 |---|---|---|---|
 | `burn` | `tongues-tts` on Burn | SpeedySpeech acoustic model -> selectable native vocoder | active |
 | `fastpitch` | `tongues-tts` on Burn | controllable FastPitch acoustic model -> selectable native vocoder | active |
+| `glow` | `tongues-tts` on Burn | Glow-TTS -> pinned per-bin standardizer -> MultiBand-MelGAN | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
@@ -659,13 +660,29 @@ spectrogram contract matches exactly. Inference ships independently of a
 trainer; the retained MDN and alignment outputs are the hooks for a future
 model-neutral staged trainer.
 
-Glow-TTS deliberately emits its neutral checkpoint mel contract. The
+Glow-TTS deliberately emits its unstandardized checkpoint mel contract. The
 historical Coqui LJSpeech release names MultiBand-MelGAN as its default
-vocoder, but that vocoder expects a separate standardized feature space.
-Tongues does not guess that transformation, so Glow-TTS is exposed through the
-unified `AcousticModel` request and generic library pipeline rather than a
-waveform-producing `speak` CLI backend. Library callers can compose a vocoder
-that declares the exact neutral contract.
+vocoder, whose analysis geometry matches but whose inputs use the published
+per-bin statistics in `scale_stats.npy`. The `glow` composition inserts the
+named `coqui-ljspeech-multiband-melgan-standardize-v1` component. Its 80 means
+and standard deviations are package data pinned to SHA-256
+`8c4a45b935563157509ddbff09f59e4ffea35e1d07f3bbf87ec21484cb275c4a`;
+construction rejects any other normalization identity or change in mel
+geometry. No sample rate, log base, frequency range, layout, or vocabulary is
+silently repaired.
+
+Run the licensed CPU path with:
+
+```sh
+cargo run --release --bin tongues -- --cpu speak --backend glow \
+  --timings --benchmark-runs 2 --seed 27 \
+  "Morning light rested on the cedar trees."
+```
+
+The two benchmark runs report cold/warm total synthesis time, first playable
+audio, real-time factor, and model-stage timings. The server and Speech Studio
+discover the same composition from the shared pipeline registry; there is no
+Glow-specific HTTP endpoint or UI branch.
 
 The model historically published under the SC-GlowTTS name uses SC to mean
 speaker conditioning: it consumes a 256-value Coqui speaker-encoder d-vector

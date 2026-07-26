@@ -89,6 +89,11 @@ jq -S '{
         checkpoint_symbols: .fast_pitch.checkpoint_symbols,
         token_ids: .fast_pitch.token_ids
     },
+    glow_tts: {
+        text: .glow_tts.text,
+        checkpoint_symbols: .glow_tts.checkpoint_symbols,
+        token_ids: .glow_tts.token_ids
+    },
     vits: {
         text: .vits.text,
         checkpoint_symbols: .vits.checkpoint_symbols,
@@ -153,8 +158,17 @@ echo "Running the published Glow-TTS checkpoint through native acoustic inferenc
 env \
     TONGUES_TEST_GLOW_CONFIG="$glow_dir/config.json" \
     TONGUES_TEST_GLOW_CHECKPOINT="$glow_dir/model_file.pth.tar" \
+    TONGUES_TEST_COQUI_REFERENCE="$reference" \
     cargo test --release -p tongues-tts \
-        burn_glow_tts::tests::published_glow_checkpoint_synthesizes \
+        burn_glow_tts::tests::published_glow_checkpoint_stage_parity \
+        -- --ignored --exact --nocapture
+
+echo "Exercising Glow-TTS short, ordinary, long, repeated, and punctuation inputs"
+env \
+    TONGUES_TEST_GLOW_CONFIG="$glow_dir/config.json" \
+    TONGUES_TEST_GLOW_CHECKPOINT="$glow_dir/model_file.pth.tar" \
+    cargo test --release -p tongues-tts \
+        burn_glow_tts_acoustic::tests::published_acoustic_backend_covers_input_matrix \
         -- --ignored --exact --nocapture
 
 echo "Inspecting Glow-TTS through the safe package importer"
@@ -164,6 +178,12 @@ env \
     cargo test --release -p tongues-tts \
         model_package::tests::published_glow_tts_fixture_uses_common_importer \
         -- --ignored --exact --nocapture
+
+echo "Synthesizing Glow-TTS through the registered CLI composition: $output_dir/glow"
+SPEECH_SMOKE_CASES=glow \
+SPEECH_SMOKE_CPU=1 \
+SPEECH_SMOKE_TEXT="Morning light rested on the cedar trees while the kettle began to sing." \
+    scripts/speech-smoke.sh "$output_dir/glow"
 
 echo "Comparing native MultiBand-MelGAN and PQMF output: $reference"
 env \

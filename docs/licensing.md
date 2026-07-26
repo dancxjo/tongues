@@ -45,6 +45,14 @@ it must not infer it from the source license. The native Tacotron 2 and
 Glow-TTS source files separately remain MPL-covered modifications because they
 adapt Coqui inference graphs.
 
+The runnable Glow-TTS waveform path also uses the MultiBand-MelGAN
+`scale_stats.npy` package member. Tongues records its exact 80 mel means and
+standard deviations in a named conversion manifest and pins that data to
+SHA-256 `8c4a45b935563157509ddbff09f59e4ffea35e1d07f3bbf87ec21484cb275c4a`.
+Those derived statistics remain artifact data under the cataloged
+MultiBand-MelGAN MPL evidence; the repository MIT license does not relicense
+them.
+
 The historical VCTK SC-GlowTTS artifact is not one of those licensed
 exceptions. Coqui's `v0.0.13` and `v0.1.0` registries publish
 `tts_models--en--vctk--sc-glowtts-transformer.zip` but leave its `license`

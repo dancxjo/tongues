@@ -267,6 +267,7 @@ pub struct SpeechDemoCommand {
 pub enum SpeakBackend {
     Burn,
     Fastpitch,
+    Glow,
     Vits,
     Fairseq,
     Yourtts,
@@ -503,6 +504,12 @@ type CpuFastPitchBackend =
     speech::BurnFastPitchPipeline<NdArray<f32>, speech::BurnVocoder<NdArray<f32>>>;
 type CudaFastPitchBackend =
     speech::BurnFastPitchPipeline<Cuda<f32, i32>, speech::BurnVocoder<Cuda<f32, i32>>>;
+type CpuGlowVocoder =
+    speech::BurnStandardizingVocoder<NdArray<f32>, speech::BurnVocoder<NdArray<f32>>>;
+type CudaGlowVocoder =
+    speech::BurnStandardizingVocoder<Cuda<f32, i32>, speech::BurnVocoder<Cuda<f32, i32>>>;
+type CpuGlowBackend = speech::BurnGlowTtsPipeline<NdArray<f32>, CpuGlowVocoder>;
+type CudaGlowBackend = speech::BurnGlowTtsPipeline<Cuda<f32, i32>, CudaGlowVocoder>;
 type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
 type CudaVitsBackend = speech::BurnVitsSpeech<Cuda<f32, i32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
@@ -513,6 +520,8 @@ enum BackendInstance {
     BurnCuda(Box<CudaBurnBackend>),
     FastPitchCpu(Box<CpuFastPitchBackend>),
     FastPitchCuda(Box<CudaFastPitchBackend>),
+    GlowCpu(Box<CpuGlowBackend>),
+    GlowCuda(Box<CudaGlowBackend>),
     VitsCpu(Box<CpuVitsBackend>),
     VitsCuda(Box<CudaVitsBackend>),
     FairseqCpu {
@@ -549,6 +558,8 @@ impl BackendInstance {
             Self::BurnCuda(_) => "burn-cuda",
             Self::FastPitchCpu(_) => "fastpitch-cpu",
             Self::FastPitchCuda(_) => "fastpitch-cuda",
+            Self::GlowCpu(_) => "glow-cpu",
+            Self::GlowCuda(_) => "glow-cuda",
             Self::VitsCpu(_) => "vits-cpu",
             Self::VitsCuda(_) => "vits-cuda",
             Self::FairseqCpu { .. } => "fairseq-mms-vits-cpu",
@@ -617,6 +628,20 @@ impl BackendInstance {
                 capabilities.durations = true;
                 capabilities.seed = false;
                 capabilities.provenance = vec!["Published Coqui release artifacts".into()];
+                capabilities
+            }
+            Self::GlowCpu(_) | Self::GlowCuda(_) => {
+                let mut capabilities = base(
+                    "glow",
+                    "glow-tts-ljspeech+standardizer+multiband-melgan",
+                    speech::SpeechModelFamily::AcousticModel,
+                    22_050,
+                );
+                capabilities.durations = true;
+                capabilities.provenance = vec![
+                    "Published Coqui Glow-TTS and MultiBand-MelGAN release artifacts".into(),
+                    speech::GLOW_MULTIBAND_STANDARDIZER_ID.into(),
+                ];
                 capabilities
             }
             Self::VitsCpu(engine) => vits_cli_capabilities(
@@ -744,6 +769,12 @@ impl BackendInstance {
                 synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::FastPitchCuda(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::GlowCpu(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::GlowCuda(ref mut backend) => {
                 synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::VitsCpu(ref mut backend) => {
@@ -934,6 +965,20 @@ impl BackendInstance {
                     .projector()
                     .project(plan)
                     .context("failed to project FastPitch checkpoint input")?,
+            )),
+            Self::GlowCpu(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project Glow-TTS checkpoint input")?,
+            )),
+            Self::GlowCuda(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project Glow-TTS checkpoint input")?,
             )),
             Self::VitsCpu(backend) => Ok(Some(
                 backend
@@ -1283,6 +1328,41 @@ fn load_backend(
             model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
             backend
         }
+        SpeakBackend::Glow => {
+            let started = Instant::now();
+            let acoustic_checkpoint =
+                crate::models::ensure_model_available(crate::models::GLOW_TTS_ACOUSTIC_MODEL_ID)?;
+            let vocoder_checkpoint =
+                crate::models::ensure_model_available(crate::models::MULTIBAND_MELGAN_VOCODER_ID)?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let acoustic_config = component_config_path(&acoustic_checkpoint)?;
+            let vocoder_config = component_config_path(&vocoder_checkpoint)?;
+            let started = Instant::now();
+            let backend = match device_arg {
+                DeviceArg::Cpu => {
+                    BackendInstance::GlowCpu(Box::new(load_glow_pipeline::<NdArray<f32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        NdArrayDevice::Cpu,
+                        &mut |event| model_load_profile.push(event),
+                    )?))
+                }
+                DeviceArg::Cuda { index } => {
+                    BackendInstance::GlowCuda(Box::new(load_glow_pipeline::<Cuda<f32, i32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        CudaDevice::new(index),
+                        &mut |event| model_load_profile.push(event),
+                    )?))
+                }
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
+        }
         SpeakBackend::Vits => {
             let started = Instant::now();
             let checkpoint = crate::models::ensure_model_available(
@@ -1549,7 +1629,7 @@ fn run_speak_with_backend(
 ) -> Result<()> {
     let options = SpeechSynthesisOptions::from(&command);
     let target_sample_rate = match command.backend {
-        SpeakBackend::Burn | SpeakBackend::Fastpitch => 22_050,
+        SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Glow => 22_050,
         SpeakBackend::Vits => 22_050,
         SpeakBackend::Fairseq | SpeakBackend::Yourtts => 16_000,
         SpeakBackend::Mock => command.sample_rate_hz,
@@ -1741,6 +1821,7 @@ fn run_speak_with_backend(
                 Some(projected),
                 SpeakBackend::Burn
                 | SpeakBackend::Fastpitch
+                | SpeakBackend::Glow
                 | SpeakBackend::Vits
                 | SpeakBackend::Fairseq
                 | SpeakBackend::Yourtts,
@@ -1749,6 +1830,7 @@ fn run_speak_with_backend(
                 None,
                 SpeakBackend::Burn
                 | SpeakBackend::Fastpitch
+                | SpeakBackend::Glow
                 | SpeakBackend::Vits
                 | SpeakBackend::Fairseq
                 | SpeakBackend::Yourtts,
@@ -1803,7 +1885,10 @@ fn run_speak_with_backend(
                     .join(" ")
             );
         }
-        if matches!(command.backend, SpeakBackend::Vits | SpeakBackend::Yourtts) {
+        if matches!(
+            command.backend,
+            SpeakBackend::Glow | SpeakBackend::Vits | SpeakBackend::Yourtts
+        ) {
             println!(
                 "inference_seed: {}",
                 options
@@ -1851,6 +1936,17 @@ fn run_speak_with_backend(
                 options.durations.as_ref().map(Vec::len).unwrap_or(0)
             );
         }
+        if matches!(command.backend, SpeakBackend::Glow) {
+            println!("glow_tts_controls:");
+            println!(
+                "  explicit_durations: {}",
+                options.durations.as_ref().map(Vec::len).unwrap_or(0)
+            );
+            println!(
+                "  feature_conversion: {}",
+                speech::GLOW_MULTIBAND_STANDARDIZER_ID
+            );
+        }
 
         if matches!(command.backend, SpeakBackend::Styletts2) {
             println!("styletts2_controls:");
@@ -1874,6 +1970,7 @@ fn run_speak_with_backend(
         match command.backend {
             SpeakBackend::Burn
             | SpeakBackend::Fastpitch
+            | SpeakBackend::Glow
             | SpeakBackend::Vits
             | SpeakBackend::Fairseq
             | SpeakBackend::Yourtts => {
@@ -2134,6 +2231,7 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
     match backend {
         SpeakBackend::Burn => "Burn components",
         SpeakBackend::Fastpitch => "FastPitch + HiFi-GAN",
+        SpeakBackend::Glow => "Glow-TTS + standardizer + MultiBand-MelGAN",
         SpeakBackend::Vits => "VITS",
         SpeakBackend::Fairseq => "Fairseq MMS VITS",
         SpeakBackend::Yourtts => "YourTTS",
@@ -2141,6 +2239,45 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
         SpeakBackend::Styletts2 => "StyleTTS2",
         SpeakBackend::Mock => "mock",
     }
+}
+
+fn load_glow_pipeline<B: Backend>(
+    acoustic_config: &Path,
+    acoustic_checkpoint: &Path,
+    vocoder_config: &Path,
+    vocoder_checkpoint: &Path,
+    device: B::Device,
+    profiler: &mut dyn FnMut(speech::ModelLoadProfileEvent),
+) -> Result<
+    speech::BurnGlowTtsPipeline<B, speech::BurnStandardizingVocoder<B, speech::BurnVocoder<B>>>,
+>
+where
+    B::Device: Clone,
+{
+    let acoustic =
+        speech::BurnGlowTtsAcoustic::load(acoustic_config, acoustic_checkpoint, device.clone())
+            .context("failed to load Burn Glow-TTS acoustic model")?;
+    let speech::AcousticOutputContract::Spectrogram(source_contract) =
+        speech::AcousticModel::output_contract(&acoustic)
+    else {
+        anyhow::bail!("Glow-TTS did not declare a spectrogram output");
+    };
+    let vocoder = speech::BurnVocoder::load_profiled(
+        vocoder_config,
+        vocoder_checkpoint,
+        device.clone(),
+        &mut *profiler,
+    )
+    .context("failed to load native MultiBand-MelGAN vocoder")?;
+    let converter = speech::BurnStandardizingVocoder::new(
+        vocoder,
+        speech::FeatureStandardizationConfig::glow_multiband()?,
+        source_contract,
+        device,
+    )
+    .context("failed to compose the pinned Glow-TTS feature conversion")?;
+    speech::BurnGlowTtsPipeline::new(acoustic, converter)
+        .context("Glow-TTS, feature conversion, and vocoder are incompatible")
 }
 
 fn load_fast_pitch_pipeline<B: Backend>(
@@ -2204,7 +2341,7 @@ where
 fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     if matches!(
         command.backend,
-        SpeakBackend::Burn | SpeakBackend::Fastpitch
+        SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Glow
     ) {
         println!("speakers: <none> (single-speaker acoustic model)");
         return Ok(());

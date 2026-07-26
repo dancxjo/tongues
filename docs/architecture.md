@@ -178,6 +178,31 @@ speaking (contracts only)
 TTS, playback, and orchestration crates emit or consume typed events but do not
 introduce reverse dependencies into `speaking`.
 
+### Incremental morphology
+
+`speaking::IncrementalMorphemeAnalyzer` accepts either valid strings or byte
+deltas. It buffers an incomplete UTF-8 scalar without exposing corrupt text,
+revises the last extended grapheme and unfinished word as more text arrives,
+and flushes all remaining candidates explicitly at end of stream.
+
+```text
+UTF-8 bytes + per-delta variety
+  -> provisional graphemes and word candidates
+  -> variety-owned morphology and phonology
+  -> stable MorphemeOccurrenceId values
+  -> append / replace / split / merge / finalize deltas
+  -> native morpheme journal or duplex BeliefAction journal
+```
+
+The English analyzer uses the English variety's lexical morphemes,
+pronunciations, and cross-boundary composition rules. Hyphenated compounds are
+analyzed component by component, apostrophe clitics remain linguistic
+morphemes, punctuation finalizes the preceding word, and a variety change is a
+word boundary even when no whitespace is present. A variety without an
+incremental analyzer emits one `Spec::Unknown` whole-word occurrence with
+`language-neutral-whole-word-fallback` provenance. It never exposes BPE pieces
+or checkpoint-private symbols as morphemes.
+
 ## Build and Runtime Verification
 
 `scripts/check-feature-matrix.sh` checks the workspace with default features,

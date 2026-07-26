@@ -12,8 +12,12 @@ digests are pinned in `scripts/coqui-reference.py`, and
 `scripts/speech-conformance.sh` fails explicitly when any required artifact is
 missing.
 
-The harness also requires the pinned Glow-TTS LJSpeech config and checkpoint
-and runs real native inference plus safe-import inspection. SC-GlowTTS is not
+The harness also requires the pinned Glow-TTS LJSpeech config/checkpoint and
+the paired MultiBand-MelGAN package. It records projected IDs, encoder
+statistics, durations, monotonic alignment, a runtime-independent fixed latent,
+all 12 reverse-flow block probes, final mel probes, standardized-mel probes,
+and a native waveform. It separately covers seeded reproducibility and the
+short/ordinary/long/repeated/punctuation input matrix. SC-GlowTTS is not
 counted as an available conformance artifact: the historical official registry
 left both the VCTK acoustic model and its paired vocoder license fields empty.
 
