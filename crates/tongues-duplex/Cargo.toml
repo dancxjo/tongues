@@ -8,4 +8,10 @@ description = "Provider-neutral deterministic duplex completion orchestration"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
 speaking = { path = "../speaking" }
+
+[dev-dependencies]
+tempfile = "3"
+
