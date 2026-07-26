@@ -1023,6 +1023,24 @@ mod tests {
     }
 
     #[test]
+    fn non_power_of_two_fft_supports_freevc_speaker_features() {
+        let spectrum = stft(
+            &[0.1; 1_600],
+            &StftConfig {
+                fft_size: 400,
+                window_size: 400,
+                hop_size: 160,
+                center: true,
+                pad_mode: PadMode::Reflect,
+                window: Window::Hann,
+            },
+        )
+        .expect("rustfft supports the 400-point FreeVC speaker transform");
+        assert_eq!(spectrum.bins_per_frame(), 201);
+        assert!(spectrum.bins.iter().all(|bin| bin.re.is_finite() && bin.im.is_finite()));
+    }
+
+    #[test]
     fn exact_feature_metadata_serializes_with_tensor() {
         let config = SpectrogramConfig {
             sample_rate_hz: 22_050,
