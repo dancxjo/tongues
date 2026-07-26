@@ -80,6 +80,50 @@ test('rejects stale snapshots that would undo concurrent verification progress',
     }), false);
 });
 
+test('merges cursor pages without duplicating shared inventory', () => {
+    const first = {
+        page: {
+            cursor: 0, limit: 2, returned: 2, total: 3, next_cursor: 2,
+        },
+        paths: [fixturePath()],
+        components: [{ id: 'text' }, { id: 'fastpitch-ljspeech' }],
+        compositions: [{ id: 'pipeline/fastpitch' }],
+        compatibility: [{
+            from_component_id: 'projector/fastpitch',
+            to_component_id: 'fastpitch-ljspeech',
+            compatible: true,
+        }],
+        presets: [{ id: 'preset/fastpitch' }],
+        verification_ids: ['fastpitch-ljspeech'],
+    };
+    const next = {
+        page: {
+            cursor: 2, limit: 2, returned: 1, total: 3,
+        },
+        paths: [fixturePath({ backend: 'fairseq', model: 'fairseq-mms-vits-eng' })],
+        components: [{ id: 'text' }, { id: 'fairseq-mms-vits-eng' }],
+        compositions: [{ id: 'pipeline/fairseq-eng' }],
+        compatibility: [{
+            from_component_id: 'projector/fairseq-mms-vits-eng',
+            to_component_id: 'fairseq-mms-vits-eng',
+            compatible: true,
+        }],
+        presets: [{ id: 'preset/fairseq-mms-vits-eng' }],
+        verification_ids: ['fairseq-mms-vits-eng'],
+    };
+    const merged = studio.mergeDiscovery(first, next);
+    assert.equal(merged.paths.length, 2);
+    assert.equal(merged.components.length, 3);
+    assert.equal(merged.compositions.length, 2);
+    assert.equal(merged.compatibility.length, 2);
+    assert.equal(merged.presets.length, 2);
+    assert.deepEqual(
+        merged.verification_ids,
+        ['fastpitch-ljspeech', 'fairseq-mms-vits-eng'],
+    );
+    assert.equal(merged.page.cursor, 2);
+});
+
 test('runtime polling waits for each request instead of using an overlapping interval', () => {
     assert.doesNotMatch(studioSource, /setInterval\s*\(/);
     assert.match(
@@ -150,6 +194,24 @@ test('renders catalog language, script, preprocessing, license, and readiness me
     for (const label of ['Language', 'Script', 'Preprocessing', 'License', 'Readiness']) {
         assert.match(studioSource, new RegExp(`<dt>${label}</dt>`));
     }
+});
+
+test('catalog defaults to runnable pipelines and keeps installable and component views explicit', () => {
+    assert.match(studioSource, /catalogView: 'ready'/);
+    for (const view of ['ready', 'downloadable', 'components']) {
+        assert.match(studioSource, new RegExp(`data-catalog-view="${view}"`));
+    }
+    assert.match(studioSource, /catalog-family/);
+    assert.match(studioSource, /catalog-license/);
+    assert.match(studioSource, /refreshCatalog/);
+    assert.match(studioSource, /Load more models/);
+});
+
+test('uses calm metadata wording and clears stale duplex results during synthesis', () => {
+    assert.match(studioSource, /No additional preprocessing required/);
+    assert.doesNotMatch(studioSource, /None declared/);
+    assert.doesNotMatch(studioSource, /License not asserted/);
+    assert.match(studioSource, /hideDuplexResult\(\)/);
 });
 
 test('reports exact directed compatibility edges', () => {

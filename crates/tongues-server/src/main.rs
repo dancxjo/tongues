@@ -69,6 +69,8 @@ const ALLOWED_ROOT_ARTIFACT_FILES: &[&str] = &[
     "labels.jsonl",
     "style_vectors.jsonl",
 ];
+const DEFAULT_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 32;
+const MAX_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 100;
 const DEFAULT_STYLETTS2_VOICE_REFERENCE: &str = "1221-135767-0014.wav";
 const DEFAULT_STYLETTS2_STYLE_REFERENCE: &str = "amused.wav";
 const ONNX_VOICE_RELATIVE_DIR: &str = "models/voices";
@@ -659,6 +661,7 @@ struct SpeechComponentDiscovery {
 #[derive(Debug, Serialize)]
 struct SpeechStudioDiscovery {
     schema_version: u32,
+    page: SpeechDiscoveryPage,
     paths: Vec<SpeechPathDiscovery>,
     components: Vec<SpeechComponentDiscovery>,
     compositions: Vec<SpeechCompositionDiscovery>,
@@ -667,6 +670,31 @@ struct SpeechStudioDiscovery {
     verification_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct SpeechDiscoveryPage {
+    cursor: usize,
+    limit: usize,
+    returned: usize,
+    total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpeechModelsQuery {
+    #[serde(default)]
+    cursor: usize,
+    #[serde(default = "default_speech_discovery_page_limit")]
+    limit: usize,
+    search: Option<String>,
+    family: Option<String>,
+    license: Option<String>,
+}
+
+fn default_speech_discovery_page_limit() -> usize {
+    DEFAULT_SPEECH_DISCOVERY_PAGE_LIMIT
 }
 
 #[derive(Debug, Deserialize)]
@@ -3463,6 +3491,18 @@ fn onnx_voice_model_path(home: &FsPath, model_id: &str) -> anyhow::Result<PathBu
 fn registered_speech_compositions_at(
     home: &FsPath,
 ) -> Vec<tongues_tts::RegisteredSpeechComposition> {
+    let mut compositions = base_registered_speech_compositions_at(home);
+    if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    ) {
+        extend_registered_speech_compositions(&mut compositions, &catalog);
+    }
+    compositions
+}
+
+fn base_registered_speech_compositions_at(
+    home: &FsPath,
+) -> Vec<tongues_tts::RegisteredSpeechComposition> {
     let mut compositions = tongues_tts::registered_speech_compositions();
     let selected =
         selected_onnx_voice_model_at(home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
@@ -3485,25 +3525,27 @@ fn registered_speech_compositions_at(
             revision_capable: false,
         }
     }));
-    if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
-        &tongues_tts::private_catalog_paths_from_environment(),
-    ) {
-        compositions.extend(
-            catalog
-                .entries
-                .iter()
-                .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
-                .map(fairseq_registered_composition),
-        );
-        compositions.extend(
-            catalog
-                .entries
-                .iter()
-                .filter(|entry| is_styletts2_catalog_entry(entry) && entry.id != "styletts2-en-us")
-                .map(styletts2_registered_composition),
-        );
-    }
     compositions
+}
+
+fn extend_registered_speech_compositions(
+    compositions: &mut Vec<tongues_tts::RegisteredSpeechComposition>,
+    catalog: &tongues_tts::ModelCatalog,
+) {
+    compositions.extend(
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
+            .map(fairseq_registered_composition),
+    );
+    compositions.extend(
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| is_styletts2_catalog_entry(entry) && entry.id != "styletts2-en-us")
+            .map(styletts2_registered_composition),
+    );
 }
 
 fn fairseq_registered_composition(
@@ -4043,88 +4085,8 @@ fn speech_backend_capabilities(
         },
         "styletts2" => {
             let model = speech_model_id(home, backend, model)?;
-            let entry = styletts2_catalog_entry(&model).ok();
-            let varieties = entry.as_ref().map_or_else(general_american, |entry| {
-                let ids = entry
-                    .varieties
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>();
-                if ids.is_empty() {
-                    general_american()
-                } else {
-                    speech_variety_capabilities(&ids)
-                }
-            });
-            let languages = entry.as_ref().map_or_else(
-                tongues_tts::LanguageCapabilities::unsupported,
-                |entry| tongues_tts::LanguageCapabilities {
-                    values: if entry.languages.is_empty() {
-                        tongues_tts::CapabilityValue::Unsupported
-                    } else {
-                        tongues_tts::CapabilityValue::Listed(
-                            entry
-                                .languages
-                                .iter()
-                                .map(|tag| tongues_tts::NamedCapability::new(tag, tag))
-                                .collect(),
-                        )
-                    },
-                    required: false,
-                    numeric_ids: false,
-                },
-            );
-            let speakers = entry.as_ref().map_or_else(unsupported_speakers, |entry| {
-                let values = entry
-                    .speakers
-                    .names
-                    .iter()
-                    .map(|name| tongues_tts::NamedCapability::new(name, name))
-                    .collect::<Vec<_>>();
-                tongues_tts::SpeakerCapabilities {
-                    values: if values.is_empty() {
-                        tongues_tts::CapabilityValue::Unsupported
-                    } else {
-                        tongues_tts::CapabilityValue::Listed(values)
-                    },
-                    required: false,
-                    numeric_ids: false,
-                }
-            });
-            tongues_tts::BackendCapabilities {
-                backend: "styletts2".into(),
-                model,
-                family: tongues_tts::SpeechModelFamily::CrossLingualVoiceClone,
-                varieties,
-                languages,
-                speakers,
-                styles: tongues_tts::StyleCapabilities {
-                    names: tongues_tts::CapabilityValue::Any,
-                    reference_audio: true,
-                    embedding_dimensions: Some(STYLE_VECTOR_DIMS),
-                },
-                reference_audio: tongues_tts::ReferenceAudioCapabilities {
-                    speaker: true,
-                    style: true,
-                    source: false,
-                    ..Default::default()
-                },
-                speed: true,
-                pitch: Default::default(),
-                energy: Default::default(),
-                durations: false,
-                seed: true,
-                devices,
-                output: output(
-                    entry
-                        .as_ref()
-                        .and_then(|entry| entry.sample_rate_hz)
-                        .unwrap_or(24_000),
-                ),
-                provenance: Vec::new(),
-                capability_tier: tongues_tts::CapabilityTier::TierC,
-                revision_capable: false,
-            }
+            let entry = styletts2_catalog_entry(&model)?;
+            styletts2_backend_capabilities(&entry, device)
         }
         "mock" => tongues_tts::BackendCapabilities {
             backend: "mock".into(),
@@ -4148,6 +4110,89 @@ fn speech_backend_capabilities(
         },
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })
+}
+
+fn styletts2_backend_capabilities(
+    entry: &tongues_tts::ModelCatalogEntry,
+    device: tongues_tts::ResolvedSpeechDevice,
+) -> tongues_tts::BackendCapabilities {
+    let ids = entry
+        .varieties
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let varieties = if ids.is_empty() {
+        speech_variety_capabilities(&["en-US-GA"])
+    } else {
+        speech_variety_capabilities(&ids)
+    };
+    let languages = tongues_tts::LanguageCapabilities {
+        values: if entry.languages.is_empty() {
+            tongues_tts::CapabilityValue::Unsupported
+        } else {
+            tongues_tts::CapabilityValue::Listed(
+                entry
+                    .languages
+                    .iter()
+                    .map(|tag| tongues_tts::NamedCapability::new(tag, tag))
+                    .collect(),
+            )
+        },
+        required: false,
+        numeric_ids: false,
+    };
+    let speaker_values = entry
+        .speakers
+        .names
+        .iter()
+        .map(|name| tongues_tts::NamedCapability::new(name, name))
+        .collect::<Vec<_>>();
+    tongues_tts::BackendCapabilities {
+        backend: "styletts2".into(),
+        model: entry.id.clone(),
+        family: tongues_tts::SpeechModelFamily::CrossLingualVoiceClone,
+        varieties,
+        languages,
+        speakers: tongues_tts::SpeakerCapabilities {
+            values: if speaker_values.is_empty() {
+                tongues_tts::CapabilityValue::Unsupported
+            } else {
+                tongues_tts::CapabilityValue::Listed(speaker_values)
+            },
+            required: false,
+            numeric_ids: false,
+        },
+        styles: tongues_tts::StyleCapabilities {
+            names: tongues_tts::CapabilityValue::Any,
+            reference_audio: true,
+            embedding_dimensions: Some(STYLE_VECTOR_DIMS),
+        },
+        reference_audio: tongues_tts::ReferenceAudioCapabilities {
+            speaker: true,
+            style: true,
+            source: false,
+            ..Default::default()
+        },
+        speed: true,
+        pitch: Default::default(),
+        energy: Default::default(),
+        durations: false,
+        seed: true,
+        devices: vec![
+            tongues_tts::SpeechDeviceRequest::Cpu,
+            tongues_tts::SpeechDeviceRequest::Cuda {
+                index: device.index().unwrap_or(0),
+            },
+        ],
+        output: tongues_tts::OutputAudioContract {
+            sample_rate_hz: entry.sample_rate_hz.unwrap_or(24_000),
+            channels: 1,
+            streaming: true,
+        },
+        provenance: Vec::new(),
+        capability_tier: tongues_tts::CapabilityTier::TierC,
+        revision_capable: false,
+    }
 }
 
 fn fairseq_backend_capabilities(
@@ -4428,7 +4473,11 @@ async fn speak(
     };
     if let Err(error) = validate_declared_speech_controls(
         &payload,
-        &speech_control_discovery(payload.backend.as_deref().unwrap_or("burn"), &capabilities),
+        &speech_control_discovery(
+            payload.backend.as_deref().unwrap_or("burn"),
+            &capabilities,
+            speech_device,
+        ),
     ) {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
@@ -4745,11 +4794,32 @@ async fn get_styletts2_samples(State(state): State<AppState>) -> impl IntoRespon
     Json(response)
 }
 
-async fn get_speech_models(State(state): State<AppState>) -> impl IntoResponse {
-    Json(build_speech_discovery(&state).await)
+async fn get_speech_models(
+    State(state): State<AppState>,
+    Query(query): Query<SpeechModelsQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.clamp(1, MAX_SPEECH_DISCOVERY_PAGE_LIMIT);
+    Json(
+        build_speech_discovery(
+            &state,
+            query.cursor,
+            limit,
+            query.search.unwrap_or_default(),
+            query.family.unwrap_or_default(),
+            query.license.unwrap_or_default(),
+        )
+        .await,
+    )
 }
 
-async fn build_speech_discovery(state: &AppState) -> SpeechStudioDiscovery {
+async fn build_speech_discovery(
+    state: &AppState,
+    cursor: usize,
+    limit: usize,
+    search: String,
+    family: String,
+    license: String,
+) -> SpeechStudioDiscovery {
     let home = resolve_mortar_home();
     let loaded = state
         .speech
@@ -4758,22 +4828,33 @@ async fn build_speech_discovery(state: &AppState) -> SpeechStudioDiscovery {
         .map(|service| service.engines.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let device = state.speech_device;
-    tokio::task::spawn_blocking(move || speech_studio_discovery(&home, device, &loaded))
-        .await
-        .unwrap_or_else(|error| SpeechStudioDiscovery {
-            schema_version: 3,
-            paths: Vec::new(),
-            components: Vec::new(),
-            compositions: Vec::new(),
-            compatibility: Vec::new(),
-            presets: Vec::new(),
-            verification_ids: Vec::new(),
-            error: Some(format!("speech model discovery task failed: {error}")),
-        })
+    tokio::task::spawn_blocking(move || {
+        speech_studio_discovery_page(
+            &home, device, &loaded, cursor, limit, &search, &family, &license,
+        )
+    })
+    .await
+    .unwrap_or_else(|error| SpeechStudioDiscovery {
+        schema_version: 4,
+        page: SpeechDiscoveryPage {
+            cursor,
+            limit,
+            returned: 0,
+            total: 0,
+            next_cursor: None,
+        },
+        paths: Vec::new(),
+        components: Vec::new(),
+        compositions: Vec::new(),
+        compatibility: Vec::new(),
+        presets: Vec::new(),
+        verification_ids: Vec::new(),
+        error: Some(format!("speech model discovery task failed: {error}")),
+    })
 }
 
 async fn verify_speech_model(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(model_id): Path<String>,
 ) -> Response {
     let home = resolve_mortar_home();
@@ -4813,17 +4894,20 @@ async fn verify_speech_model(
         }
     };
     if let Err(error) = result {
-        let discovery = build_speech_discovery(&state).await;
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({
                 "error": error,
-                "discovery": discovery,
+                "model_id": model_id,
             })),
         )
             .into_response();
     }
-    Json(build_speech_discovery(&state).await).into_response()
+    Json(json!({
+        "model_id": model_id,
+        "verified": true,
+    }))
+    .into_response()
 }
 
 async fn project_speech_request(Json(request): Json<SpeechProjectionRequest>) -> impl IntoResponse {
@@ -5110,6 +5194,30 @@ fn verification_status_label(status: tongues_tts::ModelVerificationStatus) -> &'
     }
 }
 
+fn catalog_entry_installation_error(
+    home: &FsPath,
+    entry: &tongues_tts::ModelCatalogEntry,
+) -> Option<String> {
+    let missing = entry
+        .artifacts
+        .iter()
+        .flat_map(|artifact| {
+            if artifact.members.is_empty() {
+                vec![home.join(&artifact.install_path)]
+            } else {
+                artifact
+                    .members
+                    .iter()
+                    .map(|member| home.join(&member.install_path))
+                    .collect()
+            }
+        })
+        .filter(|path| !path.is_file() && !path.is_dir())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    (!missing.is_empty()).then(|| format!("missing model artifacts: {}", missing.join(", ")))
+}
+
 fn discover_speech_path(
     home: &FsPath,
     backend: &str,
@@ -5127,6 +5235,12 @@ fn discover_speech_path(
             .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
             .map(|entry| fairseq_backend_capabilities(entry, device))
             .with_context(|| format!("unknown Fairseq MMS catalog model `{model}`"))
+    } else if backend == "styletts2" {
+        catalog
+            .find(model)
+            .filter(|entry| is_styletts2_catalog_entry(entry))
+            .map(|entry| styletts2_backend_capabilities(entry, device))
+            .with_context(|| format!("unknown StyleTTS2 catalog model `{model}`"))
     } else {
         speech_backend_capabilities(home, backend, Some(model), device, 24_000)
     }
@@ -5154,7 +5268,7 @@ fn discover_speech_path(
         capability_tier: tongues_tts::CapabilityTier::Unassigned,
         revision_capable: false,
     });
-    let catalog_ids = if backend == "fairseq" {
+    let catalog_ids = if matches!(backend, "fairseq" | "styletts2") {
         vec![model.to_string()]
     } else {
         speech_path_catalog_ids(home, backend, Some(model)).unwrap_or_default()
@@ -5163,30 +5277,10 @@ fn discover_speech_path(
         .iter()
         .filter_map(|id| catalog.find(id).cloned())
         .collect::<Vec<_>>();
-    let installation_error = if backend == "fairseq" {
+    let installation_error = if matches!(backend, "fairseq" | "styletts2") {
         match catalog_entries.first() {
-            Some(entry) => {
-                let missing = entry
-                    .artifacts
-                    .iter()
-                    .flat_map(|artifact| {
-                        if artifact.members.is_empty() {
-                            vec![home.join(&artifact.install_path)]
-                        } else {
-                            artifact
-                                .members
-                                .iter()
-                                .map(|member| home.join(&member.install_path))
-                                .collect()
-                        }
-                    })
-                    .filter(|path| !path.is_file() && !path.is_dir())
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>();
-                (!missing.is_empty())
-                    .then(|| format!("missing model artifacts: {}", missing.join(", ")))
-            }
-            None => Some(format!("unknown Fairseq MMS catalog model `{model}`")),
+            Some(entry) => catalog_entry_installation_error(home, entry),
+            None => Some(format!("unknown {backend} catalog model `{model}`")),
         }
     } else {
         speech_backend_installation_error(home, backend, Some(model))
@@ -5246,12 +5340,6 @@ fn discover_speech_path(
     if backend == "mock" {
         statuses.push("Test backend".into());
     }
-    for entry in &catalog_entries {
-        if entry.license.expression == "NOASSERTION" {
-            statuses.push("License not asserted".into());
-            break;
-        }
-    }
     let install_command =
         (!runnable && !verification_pending && !catalog_ids.is_empty()).then(|| {
             catalog_ids
@@ -5260,7 +5348,7 @@ fn discover_speech_path(
                 .collect::<Vec<_>>()
                 .join(" && ")
         });
-    let controls = speech_control_discovery(backend, &capabilities);
+    let controls = speech_control_discovery(backend, &capabilities, device);
     SpeechPathDiscovery {
         capabilities,
         id: model.into(),
@@ -5287,17 +5375,78 @@ fn discover_speech_path(
     }
 }
 
+fn is_progressive_speech_catalog_entry(entry: &tongues_tts::ModelCatalogEntry) -> bool {
+    entry.provenance.format == "fairseq-mms-vits"
+        || (is_styletts2_catalog_entry(entry) && entry.id != "styletts2-en-us")
+}
+
+fn speech_catalog_family(entry: &tongues_tts::ModelCatalogEntry) -> &'static str {
+    if entry.provenance.format == "fairseq-mms-vits" {
+        "mms"
+    } else if is_styletts2_catalog_entry(entry) {
+        "styletts2"
+    } else {
+        "other"
+    }
+}
+
+fn speech_catalog_entry_matches(
+    entry: &tongues_tts::ModelCatalogEntry,
+    search: &str,
+    family: &str,
+    license: &str,
+) -> bool {
+    let search = search.trim().to_ascii_lowercase();
+    let family = family.trim().to_ascii_lowercase();
+    let license = license.trim();
+    (family.is_empty() || speech_catalog_family(entry) == family)
+        && (license.is_empty() || entry.license.expression.eq_ignore_ascii_case(license))
+        && (search.is_empty()
+            || entry.id.to_ascii_lowercase().contains(&search)
+            || entry.display_name.to_ascii_lowercase().contains(&search)
+            || entry.architecture.to_ascii_lowercase().contains(&search)
+            || entry
+                .languages
+                .iter()
+                .any(|language| language.to_ascii_lowercase().contains(&search))
+            || entry
+                .script
+                .as_ref()
+                .is_some_and(|script| script.to_ascii_lowercase().contains(&search)))
+}
+
+#[cfg(test)]
 fn speech_studio_discovery(
     home: &FsPath,
     device: tongues_tts::ResolvedSpeechDevice,
     loaded: &[String],
+) -> SpeechStudioDiscovery {
+    speech_studio_discovery_page(home, device, loaded, 0, usize::MAX, "", "", "")
+}
+
+fn speech_studio_discovery_page(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    loaded: &[String],
+    cursor: usize,
+    limit: usize,
+    search: &str,
+    family: &str,
+    license: &str,
 ) -> SpeechStudioDiscovery {
     let catalog_paths = tongues_tts::private_catalog_paths_from_environment();
     let catalog = match tongues_tts::ModelCatalog::with_private_catalogs(&catalog_paths) {
         Ok(catalog) => catalog,
         Err(error) => {
             return SpeechStudioDiscovery {
-                schema_version: 3,
+                schema_version: 4,
+                page: SpeechDiscoveryPage {
+                    cursor,
+                    limit,
+                    returned: 0,
+                    total: 0,
+                    next_cursor: None,
+                },
                 paths: Vec::new(),
                 components: native_component_inventory_without_catalog(loaded),
                 compositions: Vec::new(),
@@ -5308,10 +5457,40 @@ fn speech_studio_discovery(
             };
         }
     };
+    let progressive_entries = catalog
+        .entries
+        .iter()
+        .filter(|entry| is_progressive_speech_catalog_entry(entry))
+        .filter(|entry| speech_catalog_entry_matches(entry, search, family, license))
+        .collect::<Vec<_>>();
+    let total = progressive_entries.len();
+    let cursor = cursor.min(total);
+    let page_end = cursor.saturating_add(limit).min(total);
+    let page_ids = progressive_entries[cursor..page_end]
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let initial_page = cursor == 0;
+    let scoped_catalog = tongues_tts::ModelCatalog {
+        schema_version: catalog.schema_version,
+        id: catalog.id.clone(),
+        entries: catalog
+            .entries
+            .iter()
+            .filter(|entry| {
+                if is_progressive_speech_catalog_entry(entry) {
+                    page_ids.contains(entry.id.as_str())
+                } else {
+                    initial_page
+                }
+            })
+            .cloned()
+            .collect(),
+    };
     let cache = tongues_tts::default_model_cache(home)
         .unwrap_or_else(|_| home.join("cache/model-downloads"));
     let store = tongues_tts::ModelStore::new(home, cache).with_offline(true);
-    let verification = catalog
+    let verification = scoped_catalog
         .entries
         .iter()
         .map(|entry| (entry.id.clone(), store.verification_state(entry)))
@@ -5321,7 +5500,7 @@ fn speech_studio_discovery(
     let mut paths = Vec::new();
     for provider in RESIDENT_BACKEND_PROVIDERS {
         if provider.id == "fairseq" {
-            for entry in catalog
+            for entry in scoped_catalog
                 .entries
                 .iter()
                 .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
@@ -5333,10 +5512,32 @@ fn speech_studio_discovery(
                     &entry.display_name,
                     entry.id == "fairseq-mms-vits-eng",
                     device,
-                    &catalog,
+                    &scoped_catalog,
                     &verification,
                     loaded,
                 ));
+            }
+            continue;
+        }
+        if !initial_page {
+            if provider.id == "styletts2" {
+                for entry in scoped_catalog
+                    .entries
+                    .iter()
+                    .filter(|entry| is_styletts2_catalog_entry(entry))
+                {
+                    paths.push(discover_speech_path(
+                        home,
+                        provider.id,
+                        &entry.id,
+                        &entry.display_name,
+                        false,
+                        device,
+                        &scoped_catalog,
+                        &verification,
+                        loaded,
+                    ));
+                }
             }
             continue;
         }
@@ -5349,7 +5550,7 @@ fn speech_studio_discovery(
                     model.display_name,
                     model.id == selected_onnx,
                     device,
-                    &catalog,
+                    &scoped_catalog,
                     &verification,
                     loaded,
                 ));
@@ -5357,10 +5558,8 @@ fn speech_studio_discovery(
             continue;
         }
         if provider.id == "styletts2" {
-            if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
-                &tongues_tts::private_catalog_paths_from_environment(),
-            ) {
-                for entry in catalog
+            {
+                for entry in scoped_catalog
                     .entries
                     .iter()
                     .filter(|entry| is_styletts2_catalog_entry(entry))
@@ -5372,7 +5571,7 @@ fn speech_studio_discovery(
                         &entry.display_name,
                         entry.id == "styletts2-en-us",
                         device,
-                        &catalog,
+                        &scoped_catalog,
                         &verification,
                         loaded,
                     ));
@@ -5389,7 +5588,7 @@ fn speech_studio_discovery(
             speech_model_display_name(provider.id, &model),
             provider.id != "mock",
             device,
-            &catalog,
+            &scoped_catalog,
             &verification,
             loaded,
         ));
@@ -5398,7 +5597,14 @@ fn speech_studio_discovery(
         let developer = path.capabilities.backend == "mock";
         (!path.runnable, developer, path.display_name.clone())
     });
-    let registered = registered_speech_compositions_at(home);
+    let mut registered = base_registered_speech_compositions_at(home);
+    extend_registered_speech_compositions(&mut registered, &scoped_catalog);
+    registered.retain(|composition| {
+        paths.iter().any(|path| {
+            path.capabilities.backend == composition.backend
+                && path.capabilities.model == composition.model
+        })
+    });
     let compositions = speech_composition_discovery(&registered, &paths);
     let presets = registered
         .iter()
@@ -5411,17 +5617,30 @@ fn speech_studio_discovery(
             developer: composition.backend == "mock",
         })
         .collect();
-    let mut components =
-        speech_component_inventory(&catalog, &store, &verification, &paths, loaded);
-    add_pipeline_pseudo_components(&mut components, &registered);
+    let mut components = speech_component_inventory(
+        &scoped_catalog,
+        &store,
+        &verification,
+        &paths,
+        loaded,
+        initial_page,
+    );
+    add_pipeline_pseudo_components(&mut components, &registered, initial_page);
     SpeechStudioDiscovery {
-        schema_version: 3,
+        schema_version: 4,
+        page: SpeechDiscoveryPage {
+            cursor,
+            limit,
+            returned: page_end - cursor,
+            total,
+            next_cursor: (page_end < total).then_some(page_end),
+        },
         components,
         compatibility: speech_pipeline_compatibility(&registered),
         compositions,
         presets,
         paths,
-        verification_ids: catalog
+        verification_ids: scoped_catalog
             .entries
             .iter()
             .filter(|entry| {
@@ -5498,43 +5717,27 @@ fn mel_port(key: &str, summary: &str) -> tongues_tts::SpeechPortContract {
 fn speech_pipeline_compatibility(
     registered: &[tongues_tts::RegisteredSpeechComposition],
 ) -> Vec<tongues_tts::SpeechPipelineCompatibility> {
-    let projectors = registered
+    // Missing edges are incompatible by default in the studio. Emitting every
+    // negative checkpoint-projector pairing made this response quadratic (more
+    // than 1.3 million edges for the MMS catalog), so only registered positive
+    // projector contracts belong on the wire.
+    let mut compatibility = registered
         .iter()
         .map(|composition| {
-            (
-                composition.pipeline.projector.clone(),
-                composition
-                    .pipeline
-                    .acoustic_model
-                    .as_ref()
-                    .or(composition.pipeline.end_to_end.as_ref())
-                    .expect("registered composition has a generator")
-                    .clone(),
-            )
+            let generator = composition
+                .pipeline
+                .acoustic_model
+                .as_ref()
+                .or(composition.pipeline.end_to_end.as_ref())
+                .expect("registered composition has a generator");
+            tongues_tts::SpeechPipelineCompatibility {
+                from_component_id: composition.pipeline.projector.clone(),
+                to_component_id: generator.clone(),
+                compatible: true,
+                reason: "This checkpoint-owned projector emits the exact vocabulary and token contract required by the model.".into(),
+            }
         })
         .collect::<Vec<_>>();
-    let generators = projectors
-        .iter()
-        .map(|(_, generator)| generator.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut compatibility = Vec::new();
-    for (projector, owner) in &projectors {
-        for generator in &generators {
-            let compatible = owner == generator;
-            compatibility.push(tongues_tts::SpeechPipelineCompatibility {
-                from_component_id: projector.clone(),
-                to_component_id: generator.clone(),
-                compatible,
-                reason: if compatible {
-                    "This checkpoint-owned projector emits the exact vocabulary and token contract required by the model.".into()
-                } else {
-                    format!(
-                        "Projector is checkpoint-bound to `{owner}`; `{generator}` requires its own vocabulary contract."
-                    )
-                },
-            });
-        }
-    }
     let acoustic_models = [
         "speedy-speech-ljspeech",
         "fastpitch-ljspeech",
@@ -5580,13 +5783,17 @@ fn speech_pipeline_compatibility(
 fn add_pipeline_pseudo_components(
     components: &mut Vec<SpeechComponentDiscovery>,
     registered: &[tongues_tts::RegisteredSpeechComposition],
+    include_baseline: bool,
 ) {
     let styletts2_paths = registered
         .iter()
         .filter(|composition| composition.backend == "styletts2")
         .map(|composition| composition.model.clone())
         .collect::<Vec<_>>();
-    for descriptor in tongues_tts::registered_speech_pipeline_components() {
+    for descriptor in tongues_tts::registered_speech_pipeline_components()
+        .into_iter()
+        .filter(|_| include_baseline)
+    {
         if let Some(component) = components
             .iter_mut()
             .find(|component| component.id == descriptor.id)
@@ -5636,9 +5843,10 @@ fn add_pipeline_pseudo_components(
             install_command: None,
         });
     }
-    if !components
-        .iter()
-        .any(|component| component.id == "styletts2")
+    if include_baseline
+        && !components
+            .iter()
+            .any(|component| component.id == "styletts2")
     {
         components.push(SpeechComponentDiscovery {
             id: "styletts2".into(),
@@ -5719,9 +5927,10 @@ fn add_pipeline_pseudo_components(
             install_command: None,
         });
     }
-    if !components
-        .iter()
-        .any(|component| component.id == "style-reference-encoder")
+    if include_baseline
+        && !components
+            .iter()
+            .any(|component| component.id == "style-reference-encoder")
     {
         components.push(SpeechComponentDiscovery {
             id: "style-reference-encoder".into(),
@@ -5988,15 +6197,20 @@ fn speech_number_control(
 fn speech_control_discovery(
     backend: &str,
     capabilities: &tongues_tts::BackendCapabilities,
+    resolved_device: tongues_tts::ResolvedSpeechDevice,
 ) -> Vec<SpeechControlDiscovery> {
     let mut controls = Vec::new();
+    let resolved_device_value = match resolved_device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => "cpu".to_string(),
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => format!("cuda:{index}"),
+    };
     let mut device = speech_control(
         "device",
         "Device",
         "select",
         "basic",
-        Some(json!("auto")),
-        "Choose CPU or a CUDA device supported by this resident path.",
+        Some(json!(resolved_device_value)),
+        "Defaults to the resident runtime device. Choose another supported device to override it for this request.",
     );
     device.options = capabilities
         .devices
@@ -6396,8 +6610,13 @@ fn speech_component_inventory(
     verification: &SpeechVerification,
     paths: &[SpeechPathDiscovery],
     loaded: &[String],
+    include_baseline: bool,
 ) -> Vec<SpeechComponentDiscovery> {
-    let mut components = native_component_inventory_without_catalog(loaded);
+    let mut components = if include_baseline {
+        native_component_inventory_without_catalog(loaded)
+    } else {
+        Vec::new()
+    };
     for entry in &catalog.entries {
         let component_id = catalog_component_id(entry);
         let index = components
@@ -6516,36 +6735,38 @@ fn speech_component_inventory(
                 .then(|| format!("cargo run --bin tongues -- models install {}", entry.id)),
         });
     }
-    components.push(SpeechComponentDiscovery {
-        id: "deterministic-mock".into(),
-        display_name: "Deterministic Mock".into(),
-        architecture: "deterministic-test-wave".into(),
-        kind: "test".into(),
-        stage: tongues_tts::SpeechPipelineStage::EndToEnd,
-        spans: vec![
-            tongues_tts::SpeechPipelineStage::AcousticModel,
-            tongues_tts::SpeechPipelineStage::Vocoder,
-        ],
-        accepts: Vec::new(),
-        produces: vec![waveform_port()],
-        control_fields: Vec::new(),
-        runnable: true,
-        installed: true,
-        verified: true,
-        verification_pending: false,
-        verification_status: tongues_tts::ModelVerificationStatus::Verified,
-        load_state: if loaded.iter().any(|engine| engine.starts_with("mock-")) {
-            "loaded"
-        } else {
-            "unloaded"
-        },
-        readiness: "test".into(),
-        statuses: vec!["Test backend".into()],
-        explanation: "Deterministic waveform generator for development and contract tests; it is not a voice engine.".into(),
-        compatible_paths: vec!["deterministic-mock".into()],
-        catalog: Vec::new(),
-        install_command: None,
-    });
+    if include_baseline {
+        components.push(SpeechComponentDiscovery {
+            id: "deterministic-mock".into(),
+            display_name: "Deterministic Mock".into(),
+            architecture: "deterministic-test-wave".into(),
+            kind: "test".into(),
+            stage: tongues_tts::SpeechPipelineStage::EndToEnd,
+            spans: vec![
+                tongues_tts::SpeechPipelineStage::AcousticModel,
+                tongues_tts::SpeechPipelineStage::Vocoder,
+            ],
+            accepts: Vec::new(),
+            produces: vec![waveform_port()],
+            control_fields: Vec::new(),
+            runnable: true,
+            installed: true,
+            verified: true,
+            verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Verified,
+            load_state: if loaded.iter().any(|engine| engine.starts_with("mock-")) {
+                "loaded"
+            } else {
+                "unloaded"
+            },
+            readiness: "test".into(),
+            statuses: vec!["Test backend".into()],
+            explanation: "Deterministic waveform generator for development and contract tests; it is not a voice engine.".into(),
+            compatible_paths: vec!["deterministic-mock".into()],
+            catalog: Vec::new(),
+            install_command: None,
+        });
+    }
     components.sort_by(|left, right| {
         left.kind
             .cmp(&right.kind)
@@ -6628,12 +6849,6 @@ fn component_statuses(
     }
     if load_state == "loaded" {
         statuses.push("Loaded".into());
-    }
-    if catalog
-        .iter()
-        .any(|entry| entry.license.expression == "NOASSERTION")
-    {
-        statuses.push("License not asserted".into());
     }
     statuses.sort();
     statuses.dedup();
@@ -8001,7 +8216,7 @@ mod tests {
         );
 
         assert!(discovery.error.is_none());
-        assert_eq!(discovery.schema_version, 3);
+        assert_eq!(discovery.schema_version, 4);
         assert!(discovery.paths.iter().all(|path| path.complete));
         assert!(discovery.compositions.iter().any(|composition| {
             composition.backend == "fastpitch"
@@ -8019,6 +8234,10 @@ mod tests {
             .filter(|composition| composition.backend == "fairseq")
             .collect::<Vec<_>>();
         assert_eq!(fairseq_compositions.len(), 1_143);
+        assert!(
+            discovery.compatibility.len() < 2_000,
+            "compatibility must remain sparse instead of expanding all projector pairs"
+        );
         assert!(fairseq_compositions.iter().all(|composition| {
             composition.pipeline.end_to_end.as_deref() == Some(composition.model.as_str())
                 && composition.pipeline.acoustic_model.is_none()
@@ -8079,6 +8298,18 @@ mod tests {
         assert!(fastpitch.controls.iter().any(|control| {
             control.field == "pitch" && control.kind == "number_array" && control.group == "expert"
         }));
+        let cuda_controls = speech_control_discovery(
+            "fastpitch",
+            &fastpitch.capabilities,
+            tongues_tts::ResolvedSpeechDevice::Cuda { index: 0 },
+        );
+        assert_eq!(
+            cuda_controls
+                .iter()
+                .find(|control| control.field == "device")
+                .and_then(|control| control.default.as_ref()),
+            Some(&json!("cuda:0"))
+        );
         assert!(
             fastpitch
                 .compatible_vocoders
@@ -8090,6 +8321,57 @@ mod tests {
                 && !vocoder.compatible
                 && !vocoder.reason.is_empty()
         }));
+
+        let first_page = speech_studio_discovery_page(
+            &mortar_home,
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            &[],
+            0,
+            32,
+            "",
+            "",
+            "",
+        );
+        assert_eq!(first_page.page.cursor, 0);
+        assert_eq!(first_page.page.returned, 32);
+        assert_eq!(first_page.page.next_cursor, Some(32));
+        assert!(
+            first_page.paths.len() < 50,
+            "the first response must not eagerly expand the entire catalog"
+        );
+        let second_page = speech_studio_discovery_page(
+            &mortar_home,
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            &[],
+            32,
+            32,
+            "",
+            "",
+            "",
+        );
+        assert_eq!(second_page.page.cursor, 32);
+        assert_eq!(second_page.page.returned, 32);
+        assert!(
+            second_page.paths.len() <= 32,
+            "continuation pages should contain only their catalog slice"
+        );
+        let filtered_page = speech_studio_discovery_page(
+            &mortar_home,
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            &[],
+            0,
+            32,
+            "azj",
+            "mms",
+            "CC-BY-NC-4.0",
+        );
+        assert!(filtered_page.page.total >= 1);
+        assert!(
+            filtered_page
+                .paths
+                .iter()
+                .any(|path| { path.id == "fairseq-mms-vits-azj-script_cyrillic" })
+        );
 
         for component in [
             "speedy-speech",
