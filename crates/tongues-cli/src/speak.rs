@@ -1037,6 +1037,7 @@ fn xtts_cli_capabilities(
                 config
                     .languages
                     .iter()
+                    .filter(|language| speech::xtts_language_has_native_cleaner(language))
                     .map(|language| speech::NamedCapability::new(language, language))
                     .collect(),
             ),
@@ -1609,14 +1610,30 @@ fn load_backend(
             );
             let started = Instant::now();
             let backend = match device_arg {
-                DeviceArg::Cpu => BackendInstance::XttsCpu(Box::new(
-                    speech::BurnXtts::load(package_dir, NdArrayDevice::Cpu)
-                        .context("failed to load native XTTS package on CPU")?,
-                )),
-                DeviceArg::Cuda { index } => BackendInstance::XttsCuda(Box::new(
-                    speech::BurnXtts::load(package_dir, CudaDevice::new(index))
-                        .context("failed to load native XTTS package on CUDA")?,
-                )),
+                DeviceArg::Cpu => {
+                    let mut engine = speech::BurnXtts::load(package_dir, NdArrayDevice::Cpu)
+                        .context("failed to load native XTTS package on CPU")?;
+                    if command.no_tts_chunking {
+                        let mut controls =
+                            speech::XttsGenerationControls::from_config(engine.config(), None);
+                        controls.stream_code_chunk =
+                            engine.config().model_args.gpt_max_audio_tokens + 1;
+                        engine.set_generation_controls(controls)?;
+                    }
+                    BackendInstance::XttsCpu(Box::new(engine))
+                }
+                DeviceArg::Cuda { index } => {
+                    let mut engine = speech::BurnXtts::load(package_dir, CudaDevice::new(index))
+                        .context("failed to load native XTTS package on CUDA")?;
+                    if command.no_tts_chunking {
+                        let mut controls =
+                            speech::XttsGenerationControls::from_config(engine.config(), None);
+                        controls.stream_code_chunk =
+                            engine.config().model_args.gpt_max_audio_tokens + 1;
+                        engine.set_generation_controls(controls)?;
+                    }
+                    BackendInstance::XttsCuda(Box::new(engine))
+                }
             };
             model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
             backend
@@ -1981,10 +1998,7 @@ fn run_speak_with_backend(
         }
         if matches!(
             command.backend,
-            SpeakBackend::Glow
-                | SpeakBackend::Vits
-                | SpeakBackend::Yourtts
-                | SpeakBackend::Xtts
+            SpeakBackend::Glow | SpeakBackend::Vits | SpeakBackend::Yourtts | SpeakBackend::Xtts
         ) {
             println!(
                 "inference_seed: {}",
@@ -2552,9 +2566,10 @@ fn xtts_config_from_command(command: &SpeakCommand) -> Result<speech::XttsV2Conf
         .as_deref()
         .map(Path::new)
         .context("--backend xtts requires --model /path/to/imported-package")?;
-    let neutral: speech::NeutralModelConfig =
-        serde_json::from_slice(&std::fs::read(package_dir.join(speech::MODEL_PACKAGE_CONFIG))?)
-            .context("invalid XTTS package model.json")?;
+    let neutral: speech::NeutralModelConfig = serde_json::from_slice(&std::fs::read(
+        package_dir.join(speech::MODEL_PACKAGE_CONFIG),
+    )?)
+    .context("invalid XTTS package model.json")?;
     anyhow::ensure!(
         neutral.architecture == speech::ModelPackageArchitecture::XttsV2,
         "model package is not XTTS v2"

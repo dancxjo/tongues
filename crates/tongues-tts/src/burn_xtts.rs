@@ -15,11 +15,11 @@ use std::time::Instant;
 use anyhow::{bail, ensure, Context, Result};
 use burn::module::{Module, Param};
 use burn::nn::conv::{Conv1d, Conv1dConfig};
+use burn::nn::interpolate::{Interpolate1dConfig, InterpolateMode};
 use burn::nn::{
     Embedding, EmbeddingConfig, GroupNorm, GroupNormConfig, LayerNorm, LayerNormConfig, Linear,
     LinearConfig, PaddingConfig1d,
 };
-use burn::nn::interpolate::{Interpolate1dConfig, InterpolateMode};
 use burn::tensor::activation::{leaky_relu, softmax};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Int, Tensor, TensorData};
@@ -31,16 +31,16 @@ use sha2::{Digest, Sha256};
 use speaking::SpeakerReferenceSource;
 use tongues_audio::{
     read_wav, spectrogram, AudioBuffer, MelConfig, MelNormalization, MelScale, PadMode,
-    SpectralDomain, SpectralScale, SpectrogramConfig, SpectrogramNormalization,
-    SpectrogramOutput, StftConfig, Window,
+    SpectralDomain, SpectralScale, SpectrogramConfig, SpectrogramNormalization, SpectrogramOutput,
+    StftConfig, Window,
 };
 
+use crate::burn_hifigan::{WeightNormConv1d, WeightNormConvTranspose1d};
 use crate::model_package::{
     ModelPackageArchitecture, NeutralModelConfig, SpeakerEncoderPackageConfig,
     MODEL_PACKAGE_CONFIG, MODEL_PACKAGE_WEIGHTS,
 };
 use crate::speaker_encoder::CoquiResNetSpeakerEncoder;
-use crate::burn_hifigan::{WeightNormConv1d, WeightNormConvTranspose1d};
 use crate::{
     AudioChunk, AudioSink, SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisEngine,
     SpeechSynthesisRequest, SynthesisDimension, SynthesisProfileEvent, SynthesisProfiler,
@@ -134,7 +134,7 @@ impl<B: Backend> HfConv1d<B> {
     }
 
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        let [batch, input_channels, _] = input.dims();
+        let [batch, _, input_channels] = input.dims();
         let output = self.bias.dims()[0];
         input.matmul(
             self.weight
@@ -180,27 +180,19 @@ impl<B: Backend> ConditioningAttention<B> {
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let [batch, channels, frames] = input.dims();
         let per_head = channels / self.heads;
-        let qkv = self
-            .qkv
-            .forward(self.norm.forward(input.clone()))
-            .reshape([batch, self.heads, per_head * 3, frames]);
+        let qkv = self.qkv.forward(self.norm.forward(input.clone())).reshape([
+            batch,
+            self.heads,
+            per_head * 3,
+            frames,
+        ]);
         let query = qkv
             .clone()
-            .slice([
-                0..batch,
-                0..self.heads,
-                0..per_head,
-                0..frames,
-            ])
+            .slice([0..batch, 0..self.heads, 0..per_head, 0..frames])
             .reshape([batch * self.heads, per_head, frames]);
         let key = qkv
             .clone()
-            .slice([
-                0..batch,
-                0..self.heads,
-                per_head..per_head * 2,
-                0..frames,
-            ])
+            .slice([0..batch, 0..self.heads, per_head..per_head * 2, 0..frames])
             .reshape([batch * self.heads, per_head, frames]);
         let value = qkv
             .slice([
@@ -276,12 +268,7 @@ impl<B: Backend> PerceiverAttention<B> {
         let query = self
             .to_q
             .forward(latents)
-            .reshape([
-                batch,
-                latent_count,
-                PERCEIVER_HEADS,
-                PERCEIVER_HEAD_DIM,
-            ])
+            .reshape([batch, latent_count, PERCEIVER_HEADS, PERCEIVER_HEAD_DIM])
             .swap_dims(1, 2);
         let kv = self.to_kv.forward(context).reshape([
             batch,
@@ -299,7 +286,7 @@ impl<B: Backend> PerceiverAttention<B> {
                 0..PERCEIVER_HEADS,
                 0..PERCEIVER_HEAD_DIM,
             ])
-            .squeeze::<4>()
+            .reshape([batch, context_count, PERCEIVER_HEADS, PERCEIVER_HEAD_DIM])
             .swap_dims(1, 2);
         let value = kv
             .slice([
@@ -309,7 +296,7 @@ impl<B: Backend> PerceiverAttention<B> {
                 0..PERCEIVER_HEADS,
                 0..PERCEIVER_HEAD_DIM,
             ])
-            .squeeze::<4>()
+            .reshape([batch, context_count, PERCEIVER_HEADS, PERCEIVER_HEAD_DIM])
             .swap_dims(1, 2);
         let attended = softmax(
             query.matmul(key.swap_dims(2, 3)) / (PERCEIVER_HEAD_DIM as f64).sqrt(),
@@ -317,11 +304,7 @@ impl<B: Backend> PerceiverAttention<B> {
         )
         .matmul(value)
         .swap_dims(1, 2)
-        .reshape([
-            batch,
-            latent_count,
-            PERCEIVER_HEADS * PERCEIVER_HEAD_DIM,
-        ]);
+        .reshape([batch, latent_count, PERCEIVER_HEADS * PERCEIVER_HEAD_DIM]);
         self.to_out.forward(attended)
     }
 }
@@ -346,16 +329,10 @@ impl<B: Backend> PerceiverFeedForward<B> {
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let [batch, frames, _] = input.dims();
         let projected = self.first.forward(input);
-        let values = projected.clone().slice([
-            0..batch,
-            0..frames,
-            0..self.inner,
-        ]);
-        let gates = projected.slice([
-            0..batch,
-            0..frames,
-            self.inner..self.inner * 2,
-        ]);
+        let values = projected
+            .clone()
+            .slice([0..batch, 0..frames, 0..self.inner]);
+        let gates = projected.slice([0..batch, 0..frames, self.inner..self.inner * 2]);
         self.second.forward(values * gelu_new(gates))
     }
 }
@@ -376,10 +353,7 @@ struct PerceiverResampler<B: Backend> {
 impl<B: Backend> PerceiverResampler<B> {
     fn init(channels: usize, device: &B::Device) -> Self {
         Self {
-            latents: Param::from_tensor(Tensor::zeros(
-                [PERCEIVER_LATENTS, channels],
-                device,
-            )),
+            latents: Param::from_tensor(Tensor::zeros([PERCEIVER_LATENTS, channels], device)),
             layers: (0..PERCEIVER_DEPTH)
                 .map(|_| PerceiverLayer {
                     attention: PerceiverAttention::init(channels, device),
@@ -398,10 +372,7 @@ impl<B: Backend> PerceiverResampler<B> {
             .reshape([1, PERCEIVER_LATENTS, channels])
             .expand([batch, PERCEIVER_LATENTS, channels]);
         for layer in &self.layers {
-            latents = layer
-                .attention
-                .forward(latents.clone(), context.clone())
-                + latents;
+            latents = layer.attention.forward(latents.clone(), context.clone()) + latents;
             latents = layer.feed_forward.forward(latents.clone()) + latents;
         }
         self.norm.forward(latents)
@@ -424,12 +395,7 @@ impl<B: Backend> RmsNorm<B> {
 
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let channels = self.gamma.dims()[0];
-        let norm = input
-            .clone()
-            .square()
-            .sum_dim(2)
-            .sqrt()
-            .clamp_min(1.0e-12);
+        let norm = input.clone().square().sum_dim(2).sqrt().clamp_min(1.0e-12);
         input / norm * self.scale * self.gamma.val().reshape([1, 1, channels])
     }
 }
@@ -472,19 +438,11 @@ impl<B: Backend> Gpt2Attention<B> {
             .swap_dims(1, 2);
         let mut key = qkv
             .clone()
-            .slice([
-                0..batch,
-                0..query_len,
-                channels..channels * 2,
-            ])
+            .slice([0..batch, 0..query_len, channels..channels * 2])
             .reshape([batch, query_len, self.heads, self.head_dim])
             .swap_dims(1, 2);
         let mut value = qkv
-            .slice([
-                0..batch,
-                0..query_len,
-                channels * 2..channels * 3,
-            ])
+            .slice([0..batch, 0..query_len, channels * 2..channels * 3])
             .reshape([batch, query_len, self.heads, self.head_dim])
             .swap_dims(1, 2);
         let past_len = past.as_ref().map_or(0, |cache| cache.key.dims()[2]);
@@ -493,8 +451,7 @@ impl<B: Backend> Gpt2Attention<B> {
             value = Tensor::cat(vec![past.value, value], 2);
         }
         let key_len = key.dims()[2];
-        let mut scores =
-            query.matmul(key.clone().swap_dims(2, 3)) / (self.head_dim as f64).sqrt();
+        let mut scores = query.matmul(key.clone().swap_dims(2, 3)) / (self.head_dim as f64).sqrt();
         if query_len > 1 {
             let device = scores.device();
             scores = scores + causal_mask::<B>(query_len, key_len, past_len, &device);
@@ -503,10 +460,7 @@ impl<B: Backend> Gpt2Attention<B> {
             .matmul(value.clone())
             .swap_dims(1, 2)
             .reshape([batch, query_len, channels]);
-        (
-            self.c_proj.forward(attended),
-            GptLayerCache { key, value },
-        )
+        (self.c_proj.forward(attended), GptLayerCache { key, value })
     }
 }
 
@@ -655,11 +609,8 @@ impl<B: Backend> XttsGpt<B> {
                 channels,
             )
             .init(device),
-            mel_embedding: EmbeddingConfig::new(
-                config.model_args.gpt_num_audio_tokens,
-                channels,
-            )
-            .init(device),
+            mel_embedding: EmbeddingConfig::new(config.model_args.gpt_num_audio_tokens, channels)
+                .init(device),
             gpt: Gpt2Transformer::init(config, device),
             mel_pos_embedding: LearnedPositionEmbeddings::init(
                 config.model_args.gpt_max_audio_tokens + 3,
@@ -672,11 +623,8 @@ impl<B: Backend> XttsGpt<B> {
                 device,
             ),
             final_norm: LayerNormConfig::new(channels).init(device),
-            text_head: LinearConfig::new(
-                channels,
-                config.model_args.gpt_number_text_tokens,
-            )
-            .init(device),
+            text_head: LinearConfig::new(channels, config.model_args.gpt_number_text_tokens)
+                .init(device),
             mel_head: LinearConfig::new(channels, config.model_args.gpt_num_audio_tokens)
                 .init(device),
         }
@@ -712,12 +660,12 @@ impl<B: Backend> XttsGpt<B> {
         text.push(i64::from(start));
         text.extend(text_ids.iter().map(|id| i64::from(*id)));
         text.push(i64::from(stop));
-        let text = Tensor::<B, 2, Int>::from_data(
-            TensorData::new(text, [1, text_ids.len() + 2]),
-            device,
-        );
+        let text =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(text, [1, text_ids.len() + 2]), device);
         let text_embedding = self.text_embedding.forward(text)
-            + self.text_pos_embedding.positions(text_ids.len() + 2, device);
+            + self
+                .text_pos_embedding
+                .positions(text_ids.len() + 2, device);
         let start_audio = Tensor::<B, 2, Int>::from_data(
             TensorData::new(
                 vec![i64::from(config.model_args.gpt_start_audio_token)],
@@ -740,21 +688,18 @@ impl<B: Backend> XttsGpt<B> {
     ) -> (Tensor<B, 2>, Tensor<B, 2>, Vec<GptLayerCache<B>>) {
         let (hidden, cache) = self.gpt.forward(input, cache);
         let hidden_dims = hidden.dims();
-        let last = hidden.slice([
-            0..1,
-            hidden_dims[1] - 1..hidden_dims[1],
-            0..hidden_dims[2],
-        ]);
-        let latent = self.final_norm.forward(last).squeeze::<2>();
+        let last = hidden.slice([0..1, hidden_dims[1] - 1..hidden_dims[1], 0..hidden_dims[2]]);
+        let latent = self
+            .final_norm
+            .forward(last)
+            .reshape([hidden_dims[0], hidden_dims[2]]);
         let logits = self.mel_head.forward(latent.clone());
         (logits, latent, cache)
     }
 
     fn code_embedding(&self, code: u32, position: usize, device: &B::Device) -> Tensor<B, 3> {
-        let code = Tensor::<B, 2, Int>::from_data(
-            TensorData::new(vec![i64::from(code)], [1, 1]),
-            device,
-        );
+        let code =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(vec![i64::from(code)], [1, 1]), device);
         self.mel_embedding.forward(code) + self.mel_pos_embedding.position(position, device)
     }
 }
@@ -920,8 +865,7 @@ impl<B: Backend> XttsHifiDecoder<B> {
         let second = if config.audio.output_sample_rate != config.audio.input_sample_rate {
             Interpolate1dConfig::new()
                 .with_scale_factor(Some(
-                    config.audio.output_sample_rate as f32
-                        / config.audio.input_sample_rate as f32,
+                    config.audio.output_sample_rate as f32 / config.audio.input_sample_rate as f32,
                 ))
                 .with_mode(InterpolateMode::Linear)
                 .with_align_corners(false)
@@ -950,11 +894,7 @@ impl<B: Backend> XttsNativeModel<B> {
         })
     }
 
-    fn load(
-        config: &XttsV2Config,
-        checkpoint: &Path,
-        device: &B::Device,
-    ) -> Result<Self> {
+    fn load(config: &XttsV2Config, checkpoint: &Path, device: &B::Device) -> Result<Self> {
         let mut model = Self::init(config, device)?;
         let result = crate::checkpoint::load_pytorch_layout_checkpoint(
             &mut model,
@@ -1036,6 +976,14 @@ impl<B: Backend> XttsNativeModel<B> {
     }
 }
 
+pub(crate) fn validate_xtts_checkpoint<B: Backend>(
+    config: &XttsV2Config,
+    checkpoint: &Path,
+    device: &B::Device,
+) -> Result<()> {
+    XttsNativeModel::<B>::load(config, checkpoint, device).map(drop)
+}
+
 pub struct BurnXtts<B: Backend> {
     config: XttsV2Config,
     tokenizer: XttsTokenizer,
@@ -1043,6 +991,7 @@ pub struct BurnXtts<B: Backend> {
     device: B::Device,
     conditioning_cache: HashMap<[u8; 32], XttsConditioning<B>>,
     conditioning_cache_order: Vec<[u8; 32]>,
+    generation_controls: Option<XttsGenerationControls>,
 }
 
 impl<B: Backend> BurnXtts<B> {
@@ -1065,11 +1014,8 @@ impl<B: Backend> BurnXtts<B> {
         let config: XttsV2Config = serde_json::from_value(neutral.parameters)
             .context("invalid canonical XTTS package parameters")?;
         let tokenizer = XttsTokenizer::from_file(package_dir.join(&config.tokenizer))?;
-        let model = XttsNativeModel::load(
-            &config,
-            &package_dir.join(MODEL_PACKAGE_WEIGHTS),
-            &device,
-        )?;
+        let model =
+            XttsNativeModel::load(&config, &package_dir.join(MODEL_PACKAGE_WEIGHTS), &device)?;
         Ok(Self {
             config,
             tokenizer,
@@ -1077,6 +1023,7 @@ impl<B: Backend> BurnXtts<B> {
             device,
             conditioning_cache: HashMap::new(),
             conditioning_cache_order: Vec::new(),
+            generation_controls: None,
         })
     }
 
@@ -1088,10 +1035,17 @@ impl<B: Backend> BurnXtts<B> {
         &self.tokenizer
     }
 
-    pub fn condition_reference(
-        &mut self,
-        references: &[PathBuf],
-    ) -> Result<XttsConditioning<B>> {
+    pub fn set_generation_controls(&mut self, controls: XttsGenerationControls) -> Result<()> {
+        controls.validate()?;
+        self.generation_controls = Some(controls);
+        Ok(())
+    }
+
+    pub fn reset_generation_controls(&mut self) {
+        self.generation_controls = None;
+    }
+
+    pub fn condition_reference(&mut self, references: &[PathBuf]) -> Result<XttsConditioning<B>> {
         ensure!(
             !references.is_empty(),
             "XTTS requires at least one reference WAV"
@@ -1102,10 +1056,10 @@ impl<B: Backend> BurnXtts<B> {
         }
         let mut loaded = Vec::with_capacity(references.len());
         for path in references {
-            loaded.push(
-                read_wav(path)
-                    .with_context(|| format!("failed to read XTTS reference {}", path.display()))?,
-            );
+            loaded
+                .push(read_wav(path).with_context(|| {
+                    format!("failed to read XTTS reference {}", path.display())
+                })?);
         }
         let conditioning = self.condition_audio(&loaded)?;
         while self.conditioning_cache_order.len() >= SPEAKER_EMBEDDING_CACHE_ENTRIES {
@@ -1125,7 +1079,9 @@ impl<B: Backend> BurnXtts<B> {
         let mut speaker_embeddings = Vec::with_capacity(references.len());
         let mut gpt_audio = Vec::new();
         for reference in references {
-            reference.validate().context("invalid XTTS reference audio")?;
+            reference
+                .validate()
+                .context("invalid XTTS reference audio")?;
             let mut mono = reference.convert_channels(1)?;
             let max_samples = usize::try_from(self.config.max_ref_len)?
                 .checked_mul(mono.sample_rate_hz as usize)
@@ -1149,9 +1105,11 @@ impl<B: Backend> BurnXtts<B> {
             let conditioning_audio = mono.resample_linear(CONDITIONING_SAMPLE_RATE)?;
             gpt_audio.extend(conditioning_audio.samples);
         }
-        let speaker = Tensor::cat(speaker_embeddings, 0)
-            .mean_dim(0)
-            .reshape([1, self.config.model_args.d_vector_dim, 1]);
+        let speaker = Tensor::cat(speaker_embeddings, 0).mean_dim(0).reshape([
+            1,
+            self.config.model_args.d_vector_dim,
+            1,
+        ]);
         let gpt = self.gpt_conditioning(&gpt_audio)?;
         Ok(XttsConditioning { gpt, speaker })
     }
@@ -1188,11 +1146,7 @@ impl<B: Backend> BurnXtts<B> {
             .checked_mul(CONDITIONING_SAMPLE_RATE as usize)
             .context("XTTS GPT conditioning chunk overflow")?;
         let minimum = (CONDITIONING_MIN_SECONDS * CONDITIONING_SAMPLE_RATE as f32) as usize;
-        let mel_stats = self
-            .model
-            .mel_stats
-            .val()
-            .reshape([1, 80, 1]);
+        let mel_stats = self.model.mel_stats.val().reshape([1, 80, 1]);
         let mut embeddings = Vec::new();
         for audio in samples[..maximum].chunks(chunk) {
             if audio.len() < minimum {
@@ -1202,11 +1156,7 @@ impl<B: Backend> BurnXtts<B> {
             let mut values = Vec::with_capacity(feature.values.len());
             for mel in 0..80 {
                 for frame in 0..feature.frames {
-                    values.push(
-                        feature.values[frame * 80 + mel]
-                            .max(1.0e-5)
-                            .ln(),
-                    );
+                    values.push(feature.values[frame * 80 + mel].max(1.0e-5).ln());
                 }
             }
             let mel = Tensor::from_data(
@@ -1276,22 +1226,29 @@ impl<B: Backend> BurnXtts<B> {
             [SynthesisDimension::new("tokens", text_ids.len())],
         )?;
 
-        let controls = XttsGenerationControls::from_config(&self.config, request.options.seed);
+        let mut controls = self
+            .generation_controls
+            .clone()
+            .unwrap_or_else(|| XttsGenerationControls::from_config(&self.config, None));
+        if let Some(seed) = request.options.seed {
+            controls.seed = seed;
+        }
         controls.validate()?;
         let prefix_started = Instant::now();
-        let prefix = self.model.gpt.prefix(
-            conditioning.gpt,
-            &text_ids,
-            &self.config,
-            &self.device,
-        )?;
+        let prefix =
+            self.model
+                .gpt
+                .prefix(conditioning.gpt, &text_ids, &self.config, &self.device)?;
         let (mut logits, mut current_latent, mut cache) = self.model.gpt.next(prefix, None);
         record_profile::<B>(
             profiler,
             &self.device,
             SynthesisStage::AutoregressiveFirstCode,
             prefix_started,
-            [SynthesisDimension::new("prefix_tokens", text_ids.len() + 35)],
+            [SynthesisDimension::new(
+                "prefix_tokens",
+                text_ids.len() + 35,
+            )],
         )?;
 
         let generation_started = Instant::now();
@@ -1490,7 +1447,10 @@ fn sample_code(
         .map(|(_, logit)| (*logit - max).exp())
         .collect::<Vec<_>>();
     let sum: f32 = probabilities.iter().sum();
-    ensure!(sum.is_finite() && sum > 0.0, "XTTS sampling logits are invalid");
+    ensure!(
+        sum.is_finite() && sum > 0.0,
+        "XTTS sampling logits are invalid"
+    );
     for probability in &mut probabilities {
         *probability /= sum;
     }
@@ -1523,10 +1483,7 @@ fn causal_mask<B: Backend>(
             values.push(if key_index <= maximum { 0.0 } else { -1.0e4 });
         }
     }
-    Tensor::from_data(
-        TensorData::new(values, [1, 1, query, key]),
-        device,
-    )
+    Tensor::from_data(TensorData::new(values, [1, 1, query, key]), device)
 }
 
 fn gelu_new<B: Backend, const D: usize>(input: Tensor<B, D>) -> Tensor<B, D> {
@@ -1535,9 +1492,7 @@ fn gelu_new<B: Backend, const D: usize>(input: Tensor<B, D>) -> Tensor<B, D> {
 }
 
 fn xtts_runtime_tensor(path: &str, _container: &str) -> bool {
-    path == "mel_stats"
-        || path.starts_with("gpt.")
-        || path.starts_with("hifigan_decoder.")
+    path == "mel_stats" || path.starts_with("gpt.") || path.starts_with("hifigan_decoder.")
 }
 
 fn xtts_speaker_encoder_config(config: &XttsV2Config) -> SpeakerEncoderPackageConfig {
@@ -1636,10 +1591,7 @@ fn reflect_preemphasis(samples: &[f32], coefficient: f32) -> Vec<f32> {
     output
 }
 
-fn conditioning_cache_key(
-    references: &[PathBuf],
-    config: &XttsV2Config,
-) -> Result<[u8; 32]> {
+fn conditioning_cache_key(references: &[PathBuf], config: &XttsV2Config) -> Result<[u8; 32]> {
     let mut digest = Sha256::new();
     digest.update(config.gpt_cond_len.to_le_bytes());
     digest.update(config.gpt_cond_chunk_len.to_le_bytes());
@@ -1672,10 +1624,17 @@ fn local_audio_path(uri: &str) -> Result<PathBuf> {
     }
 }
 
+pub fn xtts_language_has_native_cleaner(language: &str) -> bool {
+    !matches!(
+        language.to_ascii_lowercase().as_str(),
+        "ar" | "zh" | "zh-cn" | "ko" | "ja"
+    )
+}
+
 fn xtts_clean_text(text: &str, language: &str) -> Result<String> {
     let language = language.to_ascii_lowercase();
     ensure!(
-        !matches!(language.as_str(), "ar" | "zh" | "zh-cn" | "ko" | "ja"),
+        xtts_language_has_native_cleaner(&language),
         "XTTS language `{language}` requires an upstream-compatible transliterator that is not available; provide a supported Latin/Cyrillic language"
     );
     let mut output = text

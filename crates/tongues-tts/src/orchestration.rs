@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use speaking::SpeakerId;
+use speaking::{SpeakerId, SpeakerReference, SpeakerReferenceSource};
 use thiserror::Error;
 
 use crate::{
@@ -995,6 +995,12 @@ impl<E: SpeechSynthesisEngine + Send> SynthesizerBackend for PlanEngineBackend<E
             Some(SpeakerSelection::Numeric(id)) => Some(*id),
             None => None,
         };
+        if let Some(uri) = request.reference_audio.speaker.as_ref() {
+            plan.speaker_reference = Some(SpeakerReference {
+                description: Some("speaker reference from unified synthesis request".into()),
+                source: SpeakerReferenceSource::ReferenceAudio { uri: uri.clone() },
+            });
+        }
         let (model_language, language_id) = match request.model_language.as_ref() {
             Some(LanguageSelection::Named(name)) => (Some(name.clone()), None),
             Some(LanguageSelection::Numeric(id)) => (None, Some(*id)),
@@ -1371,6 +1377,74 @@ mod tests {
         assert_eq!(output.metadata.channels, 1);
         assert_eq!(chunks[0].frame_offset, 0);
         assert!(chunks[0].is_final);
+    }
+
+    #[test]
+    fn plan_adapter_preserves_neutral_speaker_reference_audio() {
+        #[derive(Debug)]
+        struct ReferenceFixtureEngine;
+
+        impl SpeechSynthesisEngine for ReferenceFixtureEngine {
+            fn capabilities(&self) -> SpeechModelCapabilities {
+                SpeechModelCapabilities {
+                    family: SpeechModelFamily::CrossLingualVoiceClone,
+                    supports_named_speakers: false,
+                    supports_languages: true,
+                    supports_reference_audio: true,
+                    supports_voice_conversion: false,
+                    integrated_vocoder: true,
+                }
+            }
+
+            fn sample_rate_hz(&self) -> u32 {
+                24_000
+            }
+
+            fn synthesize_plan_streaming(
+                &mut self,
+                request: &SpeechSynthesisRequest,
+                sink: &mut dyn AudioSink,
+            ) -> anyhow::Result<()> {
+                assert_eq!(
+                    request.plan.speaker_reference,
+                    Some(SpeakerReference {
+                        description: Some(
+                            "speaker reference from unified synthesis request".into()
+                        ),
+                        source: SpeakerReferenceSource::ReferenceAudio {
+                            uri: "voice.wav".into()
+                        },
+                    })
+                );
+                sink.emit(AudioChunk {
+                    chunk_index: 0,
+                    is_final: true,
+                    pause_after_ms: 0,
+                    sample_rate_hz: 24_000,
+                    pcm_mono_f32: vec![0.0; 24],
+                })
+            }
+        }
+
+        let mut capabilities = fixture_capabilities();
+        capabilities.backend = "reference-fixture".into();
+        capabilities.speakers = SpeakerCapabilities::unsupported();
+        capabilities.reference_audio = ReferenceAudioCapabilities {
+            speaker: true,
+            speaker_required: true,
+            ..Default::default()
+        };
+        let mut backend = PlanEngineBackend::new(
+            capabilities,
+            ResolvedSpeechDevice::Cpu,
+            ReferenceFixtureEngine,
+        );
+        let mut request = UnifiedSynthesisRequest::new("hello", "en-US");
+        request.device = SpeechDeviceRequest::Cpu;
+        request.reference_audio.speaker = Some("voice.wav".into());
+        backend
+            .synthesize(&request, &mut |_| Ok(()))
+            .expect("reference-conditioned synthesis");
     }
 
     #[test]

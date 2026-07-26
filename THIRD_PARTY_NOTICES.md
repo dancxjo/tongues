@@ -16,16 +16,18 @@ Project: [coqui-ai/TTS](https://github.com/coqui-ai/TTS)
 
 Tongues imports published Coqui checkpoint configurations and weights for
 SpeedySpeech, FastPitch, Tacotron2-DDC, Glow-TTS, HiFi-GAN v2,
-MultiBand-MelGAN, VITS, and YourTTS, and targets the corresponding tensor names, shapes,
-token contracts, defaults, and inference behavior. Coqui reference executions
-also produced numerical conformance fixtures.
+MultiBand-MelGAN, VITS, YourTTS, and XTTS v2, and targets the corresponding
+tensor names, shapes, token contracts, defaults, and inference behavior.
+Coqui reference executions also produced numerical conformance fixtures.
 
-`crates/tongues-tts/src/xtts.rs` adapts the XTTS v2 configuration, tokenizer
-boundary, and cumulative-waveform overlap semantics from Coqui TTS revision
+`crates/tongues-tts/src/xtts.rs` and
+`crates/tongues-tts/src/burn_xtts.rs` adapt the XTTS v2 configuration,
+tokenizer boundary, GPT, conditioning encoders, HiFi decoder, and
+cumulative-waveform overlap semantics from Coqui TTS revision
 `dbf1a08a0d4e47fdad6172e433eeb34bc6b13b4e`, principally
 `TTS/tts/models/xtts.py`, `TTS/tts/configs/xtts_config.py`, and
-`TTS/tts/layers/xtts/tokenizer.py`. That file is an MPL-2.0 covered
-modification rather than MIT relicensing.
+`TTS/tts/layers/xtts/`. Those files are MPL-2.0 covered modifications rather
+than MIT relicensing.
 
 `crates/tongues-tts/src/burn_align_tts.rs` adapts the Align-TTS inference graph,
 duration predictor, retained MDN checkpoint layout, and configuration contract
@@ -69,7 +71,8 @@ The Coqui TTS `v0.6.1` source tag is licensed under
 Apache-2.0. If a Tongues source file is found to contain or adapt Coqui source
 expression, that file must retain the applicable MPL notice and be handled
 under the MPL's file-level requirements, including distribution of the full
-license text.
+license text. A complete local copy is retained at
+[`fixtures/speech/align-tts-mpl-fixture/LICENSE.txt`](fixtures/speech/align-tts-mpl-fixture/LICENSE.txt).
 
 The license of source code and the license of model weights are separate. At
 `v0.6.1`, Coqui's model registry labels the SpeedySpeech and FastPitch entries
