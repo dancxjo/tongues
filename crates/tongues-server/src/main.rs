@@ -6755,7 +6755,7 @@ mod tests {
 
     #[test]
     fn single_speaker_backends_return_an_empty_optional_catalog() {
-        for backend in ["burn", "fastpitch", "onnx", "styletts2", "mock"] {
+        for backend in ["burn", "fastpitch", "glow", "onnx", "styletts2", "mock"] {
             let response = speech_speakers_response(FsPath::new("."), backend);
             assert_eq!(response.backend, backend);
             assert!(response.installed);
@@ -6787,7 +6787,7 @@ mod tests {
         )
         .expect("write ONNX config");
 
-        let discovered = ["burn", "fastpitch", "vits", "styletts2", "onnx"]
+        let discovered = ["burn", "fastpitch", "glow", "vits", "styletts2", "onnx"]
             .into_iter()
             .map(|backend| {
                 speech_backend_capabilities(
@@ -6806,7 +6806,7 @@ mod tests {
                 .iter()
                 .map(|model| model.backend.as_str())
                 .collect::<Vec<_>>(),
-            ["burn", "fastpitch", "vits", "styletts2", "onnx"]
+            ["burn", "fastpitch", "glow", "vits", "styletts2", "onnx"]
         );
         assert_eq!(discovered[0].model, "speedyspeech-ljspeech+hifigan-v2");
         assert_eq!(discovered[1].model, "fastpitch-ljspeech+hifigan-v2");
@@ -6815,24 +6815,68 @@ mod tests {
         assert!(discovered[1].pitch.explicit_values);
         assert!(discovered[1].durations);
         assert_eq!(
-            discovered[2].speakers.values,
+            discovered[2].model,
+            "glow-tts-ljspeech+standardizer+multiband-melgan"
+        );
+        assert!(discovered[2].durations);
+        assert_eq!(discovered[2].output.sample_rate_hz, 22_050);
+        assert_eq!(
+            discovered[3].speakers.values,
             tongues_tts::CapabilityValue::Listed(vec![
                 tongues_tts::NamedCapability::new("p225", "p225").with_numeric_id(0),
                 tongues_tts::NamedCapability::new("p330", "p330").with_numeric_id(90),
             ])
         );
-        assert!(discovered[3].reference_audio.speaker);
-        assert!(discovered[3].reference_audio.style);
-        assert_eq!(discovered[3].styles.embedding_dimensions, Some(256));
-        assert_eq!(discovered[4].output.sample_rate_hz, 22_050);
+        assert!(discovered[4].reference_audio.speaker);
+        assert!(discovered[4].reference_audio.style);
+        assert_eq!(discovered[4].styles.embedding_dimensions, Some(256));
+        assert_eq!(discovered[5].output.sample_rate_hz, 22_050);
         let json =
-            serde_json::to_value(&discovered[2]).expect("serialize VITS backend capabilities");
+            serde_json::to_value(&discovered[3]).expect("serialize VITS backend capabilities");
         assert_eq!(json["backend"], "vits");
         assert_eq!(json["speakers"]["values"]["support"], "listed");
         assert_eq!(json["speakers"]["values"]["values"][1]["id"], "p330");
         assert_eq!(json["speakers"]["values"]["values"][1]["numeric_id"], 90);
 
         std::fs::remove_dir_all(&mortar_home).expect("remove capability fixture");
+    }
+
+    #[test]
+    fn glow_discovery_exposes_the_named_waveform_composition() {
+        let capabilities = speech_backend_capabilities(
+            FsPath::new("/tmp"),
+            "glow",
+            None,
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            24_000,
+        )
+        .expect("Glow-TTS capabilities");
+        assert_eq!(
+            capabilities.model,
+            "glow-tts-ljspeech+standardizer+multiband-melgan"
+        );
+        assert!(capabilities.durations);
+        assert_eq!(capabilities.output.sample_rate_hz, 22_050);
+
+        let composition = tongues_tts::registered_speech_compositions()
+            .into_iter()
+            .find(|composition| composition.backend == "glow")
+            .expect("Glow-TTS composition");
+        assert_eq!(
+            composition.pipeline.acoustic_model.as_deref(),
+            Some("glow-tts-ljspeech")
+        );
+        assert_eq!(
+            composition.pipeline.vocoder.as_deref(),
+            Some("glow-standardized-multiband-melgan-ljspeech")
+        );
+
+        let compatibility = speech_vocoder_compatibility("glow");
+        assert!(compatibility.iter().any(|edge| {
+            edge.component_id == "glow-standardized-multiband-melgan-ljspeech"
+                && edge.compatible
+                && edge.reason.contains("named")
+        }));
     }
 
     #[test]

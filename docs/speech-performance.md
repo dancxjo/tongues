@@ -43,6 +43,29 @@ latency/throughput relationship explicit; reintroducing low-latency VITS
 streaming should use cached or non-overlapping decoder state rather than
 recomputing overlapping windows.
 
+## 2026-07-26 licensed Glow-TTS CPU conformance run
+
+The licensed `glow-tts-ljspeech` composition was measured on the same host
+with the Burn NdArray CPU backend, seed 27, and this input:
+
+> Morning light rested on the cedar trees while the kettle began to sing.
+
+The runnable path was Glow-TTS, the pinned
+`coqui-ljspeech-multiband-melgan-standardize-v1` conversion, and native
+MultiBand-MelGAN/PQMF synthesis. It produced 4.180 seconds of mono 22.05 kHz
+PCM audio.
+
+| Run | Synthesis | First audio | RTF | Acoustic | Conversion | Vocoder |
+|---|---:|---:|---:|---:|---:|---:|
+| Cold | 3.158 s | 3.158 s | 0.756 | 0.641 s | 0.035 ms | 2.513 s |
+| Warm | 3.200 s | 3.200 s | 0.766 | 0.640 s | 0.036 ms | 2.557 s |
+
+Cold startup before synthesis was 4.933 seconds, including cache verification
+and model construction/weight upload. The outer conformance command, including
+startup and two synthesis runs, took 11.63 seconds. These values come from the
+structured `startup_profile_json`, `inference_profile_json`, and
+`scripts/speech-smoke.sh` result emitted at revision `8d3c844`.
+
 ## Quality gate
 
 Throughput is recorded only after the SpeedySpeech positional table matches the
