@@ -97,6 +97,11 @@ code, remaining autoregressive generation, each waveform decode, and stream
 assembly; this keeps conditioning cost, first-playable latency, steady RTF, and
 overlap recomputation observable independently.
 
+Portfolio placement keeps this backend as a Tier C expressive renderer. It is
+not required as the resident onboard voice path: deployment should keep a Tier
+A resident renderer available for non-interrupting fallback through the same
+speech API.
+
 Run the two-language, two-reference and streaming-equivalence gate with:
 
 ```sh
@@ -110,7 +115,10 @@ TONGUES_XTTS_CUDA_DEVICE=0 \
 Set `TONGUES_XTTS_CPU=1` for the retained CPU path. The harness validates
 English and French with both clips, decodes each WAV, records process peak
 resident memory and structured native timings, and requires the concatenated
-streaming WAV to equal one-shot decoding for the same seed.
+streaming WAV to equal one-shot decoding for the same seed. It also writes
+`xtts-benchmark.json` with reference preparation, GPT first-code latency,
+stable first-audio latency, steady RTF, overlap-recompute decode cost, and
+separate peak RAM/GPU-memory fields.
 
 ## Safe Coqui package import
 
