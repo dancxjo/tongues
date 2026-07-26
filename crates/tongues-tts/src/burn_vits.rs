@@ -1027,7 +1027,7 @@ mod tests {
     type TestBackend = NdArray<f32>;
 
     #[test]
-    #[ignore = "requires a pinned original Fairseq MMS model directory"]
+    #[ignore = "requires a pinned original Fairseq MMS model directory; run scripts/speech-conformance.sh (fairseq-mms family)"]
     fn published_fairseq_mms_checkpoint_loads_and_synthesizes_without_python() {
         let model_dir = std::env::var_os("TONGUES_TEST_FAIRSEQ_MMS_MODEL_DIR")
             .expect("TONGUES_TEST_FAIRSEQ_MMS_MODEL_DIR is required");
@@ -1146,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts"]
+    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts; run scripts/speech-conformance.sh (yourtts family)"]
     fn published_your_tts_checkpoints_load_when_available() {
         let required =
             |name: &str| std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required"));
@@ -1170,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts"]
+    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts; run scripts/speech-conformance.sh (yourtts family)"]
     fn published_your_tts_named_enrollment_synthesizes_when_available() {
         let required =
             |name: &str| std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required"));

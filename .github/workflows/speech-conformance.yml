@@ -1,0 +1,154 @@
+name: Speech Conformance
+
+# Artifact-backed conformance lane for pinned external speech models.
+#
+# Runs on a weekly schedule and on manual dispatch.  Each artifact family is
+# either required-for-release or informational; missing families are reported
+# as SKIPPED (not silent success).  The full JSON summary is published as a
+# workflow artifact and as a job summary so drift is visible without downloading
+# the artifact.
+#
+# See docs/speech-conformance-policy.md for the release-gate definitions and
+# artifact licensing notes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      coqui_model_root:
+        description: >
+          Path to the Coqui LJSpeech/VCTK model tree on the runner.
+          Leave blank to use the default XDG_DATA_HOME location.
+        required: false
+        default: ""
+      yourtts_model_root:
+        description: >
+          Path to the YourTTS model directory (CC-BY-NC-ND 4.0).
+          Leave blank to skip the yourtts family.
+        required: false
+        default: ""
+      fairseq_model_root:
+        description: >
+          Path to a downloaded Fairseq MMS model directory (CC-BY-NC-4.0).
+          Leave blank to skip the fairseq-mms family.
+        required: false
+        default: ""
+      freevc_model_root:
+        description: >
+          Path to the FreeVC24 model directory (MIT).
+          Leave blank to skip the freevc family.
+        required: false
+        default: ""
+  schedule:
+    # Weekly on Sundays at 03:00 UTC.
+    - cron: "0 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conformance:
+    name: Artifact-backed speech conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Validate conformance script syntax
+        run: bash -n scripts/speech-conformance.sh
+
+      - name: Install artifact-backed model families
+        # Download whichever families are available through the verified
+        # catalog.  Families that require separately licensed artifacts (e.g.
+        # YourTTS CC-BY-NC-ND, Fairseq CC-BY-NC) are installed only when an
+        # explicit path is provided via workflow_dispatch inputs.
+        #
+        # On the scheduled run the Coqui families are downloaded automatically;
+        # informational families remain skipped unless configured.
+        run: |
+          set -euo pipefail
+          # Install Coqui LJSpeech and VCTK families through the verified catalog.
+          cargo build --release -p tongues-cli
+          target/release/tongues models install \
+            tts_models/en/ljspeech/speedy-speech-hifigan \
+            tts_models/en/ljspeech/fast_pitch-HifiGAN \
+            tts_models/en/ljspeech/glow-tts \
+            tts_models/en/ljspeech/multiband-melgan \
+            tts_models/en/vctk/vits \
+            || echo "Some Coqui model downloads failed or catalog IDs changed; families will be skipped."
+
+      - name: Run artifact-backed speech conformance
+        env:
+          TONGUES_COQUI_MODEL_ROOT: ${{ inputs.coqui_model_root || '' }}
+          TONGUES_YOURTTS_MODEL_ROOT: ${{ inputs.yourtts_model_root || '' }}
+          TONGUES_FAIRSEQ_MODEL_ROOT: ${{ inputs.fairseq_model_root || '' }}
+          TONGUES_FREEVC_MODEL_ROOT: ${{ inputs.freevc_model_root || '' }}
+        run: scripts/speech-conformance.sh
+
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speech-conformance-${{ github.run_id }}
+          path: target/speech-conformance/
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Publish summary to job summary
+        if: always()
+        run: |
+          summary="target/speech-conformance/conformance-summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "No conformance summary generated." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git_rev="$(jq -r '.git_revision' "$summary")"
+          ts="$(jq -r '.timestamp' "$summary")"
+          tests_run="$(jq -r '.totals.tests_run' "$summary")"
+          tests_passed="$(jq -r '.totals.tests_passed' "$summary")"
+          tests_failed="$(jq -r '.totals.tests_failed' "$summary")"
+          families_skipped="$(jq -r '.totals.families_skipped' "$summary")"
+
+          {
+            echo "## Speech Conformance Summary"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Revision | \`${git_rev}\` |"
+            echo "| Timestamp | ${ts} |"
+            echo "| Tests run | ${tests_run} |"
+            echo "| Tests passed | ${tests_passed} |"
+            echo "| Tests failed | ${tests_failed} |"
+            echo "| Families skipped | ${families_skipped} |"
+            echo ""
+            echo "### Families"
+            echo ""
+            echo "| Family | Gate | Status | Run | Passed | Failed | Skip reason |"
+            echo "|---|---|---|---:|---:|---:|---|"
+            jq -r '
+              .families | to_entries[] |
+              [
+                .key,
+                .value.release_gate,
+                .value.status,
+                (.value.tests_run | tostring),
+                (.value.tests_passed | tostring),
+                (.value.tests_failed | tostring),
+                (.value.skip_reason // "")
+              ] | "| " + join(" | ") + " |"
+            ' "$summary"
+          } >> "$GITHUB_STEP_SUMMARY"
