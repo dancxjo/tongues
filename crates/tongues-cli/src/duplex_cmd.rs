@@ -6,18 +6,21 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use speaking::{UtteranceId, VarietyId};
 use tongues_duplex::{
-    replay_journal, DuplexFixtureSuite, DuplexSimulator, EvidenceModality,
-    FixtureCompletionProvider, NormalizedCompletionHypothesis, ObservedEvidence,
-    OracleCompletionProvider, SimulatorConfig, SimulatorEventKind, SimulatorJournal,
-    SimulatorState,
+    prepare_dataset_with_progress, replay_journal, DuplexFixtureSuite, DuplexPrepareProgress,
+    DuplexSimulator, EvidenceModality, FixtureCompletionProvider, NormalizedCompletionHypothesis,
+    ObservedEvidence, OracleCompletionProvider, SimulatorConfig, SimulatorEventKind,
+    SimulatorJournal, SimulatorState,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
+const DEFAULT_DUPLEX_DATA_DIR: &str = "datasets/duplex/v0";
 
 #[derive(Subcommand, Debug)]
 pub enum DuplexCommands {
     /// Run deterministic completion beams over fixture or chunked evidence
     Demo(DuplexDemoCommand),
+    /// Prepare a prefix/completion/rollback/repair training dataset from fixtures
+    Prepare(DuplexPrepareCommand),
 }
 
 #[derive(Args, Debug)]
@@ -65,10 +68,68 @@ enum DuplexOutputFormat {
     Json,
 }
 
+/// Arguments for `tongues duplex prepare`.
+#[derive(Args, Debug)]
+pub struct DuplexPrepareCommand {
+    /// Duplex fixture suite JSON to prepare from
+    #[arg(long, default_value = DEFAULT_FIXTURES_PATH)]
+    fixtures: PathBuf,
+
+    /// Output directory for the prepared dataset
+    #[arg(long, default_value = DEFAULT_DUPLEX_DATA_DIR)]
+    out: PathBuf,
+}
+
 pub fn run(command: DuplexCommands) -> Result<()> {
     match command {
         DuplexCommands::Demo(command) => run_demo(command),
+        DuplexCommands::Prepare(command) => run_prepare(command),
     }
+}
+
+fn run_prepare(command: DuplexPrepareCommand) -> Result<()> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::time::Duration;
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} {msg}")
+            .expect("valid spinner template"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb.set_message(format!(
+        "Preparing duplex dataset at {}",
+        command.out.display()
+    ));
+
+    let report = prepare_dataset_with_progress(&command.out, &command.fixtures, {
+        let pb = pb.clone();
+        move |progress| match progress {
+            DuplexPrepareProgress::Stage { message } => pb.set_message(message),
+            DuplexPrepareProgress::Fixture { fixture_id, rows } => {
+                pb.set_message(format!("Processed fixture '{fixture_id}' → {rows} rows"));
+            }
+            DuplexPrepareProgress::Write { path, rows } => {
+                pb.set_message(format!("Wrote {rows} rows → {path}"));
+            }
+        }
+    })?;
+
+    pb.finish_and_clear();
+    println!(
+        "Prepared duplex dataset at {}: {} train / {} valid / {} test rows \
+         from {} fixtures ({} prefix, {} completion, {} rollback, {} repair)",
+        command.out.display(),
+        report.train_rows,
+        report.valid_rows,
+        report.test_rows,
+        report.fixtures,
+        report.prefix_rows,
+        report.completion_rows,
+        report.rollback_rows,
+        report.repair_rows,
+    );
+    Ok(())
 }
 
 fn run_demo(command: DuplexDemoCommand) -> Result<()> {

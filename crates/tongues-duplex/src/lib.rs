@@ -6,7 +6,15 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::{BufWriter, Write as IoWrite};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context as _, Result as AnyResult};
+use rand::SeedableRng;
+use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use speaking::{
     CompletionHypothesisId, EvidenceProvenance, EvidenceSource, ProsodyTrack,
@@ -1572,6 +1580,768 @@ pub fn run_fixture_with_consumer(
     Ok((journal, state, consumer))
 }
 
+// ---------------------------------------------------------------------------
+// Prefix, completion, rollback, and repair training data generation
+// ---------------------------------------------------------------------------
+
+/// Schema version for the duplex training dataset.
+pub const TRAINING_DATASET_VERSION: u32 = 1;
+
+/// Kind of training row derived from a duplex simulator run.
+///
+/// Every row distinguishes the evidence, inference, prediction, and commitment
+/// layers of the duplex belief state at a given utterance prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrainingRowKind {
+    /// One prefix observation: evidence arrived and the beam updated.
+    /// Covers evidence, inference, and prediction layers together.
+    Prefix,
+    /// A commit advance: morphemes moved from provisional to the committed
+    /// prefix at this step.
+    Completion,
+    /// A withdrawal/rollback: a hypothesis branch was removed.
+    /// Every rollback row names morpheme occurrences and source spans.
+    Rollback,
+    /// A repair: a hypothesis branch was revised in place.
+    /// Repair rows include reparandum, interregnum, repair, and continuation.
+    Repair,
+}
+
+/// Provenance of the row within the training corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DuplexTrainingRowSource {
+    /// Derived directly from a named duplex fixture.
+    Fixture,
+}
+
+/// Compact snapshot of one beam hypothesis at a training prefix.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BeamSnapshot {
+    /// Stable hypothesis identifier.
+    pub hypothesis_id: String,
+    /// Normalized posterior probability.
+    pub probability: f64,
+    /// Normalized morpheme keys in this hypothesis.
+    pub morphemes: Vec<String>,
+    /// True if this hypothesis was within the posterior-mass selection set.
+    pub is_selected: bool,
+}
+
+/// A morpheme occurrence identified by key, surface, and sequential index.
+///
+/// Used in rollback and repair anchors to address morpheme occurrences
+/// unambiguously within a hypothesis sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MorphemeOccurrenceRef {
+    pub key: String,
+    pub surface: String,
+    /// Zero-based occurrence index within the hypothesis morpheme sequence.
+    pub occurrence_index: usize,
+}
+
+/// Anchor for a rollback row: the hypothesis that was withdrawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RollbackAnchor {
+    /// The hypothesis that was withdrawn.
+    pub hypothesis_id: String,
+    /// Morpheme occurrences that were revoked.
+    pub morphemes: Vec<MorphemeOccurrenceRef>,
+    /// Human-readable reason for withdrawal.
+    pub reason: String,
+}
+
+/// Anchor for a repair row, using disfluency repair terminology.
+///
+/// Identifies the reparandum (what was said/predicted incorrectly), the
+/// interregnum (always empty in hypothesis space—no filled pauses), the
+/// repair (corrected morpheme sequence), and the continuation (shared
+/// tail after the repair).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepairAnchor {
+    /// Hypothesis identity (preserved through repair).
+    pub hypothesis_id: String,
+    /// Reparandum: morpheme occurrences in the previous hypothesis that are
+    /// being corrected.
+    pub reparandum: Vec<MorphemeOccurrenceRef>,
+    /// Interregnum: always empty in the duplex context (hypothesis sequences
+    /// contain no filled pauses), preserved for schema completeness.
+    pub interregnum: Vec<String>,
+    /// Repair: the corrected morpheme occurrences in the replacement hypothesis.
+    pub repair: Vec<MorphemeOccurrenceRef>,
+    /// Continuation: morpheme occurrences shared by both previous and
+    /// replacement after the repair point.
+    pub continuation: Vec<MorphemeOccurrenceRef>,
+    /// Human-readable repair reason.
+    pub reason: String,
+}
+
+/// One training row from the duplex prefix/completion/rollback/repair corpus.
+///
+/// Rows are versioned and self-describing. Every row names its fixture source
+/// and step index so the full simulator journal can be replayed independently.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DuplexTrainingRow {
+    /// Schema version. Always `TRAINING_DATASET_VERSION` (currently 1).
+    pub version: u32,
+    /// Deterministic identifier: `{fixture_id}:s{step}:{kind}:{index}`.
+    pub row_id: String,
+    /// Kind of supervision signal this row carries.
+    pub row_kind: TrainingRowKind,
+    /// Provenance of this row in the corpus.
+    pub row_source: DuplexTrainingRowSource,
+
+    // ── Utterance context ────────────────────────────────────────────────
+    /// Fixture utterance identifier.
+    pub utterance_id: String,
+    /// Language variety tag (e.g. `"en-US-GA"`).
+    pub variety: String,
+    /// ID of the fixture suite entry that produced this row.
+    pub fixture_id: String,
+    /// Zero-based evidence step index within the fixture.
+    pub step_index: usize,
+
+    // ── Evidence at this prefix ──────────────────────────────────────────
+    /// IDs of evidence items observed up to and including this step.
+    pub evidence_ids: Vec<String>,
+    /// Modalities of those evidence items (`"text"` or `"acoustics"`).
+    pub evidence_modalities: Vec<String>,
+    /// True if any evidence observed up to this step is acoustic.
+    /// Policy rows for silent versus audible repair differ on this flag.
+    pub heard: bool,
+
+    // ── Commitment state at this prefix ──────────────────────────────────
+    /// Morpheme surfaces in the committed prefix at this step.
+    pub committed_prefix: Vec<String>,
+    /// Number of committed morphemes at this step.
+    pub commit_frontier: usize,
+
+    // ── Beam state at this prefix ────────────────────────────────────────
+    /// Longest common morpheme prefix across the selected beam hypotheses.
+    pub shared_prefix: Vec<String>,
+    /// Predicted suffix beyond the committed frontier from the best hypothesis.
+    pub predicted_suffix: Vec<String>,
+    /// All active hypotheses in the beam at this step.
+    pub beam: Vec<BeamSnapshot>,
+    /// Cumulative posterior probability covered by the selected hypotheses.
+    pub covered_probability: f64,
+
+    // ── Full-context supervision labels (teacher pass) ───────────────────
+    /// Total morphemes committed across the entire fixture run.
+    /// Derived from the full-context teacher pass; not a heuristic.
+    pub safe_commit_count: usize,
+    /// Final committed text of the utterance (ground truth from teacher pass).
+    pub final_committed_text: String,
+
+    // ── Rollback payload (populated only for Rollback rows) ──────────────
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<RollbackAnchor>,
+
+    // ── Repair payload (populated only for Repair rows) ──────────────────
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<RepairAnchor>,
+
+    // ── Provenance metadata ───────────────────────────────────────────────
+    /// Name of the corpus or fixture suite file.
+    pub corpus: String,
+    /// Applicable license for this row.
+    pub license: String,
+    /// Derivation chain (e.g. `"duplex-fixture-v1"`).
+    pub derivation: String,
+}
+
+/// Report returned after dataset preparation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplexPrepareReport {
+    /// Number of fixture utterances processed.
+    pub fixtures: usize,
+    /// Total prefix rows.
+    pub prefix_rows: usize,
+    /// Total completion rows.
+    pub completion_rows: usize,
+    /// Total rollback rows.
+    pub rollback_rows: usize,
+    /// Total repair rows.
+    pub repair_rows: usize,
+    /// Total rows in the train split.
+    pub train_rows: usize,
+    /// Total rows in the valid split.
+    pub valid_rows: usize,
+    /// Total rows in the test split.
+    pub test_rows: usize,
+}
+
+/// Progress events emitted by [`prepare_dataset_with_progress`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum DuplexPrepareProgress {
+    /// A named preparation stage started.
+    Stage { message: String },
+    /// One fixture was processed.
+    Fixture { fixture_id: String, rows: usize },
+    /// A JSONL file was written.
+    Write { path: String, rows: usize },
+}
+
+/// Prepare a duplex training dataset from a fixture suite at `fixtures_path`.
+///
+/// Uses a full-context **teacher pass** to discover the final committed text
+/// for each fixture, then an incremental **student pass** to emit one or more
+/// training rows per prefix step. Writes `examples.jsonl`, `train.jsonl`,
+/// `valid.jsonl`, `test.jsonl`, and `README.md` to `out`.
+pub fn prepare_dataset(out: &Path, fixtures_path: &Path) -> AnyResult<DuplexPrepareReport> {
+    prepare_dataset_with_progress(out, fixtures_path, |_| {})
+}
+
+/// Like [`prepare_dataset`] but emits [`DuplexPrepareProgress`] events.
+pub fn prepare_dataset_with_progress(
+    out: &Path,
+    fixtures_path: &Path,
+    mut progress: impl FnMut(DuplexPrepareProgress),
+) -> AnyResult<DuplexPrepareReport> {
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+
+    progress(DuplexPrepareProgress::Stage {
+        message: format!("Loading fixture suite {}", fixtures_path.display()),
+    });
+
+    let bytes = fs::read(fixtures_path)
+        .with_context(|| format!("reading {}", fixtures_path.display()))?;
+    let suite: DuplexFixtureSuite = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing {}", fixtures_path.display()))?;
+    suite
+        .validate()
+        .with_context(|| format!("validating {}", fixtures_path.display()))?;
+
+    let corpus_name = fixtures_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("duplex-fixtures");
+
+    progress(DuplexPrepareProgress::Stage {
+        message: format!(
+            "Generating training rows from {} fixtures",
+            suite.fixtures.len()
+        ),
+    });
+
+    let mut all_rows: Vec<DuplexTrainingRow> = Vec::new();
+
+    for fixture in &suite.fixtures {
+        let rows = rows_for_fixture(fixture, corpus_name)
+            .with_context(|| format!("processing fixture '{}'", fixture.id))?;
+        let row_count = rows.len();
+        all_rows.extend(rows);
+        progress(DuplexPrepareProgress::Fixture {
+            fixture_id: fixture.id.clone(),
+            rows: row_count,
+        });
+    }
+
+    let prefix_rows = all_rows
+        .iter()
+        .filter(|r| r.row_kind == TrainingRowKind::Prefix)
+        .count();
+    let completion_rows = all_rows
+        .iter()
+        .filter(|r| r.row_kind == TrainingRowKind::Completion)
+        .count();
+    let rollback_rows = all_rows
+        .iter()
+        .filter(|r| r.row_kind == TrainingRowKind::Rollback)
+        .count();
+    let repair_rows = all_rows
+        .iter()
+        .filter(|r| r.row_kind == TrainingRowKind::Repair)
+        .count();
+
+    write_jsonl_duplex(&out.join("examples.jsonl"), &all_rows, &mut progress)?;
+
+    // Deterministic shuffle and 80/10/10 split (seed = 42).
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut shuffled = all_rows.clone();
+    shuffled.shuffle(&mut rng);
+    let n = shuffled.len();
+    let train_end = (n as f64 * 0.8).round() as usize;
+    let valid_end = (train_end + (n as f64 * 0.1).round() as usize).min(n);
+    let train = shuffled[..train_end].to_vec();
+    let valid = shuffled[train_end..valid_end].to_vec();
+    let test = shuffled[valid_end..].to_vec();
+
+    write_jsonl_duplex(&out.join("train.jsonl"), &train, &mut progress)?;
+    write_jsonl_duplex(&out.join("valid.jsonl"), &valid, &mut progress)?;
+    write_jsonl_duplex(&out.join("test.jsonl"), &test, &mut progress)?;
+
+    let readme = duplex_dataset_readme(
+        fixtures_path,
+        suite.fixtures.len(),
+        prefix_rows,
+        completion_rows,
+        rollback_rows,
+        repair_rows,
+        n,
+        train.len(),
+        valid.len(),
+        test.len(),
+    );
+    fs::write(out.join("README.md"), &readme)
+        .with_context(|| format!("writing README.md in {}", out.display()))?;
+
+    Ok(DuplexPrepareReport {
+        fixtures: suite.fixtures.len(),
+        prefix_rows,
+        completion_rows,
+        rollback_rows,
+        repair_rows,
+        train_rows: train.len(),
+        valid_rows: valid.len(),
+        test_rows: test.len(),
+    })
+}
+
+/// Generate all training rows for a single fixture.
+///
+/// Performs a full-context **teacher pass** (runs the fixture to completion)
+/// to learn `safe_commit_count` and `final_committed_text`, then performs an
+/// incremental **student pass** (replays one evidence step at a time) to emit
+/// Prefix, Completion, Rollback, and Repair rows.
+fn rows_for_fixture(
+    fixture: &DuplexFixture,
+    corpus: &str,
+) -> AnyResult<Vec<DuplexTrainingRow>> {
+    // Teacher pass: run the fixture to completion to obtain the ground truth.
+    let (_, final_state) = run_fixture(fixture)
+        .with_context(|| format!("teacher pass for fixture '{}'", fixture.id))?;
+    let safe_commit_count = final_state.committed.len();
+    let final_committed_text = final_state.committed_text();
+
+    let mut rows = Vec::new();
+
+    // Student pass: replay evidence one step at a time.
+    let provider = FixtureCompletionProvider::new(fixture);
+    let mut simulator = DuplexSimulator::new(
+        fixture.utterance_id.clone(),
+        fixture.variety.clone(),
+        fixture.config.clone(),
+        provider,
+    )
+    .with_context(|| format!("creating simulator for fixture '{}'", fixture.id))?;
+
+    for (step_index, step) in fixture.steps.iter().enumerate() {
+        let events = simulator
+            .observe(step.evidence.clone())
+            .with_context(|| {
+                format!(
+                    "observing step {} of fixture '{}'",
+                    step_index, fixture.id
+                )
+            })?;
+
+        let state = simulator.state();
+
+        // Build evidence metadata from accumulated state.
+        let evidence_ids: Vec<String> = state.evidence.keys().cloned().collect();
+        let evidence_modalities: Vec<String> = state
+            .evidence
+            .values()
+            .map(|ev| match ev.modality {
+                EvidenceModality::Text => "text".to_string(),
+                EvidenceModality::Acoustics => "acoustics".to_string(),
+            })
+            .collect();
+        let heard = state
+            .evidence
+            .values()
+            .any(|ev| ev.modality == EvidenceModality::Acoustics);
+
+        // Build beam snapshot.
+        let selected_set: BTreeSet<&CompletionHypothesisId> =
+            state.selected_hypotheses.iter().collect();
+        let beam: Vec<BeamSnapshot> = state
+            .hypotheses
+            .values()
+            .map(|h| BeamSnapshot {
+                hypothesis_id: h.id.0.clone(),
+                probability: h.probability,
+                morphemes: h.morphemes.iter().map(|m| m.key.clone()).collect(),
+                is_selected: selected_set.contains(&h.id),
+            })
+            .collect();
+
+        // Extract covered_probability from the BeamInferred event of this step.
+        let covered_probability = events
+            .iter()
+            .find_map(|ev| {
+                if let SimulatorEventKind::BeamInferred {
+                    covered_probability, ..
+                } = &ev.event
+                {
+                    Some(*covered_probability)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0);
+
+        let committed_prefix: Vec<String> =
+            state.committed.iter().map(|m| m.surface.clone()).collect();
+        let commit_frontier = state.committed.len();
+        let shared_prefix = state.shared_prefix.clone();
+        let predicted_suffix: Vec<String> = state
+            .predicted_suffix()
+            .iter()
+            .map(|m| m.surface.clone())
+            .collect();
+
+        // Helper closure that builds the common row fields.
+        let base = |row_id: String, row_kind: TrainingRowKind| DuplexTrainingRow {
+            version: TRAINING_DATASET_VERSION,
+            row_id,
+            row_kind,
+            row_source: DuplexTrainingRowSource::Fixture,
+            utterance_id: fixture.utterance_id.0.clone(),
+            variety: fixture.variety.0.clone(),
+            fixture_id: fixture.id.clone(),
+            step_index,
+            evidence_ids: evidence_ids.clone(),
+            evidence_modalities: evidence_modalities.clone(),
+            heard,
+            committed_prefix: committed_prefix.clone(),
+            commit_frontier,
+            shared_prefix: shared_prefix.clone(),
+            predicted_suffix: predicted_suffix.clone(),
+            beam: beam.clone(),
+            covered_probability,
+            safe_commit_count,
+            final_committed_text: final_committed_text.clone(),
+            rollback: None,
+            repair: None,
+            corpus: corpus.to_string(),
+            license: "CC0-1.0".to_string(),
+            derivation: "duplex-fixture-v1".to_string(),
+        };
+
+        // Prefix row: one per step.
+        rows.push(base(
+            format!("{}:s{}:prefix:0", fixture.id, step_index),
+            TrainingRowKind::Prefix,
+        ));
+
+        // Per-event rows (Completion, Rollback, Repair).
+        let mut completion_idx = 0usize;
+        let mut rollback_idx = 0usize;
+        let mut repair_idx = 0usize;
+
+        for ev in &events {
+            match &ev.event {
+                SimulatorEventKind::CommitFrontierAdvanced { to, committed, .. } => {
+                    let mut row = base(
+                        format!("{}:s{}:completion:{}", fixture.id, step_index, completion_idx),
+                        TrainingRowKind::Completion,
+                    );
+                    // Override commit_frontier with the value at the moment of
+                    // this specific advance (state.commit_frontier is already
+                    // at the final value, so use the event's `to`).
+                    row.commit_frontier = *to;
+                    row.committed_prefix = {
+                        // Reconstruct committed prefix up to this advance.
+                        let n = row.committed_prefix.len();
+                        let advance = committed.len();
+                        if advance <= n {
+                            row.committed_prefix.clone()
+                        } else {
+                            row.committed_prefix
+                                .iter()
+                                .take(*to)
+                                .cloned()
+                                .collect()
+                        }
+                    };
+                    rows.push(row);
+                    completion_idx += 1;
+                }
+
+                SimulatorEventKind::HypothesisWithdrawn { hypothesis, reason } => {
+                    let morphemes: Vec<MorphemeOccurrenceRef> = hypothesis
+                        .morphemes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, m)| MorphemeOccurrenceRef {
+                            key: m.key.clone(),
+                            surface: m.surface.clone(),
+                            occurrence_index: i,
+                        })
+                        .collect();
+                    let mut row = base(
+                        format!("{}:s{}:rollback:{}", fixture.id, step_index, rollback_idx),
+                        TrainingRowKind::Rollback,
+                    );
+                    row.rollback = Some(RollbackAnchor {
+                        hypothesis_id: hypothesis.id.0.clone(),
+                        morphemes,
+                        reason: reason.clone(),
+                    });
+                    rows.push(row);
+                    rollback_idx += 1;
+                }
+
+                SimulatorEventKind::HypothesisRepaired {
+                    previous,
+                    replacement,
+                    reason,
+                } => {
+                    // Only emit a Repair row when the morpheme sequences actually
+                    // differ. Probability-only updates (same morphemes, revised
+                    // weight) are not useful as morpheme-addressed supervision.
+                    let morphemes_changed = previous.morphemes.len() != replacement.morphemes.len()
+                        || previous
+                            .morphemes
+                            .iter()
+                            .zip(replacement.morphemes.iter())
+                            .any(|(p, r)| normalize_key(&p.key) != normalize_key(&r.key));
+                    if morphemes_changed {
+                        let anchor = build_repair_anchor(previous, replacement, reason);
+                        let mut row = base(
+                            format!("{}:s{}:repair:{}", fixture.id, step_index, repair_idx),
+                            TrainingRowKind::Repair,
+                        );
+                        row.repair = Some(anchor);
+                        rows.push(row);
+                        repair_idx += 1;
+                    }
+                }
+
+                SimulatorEventKind::EvidenceObserved { .. }
+                | SimulatorEventKind::HypothesisProposed { .. }
+                | SimulatorEventKind::BeamInferred { .. }
+                | SimulatorEventKind::VerificationEvaluated { .. } => {}
+            }
+        }
+    }
+
+    Ok(rows)
+}
+
+/// Build a [`RepairAnchor`] from a `HypothesisRepaired` event.
+///
+/// Uses longest-common-prefix / longest-common-suffix decomposition to
+/// identify the reparandum, repair, and continuation precisely.
+fn build_repair_anchor(
+    previous: &NormalizedCompletionHypothesis,
+    replacement: &NormalizedCompletionHypothesis,
+    reason: &str,
+) -> RepairAnchor {
+    let prev = &previous.morphemes;
+    let repl = &replacement.morphemes;
+
+    // Longest common prefix.
+    let common_prefix_len = prev
+        .iter()
+        .zip(repl.iter())
+        .take_while(|(p, r)| normalize_key(&p.key) == normalize_key(&r.key))
+        .count();
+
+    // Longest common suffix (only in the divergent tails).
+    let prev_tail = &prev[common_prefix_len..];
+    let repl_tail = &repl[common_prefix_len..];
+    let max_suffix = prev_tail.len().min(repl_tail.len());
+    let common_suffix_len = prev_tail
+        .iter()
+        .rev()
+        .zip(repl_tail.iter().rev())
+        .take(max_suffix)
+        .take_while(|(p, r)| normalize_key(&p.key) == normalize_key(&r.key))
+        .count();
+
+    let prev_reparandum_end = prev.len() - common_suffix_len;
+    let repl_repair_end = repl.len() - common_suffix_len;
+
+    let reparandum: Vec<MorphemeOccurrenceRef> = prev[common_prefix_len..prev_reparandum_end]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| MorphemeOccurrenceRef {
+            key: m.key.clone(),
+            surface: m.surface.clone(),
+            occurrence_index: common_prefix_len + i,
+        })
+        .collect();
+
+    let repair: Vec<MorphemeOccurrenceRef> = repl[common_prefix_len..repl_repair_end]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| MorphemeOccurrenceRef {
+            key: m.key.clone(),
+            surface: m.surface.clone(),
+            occurrence_index: common_prefix_len + i,
+        })
+        .collect();
+
+    // Continuation = shared suffix (morphemes that both sequences agree on
+    // after the divergent region).
+    let continuation: Vec<MorphemeOccurrenceRef> = repl[repl_repair_end..]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| MorphemeOccurrenceRef {
+            key: m.key.clone(),
+            surface: m.surface.clone(),
+            occurrence_index: repl_repair_end + i,
+        })
+        .collect();
+
+    RepairAnchor {
+        hypothesis_id: replacement.id.0.clone(),
+        reparandum,
+        interregnum: Vec::new(),
+        repair,
+        continuation,
+        reason: reason.to_string(),
+    }
+}
+
+fn duplex_dataset_readme(
+    fixtures_path: &Path,
+    fixture_count: usize,
+    prefix_rows: usize,
+    completion_rows: usize,
+    rollback_rows: usize,
+    repair_rows: usize,
+    total_rows: usize,
+    train_rows: usize,
+    valid_rows: usize,
+    test_rows: usize,
+) -> String {
+    format!(
+        "# Duplex prefix/completion/rollback/repair dataset\n\
+         \n\
+         Schema version: `{TRAINING_DATASET_VERSION}`\n\
+         Source: `{source}`\n\
+         Fixtures: {fixture_count}\n\
+         Total rows: {total_rows}\n\
+         \n\
+         ## Row kinds\n\
+         \n\
+         | Kind | Count |\n\
+         |------|-------|\n\
+         | prefix | {prefix_rows} |\n\
+         | completion | {completion_rows} |\n\
+         | rollback | {rollback_rows} |\n\
+         | repair | {repair_rows} |\n\
+         \n\
+         ## Splits\n\
+         \n\
+         | Split | Rows |\n\
+         |-------|------|\n\
+         | train | {train_rows} |\n\
+         | valid | {valid_rows} |\n\
+         | test  | {test_rows}  |\n\
+         \n\
+         Splits are deterministic (seed = 42, 80/10/10 ratio) and non-overlapping.\n\
+         \n\
+         ## Schema fields\n\
+         \n\
+         - `version` — dataset schema version (`u32`).\n\
+         - `row_id` — deterministic identifier `{{fixture_id}}:s{{step}}:{{kind}}:{{index}}`.\n\
+         - `row_kind` — `prefix | completion | rollback | repair`.\n\
+         - `row_source` — always `fixture` for rows derived from named fixtures.\n\
+         - `utterance_id`, `variety`, `fixture_id`, `step_index` — utterance context.\n\
+         - `evidence_ids`, `evidence_modalities` — evidence observed up to this step.\n\
+         - `heard` — `true` if any evidence is acoustic; enables silent vs audible repair policy.\n\
+         - `committed_prefix`, `commit_frontier` — committed morphemes at this step.\n\
+         - `shared_prefix`, `predicted_suffix`, `beam` — beam state.\n\
+         - `covered_probability` — posterior mass covered by the selected hypotheses.\n\
+         - `safe_commit_count` — total morphemes ultimately committed (teacher-pass ground truth).\n\
+         - `final_committed_text` — full-context committed text (teacher-pass ground truth).\n\
+         - `rollback` — rollback anchor naming the withdrawn hypothesis and morpheme occurrences.\n\
+         - `repair` — repair anchor with `reparandum`, `interregnum`, `repair`, `continuation`.\n\
+         - `corpus`, `license`, `derivation` — provenance metadata.\n\
+         \n\
+         ## Coverage\n\
+         \n\
+         - Every row distinguishes evidence, inference, prediction, and commitment layers.\n\
+         - Every rollback row names morpheme occurrences and reason.\n\
+         - Every repair row includes reparandum, interregnum, repair, and continuation.\n\
+         - `safe_commit_count` is derived from full-context truth, not a heuristic.\n\
+         - `heard`/`unheard` variants are distinguished by the `heard` flag.\n\
+         \n\
+         ## Provenance\n\
+         \n\
+         All rows are derived from the synthetic fixture suite and carry\n\
+         `license: CC0-1.0` and `derivation: duplex-fixture-v1`.\n\
+         Non-redistributable material must be kept outside this boundary.\n",
+        source = fixtures_path.display(),
+    )
+}
+
+fn write_jsonl_duplex(
+    path: &Path,
+    rows: &[DuplexTrainingRow],
+    progress: &mut impl FnMut(DuplexPrepareProgress),
+) -> AnyResult<()> {
+    write_jsonl_duplex_atomic(path, rows)?;
+    progress(DuplexPrepareProgress::Write {
+        path: path.display().to_string(),
+        rows: rows.len(),
+    });
+    Ok(())
+}
+
+fn write_jsonl_duplex_atomic(path: &Path, rows: &[DuplexTrainingRow]) -> AnyResult<()> {
+    let part = duplex_part_path(path);
+    archive_interrupted_duplex_part(path)?;
+    let file =
+        fs::File::create(&part).with_context(|| format!("creating {}", part.display()))?;
+    let mut writer = BufWriter::new(file);
+    for row in rows {
+        let line = serde_json::to_string(row)
+            .with_context(|| format!("serializing row {}", row.row_id))?;
+        writer
+            .write_all(line.as_bytes())
+            .with_context(|| format!("writing {}", part.display()))?;
+        writer
+            .write_all(b"\n")
+            .with_context(|| format!("writing newline in {}", part.display()))?;
+    }
+    writer
+        .flush()
+        .with_context(|| format!("flushing {}", part.display()))?;
+    drop(writer);
+    fs::rename(&part, path)
+        .with_context(|| format!("renaming {} -> {}", part.display(), path.display()))
+}
+
+fn duplex_part_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("artifact");
+    path.with_file_name(format!("{name}.writing.part"))
+}
+
+fn archive_interrupted_duplex_part(path: &Path) -> AnyResult<()> {
+    let part = duplex_part_path(path);
+    if !part.exists() {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let archive = part.with_extension(format!(
+        "{}interrupted-{stamp}",
+        part.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!("{e}."))
+            .unwrap_or_default()
+    ));
+    fs::rename(&part, &archive).with_context(|| {
+        format!(
+            "archiving interrupted partial {} -> {}",
+            part.display(),
+            archive.display()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2050,5 +2820,200 @@ mod tests {
             Some(SimulatorEventKind::VerificationEvaluated { .. })
         ));
         assert_eq!(simulator.state().verifications.len(), 1);
+    }
+
+    // ── Training data generation tests ───────────────────────────────────
+
+    #[test]
+    fn training_rows_cover_all_required_kinds_for_garden_path() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("garden-path").unwrap();
+        let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+
+        let has_prefix = rows
+            .iter()
+            .any(|r| r.row_kind == TrainingRowKind::Prefix);
+        let has_rollback = rows
+            .iter()
+            .any(|r| r.row_kind == TrainingRowKind::Rollback);
+        let has_repair = rows
+            .iter()
+            .any(|r| r.row_kind == TrainingRowKind::Repair);
+
+        assert!(has_prefix, "expected at least one Prefix row");
+        assert!(has_rollback, "expected at least one Rollback row");
+        assert!(has_repair, "expected at least one Repair row");
+    }
+
+    #[test]
+    fn training_rows_safe_commit_count_matches_final_committed() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("who-shot-john-f").unwrap();
+        let (_, final_state) = run_fixture(fixture).unwrap();
+        let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+
+        for row in &rows {
+            assert_eq!(
+                row.safe_commit_count,
+                final_state.committed.len(),
+                "safe_commit_count must match final committed length for row {}",
+                row.row_id
+            );
+            assert_eq!(
+                row.final_committed_text,
+                final_state.committed_text(),
+                "final_committed_text must match for row {}",
+                row.row_id
+            );
+        }
+    }
+
+    #[test]
+    fn every_rollback_row_names_morpheme_occurrences() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        for fixture in &suite.fixtures {
+            let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+            for row in rows.iter().filter(|r| r.row_kind == TrainingRowKind::Rollback) {
+                let anchor = row.rollback.as_ref().expect("rollback row must have anchor");
+                assert!(
+                    !anchor.hypothesis_id.is_empty(),
+                    "rollback anchor must name the hypothesis in fixture '{}'",
+                    fixture.id
+                );
+                // At least one morpheme occurrence must be named.
+                assert!(
+                    !anchor.morphemes.is_empty(),
+                    "rollback row must name at least one morpheme occurrence in fixture '{}'",
+                    fixture.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_repair_row_has_reparandum_and_repair() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        for fixture in &suite.fixtures {
+            let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+            for row in rows.iter().filter(|r| r.row_kind == TrainingRowKind::Repair) {
+                let anchor = row.repair.as_ref().expect("repair row must have anchor");
+                // A repair must have either reparandum or repair (one may be
+                // empty if the hypothesis only appended or only deleted).
+                assert!(
+                    !anchor.reparandum.is_empty() || !anchor.repair.is_empty(),
+                    "repair anchor must have at least reparandum or repair in fixture '{}'",
+                    fixture.id
+                );
+                // Interregnum must be empty (hypothesis space has no filled pauses).
+                assert!(
+                    anchor.interregnum.is_empty(),
+                    "interregnum must be empty in fixture '{}'",
+                    fixture.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn heard_flag_is_true_for_acoustic_evidence_fixture() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("mock-acoustics").unwrap();
+        let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+        // At least one row should have heard = true.
+        assert!(
+            rows.iter().any(|r| r.heard),
+            "mock-acoustics fixture must produce at least one heard=true row"
+        );
+    }
+
+    #[test]
+    fn heard_flag_is_false_for_text_only_fixture() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("who-shot-john-f").unwrap();
+        let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+        // All rows must have heard = false.
+        for row in &rows {
+            assert!(
+                !row.heard,
+                "who-shot-john-f fixture uses only text evidence; \
+                 row {} must have heard=false",
+                row.row_id
+            );
+        }
+    }
+
+    #[test]
+    fn row_ids_are_unique_within_a_fixture() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        for fixture in &suite.fixtures {
+            let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+            let mut ids: BTreeSet<String> = BTreeSet::new();
+            for row in &rows {
+                assert!(
+                    ids.insert(row.row_id.clone()),
+                    "duplicate row_id '{}' in fixture '{}'",
+                    row.row_id,
+                    fixture.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn training_rows_round_trip_through_serde() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("garden-path").unwrap();
+        let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
+        for row in &rows {
+            let json = serde_json::to_string(row).expect("serialize");
+            let recovered: DuplexTrainingRow =
+                serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(row, &recovered, "serde round-trip failed for {}", row.row_id);
+        }
+    }
+
+    #[test]
+    fn prepare_dataset_writes_expected_files() {
+        let suite_path = std::path::Path::new(
+            "../../fixtures/duplex/completion_scenarios_v1.json",
+        );
+        let out = tempfile::tempdir().expect("tempdir");
+        let report = prepare_dataset(out.path(), suite_path).expect("prepare succeeds");
+        assert!(report.fixtures > 0);
+        assert!(report.prefix_rows > 0);
+        for name in &["examples.jsonl", "train.jsonl", "valid.jsonl", "test.jsonl", "README.md"] {
+            assert!(
+                out.path().join(name).exists(),
+                "expected {name} to exist in output"
+            );
+        }
+        assert_eq!(
+            report.train_rows + report.valid_rows + report.test_rows,
+            report.prefix_rows + report.completion_rows + report.rollback_rows + report.repair_rows
+        );
     }
 }
