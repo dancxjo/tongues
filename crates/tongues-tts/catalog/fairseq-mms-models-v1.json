@@ -4109,6 +4109,7 @@
       "languages": [
         "azj"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -4175,6 +4176,7 @@
       "languages": [
         "azj"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -4901,6 +4903,7 @@
       "languages": [
         "bcc"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -4967,6 +4970,7 @@
       "languages": [
         "bcc"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -12953,6 +12957,7 @@
       "languages": [
         "cmo"
       ],
+      "script": "khmer",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -13019,6 +13024,7 @@
       "languages": [
         "cmo"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -14075,6 +14081,7 @@
       "languages": [
         "crk"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -14141,6 +14148,7 @@
       "languages": [
         "crk"
       ],
+      "script": "syllabics",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -19553,6 +19561,7 @@
       "languages": [
         "gag"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -19619,6 +19628,7 @@
       "languages": [
         "gag"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -20939,6 +20949,7 @@
       "languages": [
         "gof"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -29453,6 +29464,7 @@
       "languages": [
         "kff"
       ],
+      "script": "telugu",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -31037,6 +31049,7 @@
       "languages": [
         "kmr"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -31103,6 +31116,7 @@
       "languages": [
         "kmr"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -31169,6 +31183,7 @@
       "languages": [
         "kmr"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -50111,6 +50126,7 @@
       "languages": [
         "ojb"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -50177,6 +50193,7 @@
       "languages": [
         "ojb"
       ],
+      "script": "syllabics",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56051,6 +56068,7 @@
       "languages": [
         "rif"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56117,6 +56135,7 @@
       "languages": [
         "rif"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56447,6 +56466,7 @@
       "languages": [
         "rmc"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56513,6 +56533,7 @@
       "languages": [
         "rmc"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56645,6 +56666,7 @@
       "languages": [
         "rmy"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -56711,6 +56733,7 @@
       "languages": [
         "rmy"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -66413,6 +66436,7 @@
       "languages": [
         "ttq"
       ],
+      "script": "tifinagh",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -66611,6 +66635,7 @@
       "languages": [
         "tuk"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -66677,6 +66702,7 @@
       "languages": [
         "tuk"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68063,6 +68089,7 @@
       "languages": [
         "uig"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68129,6 +68156,7 @@
       "languages": [
         "uig"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68525,6 +68553,7 @@
       "languages": [
         "urd"
       ],
+      "script": "arabic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68591,6 +68620,7 @@
       "languages": [
         "urd"
       ],
+      "script": "devanagari",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68657,6 +68687,7 @@
       "languages": [
         "urd"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -68987,6 +69018,7 @@
       "languages": [
         "uzb"
       ],
+      "script": "cyrillic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -69581,6 +69613,7 @@
       "languages": [
         "wal"
       ],
+      "script": "ethiopic",
       "varieties": [],
       "speakers": {
         "count": 1,
@@ -69647,6 +69680,7 @@
       "languages": [
         "wal"
       ],
+      "script": "latin",
       "varieties": [],
       "speakers": {
         "count": 1,
