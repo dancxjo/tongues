@@ -4,6 +4,7 @@ const fs = require('node:fs');
 
 const studio = require('./speech-studio.js');
 const studioSource = fs.readFileSync(require.resolve('./speech-studio.js'), 'utf8');
+const appSource = fs.readFileSync(require.resolve('./app.js'), 'utf8');
 const stylesSource = fs.readFileSync(require.resolve('./styles.css'), 'utf8');
 
 function fixturePath(overrides = {}) {
@@ -122,6 +123,97 @@ test('merges cursor pages without duplicating shared inventory', () => {
         ['fastpitch-ljspeech', 'fairseq-mms-vits-eng'],
     );
     assert.equal(merged.page.cursor, 2);
+});
+
+test('merges one filtered selection without replacing authoritative discovery state', () => {
+    const current = {
+        page: {
+            cursor: 0, limit: 32, returned: 32, total: 900, next_cursor: 32,
+        },
+        paths: [fixturePath()],
+        components: [{ id: 'fastpitch-ljspeech' }],
+        compositions: [{ id: 'pipeline/fastpitch', backend: 'fastpitch', model: 'fastpitch-ljspeech+hifigan-v2' }],
+        compatibility: [],
+        presets: [],
+    };
+    const selected = {
+        page: {
+            cursor: 0, limit: 32, returned: 1, total: 1,
+        },
+        paths: [{
+            ...fixturePath({ backend: 'fairseq', model: 'fairseq-mms-vits-tha' }),
+            catalog: [{ id: 'fairseq-mms-vits-tha' }],
+        }],
+        components: [
+            { id: 'projector/fairseq-mms-vits-tha' },
+            { id: 'fairseq-mms-vits-tha' },
+            { id: 'unrelated-filter-result' },
+        ],
+        compositions: [{
+            id: 'pipeline/fairseq-tha',
+            backend: 'fairseq',
+            model: 'fairseq-mms-vits-tha',
+            pipeline: {
+                projector: 'projector/fairseq-mms-vits-tha',
+                end_to_end: 'fairseq-mms-vits-tha',
+                conditioners: [],
+            },
+        }],
+        compatibility: [],
+        presets: [],
+    };
+    const merged = studio.mergeSelectedResultIntoDiscovery(
+        current,
+        selected,
+        selected.compositions[0],
+    );
+    assert.equal(merged.page.total, 900);
+    assert.equal(merged.compositions.length, 2);
+    assert.equal(merged.components.some((item) => item.id === 'unrelated-filter-result'), false);
+    assert.equal(merged.components.some((item) => item.id === 'fairseq-mms-vits-tha'), true);
+});
+
+test('saved late-page recipes request their model identities for hydration', () => {
+    const discovery = { paths: [fixturePath()] };
+    assert.deepEqual(studio.savedRecipeModelIds(discovery, [{
+        model: 'fairseq-mms-vits-tha',
+        pipeline: {
+            projector: 'projector/fairseq-mms-vits-tha',
+            end_to_end: 'fairseq-mms-vits-tha',
+        },
+    }, {
+        model: 'fastpitch-ljspeech+hifigan-v2',
+    }]), ['fairseq-mms-vits-tha']);
+});
+
+test('recipe restoration clears omitted controls and uses the model-scoped keys', () => {
+    const values = new Map([
+        ['speed', '1.7'],
+        ['pitch', '0.3'],
+        ['variety:old-composition-id', 'stale'],
+        ['variety:fastpitch-ljspeech+hifigan-v2', 'en-GB-RP'],
+        ['speaker:fastpitch-ljspeech+hifigan-v2', 'stale-speaker'],
+    ]);
+    studio.restoreRecipeValues(values, fixturePath(), {
+        controls: { speed: '0.9' },
+        variety: 'en-US-GA',
+    });
+    assert.equal(values.get('speed'), '0.9');
+    assert.equal(values.has('pitch'), false);
+    assert.equal(values.get('variety:fastpitch-ljspeech+hifigan-v2'), 'en-US-GA');
+    assert.equal(values.has('speaker:fastpitch-ljspeech+hifigan-v2'), false);
+});
+
+test('catalog fetch inventory includes every missing artifact exactly once', () => {
+    assert.deepEqual(studio.missingCatalogIds({
+        missing_catalog_ids: [
+            'fastpitch-ljspeech',
+            'hifigan-v2-ljspeech',
+            'fastpitch-ljspeech',
+        ],
+        catalog: [{ id: 'ignored-when-server-supplies-missing-ids' }],
+    }), ['fastpitch-ljspeech', 'hifigan-v2-ljspeech']);
+    assert.match(studioSource, /Promise\.all\(modelIds\.map/);
 });
 
 test('runtime polling waits for each request instead of using an overlapping interval', () => {
@@ -367,12 +459,19 @@ test('compose exposes checkpoint ownership, contracts, adapters, and exact CLI o
         'Ownership and compatibility',
         'Accepted contract',
         'Exact CLI representation',
-        'Adapter + vocoder',
-        'checkpoint-owned projector',
+        'Adapter \\+ vocoder',
+        'projector is owned by the selected checkpoint',
     ]) {
         assert.match(studioSource, new RegExp(phrase, 'i'));
     }
     const path = fixturePath({
+        cli_vocoder: 'hifigan',
+        controls: [
+            {
+                field: 'speed', label: 'Speed', kind: 'number', group: 'advanced', default: 1,
+            },
+            { field: 'device', label: 'Device', kind: 'select', group: 'advanced' },
+        ],
         pipeline: {
             input: 'text',
             projector: 'projector/fastpitch-ljspeech',
@@ -389,7 +488,40 @@ test('compose exposes checkpoint ownership, contracts, adapters, and exact CLI o
     );
     assert.match(command, /^tongues speak --cpu 'Exact command\.'/);
     assert.match(command, /--backend fastpitch/);
+    assert.match(command, /--vocoder hifigan/);
     assert.match(command, /--speed 1\.2/);
+
+    const styled = fixturePath({
+        backend: 'styletts2',
+        controls: [
+            { field: 'device', kind: 'select' },
+            { field: 'blend_mode', kind: 'select' },
+            { field: 'speaker_reference_strength', kind: 'number' },
+            { field: 'style_reference_strength', kind: 'number' },
+            { field: 'style_alpha', kind: 'number' },
+            { field: 'style_beta', kind: 'number' },
+        ],
+    });
+    const styledCommand = studio.cliRepresentation(styled, new Map([
+        ['device', 'cuda:2'],
+        ['blend_mode', 'raw'],
+        ['speaker_reference_strength', '0.8'],
+        ['style_reference_strength', '0.7'],
+        ['style_alpha', '0.2'],
+        ['style_beta', '0.4'],
+    ]), { text: 'Styled.', variety: 'en-US-GA' });
+    assert.match(styledCommand, /^tongues speak --cuda-device 2 Styled\./);
+    assert.match(styledCommand, /--style-alpha 0\.2/);
+    assert.match(styledCommand, /--style-beta 0\.4/);
+    assert.doesNotMatch(styledCommand, /reference-strength/);
+});
+
+test('client navigation waits for an ordinary unmodified click', () => {
+    assert.doesNotMatch(appSource, /addEventListener\('pointerdown'/);
+    assert.match(appSource, /event\.button !== 0/);
+    for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+        assert.match(appSource, new RegExp(`event\\.${modifier}`));
+    }
 });
 
 test('compare preserves per-recipe results and permits partial failure', () => {

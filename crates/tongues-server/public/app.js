@@ -869,7 +869,6 @@ let activeJobId = null;
 let activeJobSource = null;
 let jobOutputLines = [];
 let jobArtifacts = [];
-let lastNavigationAt = 0;
 
 document.addEventListener('DOMContentLoaded', async () => {
     renderNavigation();
@@ -915,22 +914,24 @@ function renderNavigation() {
 
     const handleNavActivation = (event) => {
         const link = event.target.closest('a[data-route]');
-        if (!link) return;
+        if (!link || !shouldHandleClientNavigation(event, link)) return;
         event.preventDefault();
         navigateTo(link.getAttribute('href'));
     };
-    nav.addEventListener('pointerdown', handleNavActivation);
-    nav.addEventListener('click', (event) => {
-        if (Date.now() - lastNavigationAt < 250) {
-            event.preventDefault();
-            return;
-        }
-        handleNavActivation(event);
-    });
-    nav.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        handleNavActivation(event);
-    });
+    nav.addEventListener('click', handleNavActivation);
+}
+
+function shouldHandleClientNavigation(event, link) {
+    if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+    ) return false;
+    const target = link.getAttribute('target');
+    return !link.hasAttribute('download') && (!target || target === '_self');
 }
 
 function navigateTo(path) {
@@ -940,7 +941,6 @@ function navigateTo(path) {
     if (current === next) {
         return;
     }
-    lastNavigationAt = Date.now();
     history.pushState({}, '', path);
     const active = document.activeElement;
     if (active && typeof active.blur === 'function') {
@@ -1027,21 +1027,11 @@ function renderDashboard() {
 
     grid.querySelectorAll('[data-dashboard-route]').forEach((link) => {
         const handleDashboardActivation = (event) => {
+            if (!shouldHandleClientNavigation(event, link)) return;
             event.preventDefault();
             navigateTo(link.getAttribute('href'));
         };
-        link.addEventListener('pointerdown', handleDashboardActivation);
-        link.addEventListener('click', (event) => {
-            if (Date.now() - lastNavigationAt < 250) {
-                event.preventDefault();
-                return;
-            }
-            handleDashboardActivation(event);
-        });
-        link.addEventListener('keydown', (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            handleDashboardActivation(event);
-        });
+        link.addEventListener('click', handleDashboardActivation);
     });
 }
 

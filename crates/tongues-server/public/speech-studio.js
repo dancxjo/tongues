@@ -134,6 +134,18 @@
         }
         return merged;
     };
+    const mergeUpdated = (current, incoming, key) => {
+        const incomingByKey = new Map((incoming || []).map((item) => [key(item), item]));
+        const merged = (current || []).map((item) => incomingByKey.get(key(item)) || item);
+        const seen = new Set((current || []).map(key));
+        for (const item of incoming || []) {
+            const itemKey = key(item);
+            if (seen.has(itemKey)) continue;
+            seen.add(itemKey);
+            merged.push(item);
+        }
+        return merged;
+    };
     const mergeDiscovery = (current, incoming) => {
         if (!current || !incoming?.page || incoming.page.cursor === 0) return incoming;
         return {
@@ -161,6 +173,68 @@
             error: incoming.error || current.error,
         };
     };
+    const mergeInventoryDiscovery = (current, incoming) => {
+        if (!current) return incoming;
+        if (!incoming) return current;
+        return {
+            ...current,
+            schema_version: incoming.schema_version || current.schema_version,
+            paths: mergeUpdated(current.paths, incoming.paths, pathKey),
+            components: mergeUpdated(current.components, incoming.components, (item) => item.id),
+            compositions: mergeUpdated(
+                current.compositions,
+                incoming.compositions,
+                (item) => item.id,
+            ),
+            compatibility: mergeUpdated(
+                current.compatibility,
+                incoming.compatibility,
+                (item) => `${item.from_component_id}\0${item.to_component_id}`,
+            ),
+            presets: mergeUpdated(current.presets, incoming.presets, (item) => item.id),
+            verification_ids: pendingVerificationIds({
+                verification_ids: [
+                    ...(current.verification_ids || []),
+                    ...(incoming.verification_ids || []),
+                ],
+            }),
+            error: incoming.error || current.error,
+        };
+    };
+    const mergeSelectedResultIntoDiscovery = (current, discovery, composition) => {
+        if (!composition) return current;
+        const path = (discovery?.paths || []).find((candidate) => (
+            candidate.backend === composition.backend && candidate.model === composition.model
+        ));
+        const componentIds = new Set([
+            composition.pipeline?.input,
+            composition.pipeline?.projector,
+            composition.pipeline?.acoustic_model,
+            composition.pipeline?.vocoder,
+            composition.pipeline?.end_to_end,
+            composition.pipeline?.output,
+            ...(composition.pipeline?.conditioners || []),
+        ].filter(Boolean));
+        const selectedCatalogIds = new Set((path?.catalog || []).map((entry) => entry.id));
+        const selected = {
+            ...discovery,
+            paths: path ? [path] : [],
+            components: (discovery?.components || []).filter(
+                (component) => componentIds.has(component.id),
+            ),
+            compositions: [composition],
+            compatibility: (discovery?.compatibility || []).filter((edge) => (
+                componentIds.has(edge.from_component_id) && componentIds.has(edge.to_component_id)
+            )),
+            presets: (discovery?.presets || []).filter(
+                (preset) => preset.composition_id === composition.id,
+            ),
+            verification_ids: (discovery?.verification_ids || []).filter(
+                (id) => selectedCatalogIds.has(id),
+            ),
+        };
+        return mergeInventoryDiscovery(current, selected);
+    };
     const preservesVerificationProgress = (current, updated) => {
         if (!current) return true;
         const currentPending = new Set(pendingVerificationIds(current));
@@ -182,25 +256,7 @@
         return values;
     }
 
-    function buildPayload(path, values, context = {}) {
-        if (!path?.complete || !path?.runnable) {
-            throw new Error(path?.unavailable_reason || 'Select a complete, ready synthesis path.');
-        }
-        const payload = {
-            text: String(context.text || ''),
-            variety: context.variety || varietiesForPath(path)[0]?.id || null,
-        };
-        if (path.pipeline) payload.pipeline = path.pipeline;
-        else {
-            payload.backend = path.backend;
-            payload.model = path.model;
-        }
-        if (!payload.text.trim()) throw new Error('Enter text to synthesize.');
-        if (path.speakers?.required && !context.speaker) {
-            throw new Error('This model requires a speaker.');
-        }
-        if (context.speaker) payload.speaker = context.speaker;
-
+    function applyControlValues(path, values, payload) {
         const declared = new Set((path.controls || []).map((control) => control.field));
         for (const control of path.controls || []) {
             const value = values.get(control.field);
@@ -237,6 +293,29 @@
                 payload[control.field] = value;
             }
         }
+        return declared;
+    }
+
+    function buildPayload(path, values, context = {}) {
+        if (!path?.complete || !path?.runnable) {
+            throw new Error(path?.unavailable_reason || 'Select a complete, ready synthesis path.');
+        }
+        const payload = {
+            text: String(context.text || ''),
+            variety: context.variety || varietiesForPath(path)[0]?.id || null,
+        };
+        if (path.pipeline) payload.pipeline = path.pipeline;
+        else {
+            payload.backend = path.backend;
+            payload.model = path.model;
+        }
+        if (!payload.text.trim()) throw new Error('Enter text to synthesize.');
+        if (path.speakers?.required && !context.speaker) {
+            throw new Error('This model requires a speaker.');
+        }
+        if (context.speaker) payload.speaker = context.speaker;
+
+        const declared = applyControlValues(path, values, payload);
         if (payload.emotion && context.emotionVector) {
             payload.emotion_vector = context.emotionVector;
         }
@@ -729,19 +808,32 @@
         };
     }
 
+    function restoreRecipeValues(values, path, recipe) {
+        for (const control of path?.controls || []) values.delete(control.field);
+        for (const [field, value] of Object.entries(recipe?.controls || {})) {
+            values.set(field, value);
+        }
+        const recipePathId = path.id || path.model;
+        const varietyKey = `variety:${recipePathId}`;
+        const speakerKey = `speaker:${recipePathId}`;
+        if (recipe?.variety) values.set(varietyKey, recipe.variety);
+        else values.delete(varietyKey);
+        if (recipe?.speaker) values.set(speakerKey, recipe.speaker);
+        else values.delete(speakerKey);
+        return values;
+    }
+
     function applyRecipe(recipe) {
         if (!recipe) return false;
         const composition = (state.discovery?.compositions || []).find(
             (candidate) => candidate.id === recipe.compositionId,
         );
         if (!composition) return false;
+        const path = pathForComposition(composition);
+        if (!path) return false;
         state.pathKey = composition.id;
-        state.presetId = '';
-        for (const [field, value] of Object.entries(recipe.controls || {})) {
-            state.values.set(field, value);
-        }
-        if (recipe.variety) state.values.set(`variety:${composition.id}`, recipe.variety);
-        if (recipe.speaker) state.values.set(`speaker:${composition.id}`, recipe.speaker);
+        state.presetId = recipe.id;
+        restoreRecipeValues(state.values, path, recipe);
         renderPathSelector();
         renderSelectedPath();
         if (byId('compose-recipe-name')) byId('compose-recipe-name').value = recipe.name;
@@ -758,20 +850,31 @@
     function cliRepresentation(path, values = state.values, context = {}) {
         if (!path) return '';
         const parts = ['tongues', 'speak'];
-        const text = context.text ?? byId('text')?.value;
+        const payload = {};
+        applyControlValues(path, values, payload);
+        if (payload.cpu) parts.push('--cpu');
+        if (Number.isInteger(payload.cuda_device)) {
+            parts.push('--cuda-device', String(payload.cuda_device));
+        }
+        const text = context.text ?? (
+            typeof document !== 'undefined' ? byId('text')?.value : ''
+        );
         if (text?.trim()) parts.push(shellQuote(text.trim()));
         parts.push('--backend', shellQuote(path.backend));
         if (path.model) parts.push('--model', shellQuote(path.model));
-        if (path.pipeline?.vocoder) {
-            const vocoder = path.pipeline.vocoder.includes('multiband') ? 'multiband-melgan' : 'hifigan';
-            parts.push('--vocoder', vocoder);
-        }
-        const variety = context.variety ?? selectedVariety(path);
+        if (path.cli_vocoder) parts.push('--vocoder', shellQuote(path.cli_vocoder));
+        const variety = context.variety ?? (
+            typeof document !== 'undefined'
+                ? selectedVariety(path)
+                : varietiesForPath(path)[0]?.id
+        );
         if (variety) parts.push('--variety', shellQuote(variety));
-        const speaker = context.speaker ?? selectedSpeaker(path);
+        const speaker = context.speaker ?? (
+            typeof document !== 'undefined' ? selectedSpeaker(path) : null
+        );
         if (speaker) parts.push('--speaker', shellQuote(speaker));
         for (const control of path.controls || []) {
-            const value = values.get(control.field);
+            const value = payload[control.field];
             if (value == null || value === '' || control.field === 'device') continue;
             const flag = `--${control.field.replaceAll('_', '-')}`;
             if (control.kind === 'boolean') {
@@ -780,8 +883,6 @@
                 parts.push(flag, shellQuote(Array.isArray(value) ? value.join(',') : value));
             }
         }
-        const device = values.get('device');
-        if (device === 'cpu') parts.splice(2, 0, '--cpu');
         return parts.join(' ');
     }
 
@@ -1445,23 +1546,34 @@
         return badges;
     }
 
+    function missingCatalogIds(path) {
+        return [...new Set(
+            (path?.missing_catalog_ids || path?.catalog?.map((entry) => entry.id) || [])
+                .filter(Boolean),
+        )];
+    }
+
     async function startCatalogFetch(path, label) {
-        const modelId = path?.catalog?.[0]?.id;
-        if (!modelId) throw new Error('This catalog entry has no installable model identifier.');
-        const response = await fetch('/api/jobs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                label: `Fetched ${label}`,
-                command: 'cargo',
-                args: ['run', '--bin', 'tongues', '--', 'models', 'install', modelId],
-            }),
-        });
-        if (!response.ok) throw new Error(await response.text());
-        const result = await response.json();
+        const modelIds = missingCatalogIds(path);
+        if (!modelIds.length) {
+            throw new Error('This catalog entry has no missing installable artifacts.');
+        }
+        const results = await Promise.all(modelIds.map(async (modelId) => {
+            const response = await fetch('/api/jobs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    label: `Fetched ${label} · ${modelId}`,
+                    command: 'cargo',
+                    args: ['run', '--bin', 'tongues', '--', 'models', 'install', modelId],
+                }),
+            });
+            if (!response.ok) throw new Error(`${modelId}: ${await response.text()}`);
+            return response.json();
+        }));
         navigateWorkflow('operate');
         await refreshOperateJobs();
-        return result;
+        return results;
     }
 
     function catalogPipelineCard(composition, discovery) {
@@ -1487,7 +1599,11 @@
         actions.className = 'model-actions';
         if (composition.runnable) {
             const selectComposition = () => {
-                state.discovery = mergeDiscovery(state.discovery, discovery);
+                state.discovery = mergeSelectedResultIntoDiscovery(
+                    state.discovery,
+                    discovery,
+                    composition,
+                );
                 state.pathKey = composition.id;
                 state.presetId = '';
                 renderPathSelector();
@@ -2015,7 +2131,31 @@
             search: byId('catalog-search')?.value.trim() || '',
             family: byId('catalog-family')?.value || '',
             license: byId('catalog-license')?.value || '',
+            capability: byId('catalog-capability')?.value || '',
+            verification: byId('catalog-verification')?.value || '',
+            device: byId('catalog-device')?.value || '',
         };
+    }
+
+    function savedRecipeModelIds(discovery, recipes) {
+        const present = new Set((discovery?.paths || []).map((path) => path.model));
+        return [...new Set((recipes || []).flatMap((recipe) => [
+            recipe.model,
+            recipe.pipeline?.end_to_end,
+            recipe.pipeline?.acoustic_model,
+        ]).filter((id) => id && !present.has(id)))];
+    }
+
+    async function hydrateSavedRecipeDiscovery() {
+        const modelIds = savedRecipeModelIds(state.discovery, state.userRecipes);
+        if (!modelIds.length) return;
+        const saved = await fetchDiscoveryPage(0, Math.max(32, modelIds.length), {
+            model_ids: modelIds.join(','),
+        });
+        state.discovery = mergeInventoryDiscovery(state.discovery, saved);
+        renderPathSelector();
+        renderSelectedPath();
+        renderCompareCandidates();
     }
 
     async function refreshCatalog({ append = false } = {}) {
@@ -2041,6 +2181,7 @@
         acceptDiscovery(firstPage, true);
         state.catalogDiscovery = firstPage;
         renderInventory();
+        await hydrateSavedRecipeDiscovery();
         if (verifyChanged) await verifyDiscovery(generation, firstPage);
     }
 
@@ -2796,9 +2937,14 @@
         pathKey,
         pathForComposition,
         mergeDiscovery,
+        mergeInventoryDiscovery,
+        mergeSelectedResultIntoDiscovery,
+        missingCatalogIds,
         pendingVerificationIds,
         preservesVerificationProgress,
         recipeSnapshot,
+        restoreRecipeValues,
+        savedRecipeModelIds,
         selectInitialPath,
         selectInitialComposition,
         setWorkflow,
