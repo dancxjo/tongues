@@ -27,7 +27,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -94,7 +93,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -161,7 +159,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -228,7 +225,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -295,7 +291,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -362,7 +357,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -429,7 +423,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -496,7 +489,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -563,7 +555,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -630,7 +621,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -697,7 +687,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -764,7 +753,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -831,7 +819,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -898,7 +885,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -965,7 +951,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1032,7 +1017,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1099,7 +1083,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1166,7 +1149,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1233,7 +1215,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1300,7 +1281,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1367,7 +1347,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1434,7 +1413,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1501,7 +1479,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1568,7 +1545,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1635,7 +1611,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1702,7 +1677,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1769,7 +1743,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1836,7 +1809,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1903,7 +1875,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -1970,7 +1941,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2037,7 +2007,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2104,7 +2073,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2171,7 +2139,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2238,7 +2205,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2305,7 +2271,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2372,7 +2337,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2439,7 +2403,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2506,7 +2469,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2573,7 +2535,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2640,7 +2601,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2707,7 +2667,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2774,7 +2733,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2841,7 +2799,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2908,7 +2865,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -2975,7 +2931,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3042,7 +2997,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3109,7 +3063,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3176,7 +3129,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3243,7 +3195,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3310,7 +3261,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3377,7 +3327,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3444,7 +3393,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3511,7 +3459,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3578,7 +3525,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3645,7 +3591,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3712,7 +3657,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3779,7 +3723,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3846,7 +3789,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3913,7 +3855,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -3980,7 +3921,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4047,7 +3987,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4114,7 +4053,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4181,7 +4119,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4248,7 +4185,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4315,7 +4251,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4382,7 +4317,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4449,7 +4383,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4516,7 +4449,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4583,7 +4515,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4650,7 +4581,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4717,7 +4647,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4784,7 +4713,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4851,7 +4779,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4918,7 +4845,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -4985,7 +4911,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5052,7 +4977,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5119,7 +5043,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5186,7 +5109,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5253,7 +5175,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5320,7 +5241,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5387,7 +5307,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5454,7 +5373,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5521,7 +5439,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5588,7 +5505,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5655,7 +5571,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5722,7 +5637,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5789,7 +5703,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5856,7 +5769,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5923,7 +5835,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -5990,7 +5901,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6057,7 +5967,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6124,7 +6033,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6191,7 +6099,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6258,7 +6165,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6325,7 +6231,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6392,7 +6297,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6459,7 +6363,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6526,7 +6429,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6593,7 +6495,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6660,7 +6561,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6727,7 +6627,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6794,7 +6693,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6861,7 +6759,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6928,7 +6825,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -6995,7 +6891,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7062,7 +6957,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7129,7 +7023,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7196,7 +7089,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7263,7 +7155,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7330,7 +7221,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7397,7 +7287,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7464,7 +7353,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7531,7 +7419,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7598,7 +7485,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7665,7 +7551,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7732,7 +7617,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7799,7 +7683,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7866,7 +7749,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -7933,7 +7815,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8000,7 +7881,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8067,7 +7947,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8134,7 +8013,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8201,7 +8079,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8268,7 +8145,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8335,7 +8211,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8402,7 +8277,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8469,7 +8343,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8536,7 +8409,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8603,7 +8475,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8670,7 +8541,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8737,7 +8607,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8804,7 +8673,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8871,7 +8739,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -8938,7 +8805,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9005,7 +8871,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9072,7 +8937,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9139,7 +9003,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9206,7 +9069,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9273,7 +9135,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9340,7 +9201,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9407,7 +9267,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9474,7 +9333,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9541,7 +9399,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9608,7 +9465,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9675,7 +9531,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9742,7 +9597,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9809,7 +9663,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9876,7 +9729,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -9943,7 +9795,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10010,7 +9861,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10077,7 +9927,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10144,7 +9993,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10211,7 +10059,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10278,7 +10125,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10345,7 +10191,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10412,7 +10257,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10479,7 +10323,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10546,7 +10389,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10613,7 +10455,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10680,7 +10521,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10747,7 +10587,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10814,7 +10653,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10881,7 +10719,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -10948,7 +10785,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11015,7 +10851,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11082,7 +10917,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11149,7 +10983,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11216,7 +11049,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11283,7 +11115,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11350,7 +11181,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11417,7 +11247,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11484,7 +11313,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11551,7 +11379,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11618,7 +11445,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11685,7 +11511,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11752,7 +11577,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11819,7 +11643,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11886,7 +11709,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -11953,7 +11775,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12020,7 +11841,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12087,7 +11907,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12154,7 +11973,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12221,7 +12039,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12288,7 +12105,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12355,7 +12171,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12422,7 +12237,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12489,7 +12303,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12556,7 +12369,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12623,7 +12435,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12690,7 +12501,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12757,7 +12567,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12824,7 +12633,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12891,7 +12699,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -12958,7 +12765,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13025,7 +12831,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13092,7 +12897,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13159,7 +12963,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13226,7 +13029,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13293,7 +13095,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13360,7 +13161,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13427,7 +13227,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13494,7 +13293,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13561,7 +13359,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13628,7 +13425,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13695,7 +13491,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13762,7 +13557,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13829,7 +13623,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13896,7 +13689,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -13963,7 +13755,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14030,7 +13821,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14097,7 +13887,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14164,7 +13953,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14231,7 +14019,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14298,7 +14085,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14365,7 +14151,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14432,7 +14217,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14499,7 +14283,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14566,7 +14349,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14633,7 +14415,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14700,7 +14481,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14767,7 +14547,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14834,7 +14613,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14901,7 +14679,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -14968,7 +14745,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15035,7 +14811,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15102,7 +14877,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15169,7 +14943,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15236,7 +15009,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15303,7 +15075,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15370,7 +15141,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15437,7 +15207,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15504,7 +15273,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15571,7 +15339,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15638,7 +15405,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15705,7 +15471,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15772,7 +15537,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15839,7 +15603,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15906,7 +15669,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -15973,7 +15735,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16040,7 +15801,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16107,7 +15867,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16174,7 +15933,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16241,7 +15999,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16308,7 +16065,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16375,7 +16131,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16442,7 +16197,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16509,7 +16263,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16576,7 +16329,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16643,7 +16395,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16710,7 +16461,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16777,7 +16527,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16844,7 +16593,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16911,7 +16659,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -16978,7 +16725,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17045,7 +16791,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17112,7 +16857,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17179,7 +16923,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17246,7 +16989,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17313,7 +17055,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17380,7 +17121,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17447,7 +17187,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17514,7 +17253,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17581,7 +17319,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17648,7 +17385,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17715,7 +17451,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17782,7 +17517,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17849,7 +17583,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17916,7 +17649,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -17983,7 +17715,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18050,7 +17781,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18117,7 +17847,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18184,7 +17913,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18251,7 +17979,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18318,7 +18045,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18385,7 +18111,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18452,7 +18177,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18519,7 +18243,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18586,7 +18309,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18653,7 +18375,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18720,7 +18441,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18787,7 +18507,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18854,7 +18573,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18921,7 +18639,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -18988,7 +18705,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19055,7 +18771,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19122,7 +18837,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19189,7 +18903,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19256,7 +18969,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19323,7 +19035,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19390,7 +19101,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19457,7 +19167,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19524,7 +19233,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19591,7 +19299,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19658,7 +19365,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19725,7 +19431,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19792,7 +19497,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19859,7 +19563,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19926,7 +19629,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -19993,7 +19695,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20060,7 +19761,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20127,7 +19827,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20194,7 +19893,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20261,7 +19959,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20328,7 +20025,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20395,7 +20091,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20462,7 +20157,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20529,7 +20223,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20596,7 +20289,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20663,7 +20355,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20730,7 +20421,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20797,7 +20487,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20864,7 +20553,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20931,7 +20619,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -20998,7 +20685,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21065,7 +20751,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21132,7 +20817,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21199,7 +20883,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21266,7 +20949,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21333,7 +21015,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21400,7 +21081,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21467,7 +21147,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21534,7 +21213,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21601,7 +21279,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21668,7 +21345,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21735,7 +21411,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21802,7 +21477,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21869,7 +21543,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -21936,7 +21609,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22003,7 +21675,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22070,7 +21741,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22137,7 +21807,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22204,7 +21873,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22271,7 +21939,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22338,7 +22005,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22405,7 +22071,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22472,7 +22137,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22539,7 +22203,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22606,7 +22269,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22673,7 +22335,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22740,7 +22401,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22807,7 +22467,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22874,7 +22533,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -22941,7 +22599,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23008,7 +22665,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23075,7 +22731,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23142,7 +22797,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23209,7 +22863,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23276,7 +22929,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23343,7 +22995,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23410,7 +23061,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23477,7 +23127,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23544,7 +23193,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23611,7 +23259,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23678,7 +23325,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23745,7 +23391,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23812,7 +23457,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23879,7 +23523,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -23946,7 +23589,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24013,7 +23655,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24080,7 +23721,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24147,7 +23787,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24214,7 +23853,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24281,7 +23919,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24348,7 +23985,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24415,7 +24051,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24482,7 +24117,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24549,7 +24183,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24616,7 +24249,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24683,7 +24315,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24750,7 +24381,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24817,7 +24447,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24884,7 +24513,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -24951,7 +24579,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25018,7 +24645,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25085,7 +24711,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25152,7 +24777,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25219,7 +24843,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25286,7 +24909,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25353,7 +24975,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25420,7 +25041,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25487,7 +25107,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25554,7 +25173,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25621,7 +25239,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25688,7 +25305,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25755,7 +25371,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25822,7 +25437,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25889,7 +25503,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -25956,7 +25569,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26023,7 +25635,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26090,7 +25701,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26157,7 +25767,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26224,7 +25833,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26291,7 +25899,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26358,7 +25965,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26425,7 +26031,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26492,7 +26097,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26559,7 +26163,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26626,7 +26229,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26693,7 +26295,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26760,7 +26361,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26827,7 +26427,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26894,7 +26493,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -26961,7 +26559,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27028,7 +26625,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27095,7 +26691,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27162,7 +26757,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27229,7 +26823,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27296,7 +26889,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27363,7 +26955,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27430,7 +27021,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27497,7 +27087,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27564,7 +27153,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27631,7 +27219,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27698,7 +27285,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27765,7 +27351,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27832,7 +27417,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27899,7 +27483,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -27966,7 +27549,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28033,7 +27615,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28100,7 +27681,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28167,7 +27747,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28234,7 +27813,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28301,7 +27879,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28368,7 +27945,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28435,7 +28011,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28502,7 +28077,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28569,7 +28143,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28636,7 +28209,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28703,7 +28275,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28770,7 +28341,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28837,7 +28407,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28904,7 +28473,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -28971,7 +28539,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29038,7 +28605,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29105,7 +28671,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29172,7 +28737,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29239,7 +28803,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29306,7 +28869,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29373,7 +28935,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29440,7 +29001,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29507,7 +29067,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29574,7 +29133,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29641,7 +29199,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29708,7 +29265,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29775,7 +29331,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29842,7 +29397,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29909,7 +29463,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -29976,7 +29529,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30043,7 +29595,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30110,7 +29661,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30177,7 +29727,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30244,7 +29793,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30311,7 +29859,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30378,7 +29925,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30445,7 +29991,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30512,7 +30057,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30579,7 +30123,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30646,7 +30189,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30713,7 +30255,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30780,7 +30321,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30847,7 +30387,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30914,7 +30453,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -30981,7 +30519,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31048,7 +30585,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31115,7 +30651,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31182,7 +30717,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31249,7 +30783,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31316,7 +30849,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31383,7 +30915,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31450,7 +30981,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31517,7 +31047,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31584,7 +31113,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31651,7 +31179,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31718,7 +31245,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31785,7 +31311,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31852,7 +31377,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31919,7 +31443,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -31986,7 +31509,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32053,7 +31575,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32120,7 +31641,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32187,7 +31707,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32254,7 +31773,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32321,7 +31839,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32388,7 +31905,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32455,7 +31971,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32522,7 +32037,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32589,7 +32103,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32656,7 +32169,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32723,7 +32235,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32790,7 +32301,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32857,7 +32367,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32924,7 +32433,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -32991,7 +32499,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33058,7 +32565,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33125,7 +32631,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33192,7 +32697,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33259,7 +32763,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33326,7 +32829,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33393,7 +32895,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33460,7 +32961,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33527,7 +33027,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33594,7 +33093,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33661,7 +33159,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33728,7 +33225,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33795,7 +33291,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33862,7 +33357,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33929,7 +33423,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -33996,7 +33489,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34063,7 +33555,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34130,7 +33621,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34197,7 +33687,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34264,7 +33753,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34331,7 +33819,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34398,7 +33885,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34465,7 +33951,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34532,7 +34017,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34599,7 +34083,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34666,7 +34149,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34733,7 +34215,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34800,7 +34281,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34867,7 +34347,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -34934,7 +34413,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35001,7 +34479,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35068,7 +34545,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35135,7 +34611,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35202,7 +34677,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35269,7 +34743,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35336,7 +34809,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35403,7 +34875,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35470,7 +34941,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35537,7 +35007,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35604,7 +35073,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35671,7 +35139,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35738,7 +35205,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35805,7 +35271,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35872,7 +35337,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -35939,7 +35403,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36006,7 +35469,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36073,7 +35535,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36140,7 +35601,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36207,7 +35667,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36274,7 +35733,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36341,7 +35799,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36408,7 +35865,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36475,7 +35931,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36542,7 +35997,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36609,7 +36063,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36676,7 +36129,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36743,7 +36195,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36810,7 +36261,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36877,7 +36327,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -36944,7 +36393,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37011,7 +36459,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37078,7 +36525,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37145,7 +36591,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37212,7 +36657,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37279,7 +36723,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37346,7 +36789,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37413,7 +36855,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37480,7 +36921,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37547,7 +36987,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37614,7 +37053,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37681,7 +37119,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37748,7 +37185,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37815,7 +37251,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37882,7 +37317,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -37949,7 +37383,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38016,7 +37449,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38083,7 +37515,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38150,7 +37581,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38217,7 +37647,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38284,7 +37713,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38351,7 +37779,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38418,7 +37845,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38485,7 +37911,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38552,7 +37977,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38619,7 +38043,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38686,7 +38109,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38753,7 +38175,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38820,7 +38241,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38887,7 +38307,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -38954,7 +38373,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39021,7 +38439,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39088,7 +38505,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39155,7 +38571,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39222,7 +38637,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39289,7 +38703,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39356,7 +38769,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39423,7 +38835,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39490,7 +38901,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39557,7 +38967,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39624,7 +39033,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39691,7 +39099,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39758,7 +39165,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39825,7 +39231,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39892,7 +39297,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -39959,7 +39363,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40026,7 +39429,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40093,7 +39495,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40160,7 +39561,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40227,7 +39627,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40294,7 +39693,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40361,7 +39759,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40428,7 +39825,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40495,7 +39891,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40562,7 +39957,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40629,7 +40023,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40696,7 +40089,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40763,7 +40155,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40830,7 +40221,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40897,7 +40287,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -40964,7 +40353,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41031,7 +40419,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41098,7 +40485,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41165,7 +40551,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41232,7 +40617,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41299,7 +40683,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41366,7 +40749,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41433,7 +40815,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41500,7 +40881,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41567,7 +40947,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41634,7 +41013,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41701,7 +41079,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41768,7 +41145,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41835,7 +41211,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41902,7 +41277,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -41969,7 +41343,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42036,7 +41409,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42103,7 +41475,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42170,7 +41541,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42237,7 +41607,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42304,7 +41673,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42371,7 +41739,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42438,7 +41805,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42505,7 +41871,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42572,7 +41937,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42639,7 +42003,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42706,7 +42069,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42773,7 +42135,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42840,7 +42201,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42907,7 +42267,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -42974,7 +42333,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43041,7 +42399,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43108,7 +42465,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43175,7 +42531,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43242,7 +42597,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43309,7 +42663,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43376,7 +42729,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43443,7 +42795,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43510,7 +42861,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43577,7 +42927,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43644,7 +42993,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43711,7 +43059,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43778,7 +43125,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43845,7 +43191,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43912,7 +43257,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -43979,7 +43323,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44046,7 +43389,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44113,7 +43455,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44180,7 +43521,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44247,7 +43587,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44314,7 +43653,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44381,7 +43719,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44448,7 +43785,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44515,7 +43851,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44582,7 +43917,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44649,7 +43983,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44716,7 +44049,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44783,7 +44115,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44850,7 +44181,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44917,7 +44247,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -44984,7 +44313,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45051,7 +44379,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45118,7 +44445,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45185,7 +44511,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45252,7 +44577,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45319,7 +44643,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45386,7 +44709,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45453,7 +44775,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45520,7 +44841,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45587,7 +44907,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45654,7 +44973,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45721,7 +45039,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45788,7 +45105,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45855,7 +45171,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45922,7 +45237,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -45989,7 +45303,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46056,7 +45369,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46123,7 +45435,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46190,7 +45501,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46257,7 +45567,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46324,7 +45633,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46391,7 +45699,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46458,7 +45765,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46525,7 +45831,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46592,7 +45897,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46659,7 +45963,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46726,7 +46029,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46793,7 +46095,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46860,7 +46161,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46927,7 +46227,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -46994,7 +46293,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47061,7 +46359,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47128,7 +46425,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47195,7 +46491,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47262,7 +46557,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47329,7 +46623,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47396,7 +46689,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47463,7 +46755,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47530,7 +46821,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47597,7 +46887,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47664,7 +46953,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47731,7 +47019,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47798,7 +47085,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47865,7 +47151,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47932,7 +47217,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -47999,7 +47283,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48066,7 +47349,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48133,7 +47415,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48200,7 +47481,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48267,7 +47547,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48334,7 +47613,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48401,7 +47679,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48468,7 +47745,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48535,7 +47811,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48602,7 +47877,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48669,7 +47943,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48736,7 +48009,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48803,7 +48075,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48870,7 +48141,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -48937,7 +48207,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49004,7 +48273,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49071,7 +48339,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49138,7 +48405,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49205,7 +48471,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49272,7 +48537,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49339,7 +48603,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49406,7 +48669,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49473,7 +48735,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49540,7 +48801,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49607,7 +48867,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49674,7 +48933,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49741,7 +48999,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49808,7 +49065,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49875,7 +49131,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -49942,7 +49197,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50009,7 +49263,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50076,7 +49329,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50143,7 +49395,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50210,7 +49461,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50277,7 +49527,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50344,7 +49593,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50411,7 +49659,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50478,7 +49725,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50545,7 +49791,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50612,7 +49857,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50679,7 +49923,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50746,7 +49989,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50813,7 +50055,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50880,7 +50121,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -50947,7 +50187,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51014,7 +50253,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51081,7 +50319,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51148,7 +50385,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51215,7 +50451,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51282,7 +50517,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51349,7 +50583,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51416,7 +50649,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51483,7 +50715,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51550,7 +50781,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51617,7 +50847,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51684,7 +50913,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51751,7 +50979,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51818,7 +51045,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51885,7 +51111,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -51952,7 +51177,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52019,7 +51243,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52086,7 +51309,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52153,7 +51375,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52220,7 +51441,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52287,7 +51507,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52354,7 +51573,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52421,7 +51639,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52488,7 +51705,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52555,7 +51771,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52622,7 +51837,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52689,7 +51903,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52756,7 +51969,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52823,7 +52035,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52890,7 +52101,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -52957,7 +52167,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53024,7 +52233,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53091,7 +52299,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53158,7 +52365,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53225,7 +52431,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53292,7 +52497,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53359,7 +52563,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53426,7 +52629,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53493,7 +52695,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53560,7 +52761,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53627,7 +52827,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53694,7 +52893,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53761,7 +52959,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53828,7 +53025,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53895,7 +53091,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -53962,7 +53157,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54029,7 +53223,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54096,7 +53289,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54163,7 +53355,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54230,7 +53421,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54297,7 +53487,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54364,7 +53553,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54431,7 +53619,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54498,7 +53685,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54565,7 +53751,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54632,7 +53817,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54699,7 +53883,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54766,7 +53949,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54833,7 +54015,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54900,7 +54081,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -54967,7 +54147,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55034,7 +54213,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55101,7 +54279,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55168,7 +54345,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55235,7 +54411,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55302,7 +54477,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55369,7 +54543,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55436,7 +54609,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55503,7 +54675,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55570,7 +54741,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55637,7 +54807,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55704,7 +54873,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55771,7 +54939,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55838,7 +55005,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55905,7 +55071,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -55972,7 +55137,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56039,7 +55203,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56106,7 +55269,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56173,7 +55335,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56240,7 +55401,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56307,7 +55467,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56374,7 +55533,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56441,7 +55599,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56508,7 +55665,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56575,7 +55731,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56642,7 +55797,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56709,7 +55863,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56776,7 +55929,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56843,7 +55995,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56910,7 +56061,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -56977,7 +56127,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57044,7 +56193,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57111,7 +56259,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57178,7 +56325,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57245,7 +56391,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57312,7 +56457,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57379,7 +56523,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57446,7 +56589,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57513,7 +56655,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57580,7 +56721,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57647,7 +56787,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57714,7 +56853,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57781,7 +56919,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57848,7 +56985,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57915,7 +57051,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -57982,7 +57117,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58049,7 +57183,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58116,7 +57249,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58183,7 +57315,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58250,7 +57381,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58317,7 +57447,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58384,7 +57513,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58451,7 +57579,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58518,7 +57645,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58585,7 +57711,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58652,7 +57777,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58719,7 +57843,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58786,7 +57909,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58853,7 +57975,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58920,7 +58041,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -58987,7 +58107,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59054,7 +58173,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59121,7 +58239,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59188,7 +58305,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59255,7 +58371,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59322,7 +58437,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59389,7 +58503,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59456,7 +58569,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59523,7 +58635,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59590,7 +58701,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59657,7 +58767,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59724,7 +58833,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59791,7 +58899,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59858,7 +58965,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59925,7 +59031,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -59992,7 +59097,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60059,7 +59163,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60126,7 +59229,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60193,7 +59295,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60260,7 +59361,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60327,7 +59427,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60394,7 +59493,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60461,7 +59559,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60528,7 +59625,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60595,7 +59691,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60662,7 +59757,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60729,7 +59823,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60796,7 +59889,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60863,7 +59955,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60930,7 +60021,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -60997,7 +60087,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61064,7 +60153,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61131,7 +60219,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61198,7 +60285,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61265,7 +60351,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61332,7 +60417,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61399,7 +60483,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61466,7 +60549,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61533,7 +60615,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61600,7 +60681,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61667,7 +60747,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61734,7 +60813,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61801,7 +60879,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61868,7 +60945,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -61935,7 +61011,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62002,7 +61077,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62069,7 +61143,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62136,7 +61209,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62203,7 +61275,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62270,7 +61341,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62337,7 +61407,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62404,7 +61473,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62471,7 +61539,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62538,7 +61605,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62605,7 +61671,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62672,7 +61737,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62739,7 +61803,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62806,7 +61869,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62873,7 +61935,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -62940,7 +62001,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63007,7 +62067,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63074,7 +62133,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63141,7 +62199,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63208,7 +62265,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63275,7 +62331,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63342,7 +62397,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63409,7 +62463,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63476,7 +62529,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63543,7 +62595,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63610,7 +62661,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63677,7 +62727,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63744,7 +62793,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63811,7 +62859,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63878,7 +62925,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -63945,7 +62991,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64012,7 +63057,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64079,7 +63123,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64146,7 +63189,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64213,7 +63255,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64280,7 +63321,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64347,7 +63387,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64414,7 +63453,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64481,7 +63519,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64548,7 +63585,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64615,7 +63651,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64682,7 +63717,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64749,7 +63783,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64816,7 +63849,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64883,7 +63915,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -64950,7 +63981,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65017,7 +64047,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65084,7 +64113,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65151,7 +64179,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65218,7 +64245,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65285,7 +64311,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65352,7 +64377,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65419,7 +64443,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65486,7 +64509,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65553,7 +64575,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65620,7 +64641,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65687,7 +64707,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65754,7 +64773,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65821,7 +64839,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65888,7 +64905,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -65955,7 +64971,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66022,7 +65037,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66089,7 +65103,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66156,7 +65169,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66223,7 +65235,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66290,7 +65301,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66357,7 +65367,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66424,7 +65433,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66491,7 +65499,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66558,7 +65565,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66625,7 +65631,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66692,7 +65697,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66759,7 +65763,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66826,7 +65829,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66893,7 +65895,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -66960,7 +65961,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67027,7 +66027,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67094,7 +66093,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67161,7 +66159,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67228,7 +66225,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67295,7 +66291,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67362,7 +66357,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67429,7 +66423,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67496,7 +66489,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67563,7 +66555,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67630,7 +66621,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67697,7 +66687,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67764,7 +66753,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67831,7 +66819,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67898,7 +66885,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -67965,7 +66951,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68032,7 +67017,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68099,7 +67083,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68166,7 +67149,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68233,7 +67215,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68300,7 +67281,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68367,7 +67347,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68434,7 +67413,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68501,7 +67479,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68568,7 +67545,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68635,7 +67611,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68702,7 +67677,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68769,7 +67743,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68836,7 +67809,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68903,7 +67875,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -68970,7 +67941,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69037,7 +68007,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69104,7 +68073,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69171,7 +68139,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69238,7 +68205,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69305,7 +68271,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69372,7 +68337,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69439,7 +68403,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69506,7 +68469,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69573,7 +68535,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69640,7 +68601,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69707,7 +68667,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69774,7 +68733,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69841,7 +68799,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69908,7 +68865,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -69975,7 +68931,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70042,7 +68997,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70109,7 +69063,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70176,7 +69129,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70243,7 +69195,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70310,7 +69261,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70377,7 +69327,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70444,7 +69393,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70511,7 +69459,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70578,7 +69525,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70645,7 +69591,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70712,7 +69657,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70779,7 +69723,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70846,7 +69789,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70913,7 +69855,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -70980,7 +69921,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71047,7 +69987,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71114,7 +70053,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71181,7 +70119,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71248,7 +70185,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71315,7 +70251,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71382,7 +70317,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71449,7 +70383,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71516,7 +70449,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71583,7 +70515,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71650,7 +70581,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71717,7 +70647,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71784,7 +70713,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71851,7 +70779,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71918,7 +70845,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -71985,7 +70911,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72052,7 +70977,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72119,7 +71043,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72186,7 +71109,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72253,7 +71175,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72320,7 +71241,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72387,7 +71307,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72454,7 +71373,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72521,7 +71439,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72588,7 +71505,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72655,7 +71571,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72722,7 +71637,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72789,7 +71703,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72856,7 +71769,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72923,7 +71835,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -72990,7 +71901,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73057,7 +71967,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73124,7 +72033,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73191,7 +72099,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73258,7 +72165,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73325,7 +72231,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73392,7 +72297,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73459,7 +72363,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73526,7 +72429,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73593,7 +72495,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73660,7 +72561,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73727,7 +72627,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73794,7 +72693,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73861,7 +72759,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73928,7 +72825,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -73995,7 +72891,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74062,7 +72957,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74129,7 +73023,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74196,7 +73089,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74263,7 +73155,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74330,7 +73221,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74397,7 +73287,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74464,7 +73353,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74531,7 +73419,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74598,7 +73485,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74665,7 +73551,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74732,7 +73617,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74799,7 +73683,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74866,7 +73749,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -74933,7 +73815,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75000,7 +73881,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75067,7 +73947,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75134,7 +74013,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75201,7 +74079,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75268,7 +74145,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75335,7 +74211,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75402,7 +74277,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75469,7 +74343,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75536,7 +74409,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75603,7 +74475,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75670,7 +74541,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75737,7 +74607,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75804,7 +74673,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75871,7 +74739,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -75938,7 +74805,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76005,7 +74871,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76072,7 +74937,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76139,7 +75003,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76206,7 +75069,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76273,7 +75135,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76340,7 +75201,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76407,7 +75267,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76474,7 +75333,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],
@@ -76541,7 +75399,6 @@
       "capabilities": [
         "end-to-end-speech",
         "graphemes",
-        "streaming",
         "speed",
         "seed"
       ],

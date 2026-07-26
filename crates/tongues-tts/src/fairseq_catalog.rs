@@ -261,7 +261,6 @@ pub fn generate_fairseq_catalog(source: &FairseqCatalogSource) -> Result<ModelCa
                 capabilities: vec![
                     "end-to-end-speech".into(),
                     "graphemes".into(),
-                    "streaming".into(),
                     "speed".into(),
                     "seed".into(),
                 ],
@@ -421,6 +420,10 @@ mod tests {
         assert_eq!(english.varieties, ["en-US-GA", "en-GB-RP"]);
         assert_eq!(english.artifacts.len(), 3);
         assert_eq!(english.provenance.format, "fairseq-mms-vits");
+        assert!(
+            !english.capabilities.iter().any(|value| value == "streaming"),
+            "MMS VITS synthesis is whole-utterance; revision-safe suffix replacement is handled by the ledger layer"
+        );
 
         let azj = catalog
             .find("fairseq-mms-vits-azj-script_cyrillic")
