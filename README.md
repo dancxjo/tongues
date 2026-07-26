@@ -168,6 +168,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just sight-words` | Fine-tune on built-in Dolch sight words. |
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
+| `just serve` | Start the local web UI on loopback; set `TONGUES_ALLOW_INSECURE_REMOTE=1` only for explicit insecure remote development binds. |
 | `cargo run --bin tongues -- pronunciation --json "hello world"` | Inspect the versioned pronunciation trace and canonical plan. |
 | `cargo run --bin tongues -- speaking --json "hello world"` | Emit the complete backend-neutral `UtterancePlan`. |
 | `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |

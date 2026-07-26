@@ -219,7 +219,7 @@ const commonDefaults = {
     '--ollama-max-chars': '12000',
     '--ollama-url': 'http://localhost:11434',
     '--out-dir': 'outputs/styletts2-discovery',
-    '--output': 'output.wav',
+    '--output': 'runs/output.wav',
     '--patience': '5',
     '--quality': 'balanced',
     '--repair-control': '\\u001b[1A\\u001b[2K',

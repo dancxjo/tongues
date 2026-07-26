@@ -1,8 +1,10 @@
 use anyhow::Context as _;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::{StatusCode, header},
+    extract::DefaultBodyLimit,
+    extract::{Path, Query, Request, State},
+    http::{Method, StatusCode, header},
+    middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -16,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fmt;
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
 use std::panic;
@@ -51,8 +54,21 @@ const VITS_SPEAKER_COUNT: u32 = 109;
 const JOB_OUTPUT_LIMIT: usize = 1_000;
 const DEFAULT_HTTP_PORT: u16 = 3000;
 const DEFAULT_HTTPS_PORT: u16 = 8443;
+const DEFAULT_HOST: &str = "127.0.0.1";
 const FILE_LIST_LIMIT: usize = 500;
 const DEFAULT_SPEECH_MAX_IN_FLIGHT: usize = 2;
+const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
+const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ACTIVE_JOBS: usize = 4;
+const INSECURE_REMOTE_ENV: &str = "TONGUES_ALLOW_INSECURE_REMOTE";
+const ALLOWED_ARTIFACT_ROOTS: &[&str] = &[
+    "archive", "data", "datasets", "models", "outputs", "releases", "runs",
+];
+const ALLOWED_ROOT_ARTIFACT_FILES: &[&str] = &[
+    "emotion_signatures.json",
+    "labels.jsonl",
+    "style_vectors.jsonl",
+];
 const DEFAULT_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 32;
 const MAX_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 100;
 const DEFAULT_STYLETTS2_VOICE_REFERENCE: &str = "1221-135767-0014.wav";
@@ -131,11 +147,40 @@ impl SpeechAdmission {
     }
 }
 
+#[derive(Debug)]
+struct StartupError {
+    stage: &'static str,
+    detail: String,
+}
+
+impl StartupError {
+    fn new(stage: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl fmt::Display for StartupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Startup failed while {}: {}", self.stage, self.detail)
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    if let Err(error) = run_server().await {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+async fn run_server() -> Result<(), StartupError> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let workspace_root = std::env::current_dir().unwrap();
+    let workspace_root = std::env::current_dir()
+        .map_err(|error| StartupError::new("resolving the workspace root", error.to_string()))?;
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
     let cert_dir = workspace_root.join(".certs");
     let speech_max_in_flight = speech_max_in_flight();
@@ -172,7 +217,7 @@ async fn main() {
 
     let app = build_app(state);
 
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.into());
     let http_port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
@@ -184,22 +229,29 @@ async fn main() {
 
     let http_addr = format!("{host}:{http_port}")
         .parse::<SocketAddr>()
-        .expect("valid HTTP bind address");
+        .map_err(|error| StartupError::new("parsing the HTTP bind address", error.to_string()))?;
     let https_addr = format!("{host}:{https_port}")
         .parse::<SocketAddr>()
-        .expect("valid HTTPS bind address");
+        .map_err(|error| StartupError::new("parsing the HTTPS bind address", error.to_string()))?;
+    validate_bind_address(http_addr)?;
+    validate_bind_address(https_addr)?;
 
-    ensure_self_signed_cert(&cert_dir);
+    ensure_self_signed_cert(&cert_dir)?;
     let tls_config = RustlsConfig::from_pem_file(
         cert_dir.join("tongues-local.crt"),
         cert_dir.join("tongues-local.key"),
     )
     .await
-    .expect("load local TLS certificate");
+    .map_err(|error| StartupError::new("loading the local TLS certificate", error.to_string()))?;
 
     println!("Web server listening on http://{http_addr}");
     println!("Web server listening on https://{https_addr}");
     println!("Self-signed certificate: {}", cert_dir.display());
+    if !http_addr.ip().is_loopback() || !https_addr.ip().is_loopback() {
+        println!(
+            "Warning: remote bind enabled via {INSECURE_REMOTE_ENV}=1; API protections remain development-only."
+        );
+    }
     println!(
         "Resident speech admission: 1 active + {} queued",
         speech_max_in_flight.saturating_sub(1)
@@ -207,24 +259,25 @@ async fn main() {
     println!("Resident speech device: {}", speech_device.display_name());
 
     let http_app = app.clone();
-    let http = async move {
-        axum::serve(
-            tokio::net::TcpListener::bind(&http_addr).await.unwrap(),
-            http_app,
-        )
+    let http_listener = tokio::net::TcpListener::bind(http_addr)
         .await
-        .unwrap();
+        .map_err(|error| StartupError::new("binding the HTTP listener", error.to_string()))?;
+    let http = async move {
+        axum::serve(http_listener, http_app)
+            .await
+            .map_err(|error| StartupError::new("serving the HTTP listener", error.to_string()))
     };
     let https = async move {
-        if let Err(error) = axum_server::bind_rustls(https_addr, tls_config)
+        axum_server::bind_rustls(https_addr, tls_config)
             .serve(app.into_make_service())
             .await
-        {
-            eprintln!("HTTPS listener failed on {https_addr}: {error}");
-        }
+            .map_err(|error| StartupError::new("serving the HTTPS listener", error.to_string()))
     };
 
-    tokio::join!(http, https);
+    let (http_result, https_result) = tokio::join!(http, https);
+    http_result?;
+    https_result?;
+    Ok(())
 }
 
 fn build_app(state: AppState) -> Router {
@@ -248,7 +301,7 @@ fn build_app(state: AppState) -> Router {
         .route("/api/speech/models", get(get_speech_models))
         .route(
             "/api/speech/models/verify/{model_id}",
-            get(verify_speech_model).post(verify_speech_model),
+            post(verify_speech_model),
         )
         .route("/api/duplex/project", post(project_duplex_request))
         .route("/api/speech/project", post(project_speech_request))
@@ -279,16 +332,79 @@ fn build_app(state: AppState) -> Router {
         .route("/models/{*path}", get(serve_app_index))
         .route("/cli/{*path}", get(serve_app_index))
         .fallback_service(ServeDir::new(static_dir))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
+        .layer(middleware::from_fn(enforce_request_policy))
         .with_state(state)
 }
 
-fn ensure_self_signed_cert(cert_dir: &FsPath) {
+fn validate_bind_address(addr: SocketAddr) -> Result<(), StartupError> {
+    if bind_address_allowed(
+        addr,
+        std::env::var_os(INSECURE_REMOTE_ENV).as_deref() == Some(std::ffi::OsStr::new("1")),
+    ) {
+        return Ok(());
+    }
+    Err(StartupError::new(
+        "validating the bind address",
+        format!(
+            "refusing to bind to {addr} without an explicit trust decision; set {INSECURE_REMOTE_ENV}=1 for insecure development-only remote access"
+        ),
+    ))
+}
+
+fn bind_address_allowed(addr: SocketAddr, insecure_remote_opt_in: bool) -> bool {
+    addr.ip().is_loopback() || insecure_remote_opt_in
+}
+
+async fn enforce_request_policy(request: Request, next: Next) -> Response {
+    if request.method() != Method::GET
+        && request.method() != Method::HEAD
+        && request.method() != Method::OPTIONS
+    {
+        if let Err(error) = validate_same_origin(request.headers()) {
+            return (StatusCode::FORBIDDEN, error).into_response();
+        }
+    }
+    next.run(request).await
+}
+
+fn validate_same_origin(headers: &axum::http::HeaderMap) -> Result<(), String> {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return Ok(());
+    };
+    let origin = origin
+        .to_str()
+        .map_err(|_| "invalid Origin header".to_string())?;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "missing Host header on mutating request".to_string())?;
+    let allowed_http = format!("http://{host}");
+    let allowed_https = format!("https://{host}");
+    if origin.eq_ignore_ascii_case(&allowed_http) || origin.eq_ignore_ascii_case(&allowed_https) {
+        return Ok(());
+    }
+    Err(format!("cross-origin request from {origin} is not allowed"))
+}
+
+fn ensure_self_signed_cert(cert_dir: &FsPath) -> Result<(), StartupError> {
     let cert = cert_dir.join("tongues-local.crt");
     let key = cert_dir.join("tongues-local.key");
     if cert.exists() && key.exists() {
-        return;
+        return Ok(());
     }
-    std::fs::create_dir_all(cert_dir).expect("create cert directory");
+    std::fs::create_dir_all(cert_dir).map_err(|error| {
+        StartupError::new("creating the certificate directory", error.to_string())
+    })?;
+    let key_arg = key.to_str().ok_or_else(|| {
+        StartupError::new("building the OpenSSL key path", "path is not valid UTF-8")
+    })?;
+    let cert_arg = cert.to_str().ok_or_else(|| {
+        StartupError::new(
+            "building the OpenSSL certificate path",
+            "path is not valid UTF-8",
+        )
+    })?;
     let status = Command::new("openssl")
         .args([
             "req",
@@ -300,19 +416,28 @@ fn ensure_self_signed_cert(cert_dir: &FsPath) {
             "3650",
             "-nodes",
             "-keyout",
-            key.to_str().expect("key path utf-8"),
+            key_arg,
             "-out",
-            cert.to_str().expect("cert path utf-8"),
+            cert_arg,
             "-subj",
             "/CN=localhost",
             "-addext",
-            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1",
         ])
         .status()
-        .expect("run openssl to create local certificate");
+        .map_err(|error| {
+            StartupError::new(
+                "running OpenSSL to create a local certificate",
+                error.to_string(),
+            )
+        })?;
     if !status.success() {
-        panic!("openssl failed to create local certificate");
+        return Err(StartupError::new(
+            "creating the local certificate",
+            format!("openssl exited with status {status}"),
+        ));
     }
+    Ok(())
 }
 
 async fn serve_app_index(State(state): State<AppState>) -> impl IntoResponse {
@@ -740,6 +865,180 @@ struct StartJobRequest {
     args: Vec<String>,
 }
 
+const ALLOWED_JOB_PREFIXES: &[&[&str]] = &[
+    &["discrepancies"],
+    &["emotions", "eval"],
+    &["emotions", "infer"],
+    &["emotions", "prepare"],
+    &["emotions", "train"],
+    &["eval"],
+    &["fetch-cmudict"],
+    &["fetch-corpora"],
+    &["g2p2g", "clean"],
+    &["g2p2g", "eval"],
+    &["g2p2g", "infer"],
+    &["g2p2g", "prepare"],
+    &["g2p2g", "refine"],
+    &["g2p2g", "repl"],
+    &["g2p2g", "train"],
+    &["head2phones", "clean"],
+    &["head2phones", "infer"],
+    &["head2phones", "prepare"],
+    &["head2phones", "train"],
+    &["head2phones", "verify"],
+    &["interpretation", "clean"],
+    &["interpretation", "eval"],
+    &["interpretation", "prepare"],
+    &["interpretation", "stream"],
+    &["interpretation", "train"],
+    &["models", "fetch"],
+    &["models", "list"],
+    &["models", "menu"],
+    &["models", "path"],
+    &["models", "status"],
+    &["models", "use"],
+    &["phonemes"],
+    &["phones"],
+    &["predict"],
+    &["prepare"],
+    &["refine"],
+    &["repl"],
+    &["sentence-parser", "clean"],
+    &["sentence-parser", "eval"],
+    &["sentence-parser", "infer"],
+    &["sentence-parser", "parse"],
+    &["sentence-parser", "prepare"],
+    &["sentence-parser", "stream"],
+    &["sentence-parser", "train"],
+    &["speak"],
+    &["speaking"],
+    &["styletts2", "discover"],
+    &["styletts2", "emotion-signatures"],
+    &["styletts2", "encode-style"],
+    &["train"],
+    &["wiktionary", "clean"],
+    &["wiktionary", "infer"],
+    &["wiktionary", "prepare"],
+    &["wiktionary", "train"],
+];
+
+const FLAG_ONLY_JOB_ARGS: &[&str] = &[
+    "--all",
+    "--careful-style",
+    "--cpu",
+    "--debug-pronunciation",
+    "--fail-on-guessed-pronunciation",
+    "--force",
+    "--json",
+    "--list",
+    "--no-create",
+    "--no-download-wiktionary-audio",
+    "--no-full-cut",
+    "--no-g2p2g",
+    "--no-tts-chunking",
+    "--no-whisper-transcripts",
+    "--no-wiktionary",
+    "--no-wiktionary-audio",
+    "--ollama-strict",
+    "--prepare",
+    "--quiet",
+    "--raw",
+    "--strict",
+    "--timings",
+    "--verbose",
+    "--verify-ollama",
+    "--wait-for-prepare",
+];
+
+const VALUE_JOB_ARGS: &[&str] = &[
+    "--archive-dir",
+    "--backend",
+    "--batch-size",
+    "--cache-dir",
+    "--config",
+    "--corpus",
+    "--cuts-per-wav",
+    "--data",
+    "--diffusion-steps",
+    "--dropout",
+    "--dump",
+    "--durations",
+    "--embedding-scale",
+    "--emotion",
+    "--emotion-signatures",
+    "--emotion-strength",
+    "--epochs",
+    "--g2p2g-model",
+    "--head2phones-model",
+    "--input",
+    "--labels",
+    "--lang",
+    "--learning-rate",
+    "--limit",
+    "--mask-policy",
+    "--max-chars",
+    "--max-cut-ms",
+    "--max-mask-rate",
+    "--max-rarity",
+    "--max-tts-symbols",
+    "--max-utterances",
+    "--max-whisper-wer",
+    "--max-wiktionary-audio",
+    "--mel-bins",
+    "--method",
+    "--min-cut-ms",
+    "--model",
+    "--notation",
+    "--num-samples",
+    "--ollama-max-chars",
+    "--ollama-model",
+    "--ollama-rows",
+    "--ollama-url",
+    "--out",
+    "--out-dir",
+    "--output",
+    "--patience",
+    "--pitch",
+    "--pitch-scale",
+    "--pitch-shift",
+    "--previous",
+    "--quality",
+    "--references-dir",
+    "--repair-control",
+    "--run-id",
+    "--sample-rate-hz",
+    "--seed",
+    "--sight-words",
+    "--source",
+    "--source-manifest",
+    "--span-mask-prob",
+    "--speaker",
+    "--speaker-reference-strength",
+    "--speed",
+    "--split",
+    "--splits",
+    "--style-alpha",
+    "--style-beta",
+    "--style-reference-strength",
+    "--style-seed",
+    "--style-wav",
+    "--subset",
+    "--task",
+    "--tier",
+    "--train-frac",
+    "--training-set",
+    "--valid-frac",
+    "--variety",
+    "--voice-wav",
+    "--wav",
+    "--weight-decay",
+    "--whisper-model",
+    "--wiktionary-audio-data",
+    "--wiktionary-model",
+    "--word",
+    "--words-file",
+];
+
 #[derive(Serialize)]
 struct StartJobResponse {
     job_id: String,
@@ -864,18 +1163,59 @@ async fn list_files(
                 .into_response();
         }
     };
-    let mut target = state.workspace_root.join(&relative);
+    if relative.as_os_str().is_empty() {
+        return Json(FileListResponse {
+            path: String::new(),
+            parent: None,
+            entries: artifact_browser_root_entries(&state.workspace_root),
+            error: None,
+        })
+        .into_response();
+    }
+    let target = match resolve_existing_artifact_path(&state.workspace_root, &relative) {
+        Ok(path) => path,
+        Err(error) => {
+            return Json(FileListResponse {
+                path: path_to_web(&relative),
+                parent: parent_web_path(&relative),
+                entries: Vec::new(),
+                error: Some(error),
+            })
+            .into_response();
+        }
+    };
     let mut list_relative = relative.clone();
+    let mut target_dir = target.clone();
     if target.is_file() {
         list_relative = relative
             .parent()
             .unwrap_or_else(|| FsPath::new(""))
             .to_path_buf();
-        target = state.workspace_root.join(&list_relative);
+        if list_relative.as_os_str().is_empty() {
+            return Json(FileListResponse {
+                path: String::new(),
+                parent: None,
+                entries: artifact_browser_root_entries(&state.workspace_root),
+                error: None,
+            })
+            .into_response();
+        }
+        target_dir = match resolve_existing_artifact_path(&state.workspace_root, &list_relative) {
+            Ok(path) => path,
+            Err(error) => {
+                return Json(FileListResponse {
+                    path: path_to_web(&list_relative),
+                    parent: parent_web_path(&list_relative),
+                    entries: Vec::new(),
+                    error: Some(error),
+                })
+                .into_response();
+            }
+        };
     }
 
     let mut entries = Vec::new();
-    let read_dir = match std::fs::read_dir(&target) {
+    let read_dir = match std::fs::read_dir(&target_dir) {
         Ok(read_dir) => read_dir,
         Err(error) => {
             return Json(FileListResponse {
@@ -887,16 +1227,16 @@ async fn list_files(
             .into_response();
         }
     };
-
     for entry in read_dir.flatten().take(FILE_LIST_LIMIT) {
-        let Ok(metadata) = entry.metadata() else {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_relative = list_relative.join(&name);
+        let Ok(entry_path) = resolve_existing_artifact_path(&state.workspace_root, &entry_relative)
+        else {
             continue;
         };
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == ".git" || name == "target" {
+        let Ok(metadata) = std::fs::metadata(&entry_path) else {
             continue;
-        }
-        let entry_relative = list_relative.join(&name);
+        };
         let is_dir = metadata.is_dir();
         entries.push(FileEntry {
             name,
@@ -937,9 +1277,22 @@ async fn download_file(
         Ok(path) => path,
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
-    let path = state.workspace_root.join(&relative);
-    if !path.is_file() {
+    let path = match resolve_existing_artifact_path(&state.workspace_root, &relative) {
+        Ok(path) => path,
+        Err(error) => return (StatusCode::NOT_FOUND, error).into_response(),
+    };
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return (StatusCode::NOT_FOUND, "download path is not available").into_response();
+    };
+    if !metadata.is_file() {
         return (StatusCode::NOT_FOUND, "download path is not a file").into_response();
+    }
+    if metadata.len() > MAX_DOWNLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("download exceeds the {MAX_DOWNLOAD_BYTES}-byte limit"),
+        )
+            .into_response();
     }
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
@@ -1205,8 +1558,22 @@ async fn start_job(
     State(state): State<AppState>,
     Json(payload): Json<StartJobRequest>,
 ) -> impl IntoResponse {
-    if let Err(error) = validate_job_request(&payload) {
+    if let Err(error) = validate_job_request(&state.workspace_root, &payload) {
         return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    {
+        let jobs = state.jobs.lock().expect("job registry lock");
+        let running = jobs
+            .values()
+            .filter(|job| matches!(job.summary.status, JobStatus::Running))
+            .count();
+        if running >= MAX_ACTIVE_JOBS {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("job queue is full; at most {MAX_ACTIVE_JOBS} jobs may run at once"),
+            )
+                .into_response();
+        }
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -1317,17 +1684,161 @@ async fn job_events(
         .into_response()
 }
 
-fn validate_job_request(payload: &StartJobRequest) -> Result<(), String> {
+fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> Result<(), String> {
     if payload.command != "cargo" {
         return Err("only cargo jobs are supported".into());
     }
-    if payload.args.len() < 4 || payload.args[0] != "run" || payload.args[1] != "--bin" {
-        return Err("job args must run a known cargo binary".into());
+    if payload.args.len() < 5
+        || payload.args[0] != "run"
+        || payload.args[1] != "--bin"
+        || payload.args[2] != "tongues"
+        || payload.args[3] != "--"
+    {
+        return Err("job args must be `cargo run --bin tongues -- ...`".into());
     }
     if payload.args.iter().any(|arg| arg.contains('\0')) {
         return Err("job args contain invalid data".into());
     }
+    if payload
+        .args
+        .iter()
+        .any(|arg| arg.starts_with('-') && !arg.starts_with("--"))
+    {
+        return Err("short flags are not available through the web job API".into());
+    }
+    let args = &payload.args[4..];
+    let mut cursor = 0;
+    while matches!(
+        args.get(cursor).map(String::as_str),
+        Some("--cpu" | "--quiet" | "--verbose")
+    ) {
+        cursor += 1;
+    }
+    let Some(prefix_len) = ALLOWED_JOB_PREFIXES
+        .iter()
+        .filter(|prefix| {
+            args.len() >= cursor + prefix.len()
+                && prefix
+                    .iter()
+                    .zip(&args[cursor..cursor + prefix.len()])
+                    .all(|(expected, actual)| *expected == actual)
+        })
+        .map(|prefix| prefix.len())
+        .max()
+    else {
+        return Err("job args do not match an approved Tongues command".into());
+    };
+    cursor += prefix_len;
+    let command_prefix = &args[cursor - prefix_len..cursor];
+    while cursor < args.len() {
+        let token = &args[cursor];
+        if FLAG_ONLY_JOB_ARGS.iter().any(|flag| *flag == token) {
+            cursor += 1;
+            continue;
+        }
+        if VALUE_JOB_ARGS.iter().any(|flag| *flag == token) {
+            let Some(value) = args.get(cursor + 1) else {
+                return Err(format!("missing value for {token}"));
+            };
+            validate_job_argument_value(workspace_root, command_prefix, token, value)?;
+            cursor += 2;
+            continue;
+        }
+        validate_job_positional_value(workspace_root, command_prefix, token)?;
+        cursor += 1;
+    }
     Ok(())
+}
+
+fn validate_job_argument_value(
+    workspace_root: &FsPath,
+    prefix: &[String],
+    flag: &str,
+    value: &str,
+) -> Result<(), String> {
+    if value.starts_with("--") {
+        return Err(format!("missing value for {flag}"));
+    }
+    if value.len() > 8 * 1024 {
+        return Err(format!("value for {flag} is too large"));
+    }
+    if is_job_config_flag(flag) {
+        validate_job_config_path(workspace_root, value)?;
+    } else if is_job_artifact_path_flag(flag) {
+        validate_job_artifact_path(workspace_root, value)?;
+    } else if job_prefix_is(prefix, &["styletts2", "discover"]) && flag == "--references-dir" {
+        validate_job_artifact_path(workspace_root, value)?;
+    }
+    Ok(())
+}
+
+fn validate_job_positional_value(
+    workspace_root: &FsPath,
+    prefix: &[String],
+    value: &str,
+) -> Result<(), String> {
+    if value.len() > 64 * 1024 {
+        return Err("positional job values are too large".into());
+    }
+    if job_prefix_is(prefix, &["styletts2", "encode-style"])
+        || job_prefix_is(prefix, &["styletts2", "emotion-signatures"])
+    {
+        validate_job_artifact_path(workspace_root, value)?;
+    }
+    Ok(())
+}
+
+fn job_prefix_is(prefix: &[String], expected: &[&str]) -> bool {
+    prefix.len() == expected.len()
+        && prefix
+            .iter()
+            .map(String::as_str)
+            .zip(expected.iter().copied())
+            .all(|(actual, expected)| actual == expected)
+}
+
+fn is_job_config_flag(flag: &str) -> bool {
+    flag == "--config"
+}
+
+fn is_job_artifact_path_flag(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--archive-dir"
+            | "--cache-dir"
+            | "--data"
+            | "--dump"
+            | "--emotion-signatures"
+            | "--g2p2g-model"
+            | "--head2phones-model"
+            | "--input"
+            | "--labels"
+            | "--model"
+            | "--out"
+            | "--out-dir"
+            | "--output"
+            | "--source-manifest"
+            | "--style-wav"
+            | "--voice-wav"
+            | "--wav"
+            | "--whisper-model"
+            | "--wiktionary-audio-data"
+            | "--wiktionary-model"
+            | "--words-file"
+    )
+}
+
+fn validate_job_config_path(workspace_root: &FsPath, value: &str) -> Result<(), String> {
+    let relative = safe_relative_path(value)?;
+    if artifact_root_name(&relative) != Some("configs") {
+        return Err("config paths must stay inside configs/".into());
+    }
+    validate_existing_ancestor_within_workspace(workspace_root, &relative)
+}
+
+fn validate_job_artifact_path(workspace_root: &FsPath, value: &str) -> Result<(), String> {
+    let relative = safe_relative_path(value)?;
+    validate_artifact_relative_path(workspace_root, &relative)
 }
 
 struct PronunciationCommandRequest {
@@ -1347,7 +1858,8 @@ fn build_pronunciation_command(
         return Err("input is required".into());
     }
     let model = safe_relative_path(&payload.model)?;
-    let model_path = state.workspace_root.join(&model);
+    validate_artifact_relative_path(&state.workspace_root, &model)?;
+    let model_path = resolve_existing_artifact_path(&state.workspace_root, &model)?;
     if !model_path.exists() {
         return Err(format!(
             "model path does not exist: {}",
@@ -1850,6 +2362,196 @@ fn download_url_for(path: &FsPath) -> String {
     )
 }
 
+fn artifact_browser_root_entries(workspace_root: &FsPath) -> Vec<FileEntry> {
+    let mut entries = ALLOWED_ARTIFACT_ROOTS
+        .iter()
+        .filter_map(|root| {
+            let relative = PathBuf::from(root);
+            let path = resolve_existing_artifact_path(workspace_root, &relative).ok()?;
+            let metadata = std::fs::metadata(path).ok()?;
+            if !metadata.is_dir() {
+                return None;
+            }
+            Some(FileEntry {
+                name: (*root).into(),
+                path: path_to_web(&relative),
+                kind: "dir".into(),
+                size: None,
+                modified_ms: metadata.modified().ok().and_then(system_time_ms),
+                download_url: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    for file in ALLOWED_ROOT_ARTIFACT_FILES {
+        let relative = PathBuf::from(file);
+        let Ok(path) = resolve_existing_artifact_path(workspace_root, &relative) else {
+            continue;
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        entries.push(FileEntry {
+            name: (*file).into(),
+            path: path_to_web(&relative),
+            kind: "file".into(),
+            size: Some(metadata.len()),
+            modified_ms: metadata.modified().ok().and_then(system_time_ms),
+            download_url: Some(download_url_for(&relative)),
+        });
+    }
+    entries.sort_by(|left, right| {
+        let left_dir = left.kind == "dir";
+        let right_dir = right.kind == "dir";
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    entries
+}
+
+fn resolve_existing_artifact_path(
+    workspace_root: &FsPath,
+    relative: &FsPath,
+) -> Result<PathBuf, String> {
+    validate_artifact_relative_path(workspace_root, relative)?;
+    let workspace = canonical_workspace_root(workspace_root)?;
+    let path = workspace_root.join(relative);
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
+    if !resolved.starts_with(&workspace) {
+        return Err("paths must stay inside approved artifact roots".into());
+    }
+    let metadata = std::fs::metadata(&resolved)
+        .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
+    if !is_visible_artifact_path(relative, metadata.is_dir()) {
+        return Err("requested path is not exposed by the local server".into());
+    }
+    if let Some(root) = artifact_root_name(relative) {
+        let root_path = workspace_root.join(root);
+        if root_path.exists() {
+            let resolved_root = root_path
+                .canonicalize()
+                .map_err(|error| format!("failed to resolve {}: {error}", root_path.display()))?;
+            if !resolved.starts_with(&resolved_root) {
+                return Err("paths must stay inside approved artifact roots".into());
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn validate_artifact_relative_path(
+    workspace_root: &FsPath,
+    relative: &FsPath,
+) -> Result<(), String> {
+    if relative.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if is_allowed_root_artifact_file(relative) {
+        validate_existing_ancestor_within_workspace(workspace_root, relative)?;
+        return Ok(());
+    }
+    let Some(root) = artifact_root_name(relative) else {
+        return Err("paths must stay inside approved artifact roots".into());
+    };
+    if !ALLOWED_ARTIFACT_ROOTS
+        .iter()
+        .any(|allowed| *allowed == root)
+    {
+        return Err("paths must stay inside approved artifact roots".into());
+    }
+    validate_existing_ancestor_within_workspace(workspace_root, relative)
+}
+
+fn validate_existing_ancestor_within_workspace(
+    workspace_root: &FsPath,
+    relative: &FsPath,
+) -> Result<(), String> {
+    let workspace = canonical_workspace_root(workspace_root)?;
+    let absolute = workspace_root.join(relative);
+    let anchor = deepest_existing_path(&absolute)
+        .ok_or_else(|| format!("path is not available: {}", path_to_web(relative)))?;
+    let resolved_anchor = anchor
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", anchor.display()))?;
+    if !resolved_anchor.starts_with(&workspace) {
+        return Err("paths must stay inside the Tongues workspace".into());
+    }
+    Ok(())
+}
+
+fn canonical_workspace_root(workspace_root: &FsPath) -> Result<PathBuf, String> {
+    workspace_root
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve workspace root: {error}"))
+}
+
+fn deepest_existing_path(path: &FsPath) -> Option<PathBuf> {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+fn artifact_root_name(relative: &FsPath) -> Option<&str> {
+    match relative.components().next()? {
+        Component::Normal(component) => component.to_str(),
+        _ => None,
+    }
+}
+
+fn is_allowed_root_artifact_file(relative: &FsPath) -> bool {
+    relative
+        .parent()
+        .is_none_or(|parent| parent.as_os_str().is_empty())
+        && relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                ALLOWED_ROOT_ARTIFACT_FILES
+                    .iter()
+                    .any(|allowed| *allowed == name)
+            })
+}
+
+fn is_visible_artifact_path(relative: &FsPath, is_dir: bool) -> bool {
+    let Some(name) = relative.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.starts_with('.') {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if matches!(lower.as_str(), ".certs" | ".git" | "target") {
+        return false;
+    }
+    if is_dir {
+        return true;
+    }
+    !matches!(
+        lower.as_str(),
+        ".env" | "cargo.lock" | "cargo.toml" | "config.json" | "justfile"
+    ) && !lower.starts_with(".env.")
+        && !lower.ends_with(".cer")
+        && !lower.ends_with(".crt")
+        && !lower.ends_with(".csr")
+        && !lower.ends_with(".der")
+        && !lower.ends_with(".key")
+        && !lower.ends_with(".p12")
+        && !lower.ends_with(".pem")
+        && !lower.ends_with(".pfx")
+        && !lower.ends_with(".toml")
+        && !lower.ends_with(".yaml")
+        && !lower.ends_with(".yml")
+}
+
 fn artifacts_for_job(workspace_root: &FsPath, args: &[String]) -> Vec<JobArtifact> {
     let mut artifacts = Vec::new();
     let mut index = 0;
@@ -1880,10 +2582,9 @@ fn add_artifacts_for_path(
     flag: &str,
     artifacts: &mut Vec<JobArtifact>,
 ) {
-    let Some(relative) = job_path_to_relative(workspace_root, value) else {
+    let Some((relative, path)) = job_path_to_relative(workspace_root, value) else {
         return;
     };
-    let path = workspace_root.join(&relative);
     let Ok(metadata) = std::fs::metadata(&path) else {
         return;
     };
@@ -1910,11 +2611,13 @@ fn add_artifacts_for_path(
             let mut files = read_dir
                 .flatten()
                 .filter_map(|entry| {
-                    let metadata = entry.metadata().ok()?;
-                    if !metadata.is_file() {
+                    let file_relative = relative.join(entry.file_name());
+                    let file_path =
+                        resolve_existing_artifact_path(workspace_root, &file_relative).ok()?;
+                    let metadata = std::fs::metadata(&file_path).ok()?;
+                    if !metadata.is_file() || !is_visible_artifact_path(&file_relative, false) {
                         return None;
                     }
-                    let file_relative = relative.join(entry.file_name());
                     Some(JobArtifact {
                         label: path_to_web(&file_relative),
                         path: path_to_web(&file_relative),
@@ -1931,12 +2634,17 @@ fn add_artifacts_for_path(
     }
 }
 
-fn job_path_to_relative(workspace_root: &FsPath, value: &str) -> Option<PathBuf> {
+fn job_path_to_relative(workspace_root: &FsPath, value: &str) -> Option<(PathBuf, PathBuf)> {
     let path = FsPath::new(value.trim());
-    if path.is_absolute() {
-        return path.strip_prefix(workspace_root).ok().map(PathBuf::from);
-    }
-    safe_relative_path(value).ok()
+    let relative = if path.is_absolute() {
+        let workspace = canonical_workspace_root(workspace_root).ok()?;
+        let resolved = path.canonicalize().ok()?;
+        resolved.strip_prefix(&workspace).ok().map(PathBuf::from)?
+    } else {
+        safe_relative_path(value).ok()?
+    };
+    let resolved = resolve_existing_artifact_path(workspace_root, &relative).ok()?;
+    Some((relative, resolved))
 }
 
 type ResidentSpeechBackend = Box<dyn tongues_tts::SynthesizerBackend>;
@@ -2134,10 +2842,7 @@ impl ResidentSpeechService {
                 .map(|w| w.token.as_str())
                 .collect();
             if !guessed.is_empty() {
-                anyhow::bail!(
-                    "guessed_pronunciation: {}",
-                    guessed.join(", ")
-                );
+                anyhow::bail!("guessed_pronunciation: {}", guessed.join(", "));
             }
         }
 
@@ -4014,20 +4719,8 @@ fn resident_synthesis_context(
 
 fn workspace_reference_wav(state: &AppState, input: &str) -> Result<PathBuf, String> {
     let relative = safe_relative_path(input)?;
-    let workspace = state
-        .workspace_root
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve workspace root: {error}"))?;
-    let path = workspace.join(relative);
-    let resolved = path.canonicalize().map_err(|error| {
-        format!(
-            "failed to resolve reference WAV {}: {error}",
-            path.display()
-        )
-    })?;
-    if !resolved.starts_with(&workspace) {
-        return Err("reference WAV must stay inside the Tongues workspace".into());
-    }
+    validate_artifact_relative_path(&state.workspace_root, &relative)?;
+    let resolved = resolve_existing_artifact_path(&state.workspace_root, &relative)?;
     if !resolved.is_file()
         || resolved
             .extension()
@@ -4036,7 +4729,7 @@ fn workspace_reference_wav(state: &AppState, input: &str) -> Result<PathBuf, Str
     {
         return Err(format!(
             "reference audio must be a WAV file: {}",
-            path.display()
+            resolved.display()
         ));
     }
     Ok(resolved)
@@ -4328,7 +5021,8 @@ fn duplex_run_and_journal(
             return Err("journal_path cannot be empty".into());
         }
         let relative = safe_relative_path(journal_path)?;
-        let full_path = workspace_root.join(&relative);
+        validate_artifact_relative_path(workspace_root, &relative)?;
+        let full_path = resolve_existing_artifact_path(workspace_root, &relative)?;
         let bytes = std::fs::read(&full_path)
             .map_err(|error| format!("failed to read journal {}: {error}", full_path.display()))?;
         let journal: SimulatorJournal = serde_json::from_slice(&bytes)
@@ -7844,7 +8538,7 @@ mod tests {
             },
         )
         .expect("generated duplex projection");
-        let relative_path = format!("target/duplex-tests/{}.journal.json", uuid::Uuid::new_v4());
+        let relative_path = format!("runs/duplex-tests/{}.journal.json", uuid::Uuid::new_v4());
         let full_path = workspace_root.join(&relative_path);
         std::fs::create_dir_all(full_path.parent().expect("journal parent"))
             .expect("create journal directory");
@@ -8406,5 +9100,181 @@ mod tests {
             serialized_warnings[0]["message"],
             "guessed pronunciation for xyz123"
         );
+    }
+
+    #[test]
+    fn remote_bind_requires_an_explicit_opt_in() {
+        assert!(bind_address_allowed(
+            "127.0.0.1:3000".parse().expect("loopback HTTP"),
+            false
+        ));
+        assert!(bind_address_allowed(
+            "[::1]:8443".parse().expect("loopback HTTPS"),
+            false
+        ));
+        assert!(!bind_address_allowed(
+            "0.0.0.0:3000".parse().expect("wildcard HTTP"),
+            false
+        ));
+        assert!(bind_address_allowed(
+            "0.0.0.0:3000".parse().expect("wildcard HTTP"),
+            true
+        ));
+    }
+
+    #[test]
+    fn same_origin_policy_rejects_cross_origin_mutations() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(header::HOST, "localhost:3000".parse().expect("host header"));
+        headers.insert(
+            header::ORIGIN,
+            "http://localhost:3000".parse().expect("origin header"),
+        );
+        assert!(validate_same_origin(&headers).is_ok());
+        headers.insert(
+            header::ORIGIN,
+            "https://evil.example".parse().expect("evil origin"),
+        );
+        assert!(validate_same_origin(&headers).is_err());
+    }
+
+    #[test]
+    fn artifact_paths_reject_workspace_escape_and_sensitive_files() {
+        let workspace = test_workspace("artifacts");
+        let runs_dir = workspace.join("runs");
+        std::fs::create_dir_all(&runs_dir).expect("create runs");
+        std::fs::write(runs_dir.join("visible.txt"), "ok").expect("write visible artifact");
+        std::fs::write(runs_dir.join(".env"), "secret").expect("write hidden file");
+        std::fs::write(runs_dir.join("secret.key"), "secret").expect("write key file");
+        std::fs::write(runs_dir.join("config.json"), "{}").expect("write config file");
+
+        assert!(is_visible_artifact_path(
+            FsPath::new("runs/visible.txt"),
+            false
+        ));
+        assert!(!is_visible_artifact_path(FsPath::new("runs/.env"), false));
+        assert!(!is_visible_artifact_path(
+            FsPath::new("runs/secret.key"),
+            false
+        ));
+        assert!(!is_visible_artifact_path(
+            FsPath::new("runs/config.json"),
+            false
+        ));
+        assert!(
+            validate_artifact_relative_path(&workspace, FsPath::new("runs/visible.txt")).is_ok()
+        );
+        assert!(validate_artifact_relative_path(&workspace, FsPath::new("README.md")).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let outside = workspace
+                .parent()
+                .expect("workspace parent")
+                .join(format!("outside-{}.txt", uuid::Uuid::new_v4()));
+            std::fs::write(&outside, "escape").expect("write outside file");
+            symlink(&outside, runs_dir.join("escape.txt")).expect("create escape symlink");
+            assert!(
+                resolve_existing_artifact_path(&workspace, FsPath::new("runs/escape.txt")).is_err()
+            );
+            std::fs::remove_file(outside).expect("remove outside file");
+        }
+
+        std::fs::remove_dir_all(workspace).expect("remove artifact workspace");
+    }
+
+    #[test]
+    fn job_validation_rejects_unknown_flags_and_workspace_paths() {
+        let workspace = test_workspace("jobs");
+        std::fs::create_dir_all(workspace.join("configs/g2p2g")).expect("create config dir");
+        std::fs::create_dir_all(workspace.join("datasets/g2p2g")).expect("create data dir");
+        std::fs::create_dir_all(workspace.join("models/g2p2g/openepd-v0"))
+            .expect("create model dir");
+        std::fs::create_dir_all(workspace.join("runs")).expect("create runs dir");
+        std::fs::write(
+            workspace.join("configs/g2p2g/default.toml"),
+            "mode = 'test'\n",
+        )
+        .expect("write config");
+        std::fs::write(workspace.join("Cargo.toml"), "[package]\nname='fixture'\n")
+            .expect("write cargo file");
+
+        let valid = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "g2p2g".into(),
+                "prepare".into(),
+                "--config".into(),
+                "configs/g2p2g/default.toml".into(),
+                "--out".into(),
+                "datasets/g2p2g/openepd-v0".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &valid).is_ok());
+
+        let unknown_flag = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "g2p2g".into(),
+                "prepare".into(),
+                "--manifest-path".into(),
+                "Cargo.toml".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &unknown_flag).is_err());
+
+        let bad_config_path = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "g2p2g".into(),
+                "prepare".into(),
+                "--config".into(),
+                "Cargo.toml".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &bad_config_path).is_err());
+
+        let bad_positional_path = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "styletts2".into(),
+                "emotion-signatures".into(),
+                "Cargo.toml".into(),
+                "--out".into(),
+                "runs/emotions.json".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &bad_positional_path).is_err());
+
+        std::fs::remove_dir_all(workspace).expect("remove job workspace");
+    }
+
+    fn test_workspace(label: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("tongues-server-{label}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).expect("create temp workspace");
+        path
     }
 }

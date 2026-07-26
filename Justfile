@@ -351,6 +351,7 @@ sight-words *args:
 fetch-corpora *args:
     cargo run --bin tongues -- fetch-corpora "$@"
 
-# Start the web interface on 0.0.0.0:3000 plus HTTPS on 0.0.0.0:443
+# Start the web interface on loopback. Set TONGUES_ALLOW_INSECURE_REMOTE=1 before
+# startup to opt into an unauthenticated non-loopback development bind.
 serve *args:
     cargo run --bin tongues-server "$@"
