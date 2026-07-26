@@ -2706,7 +2706,38 @@ fn registered_speech_compositions_at(
             recommended: voice.id == selected,
         }
     }));
+    if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    ) {
+        compositions.extend(
+            catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
+                .map(fairseq_registered_composition),
+        );
+    }
     compositions
+}
+
+fn fairseq_registered_composition(
+    entry: &tongues_tts::ModelCatalogEntry,
+) -> tongues_tts::RegisteredSpeechComposition {
+    let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
+        format!("projector/{}", entry.id),
+        entry.id.clone(),
+        Vec::new(),
+    );
+    tongues_tts::RegisteredSpeechComposition {
+        id: pipeline
+            .canonical_id()
+            .expect("Fairseq MMS end-to-end pipeline must be valid"),
+        display_name: entry.display_name.clone(),
+        backend: "fairseq".into(),
+        model: entry.id.clone(),
+        pipeline,
+        recommended: entry.id == "fairseq-mms-vits-eng",
+    }
 }
 
 fn resolve_registered_pipeline(
@@ -2733,19 +2764,7 @@ fn resolve_legacy_composition(
         let entry = catalog
             .find(&model)
             .context("resolved Fairseq MMS model disappeared from the catalog")?;
-        let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
-            format!("projector/{}", entry.id),
-            entry.id.clone(),
-            Vec::new(),
-        );
-        return Ok(tongues_tts::RegisteredSpeechComposition {
-            id: pipeline.canonical_id()?,
-            display_name: entry.display_name.clone(),
-            backend: "fairseq".into(),
-            model: entry.id.clone(),
-            pipeline,
-            recommended: entry.id == "fairseq-mms-vits-eng",
-        });
+        return Ok(fairseq_registered_composition(entry));
     }
     registered_speech_compositions_at(home)
         .into_iter()
@@ -2989,37 +3008,7 @@ fn speech_backend_capabilities(
             let entry = catalog
                 .find(&model)
                 .context("resolved Fairseq MMS model disappeared from the catalog")?;
-            tongues_tts::BackendCapabilities {
-                backend: "fairseq".into(),
-                model: entry.id.clone(),
-                family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
-                // The selected checkpoint consumes raw graphemes. Catalog
-                // `varieties` remains the authority for voice-variety claims;
-                // runtime planning may use any Tongues text plan.
-                varieties: tongues_tts::CapabilityValue::Any,
-                languages: tongues_tts::LanguageCapabilities {
-                    values: tongues_tts::CapabilityValue::Listed(
-                        entry
-                            .languages
-                            .iter()
-                            .map(|language| tongues_tts::NamedCapability::new(language, language))
-                            .collect(),
-                    ),
-                    required: false,
-                    numeric_ids: false,
-                },
-                speakers: unsupported_speakers(),
-                styles: unsupported_styles(),
-                reference_audio: Default::default(),
-                speed: true,
-                pitch: Default::default(),
-                energy: Default::default(),
-                durations: false,
-                seed: true,
-                devices,
-                output: output(entry.sample_rate_hz.unwrap_or(16_000)),
-                provenance: vec![entry.provenance.source.clone()],
-            }
+            fairseq_backend_capabilities(entry, device)
         }
         "yourtts" => {
             let dir = home.join(YOURTTS_RELATIVE_DIR);
@@ -3233,6 +3222,60 @@ fn speech_backend_capabilities(
         },
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })
+}
+
+fn fairseq_backend_capabilities(
+    entry: &tongues_tts::ModelCatalogEntry,
+    device: tongues_tts::ResolvedSpeechDevice,
+) -> tongues_tts::BackendCapabilities {
+    tongues_tts::BackendCapabilities {
+        backend: "fairseq".into(),
+        model: entry.id.clone(),
+        family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+        // The selected checkpoint consumes raw graphemes. Catalog `varieties`
+        // remains the authority for voice-variety claims; runtime planning may
+        // use any Tongues text plan.
+        varieties: tongues_tts::CapabilityValue::Any,
+        languages: tongues_tts::LanguageCapabilities {
+            values: tongues_tts::CapabilityValue::Listed(
+                entry
+                    .languages
+                    .iter()
+                    .map(|language| tongues_tts::NamedCapability::new(language, language))
+                    .collect(),
+            ),
+            required: false,
+            numeric_ids: false,
+        },
+        speakers: unsupported_speaker_capabilities(),
+        styles: tongues_tts::StyleCapabilities::unsupported(),
+        reference_audio: Default::default(),
+        speed: true,
+        pitch: Default::default(),
+        energy: Default::default(),
+        durations: false,
+        seed: true,
+        devices: vec![
+            tongues_tts::SpeechDeviceRequest::Cpu,
+            tongues_tts::SpeechDeviceRequest::Cuda {
+                index: device.index().unwrap_or(0),
+            },
+        ],
+        output: tongues_tts::OutputAudioContract {
+            sample_rate_hz: entry.sample_rate_hz.unwrap_or(16_000),
+            channels: 1,
+            streaming: true,
+        },
+        provenance: vec![entry.provenance.source.clone()],
+    }
+}
+
+fn unsupported_speaker_capabilities() -> tongues_tts::SpeakerCapabilities {
+    tongues_tts::SpeakerCapabilities {
+        values: tongues_tts::CapabilityValue::Unsupported,
+        required: false,
+        numeric_ids: false,
+    }
 }
 
 fn speech_variety_capabilities(ids: &[&str]) -> tongues_tts::CapabilityValue {
@@ -4033,8 +4076,16 @@ fn discover_speech_path(
     verification: &SpeechVerification,
     loaded: &[String],
 ) -> SpeechPathDiscovery {
-    let capabilities = speech_backend_capabilities(home, backend, Some(model), device, 24_000)
-        .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
+    let capabilities = if backend == "fairseq" {
+        catalog
+            .find(model)
+            .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
+            .map(|entry| fairseq_backend_capabilities(entry, device))
+            .with_context(|| format!("unknown Fairseq MMS catalog model `{model}`"))
+    } else {
+        speech_backend_capabilities(home, backend, Some(model), device, 24_000)
+    }
+    .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
             backend: backend.into(),
             model: model.into(),
             family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
@@ -4190,6 +4241,26 @@ fn speech_studio_discovery(
         selected_onnx_voice_model_at(home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
     let mut paths = Vec::new();
     for provider in RESIDENT_BACKEND_PROVIDERS {
+        if provider.id == "fairseq" {
+            for entry in catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
+            {
+                paths.push(discover_speech_path(
+                    home,
+                    provider.id,
+                    &entry.id,
+                    &entry.display_name,
+                    entry.id == "fairseq-mms-vits-eng",
+                    device,
+                    &catalog,
+                    &verification,
+                    loaded,
+                ));
+            }
+            continue;
+        }
         if provider.id == "onnx" {
             for model in ONNX_VOICE_MODELS {
                 paths.push(discover_speech_path(
@@ -5209,7 +5280,7 @@ fn native_component_inventory_without_catalog(loaded: &[String]) -> Vec<SpeechCo
 fn speech_component_inventory(
     catalog: &tongues_tts::ModelCatalog,
     store: &tongues_tts::ModelStore,
-    verification: &BTreeMap<String, Result<(), String>>,
+    verification: &SpeechVerification,
     paths: &[SpeechPathDiscovery],
     loaded: &[String],
 ) -> Vec<SpeechComponentDiscovery> {
@@ -6789,6 +6860,33 @@ mod tests {
                 && composition.pipeline.end_to_end.as_deref() == Some("vits-vctk")
                 && composition.pipeline.vocoder.is_none()
         }));
+        let fairseq_compositions = discovery
+            .compositions
+            .iter()
+            .filter(|composition| composition.backend == "fairseq")
+            .collect::<Vec<_>>();
+        assert_eq!(fairseq_compositions.len(), 1_143);
+        assert!(fairseq_compositions.iter().all(|composition| {
+            composition.pipeline.end_to_end.as_deref() == Some(composition.model.as_str())
+                && composition.pipeline.acoustic_model.is_none()
+                && composition.pipeline.vocoder.is_none()
+                && composition.pipeline.projector
+                    == format!("projector/{}", composition.model)
+        }));
+        let scripted = discovery
+            .paths
+            .iter()
+            .find(|path| path.id == "fairseq-mms-vits-azj-script_cyrillic")
+            .expect("script-qualified Fairseq path");
+        assert_eq!(scripted.catalog[0].languages, ["azj"]);
+        assert_eq!(scripted.catalog[0].script.as_deref(), Some("cyrillic"));
+        assert_eq!(
+            scripted.catalog[0].preprocessing,
+            ["lowercase-and-filter-vocab"]
+        );
+        assert_eq!(scripted.catalog[0].license.expression, "CC-BY-NC-4.0");
+        assert!(!scripted.runnable);
+        assert!(scripted.install_command.is_some());
         assert!(discovery.compatibility.iter().any(|edge| {
             edge.from_component_id == "fastpitch-ljspeech"
                 && edge.to_component_id == "hifigan-v2-ljspeech"

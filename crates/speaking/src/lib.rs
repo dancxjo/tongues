@@ -6,6 +6,7 @@
 
 pub mod acoustics;
 pub mod asr;
+pub mod conformance;
 pub mod data;
 pub mod discrepancies;
 pub mod duplex;
@@ -37,6 +38,7 @@ pub mod word_stream;
 
 pub use acoustics::*;
 pub use asr::*;
+pub use conformance::*;
 pub use data::*;
 pub use discrepancies::*;
 pub use duplex::*;

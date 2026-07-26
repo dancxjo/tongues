@@ -292,6 +292,7 @@ pub trait PronunciationPipeline {
         let mut phonemes = Vec::new();
         let mut phones = Vec::new();
         let mut warnings = Vec::new();
+        let mut lexical_candidates = Vec::new();
         let style = input.style.clone().unwrap_or_default();
         let careful_style = style.careful_style;
 
@@ -315,6 +316,22 @@ pub trait PronunciationPipeline {
                 next_part_of_speech: syntax.tokens.get(word_index + 1).map(|token| token.pos),
             };
             let pronunciation = self.token_classifier(word, &variety, context);
+            lexical_candidates.push(LexicalPronunciationCandidates {
+                word_index,
+                token: word.normalized.clone(),
+                candidates: pronunciation
+                    .candidates
+                    .iter()
+                    .map(|candidate| {
+                        candidate
+                            .iter()
+                            .map(|planned| planned.phoneme.clone())
+                            .collect()
+                    })
+                    .collect(),
+                confidence: confidence_for_status(pronunciation.status),
+                provenance: pronunciation.provenance.clone(),
+            });
             warnings.extend(pronunciation.warnings.clone());
             let mut word_phonemes =
                 self.phoneme_planner(&canonical_variety, word_index, &pronunciation);
@@ -354,7 +371,9 @@ pub trait PronunciationPipeline {
 
         Ok(PhonemicizeOutput {
             text: input.text.clone(),
-            variety: input.variety.clone(),
+            normalized_text,
+            variety: canonical_variety.clone(),
+            lexical_candidates,
             graphemes,
             phonemes,
             phones,
@@ -417,7 +436,10 @@ impl Default for PhonemicizeStyle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhonemicizeOutput {
     pub text: String,
+    pub normalized_text: String,
     pub variety: VarietyId,
+    #[serde(default)]
+    pub lexical_candidates: Vec<LexicalPronunciationCandidates>,
     pub graphemes: Vec<GraphemeToken>,
     pub phonemes: Vec<PhonemeToken>,
     pub phones: Vec<PhoneToken>,
@@ -430,6 +452,15 @@ pub struct PhonemicizeOutput {
     pub syntax: SentenceSyntaxAnalysis,
     #[serde(default)]
     pub warnings: Vec<PronunciationWarning>,
+    pub provenance: EvidenceProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LexicalPronunciationCandidates {
+    pub word_index: usize,
+    pub token: String,
+    pub candidates: Vec<Vec<PhonemeId>>,
+    pub confidence: f32,
     pub provenance: EvidenceProvenance,
 }
 

@@ -1564,6 +1564,68 @@ mod tests {
     }
 
     #[test]
+    fn tiny_encoder_masks_padded_tokens() {
+        let device = NdArrayDevice::Cpu;
+        TestBackend::seed(&device, 11);
+        let config = tiny_config();
+        let encoder = GlowTextEncoder::<TestBackend>::init(&config, &device).expect("encoder");
+        let tokens =
+            Tensor::<TestBackend, 2, Int>::from_ints([[0, 1, 0, 0], [0, 1, 2, 3]], &device);
+        let lengths = Tensor::<TestBackend, 1, Int>::from_ints([2, 4], &device);
+        let encoded = encoder.forward(tokens, lengths, None).expect("encoded");
+        assert_eq!(
+            encoded
+                .mask
+                .clone()
+                .into_data()
+                .to_vec::<f32>()
+                .expect("mask"),
+            vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+        );
+        for (label, values, channels) in [
+            ("encoded", encoded.encoded, 4),
+            ("mean", encoded.mean, 4),
+            ("log scale", encoded.log_scale, 4),
+            ("log durations", encoded.log_durations, 1),
+        ] {
+            let values = values.into_data().to_vec::<f32>().expect(label);
+            for channel in 0..channels {
+                assert_eq!(values[channel * 4 + 2], 0.0, "{label} padding");
+                assert_eq!(values[channel * 4 + 3], 0.0, "{label} padding");
+            }
+        }
+    }
+
+    #[test]
+    fn speaker_conditioning_contract_rejects_missing_malformed_and_conflicting_inputs() {
+        let device = NdArrayDevice::Cpu;
+        let valid = Tensor::<TestBackend, 3>::zeros([1, 256, 1], &device);
+        assert!(normalize_conditioning(Some(valid.clone()), 1, 0, 4).is_err());
+        assert!(normalize_conditioning::<TestBackend>(None, 1, 256, 4).is_err());
+        assert!(normalize_conditioning(
+            Some(Tensor::<TestBackend, 3>::zeros([1, 255, 1], &device)),
+            1,
+            256,
+            4
+        )
+        .is_err());
+        assert!(normalize_conditioning(
+            Some(Tensor::<TestBackend, 3>::zeros([1, 256, 2], &device)),
+            1,
+            256,
+            4
+        )
+        .is_err());
+        assert_eq!(
+            normalize_conditioning(Some(valid), 1, 256, 4)
+                .expect("valid conditioning")
+                .expect("conditioning tensor")
+                .dims(),
+            [1, 256, 1]
+        );
+    }
+
+    #[test]
     #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
     fn published_glow_checkpoint_synthesizes() {
         let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")

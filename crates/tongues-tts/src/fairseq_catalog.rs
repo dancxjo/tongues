@@ -250,6 +250,7 @@ pub fn generate_fairseq_catalog(source: &FairseqCatalogSource) -> Result<ModelCa
                 compatible_with: vec!["fairseq-mms-vits".into(), "coqui-fairseq-vits".into()],
                 package_version: 1,
                 languages: vec![entry.language.clone()],
+                script: entry.script.clone(),
                 varieties: entry.varieties.clone(),
                 speakers: CatalogSpeakers {
                     count: 1,
@@ -425,6 +426,7 @@ mod tests {
             .find("fairseq-mms-vits-azj-script_cyrillic")
             .unwrap();
         assert_eq!(azj.languages, ["azj"]);
+        assert_eq!(azj.script.as_deref(), Some("cyrillic"));
         assert!(azj.varieties.is_empty());
         assert_eq!(azj.preprocessing, ["uroman"]);
     }

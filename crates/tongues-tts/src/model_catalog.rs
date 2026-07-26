@@ -50,6 +50,9 @@ pub struct ModelCatalogEntry {
     pub package_version: u32,
     #[serde(default)]
     pub languages: Vec<String>,
+    /// Source-declared writing system for script-qualified checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
     #[serde(default)]
     pub varieties: Vec<String>,
     pub speakers: CatalogSpeakers,
@@ -575,6 +578,7 @@ impl ModelStore {
                 .iter()
                 .map(|language| language.tag.clone())
                 .collect(),
+            script: None,
             varieties: Vec::new(),
             speakers: CatalogSpeakers {
                 count: package.manifest.speakers.len(),
@@ -1670,6 +1674,7 @@ mod tests {
             compatible_with: Vec::new(),
             package_version: 1,
             languages: Vec::new(),
+            script: None,
             varieties: Vec::new(),
             speakers: CatalogSpeakers::default(),
             sample_rate_hz: None,
@@ -1757,6 +1762,7 @@ mod tests {
             compatible_with: Vec::new(),
             package_version: 1,
             languages: vec!["en".into()],
+            script: None,
             varieties: Vec::new(),
             speakers: CatalogSpeakers::default(),
             sample_rate_hz: None,

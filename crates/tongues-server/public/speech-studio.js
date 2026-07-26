@@ -633,6 +633,8 @@
         )))];
         const rate = path.output?.sample_rate_hz;
         const languages = [...new Set(catalog.flatMap((entry) => entry.languages || []))];
+        const scripts = [...new Set(catalog.map((entry) => entry.script).filter(Boolean))];
+        const preprocessing = [...new Set(catalog.flatMap((entry) => entry.preprocessing || []))];
         const statuses = path.statuses.map((status) => `<span class="status-badge">${escapeHtml(status)}</span>`).join('');
         card.innerHTML = `
             <div class="speech-section-heading">
@@ -647,8 +649,11 @@
                 <div><dt>Audio</dt><dd>${rate ? `${rate} Hz · ${path.output.channels} channel` : 'Not declared'}</dd></div>
                 <div><dt>Devices</dt><dd>${escapeHtml((path.controls.find((item) => item.field === 'device')?.options || []).map((item) => item.label).join(', '))}</dd></div>
                 <div><dt>Language</dt><dd>${escapeHtml(languages.join(', ') || 'Not declared')}</dd></div>
+                <div><dt>Script</dt><dd>${escapeHtml(scripts.join(', ') || 'Source default')}</dd></div>
+                <div><dt>Preprocessing</dt><dd>${escapeHtml(preprocessing.join(', ') || 'None declared')}</dd></div>
                 <div><dt>Speakers</dt><dd>${listedValues(path.speakers?.values).length || catalog.reduce((sum, entry) => sum + (entry.speakers?.count || 0), 0)}</dd></div>
                 <div><dt>License</dt><dd>${escapeHtml(licenses.join(', ') || 'Not asserted')}</dd></div>
+                <div><dt>Readiness</dt><dd>${escapeHtml(path.runnable ? 'Ready' : path.statuses.join(', '))}</dd></div>
                 <div><dt>Resident</dt><dd>${escapeHtml(path.load_state)}</dd></div>
                 <div><dt>Provenance</dt><dd>${escapeHtml(provenance.join(' | ') || path.provenance.join(', ') || 'Not declared')}</dd></div>
             </dl>
@@ -752,6 +757,13 @@
                     `Load: ${component.load_state}`,
                     component.control_fields?.length
                         ? `Controls: ${component.control_fields.join(', ')}`
+                        : null,
+                    catalog.length ? `Language: ${[...new Set(catalog.flatMap((entry) => entry.languages || []))].join(', ')}` : null,
+                    catalog.some((entry) => entry.script)
+                        ? `Script: ${[...new Set(catalog.map((entry) => entry.script).filter(Boolean))].join(', ')}`
+                        : null,
+                    catalog.some((entry) => (entry.preprocessing || []).length)
+                        ? `Preprocessing: ${[...new Set(catalog.flatMap((entry) => entry.preprocessing || []))].join(', ')}`
                         : null,
                     catalog.length ? `License: ${[...new Set(catalog.map((entry) => entry.license.expression))].join(', ')}` : null,
                     component.compatible_paths.length ? `Paths: ${component.compatible_paths.join(', ')}` : null,

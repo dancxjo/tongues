@@ -60,6 +60,15 @@ test('deduplicates pending catalog verification calls', () => {
     assert.deepEqual(studio.pendingVerificationIds({}), []);
 });
 
+test('background verification is serialized and uses explicit mutation requests', () => {
+    assert.match(studioSource, /const VERIFICATION_CONCURRENCY = 1/);
+    assert.match(
+        studioSource,
+        /models\/verify\/\$\{encodeURIComponent\(modelId\)\}`,\s*\{ method: 'POST'/,
+    );
+    assert.doesNotMatch(studioSource, />Verifying</);
+});
+
 test('rejects stale snapshots that would undo concurrent verification progress', () => {
     const current = { verification_ids: ['vits-vctk'] };
     assert.equal(studio.preservesVerificationProgress(current, {
@@ -114,6 +123,32 @@ test('selects runnable component compositions independently of legacy paths', ()
     };
     assert.equal(studio.selectInitialComposition({ compositions: [unavailable, ready] }).id, 'ready');
     assert.equal(studio.compositionGenerator(ready), 'fastpitch-ljspeech');
+});
+
+test('treats every MMS checkpoint as an end-to-end model with an integrated decoder', () => {
+    const mms = {
+        id: 'mms-tha',
+        backend: 'fairseq',
+        model: 'fairseq-mms-vits-tha',
+        runnable: true,
+        pipeline: {
+            input: 'text',
+            projector: 'projector/fairseq-mms-vits-tha',
+            conditioners: [],
+            end_to_end: 'fairseq-mms-vits-tha',
+            output: 'wav',
+        },
+    };
+    assert.equal(studio.compositionGenerator(mms), 'fairseq-mms-vits-tha');
+    assert.equal(mms.pipeline.acoustic_model, undefined);
+    assert.equal(mms.pipeline.vocoder, undefined);
+    assert.match(studioSource, /Waveform decoding is integrated into this model/);
+});
+
+test('renders catalog language, script, preprocessing, license, and readiness metadata', () => {
+    for (const label of ['Language', 'Script', 'Preprocessing', 'License', 'Readiness']) {
+        assert.match(studioSource, new RegExp(`<dt>${label}</dt>`));
+    }
 });
 
 test('reports exact directed compatibility edges', () => {
