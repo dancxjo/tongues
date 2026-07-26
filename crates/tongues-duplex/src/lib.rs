@@ -1022,22 +1022,16 @@ pub fn run_fixture(
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum ProvisionalTranscriptEvent {
     /// New provisional morphemes appended beyond the committed frontier.
-    Append {
-        morphemes: Vec<CompletionMorpheme>,
-    },
+    Append { morphemes: Vec<CompletionMorpheme> },
     /// Existing provisional morphemes replaced in place (revision or repair).
     Replace {
         previous: Vec<CompletionMorpheme>,
         replacement: Vec<CompletionMorpheme>,
     },
     /// Previously provisional morphemes withdrawn (no longer supported).
-    Withdraw {
-        morphemes: Vec<CompletionMorpheme>,
-    },
+    Withdraw { morphemes: Vec<CompletionMorpheme> },
     /// Morphemes moved from provisional to permanent committed history.
-    Commit {
-        morphemes: Vec<CommittedMorpheme>,
-    },
+    Commit { morphemes: Vec<CommittedMorpheme> },
 }
 
 /// Downstream consumer that processes [`SimulatorEvent`]s and derives
@@ -1090,13 +1084,15 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
     fn on_event(&mut self, event: &SimulatorEvent) {
         match &event.event {
             SimulatorEventKind::HypothesisProposed { hypothesis } => {
-                self.hypotheses.insert(hypothesis.id.clone(), hypothesis.clone());
+                self.hypotheses
+                    .insert(hypothesis.id.clone(), hypothesis.clone());
             }
             SimulatorEventKind::HypothesisWithdrawn { hypothesis, .. } => {
                 self.hypotheses.remove(&hypothesis.id);
             }
             SimulatorEventKind::HypothesisRepaired { replacement, .. } => {
-                self.hypotheses.insert(replacement.id.clone(), replacement.clone());
+                self.hypotheses
+                    .insert(replacement.id.clone(), replacement.clone());
             }
             SimulatorEventKind::BeamInferred { selected, .. } => {
                 // Derive new provisional suffix from the highest-probability
@@ -1138,9 +1134,10 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
             SimulatorEventKind::CommitFrontierAdvanced { committed, .. } => {
                 self.committed_len += committed.len();
                 self.committed.extend(committed.iter().cloned());
-                self.transcript_events.push(ProvisionalTranscriptEvent::Commit {
-                    morphemes: committed.clone(),
-                });
+                self.transcript_events
+                    .push(ProvisionalTranscriptEvent::Commit {
+                        morphemes: committed.clone(),
+                    });
                 // Strip committed morphemes from the head of the provisional suffix.
                 let new_len = self.provisional.len().saturating_sub(committed.len());
                 self.provisional = self.provisional[self.provisional.len() - new_len..].to_vec();
@@ -1155,7 +1152,11 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
 pub fn run_fixture_with_consumer(
     fixture: &DuplexFixture,
 ) -> Result<
-    (SimulatorJournal, SimulatorState, RecordingSpeculativeConsumer),
+    (
+        SimulatorJournal,
+        SimulatorState,
+        RecordingSpeculativeConsumer,
+    ),
     SimulatorError,
 > {
     let provider = FixtureCompletionProvider::new(fixture);
@@ -1424,10 +1425,10 @@ mod tests {
         // The simulator must record that the false-boundary hypothesis was
         // withdrawn after correcting evidence arrived.
         assert!(
-            journal.events.iter().any(|ev| matches!(
-                ev.event,
-                SimulatorEventKind::HypothesisWithdrawn { .. }
-            )),
+            journal
+                .events
+                .iter()
+                .any(|ev| matches!(ev.event, SimulatorEventKind::HypothesisWithdrawn { .. })),
             "expected at least one HypothesisWithdrawn simulator event"
         );
 
@@ -1446,10 +1447,10 @@ mod tests {
 
         // Consumer must have produced at least one Commit event.
         assert!(
-            consumer.transcript_events.iter().any(|ev| matches!(
-                ev,
-                ProvisionalTranscriptEvent::Commit { .. }
-            )),
+            consumer
+                .transcript_events
+                .iter()
+                .any(|ev| matches!(ev, ProvisionalTranscriptEvent::Commit { .. })),
             "expected at least one Commit event"
         );
 
@@ -1468,10 +1469,14 @@ mod tests {
 
         // After step 1 (ambiguous /miːt/ evidence), both hypotheses should be
         // present in the simulator without any commit.
-        let events_after_step1: Vec<_> = journal.events.iter().take_while(|e| {
-            !matches!(e.event, SimulatorEventKind::EvidenceObserved { .. })
-                || journal.events.iter().position(|x| x == *e).unwrap_or(0) < 5
-        }).collect();
+        let events_after_step1: Vec<_> = journal
+            .events
+            .iter()
+            .take_while(|e| {
+                !matches!(e.event, SimulatorEventKind::EvidenceObserved { .. })
+                    || journal.events.iter().position(|x| x == *e).unwrap_or(0) < 5
+            })
+            .collect();
         let _ = events_after_step1; // structural check is below via consumer
 
         // Consumer must have emitted Append for initial provisional suffix,

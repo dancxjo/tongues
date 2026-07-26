@@ -542,7 +542,10 @@ enum BackendInstance {
     #[cfg(not(feature = "styletts2-onnx"))]
     StyleTts2,
     #[cfg(feature = "onnx-tts")]
-    Onnx(speech::OnnxSpeechBackend),
+    Onnx {
+        backend: speech::OnnxSpeechBackend,
+        model_id: String,
+    },
     #[cfg(not(feature = "onnx-tts"))]
     Onnx,
 }
@@ -717,7 +720,8 @@ impl BackendInstance {
             #[cfg(not(feature = "styletts2-onnx"))]
             Self::StyleTts2 => unreachable!("StyleTTS2 feature is disabled"),
             #[cfg(feature = "onnx-tts")]
-            Self::Onnx(engine) => {
+            Self::Onnx { backend, model_id } => {
+                let engine = backend;
                 let config = engine.voice_config();
                 let values = config
                     .speaker_id_map
@@ -726,7 +730,7 @@ impl BackendInstance {
                     .collect::<Vec<_>>();
                 speech::BackendCapabilities {
                     backend: "onnx".into(),
-                    model: "onnx-compatibility-voice".into(),
+                    model: model_id.clone(),
                     family: speech::SpeechModelFamily::EndToEndSpeech,
                     varieties,
                     languages: speech::LanguageCapabilities::unsupported(),
@@ -748,7 +752,7 @@ impl BackendInstance {
                     seed: false,
                     devices,
                     output: output(config.sample_rate_hz),
-                    provenance: vec!["Piper-compatible ONNX import".into()],
+                    provenance: vec!["ONNX compatibility voice import".into()],
                 }
             }
             #[cfg(not(feature = "onnx-tts"))]
@@ -921,7 +925,7 @@ impl BackendInstance {
                 )
             }
             #[cfg(feature = "onnx-tts")]
-            Self::Onnx(ref mut backend) => {
+            Self::Onnx { backend, .. } => {
                 let mut pcm_mono_f32 = Vec::new();
                 let synthesis_options = onnx_synthesis_options(options)?;
                 backend.synthesize_plan_streaming_with_options(
@@ -1676,6 +1680,7 @@ fn load_backend(
             #[cfg(feature = "onnx-tts")]
             {
                 use speech::{voice_config_path, OnnxSpeechBackend, VoiceConfig};
+                let selected_model = crate::models::selected_voice_model_bundle()?.id.to_string();
                 let primary_model = crate::models::ensure_voice_model_available()?;
                 let config_path = voice_config_path(&primary_model);
                 let config = VoiceConfig::from_json_file(&config_path)?;
@@ -1683,7 +1688,10 @@ fn load_backend(
                     DeviceArg::Cpu => OnnxSpeechBackend::load_cpu(&primary_model, config)?,
                     DeviceArg::Cuda { .. } => OnnxSpeechBackend::load(&primary_model, config)?,
                 };
-                BackendInstance::Onnx(backend)
+                BackendInstance::Onnx {
+                    backend,
+                    model_id: selected_model,
+                }
             }
             #[cfg(not(feature = "onnx-tts"))]
             {
@@ -1740,7 +1748,7 @@ fn run_speak_with_backend(
         SpeakBackend::Xtts => 24_000,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
-        SpeakBackend::Onnx => 22_050,
+        SpeakBackend::Onnx => backend.capabilities(startup.device).output.sample_rate_hz,
     };
     let backend_label = backend.label();
     if command.timings {

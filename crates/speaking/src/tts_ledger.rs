@@ -142,11 +142,9 @@ impl std::fmt::Display for PlanDeltaError {
                 "plan delta utterance mismatch: expected {}, received {}",
                 expected.0, received.0
             ),
-            Self::CannotCancelPlayedEmission { emission_id } => write!(
-                formatter,
-                "cannot cancel played emission {}",
-                emission_id.0
-            ),
+            Self::CannotCancelPlayedEmission { emission_id } => {
+                write!(formatter, "cannot cancel played emission {}", emission_id.0)
+            }
             Self::CannotReplacePlayedEmission { emission_id } => write!(
                 formatter,
                 "cannot replace played emission {}",

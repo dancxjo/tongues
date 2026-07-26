@@ -1037,7 +1037,10 @@ mod tests {
         )
         .expect("rustfft supports the 400-point FreeVC speaker transform");
         assert_eq!(spectrum.bins_per_frame(), 201);
-        assert!(spectrum.bins.iter().all(|bin| bin.re.is_finite() && bin.im.is_finite()));
+        assert!(spectrum
+            .bins
+            .iter()
+            .all(|bin| bin.re.is_finite() && bin.im.is_finite()));
     }
 
     #[test]
