@@ -101,12 +101,7 @@ impl<B: Backend> HifiganTrainer<B> {
 
     /// Construct a trainer with HiFi-GAN paper default loss weights.
     pub fn with_defaults(generator: HifiganGenerator<B>, device: &B::Device) -> Self {
-        Self::new(
-            generator,
-            device,
-            VocoderLossWeights::default(),
-            1,
-        )
+        Self::new(generator, device, VocoderLossWeights::default(), 1)
     }
 
     /// Run the generator forward pass.
@@ -321,8 +316,14 @@ mod tests {
             .into_data()
             .to_vec::<f32>()
             .unwrap()[0];
-        assert!(loss.is_finite(), "generator loss must be finite, got {loss}");
-        assert!(loss >= 0.0, "generator loss must be non-negative, got {loss}");
+        assert!(
+            loss.is_finite(),
+            "generator loss must be finite, got {loss}"
+        );
+        assert!(
+            loss >= 0.0,
+            "generator loss must be non-negative, got {loss}"
+        );
     }
 
     #[test]

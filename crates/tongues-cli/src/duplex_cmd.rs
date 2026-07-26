@@ -93,8 +93,7 @@ fn run_prepare(command: DuplexPrepareCommand) -> Result<()> {
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} {msg}")
-            .expect("valid spinner template"),
+        ProgressStyle::with_template("{spinner:.green} {msg}").expect("valid spinner template"),
     );
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(format!(

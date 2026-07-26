@@ -5057,16 +5057,6 @@ fn speech_path_catalog_ids(
                 .map(str::to_string)
                 .unwrap_or(speech_model_id(home, backend, None)?),
         ],
-        "onnx" => vec![
-            model
-                .filter(|model| !model.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or(speech_model_id(home, backend, None)?),
-        ],
-        "onnx" => vec![model
-            .filter(|model| !model.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or(speech_model_id(home, backend, None)?)],
         "mock" => Vec::new(),
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })

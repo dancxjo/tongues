@@ -175,9 +175,12 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MelganTrainer<B> {
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let predicted = self.generate(batch.conditioning_mel)?;
         match self.training_phase(global_step) {
-            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => {
-                generator_output(&self.msd, batch.target_waveform, predicted, &self.loss_weights)
-            }
+            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => generator_output(
+                &self.msd,
+                batch.target_waveform,
+                predicted,
+                &self.loss_weights,
+            ),
             VocoderTrainingPhase::Discriminator => {
                 discriminator_output(&self.msd, batch.target_waveform, predicted)
             }
@@ -245,9 +248,12 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for MultibandMelganTrainer<B> {
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let predicted = self.generate(batch.conditioning_mel)?;
         match self.training_phase(global_step) {
-            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => {
-                generator_output(&self.msd, batch.target_waveform, predicted, &self.loss_weights)
-            }
+            VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint => generator_output(
+                &self.msd,
+                batch.target_waveform,
+                predicted,
+                &self.loss_weights,
+            ),
             VocoderTrainingPhase::Discriminator => {
                 discriminator_output(&self.msd, batch.target_waveform, predicted)
             }
@@ -310,7 +316,10 @@ mod tests {
             .into_data()
             .to_vec::<f32>()
             .unwrap()[0];
-        assert!(loss.is_finite(), "generator loss must be finite, got {loss}");
+        assert!(
+            loss.is_finite(),
+            "generator loss must be finite, got {loss}"
+        );
     }
 
     #[test]

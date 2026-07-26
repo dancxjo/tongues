@@ -52,6 +52,7 @@ pub mod burn_vits_decoder;
 pub mod burn_vits_duration;
 pub mod burn_vits_flow;
 pub mod burn_vits_text;
+pub mod burn_vits_training;
 pub mod burn_vocoder;
 pub mod burn_vocoder_discriminators;
 pub mod burn_vocoder_losses;
@@ -82,6 +83,7 @@ pub mod tacotron_config;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
+pub mod vits_recipe;
 pub mod vocoder_recipe;
 pub mod wavlm;
 pub mod xtts;
@@ -119,9 +121,11 @@ pub use burn_glow_tts::{
 pub use burn_glow_tts_acoustic::{BurnGlowTtsAcoustic, COQUI_D_VECTOR_SPACE};
 pub use burn_glow_tts_pipeline::BurnGlowTtsPipeline;
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
+pub use burn_hifigan_trainer::HifiganTrainer;
 pub use burn_melgan::{
     MelganError, MelganGenerator, MelganGeneratorConfig, MultibandMelganGenerator, Pqmf, PqmfConfig,
 };
+pub use burn_melgan_trainer::{MelganTrainer, MultibandMelganTrainer};
 pub use burn_pipeline::BurnSpeedySpeechPipeline;
 pub use burn_speedy_speech::{
     ResidualConvConfig, SpeedySpeech, SpeedySpeechConfig, SpeedySpeechError, SpeedySpeechOutput,
@@ -148,6 +152,13 @@ pub use burn_vits_flow::{
 pub use burn_vits_text::{
     VitsTextPriorConfig, VitsTextPriorEncoder, VitsTextPriorError, VitsTextPriorOutput,
 };
+pub use burn_vits_training::{
+    combine_vits_generator_losses, deterministic_segment_starts, gaussian_log_likelihood,
+    masked_duration_loss, maximum_monotonic_path, slice_segments, slice_waveform_segments,
+    vits_kl_loss, VitsDiscriminators, VitsGeneratorLosses, VitsInferenceExport,
+    VitsPosteriorEncoder, VitsPosteriorEncoderConfig, VitsPosteriorOutput, VitsTrainableGenerator,
+    VitsTrainingBatch, VitsTrainingForward,
+};
 pub use burn_vocoder::{
     BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
     BurnVocoder,
@@ -163,12 +174,6 @@ pub use burn_vocoder_losses::{
 pub use burn_vocoder_training::{
     BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
     VocoderTrainingPhase,
-};
-pub use burn_hifigan_trainer::HifiganTrainer;
-pub use burn_melgan_trainer::{MelganTrainer, MultibandMelganTrainer};
-pub use vocoder_recipe::{
-    HifiganTrainingRecipe, MelganTrainingRecipe, RecipeMelContract, SerializableLossWeights,
-    VocoderTrainingHyperparams, VocoderTrainingState, RECIPE_SCHEMA_VERSION,
 };
 pub use burn_xtts::{
     xtts_language_has_native_cleaner, BurnXtts, XttsConditioning, XttsGenerationControls,
@@ -274,6 +279,19 @@ pub use tacotron_config::{
 };
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
 pub use vits_projector::VitsLinguisticProjector;
+pub use vits_recipe::{
+    initialize_vits_run_with_progress, publish_vits_checkpoint, render_model_card,
+    write_vits_training_manifest, write_vits_training_state, VitsCheckpointPolicy,
+    VitsCheckpointStaging, VitsDatasetManifest, VitsFreezeConfig, VitsLossWeights,
+    VitsOptimizerConfig, VitsRunLayout, VitsSchedulerConfig, VitsSupportedSubset,
+    VitsTrainingBackend, VitsTrainingManifest, VitsTrainingProgress, VitsTrainingRecipe,
+    VitsTrainingState, VITS_TRAINING_MANIFEST_SCHEMA_VERSION, VITS_TRAINING_RECIPE_SCHEMA_VERSION,
+    VITS_TRAINING_STATE_SCHEMA_VERSION,
+};
+pub use vocoder_recipe::{
+    HifiganTrainingRecipe, MelganTrainingRecipe, RecipeMelContract, SerializableLossWeights,
+    VocoderTrainingHyperparams, VocoderTrainingState, RECIPE_SCHEMA_VERSION,
+};
 pub use wavlm::{WavLm, WavLmConfig};
 pub use xtts::{
     XttsAudioConfig, XttsModelArgs, XttsStreamAssembler, XttsTokenizer, XttsV2Config,

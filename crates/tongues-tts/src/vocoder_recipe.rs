@@ -160,11 +160,7 @@ impl HifiganTrainingRecipe {
                 in_channels: 80,
                 out_channels: 1,
                 resblock_type: "1".to_owned(),
-                resblock_dilation_sizes: vec![
-                    vec![1, 3, 5],
-                    vec![1, 3, 5],
-                    vec![1, 3, 5],
-                ],
+                resblock_dilation_sizes: vec![vec![1, 3, 5], vec![1, 3, 5], vec![1, 3, 5]],
                 resblock_kernel_sizes: vec![3, 7, 11],
                 upsample_kernel_sizes: vec![16, 16, 4, 4],
                 upsample_initial_channel: 512,

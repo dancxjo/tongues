@@ -97,10 +97,7 @@ pub fn feature_matching_loss<B: Backend>(
 }
 
 /// Truncate two 3-D tensors along the time axis (dim 2) to the same length.
-fn align_time_axes<B: Backend>(
-    a: Tensor<B, 3>,
-    b: Tensor<B, 3>,
-) -> (Tensor<B, 3>, Tensor<B, 3>) {
+fn align_time_axes<B: Backend>(a: Tensor<B, 3>, b: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {
     let [ab, ac, at] = a.dims();
     let [bb, bc, bt] = b.dims();
     let min_t = at.min(bt);
@@ -124,9 +121,7 @@ fn align_time_axes<B: Backend>(
 /// by producing outputs that the discriminator rates as real.
 ///
 /// Returns a scalar loss tensor.
-pub fn adversarial_generator_loss<B: Backend>(
-    fake_scores: Vec<Tensor<B, 3>>,
-) -> Tensor<B, 1> {
+pub fn adversarial_generator_loss<B: Backend>(fake_scores: Vec<Tensor<B, 3>>) -> Tensor<B, 1> {
     let mut loss: Option<Tensor<B, 1>> = None;
     let mut count = 0usize;
     for score in fake_scores {

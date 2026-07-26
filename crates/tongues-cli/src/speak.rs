@@ -622,6 +622,8 @@ impl BackendInstance {
                     22_050,
                 );
                 capabilities.provenance = vec!["Published Coqui release artifacts".into()];
+                capabilities.capability_tier = speech::CapabilityTier::TierA;
+                capabilities.revision_capable = true;
                 capabilities
             }
             Self::FastPitchCpu(_) | Self::FastPitchCuda(_) => {
@@ -639,6 +641,8 @@ impl BackendInstance {
                 capabilities.durations = true;
                 capabilities.seed = false;
                 capabilities.provenance = vec!["Published Coqui release artifacts".into()];
+                capabilities.capability_tier = speech::CapabilityTier::TierA;
+                capabilities.revision_capable = true;
                 capabilities
             }
             Self::GlowCpu(_) | Self::GlowCuda(_) => {
@@ -653,6 +657,8 @@ impl BackendInstance {
                     "Published Coqui Glow-TTS and MultiBand-MelGAN release artifacts".into(),
                     speech::GLOW_MULTIBAND_STANDARDIZER_ID.into(),
                 ];
+                capabilities.capability_tier = speech::CapabilityTier::TierA;
+                capabilities.revision_capable = true;
                 capabilities
             }
             Self::VitsCpu(engine) => vits_cli_capabilities(

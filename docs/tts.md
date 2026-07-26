@@ -576,6 +576,13 @@ an English model. Imported multilingual VITS packages load
 explicit named or numeric selection, while a one-language embedding may
 default to row zero.
 
+The staged Python-free training path reuses this exact inference graph and
+exports SafeTensors checkpoints that load directly through `BurnVitsSpeech`.
+Its versioned recipe, posterior encoder, maximum-path alignment, segment
+slicing, adversarial/mel/duration/KL losses, durable resume files, model-card
+contract, fixture gates, and CPU/CUDA guidance are documented in
+[Native VITS training and fine-tuning](vits-training.md).
+
 The local server exposes every registered model and executable component graph
 through `GET /api/speech/models`. Schema v3 separates `components`,
 directed `compatibility` edges, complete `compositions`, convenient `presets`,

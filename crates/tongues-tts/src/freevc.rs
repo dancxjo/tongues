@@ -756,7 +756,10 @@ mod tests {
         let mut values = vec![3.0_f32, 4.0];
         l2_normalize(&mut values).unwrap();
         let norm: f32 = values.iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1.0e-6, "norm should be 1.0, got {norm}");
+        assert!(
+            (norm - 1.0).abs() < 1.0e-6,
+            "norm should be 1.0, got {norm}"
+        );
         assert!((values[0] - 0.6).abs() < 1.0e-6);
         assert!((values[1] - 0.8).abs() < 1.0e-6);
     }

@@ -238,9 +238,7 @@ pub struct MultiScaleDiscriminator<B: Backend> {
 impl<B: Backend> MultiScaleDiscriminator<B> {
     /// Initialize three scale sub-discriminators.
     pub fn new(device: &B::Device) -> Self {
-        let sub_discriminators = (0..3)
-            .map(|_| ScaleSubDiscriminator::new(device))
-            .collect();
+        let sub_discriminators = (0..3).map(|_| ScaleSubDiscriminator::new(device)).collect();
         Self { sub_discriminators }
     }
 

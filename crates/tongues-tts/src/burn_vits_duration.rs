@@ -494,7 +494,7 @@ impl<B: Backend> StochasticDurationPredictor<B> {
                 skip_enum_variants: true,
             },
         )
-        .map_err(|error| StochasticDurationError::Checkpoint(error.to_string()))?;
+        .map_err(|error| StochasticDurationError::Checkpoint(format!("{error:#}")))?;
         let mut missing = result
             .missing
             .iter()
@@ -647,6 +647,34 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         latent = self.affine.reverse(latent, mask.clone());
 
         Ok(latent.slice([0..batch, 0..1, 0..frames]) * mask)
+    }
+
+    /// Differentiable training-time duration estimate.
+    ///
+    /// The stochastic duration flow is evaluated at its zero-noise posterior
+    /// mode. This shares every inference-side prior parameter and provides a
+    /// stable log-duration target for maximum-path alignment training. The
+    /// full variational posterior remains training-only and is not needed when
+    /// fine-tuning a published inference checkpoint with deterministic fixture
+    /// batches.
+    pub fn training_log_duration(
+        &self,
+        input: Tensor<B, 3>,
+        mask: Tensor<B, 3>,
+        conditioning: Option<Tensor<B, 3>>,
+        language_conditioning: Option<Tensor<B, 3>>,
+    ) -> Result<Tensor<B, 3>, StochasticDurationError> {
+        let [batch, _, frames] = input.dims();
+        let device = input.device();
+        let noise = Tensor::zeros([batch, 2, frames], &device);
+        self.reverse_with_noise_conditioned(
+            input,
+            mask,
+            conditioning,
+            language_conditioning,
+            noise,
+            0.0,
+        )
     }
 
     /// Reverse inference with deterministic backend-seeded Gaussian noise.

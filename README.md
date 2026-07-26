@@ -104,6 +104,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Common Phone](docs/common-phone.md)
 - [Emotions](docs/emotions.md)
 - [Native audio and feature extraction](docs/audio.md)
+- [Native VITS training and fine-tuning](docs/vits-training.md)
 - [Text to speech](docs/tts.md)
 - [Speech system provenance](docs/provenance.md)
 - [Speech synthesis smoke measurements](docs/speech-smoke.md)
