@@ -31,6 +31,7 @@ pub mod syntax;
 pub mod text_stability;
 pub mod time;
 pub mod transcript;
+pub mod tts_ledger;
 pub mod utterance;
 pub mod variety;
 #[cfg(feature = "asr-whisper")]
@@ -64,6 +65,7 @@ pub use syntax::*;
 pub use text_stability::*;
 pub use time::*;
 pub use transcript::*;
+pub use tts_ledger::*;
 pub use utterance::*;
 pub use variety::*;
 #[cfg(feature = "asr-whisper")]

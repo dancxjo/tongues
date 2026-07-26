@@ -60,6 +60,7 @@ pub mod freevc;
 pub mod freevc_config;
 pub mod glow_tts_config;
 pub mod languages;
+pub mod mock_renderer;
 pub mod model_catalog;
 pub mod model_config;
 pub mod model_package;
@@ -67,9 +68,11 @@ pub mod orchestration;
 pub mod phoneme_projector;
 pub mod pipeline_registry;
 pub mod profiling;
+pub mod revision_assembler;
 pub mod speaker_encoder;
 pub mod speakers;
 pub mod tacotron_config;
+pub mod tts_ledger;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
@@ -184,6 +187,7 @@ pub use model_catalog::{
     MODEL_RUNTIME_COMPATIBILITY_VERSION, MODEL_VERIFICATION_CACHE_SCHEMA_VERSION,
     MODEL_VERIFIER_VERSION,
 };
+pub use mock_renderer::{MockTtsRenderer, MockTtsRendererConfig};
 pub use model_config::{
     AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams, MelganBundleConfig,
     MelganGeneratorParams, MelganVariant,
@@ -221,6 +225,7 @@ pub use profiling::{
     ModelLoadProfileEvent, ModelLoadStage, SynthesisDimension, SynthesisProfileEvent,
     SynthesisProfiler, SynthesisStage,
 };
+pub use revision_assembler::{crossfade_linear, RevisionWaveformAssembler};
 pub use speaker_encoder::{
     angular_prototypical_loss, average_embeddings, cosine_similarity,
     NativeSpeakerEmbeddingService, SpeakerEmbeddingCachePolicy,
@@ -231,6 +236,7 @@ pub use tacotron_config::{
     TacotronConfigError, TacotronInferenceConfig, TacotronVariant,
     DEFAULT_TACOTRON_MAX_DECODER_STEPS,
 };
+pub use tts_ledger::{LedgerEntry, LedgerError, TtsPlaybackLedger};
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
 pub use vits_projector::VitsLinguisticProjector;
 pub use wavlm::{WavLm, WavLmConfig};
