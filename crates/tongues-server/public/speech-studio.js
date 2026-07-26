@@ -1135,9 +1135,9 @@
             <div class="status-badges">${statuses.map(
                 (status) => `<span class="status-badge">${escapeHtml(status)}</span>`,
             ).join('')}</div>
-            <h4>Accepts</h4>
+            <h4>Accepted contract</h4>
             <ul>${contractList(component?.accepts, stage === 'input' ? 'User text' : 'No separate input contract')}</ul>
-            <h4>Emits</h4>
+            <h4>Emitted contract</h4>
             <ul>${contractList(component?.produces, stage === 'output' ? 'Downloadable WAV audio' : 'No separate output contract')}</ul>
             <h4>Ownership and compatibility</h4>
             <p>${escapeHtml(ownership)}</p>
@@ -2034,16 +2034,14 @@
         renderInventory();
     }
 
-    async function refreshDiscovery(waitForVerification = true) {
+    async function refreshDiscovery(verifyChanged = false) {
         const generation = state.verificationGeneration + 1;
         state.verificationGeneration = generation;
         const firstPage = await fetchDiscoveryPage();
         acceptDiscovery(firstPage, true);
         state.catalogDiscovery = firstPage;
         renderInventory();
-        const completion = verifyDiscovery(generation, firstPage);
-        if (waitForVerification) await completion;
-        else completion.catch((error) => showError(`Speech discovery failed: ${error.message}`));
+        if (verifyChanged) await verifyDiscovery(generation, firstPage);
     }
 
     function hideDuplexResult() {
@@ -2804,6 +2802,7 @@
         selectInitialPath,
         selectInitialComposition,
         setWorkflow,
+        studioShell,
         varietiesForPath,
         workflowForPath,
     };

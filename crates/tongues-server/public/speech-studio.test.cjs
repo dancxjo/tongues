@@ -335,3 +335,104 @@ test('renders predicted duplex tokens distinctly and loads the server-projected 
     assert.match(stylesSource, /\.duplex-token-predicted/);
     assert.match(studioSource, /predicted[\s\S]*playable client audio/i);
 });
+
+test('routes every Speech Studio workflow to a stable deep link', () => {
+    const routes = {
+        '/speech': 'speak',
+        '/speech/': 'speak',
+        '/speech/compose': 'compose',
+        '/speech/compare': 'compare',
+        '/speech/catalog': 'catalog',
+        '/speech/operate': 'operate',
+    };
+    for (const [path, workflow] of Object.entries(routes)) {
+        assert.equal(studio.workflowForPath(path), workflow);
+        assert.match(studio.studioShell(), new RegExp(`data-workflow="${workflow}"`));
+    }
+});
+
+test('the initial shell has workflow structure but no expanded registry records', () => {
+    const shell = studio.studioShell();
+    assert.match(shell, /Turn text into speech/);
+    assert.match(shell, /Compose a speech pipeline/);
+    assert.match(shell, /Compare complete recipes/);
+    assert.match(shell, /Capability discovery/);
+    assert.match(shell, /Operate Speech Studio/);
+    assert.doesNotMatch(shell, /fairseq-mms-vits-(eng|fra|deu)/);
+    assert.equal((shell.match(/<option/g) || []).length < 30, true);
+});
+
+test('compose exposes checkpoint ownership, contracts, adapters, and exact CLI output', () => {
+    for (const phrase of [
+        'Ownership and compatibility',
+        'Accepted contract',
+        'Exact CLI representation',
+        'Adapter + vocoder',
+        'checkpoint-owned projector',
+    ]) {
+        assert.match(studioSource, new RegExp(phrase, 'i'));
+    }
+    const path = fixturePath({
+        pipeline: {
+            input: 'text',
+            projector: 'projector/fastpitch-ljspeech',
+            acoustic_model: 'fastpitch-ljspeech',
+            conditioners: [],
+            vocoder: 'hifigan-v2-ljspeech',
+            output: 'wav',
+        },
+    });
+    const command = studio.cliRepresentation(
+        path,
+        new Map([['speed', '1.2'], ['device', 'cpu']]),
+        { text: 'Exact command.', variety: 'en-US-GA' },
+    );
+    assert.match(command, /^tongues speak --cpu 'Exact command\.'/);
+    assert.match(command, /--backend fastpitch/);
+    assert.match(command, /--speed 1\.2/);
+});
+
+test('compare preserves per-recipe results and permits partial failure', () => {
+    assert.match(studioSource, /compareResults: new Map\(\)/);
+    assert.match(studioSource, /Promise\.allSettled\(tasks\)/);
+    assert.match(studioSource, /lane\.dataset\.state = 'failed'/);
+    assert.match(studioSource, /Results remain playable without regeneration/);
+    assert.match(studioSource, /Blind listening mode/);
+});
+
+test('recipes persist controls and navigation carries current state between workflows', () => {
+    assert.match(studioSource, /tongues\.speech\.user-recipes\.v1/);
+    assert.match(studioSource, /controls: controlSnapshot\(path\)/);
+    assert.match(studioSource, /compositionId: state\.pathKey/);
+    assert.match(studioSource, /show-pipeline/);
+    assert.match(studioSource, /add-current-to-compare/);
+    assert.match(studioSource, /open-pipeline-in-speak/);
+});
+
+test('operate keeps targeted verification, jobs, cancellation, and duplex evidence together', () => {
+    assert.match(studioSource, /Verify changed models/);
+    assert.match(studioSource, /\/api\/jobs/);
+    assert.match(studioSource, /data-cancel-job/);
+    assert.match(studioSource, /Labs: predictive duplex evidence/);
+    assert.match(studioSource, /refreshOperateJobs/);
+    assert.doesNotMatch(
+        studioSource,
+        /async function refreshDiscovery[\s\S]{0,600}verifyDiscovery\(generation, firstPage\);\s*if/,
+    );
+});
+
+test('workflow controls are labeled, responsive, theme-aware, and reduced-motion safe', () => {
+    for (const label of [
+        'Text to speak',
+        'Voice or language',
+        'Recipe',
+        'Shared prompt',
+        'Search models and languages',
+    ]) {
+        assert.match(studioSource, new RegExp(`>${label}<`));
+    }
+    assert.match(stylesSource, /@media \(max-width: 720px\)/);
+    assert.match(stylesSource, /@media \(prefers-reduced-motion: reduce\)/);
+    assert.match(stylesSource, /@media \(prefers-color-scheme: dark\)/);
+    assert.match(stylesSource, /\.compare-results/);
+});

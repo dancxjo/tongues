@@ -6236,7 +6236,13 @@ fn speech_control_discovery(
         })
         .collect();
     controls.push(device);
-    if let tongues_tts::CapabilityValue::Listed(values) = &capabilities.languages.values {
+    // A catalog language identifies a single-language checkpoint; it is not a
+    // learned language embedding that callers may select. Only advertise a
+    // request control when the checkpoint declares a real learned-language
+    // selection contract.
+    if (capabilities.languages.required || capabilities.languages.numeric_ids)
+        && let tongues_tts::CapabilityValue::Listed(values) = &capabilities.languages.values
+    {
         let mut language = speech_control(
             "model_language",
             "Model language",
@@ -8377,7 +8383,18 @@ mod tests {
                 .iter()
                 .any(|path| { path.id == "fairseq-mms-vits-azj-script_cyrillic" })
         );
-
+        let fairseq = filtered_page
+            .paths
+            .iter()
+            .find(|path| path.id == "fairseq-mms-vits-azj-script_cyrillic")
+            .expect("filtered MMS path");
+        assert!(
+            fairseq
+                .controls
+                .iter()
+                .all(|control| control.field != "model_language"),
+            "a single-language checkpoint identity must not become a learned-language request control"
+        );
         for component in [
             "speedy-speech",
             "fastpitch",
