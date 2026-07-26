@@ -28,8 +28,8 @@ pub(super) const VARIETIES: &[EnglishVarietyRow] = &[
     },
     EnglishVarietyRow {
         id: "en-GB-RP",
-        name: "Received Pronunciation (stub)",
-        implementation_status: ImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
+        name: "Received Pronunciation",
+        implementation_status: ImplementationStatusSpec::Complete,
         singing: false,
     },
     EnglishVarietyRow {

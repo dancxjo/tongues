@@ -18,10 +18,7 @@ fn make_pronunciation(variety_id: &str, cmu_symbols: &[&str]) -> Vec<PhonemeToke
             let raw_symbol = cmu.raw_symbol();
             let features = crate::data::notation::arpabet::cmu_token_features(&cmu);
             PhonemeToken {
-                phoneme: Spec::Known(crate::data::notation::arpabet::phoneme_id(
-                    variety_id,
-                    &raw_symbol,
-                )),
+                phoneme: Spec::Known(super::english_phoneme_id(variety_id, &raw_symbol)),
                 span: None,
                 features,
                 realized_as: Vec::new(),

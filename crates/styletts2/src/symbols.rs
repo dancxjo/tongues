@@ -750,6 +750,20 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
             set = set.with_alias(format!("{variety}.phoneme.{}", entry.ipa), entry.symbol);
         }
     }
+    for (phoneme, symbol) in [
+        ("e", "EH"),
+        ("ɒ", "AA"),
+        ("ɑː", "AA"),
+        ("ɔː", "AO"),
+        ("əʊ", "OW"),
+        ("ɜː", "ER"),
+        ("ɪə", "IH"),
+        ("eə", "EH"),
+        ("ʊə", "UH"),
+        ("i", "IY"),
+    ] {
+        set = set.with_alias(format!("en-GB-RP.phoneme.{phoneme}"), symbol);
+    }
     set = set
         .with_alias("en-US.arpabet.AH0", "ə")
         .with_alias("en-US.arpabet.AH1", "ʌ")
@@ -760,11 +774,14 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
 
     for (phone_id, symbol) in [
         ("ipa.phone.ɑ", "AA"),
+        ("ipa.phone.ɑː", "AA"),
         ("ipa.phone.æ", "AE"),
+        ("ipa.phone.ɒ", "AA"),
         ("ipa.phone.ʌ", "ʌ"),
         ("ipa.phone.ə", "ə"),
         ("ipa.phone.ɐ", "ɐ"),
         ("ipa.phone.ɔ", "AO"),
+        ("ipa.phone.ɔː", "AO"),
         ("ipa.phone.aʊ", "AW"),
         ("ipa.phone.aɪ", "AY"),
         ("ipa.phone.b", "B"),
@@ -772,6 +789,9 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
         ("ipa.phone.d", "D"),
         ("ipa.phone.ð", "DH"),
         ("ipa.phone.ɛ", "EH"),
+        ("ipa.phone.e", "EH"),
+        ("ipa.phone.eə", "EH"),
+        ("ipa.phone.ɜː", "ER"),
         ("ipa.phone.ɝ", "ɝ"),
         ("ipa.phone.ɚ", "ɚ"),
         ("ipa.phone.eɪ", "EY"),
@@ -779,6 +799,8 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
         ("ipa.phone.ɡ", "G"),
         ("ipa.phone.h", "HH"),
         ("ipa.phone.ɪ", "IH"),
+        ("ipa.phone.ɪə", "IH"),
+        ("ipa.phone.i", "IY"),
         ("ipa.phone.iː", "IY"),
         ("ipa.phone.dʒ", "JH"),
         ("ipa.phone.k", "K"),
@@ -790,6 +812,7 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
         ("ipa.phone.n", "N"),
         ("ipa.phone.ŋ", "NG"),
         ("ipa.phone.oʊ", "OW"),
+        ("ipa.phone.əʊ", "OW"),
         ("ipa.phone.ɔɪ", "OY"),
         ("ipa.phone.p", "P"),
         ("ipa.phone.pʰ", "P"),
@@ -802,6 +825,7 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
         ("ipa.phone.t˭", "T"),
         ("ipa.phone.θ", "TH"),
         ("ipa.phone.ʊ", "UH"),
+        ("ipa.phone.ʊə", "UH"),
         ("ipa.phone.uː", "UW"),
         ("ipa.phone.v", "V"),
         ("ipa.phone.w", "W"),

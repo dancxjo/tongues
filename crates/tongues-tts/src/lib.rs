@@ -945,10 +945,13 @@ fn arpabet_symbol_from_features(features: &speaking::FeatureBundle) -> Option<St
 fn speech_symbol_for_phone_id(phone_id: &str) -> Option<&'static str> {
     Some(match phone_id {
         "ipa.phone.ɑ" => "AA",
+        "ipa.phone.ɑː" => "AA",
         "ipa.phone.æ" => "AE",
+        "ipa.phone.ɒ" => "AA",
         "ipa.phone.ʌ" => "AH1",
         "ipa.phone.ə" | "ipa.phone.ɐ" => "AH0",
         "ipa.phone.ɔ" => "AO",
+        "ipa.phone.ɔː" => "AO",
         "ipa.phone.aʊ" => "AW",
         "ipa.phone.aɪ" => "AY",
         "ipa.phone.b" => "B",
@@ -956,6 +959,8 @@ fn speech_symbol_for_phone_id(phone_id: &str) -> Option<&'static str> {
         "ipa.phone.d" => "D",
         "ipa.phone.ð" => "DH",
         "ipa.phone.ɛ" => "EH",
+        "ipa.phone.e" | "ipa.phone.eə" => "EH",
+        "ipa.phone.ɜː" => "ER1",
         "ipa.phone.ɝ" => "ER1",
         "ipa.phone.ɚ" => "ER0",
         "ipa.phone.eɪ" => "EY",
@@ -963,6 +968,7 @@ fn speech_symbol_for_phone_id(phone_id: &str) -> Option<&'static str> {
         "ipa.phone.ɡ" => "G",
         "ipa.phone.h" => "HH",
         "ipa.phone.ɪ" => "IH",
+        "ipa.phone.ɪə" => "IH",
         "ipa.phone.iː" | "ipa.phone.i" => "IY",
         "ipa.phone.dʒ" => "JH",
         "ipa.phone.k" | "ipa.phone.kʰ" | "ipa.phone.k˭" => "K",
@@ -971,6 +977,7 @@ fn speech_symbol_for_phone_id(phone_id: &str) -> Option<&'static str> {
         "ipa.phone.n" => "N",
         "ipa.phone.ŋ" => "NG",
         "ipa.phone.oʊ" => "OW",
+        "ipa.phone.əʊ" => "OW",
         "ipa.phone.ɔɪ" => "OY",
         "ipa.phone.p" | "ipa.phone.pʰ" | "ipa.phone.p˭" => "P",
         "ipa.phone.ɹ" => "R",
@@ -979,6 +986,7 @@ fn speech_symbol_for_phone_id(phone_id: &str) -> Option<&'static str> {
         "ipa.phone.t" | "ipa.phone.tʰ" | "ipa.phone.t˭" => "T",
         "ipa.phone.θ" => "TH",
         "ipa.phone.ʊ" => "UH",
+        "ipa.phone.ʊə" => "UH",
         "ipa.phone.uː" | "ipa.phone.u" => "UW",
         "ipa.phone.v" => "V",
         "ipa.phone.w" => "W",
@@ -2364,6 +2372,22 @@ mod tests {
         let config = VoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
         let ids = phoneme_ids_from_text("hello world", "en-US", &config).expect("ids");
         assert!(!ids.ids.is_empty());
+    }
+
+    #[test]
+    fn arpabet_voice_projection_accepts_rp_phone_targets() {
+        for (phone, expected) in [
+            ("ipa.phone.ɒ", "AA"),
+            ("ipa.phone.ɑː", "AA"),
+            ("ipa.phone.ɔː", "AO"),
+            ("ipa.phone.əʊ", "OW"),
+            ("ipa.phone.ɜː", "ER1"),
+            ("ipa.phone.ɪə", "IH"),
+            ("ipa.phone.eə", "EH"),
+            ("ipa.phone.ʊə", "UH"),
+        ] {
+            assert_eq!(speech_symbol_for_phone_id(phone), Some(expected), "{phone}");
+        }
     }
 
     #[test]

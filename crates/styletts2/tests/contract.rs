@@ -510,6 +510,29 @@ fn en_us_phone_lowering_preserves_schwa_and_strut_distinction() {
 }
 
 #[test]
+fn en_us_phone_lowering_accepts_rp_phone_targets() {
+    let lowered = styletts2_en_us_symbol_set()
+        .lower_phone_tokens(&[
+            phone_token("ipa.phone.ɒ"),
+            phone_token("ipa.phone.ɑː"),
+            phone_token("ipa.phone.ɔː"),
+            phone_token("ipa.phone.əʊ"),
+            phone_token("ipa.phone.ɜː"),
+            phone_token("ipa.phone.ɪə"),
+            phone_token("ipa.phone.eə"),
+            phone_token("ipa.phone.ʊə"),
+        ])
+        .expect("RP phones should lower to the English StyleTTS2 symbol set");
+    let symbols = lowered
+        .tokens
+        .iter()
+        .map(|token| token.symbol.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(symbols, ["AA", "AA", "AO", "OW", "ER", "IH", "EH", "UH"]);
+}
+
+#[test]
 fn en_us_phone_lowering_lowers_dark_l_to_regular_l() {
     let lowered = styletts2_en_us_symbol_set()
         .lower_phone_tokens(&[phone_token("ipa.phone.ɫ")])

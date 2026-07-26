@@ -3,6 +3,7 @@ use std::collections::HashMap;
 mod catalog;
 pub mod morphology;
 pub mod normalization;
+mod rp;
 pub mod syntax;
 
 use crate::acoustics::{
@@ -11,8 +12,8 @@ use crate::acoustics::{
     CueDiagnosticity, CueTarget, LandmarkAnchor, LandmarkOrderStep, NumericRange,
     RelativeTimeWindow, SegmentSamplingStrategy, SubsegmentProportion, SubsegmentRole, WeightedCue,
 };
-use crate::data::lexicons::CMUDICT_ID;
 use crate::data::lexicons::cmudict::CmuPhoneme;
+use crate::data::lexicons::{CMUDICT_ID, CMUDICT_RP_ID};
 use crate::data::notation::arpabet::{self, ARPABET};
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{AcousticCueId, FeatureId, LanguageId, PhoneId, VarietyId};
@@ -48,7 +49,7 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] = &[
     },
     crate::data::varieties::VarietyRegistration {
         canonical_id: "en-GB-RP",
-        aliases: &[],
+        aliases: &["en-GB", "en-GB.RP", "rp"],
         language_tag: "en-GB",
         load: variety,
     },
@@ -214,9 +215,22 @@ enum ClusterScope {
 
 pub fn variety(id: &str) -> LinguisticVariety {
     let row = catalog::get(id);
-    let phonemes = phoneme_inventory(row.id);
-    let phones = phone_inventory();
+    let is_rp = row.id == rp::ID;
+    let phonemes = if is_rp {
+        rp::phoneme_inventory()
+    } else {
+        phoneme_inventory(row.id)
+    };
+    let phones = if is_rp {
+        rp::phone_inventory()
+    } else {
+        phone_inventory()
+    };
     let acoustic_profile = acoustic_profile(&phonemes, &phones);
+    let mut orthographic_units = orthographic_unit_pronunciations(row.id);
+    if is_rp {
+        rp::adapt_orthographic_units(&mut orthographic_units);
+    }
 
     LinguisticVariety {
         id: VarietyId(row.id.into()),
@@ -225,11 +239,19 @@ pub fn variety(id: &str) -> LinguisticVariety {
         feature_system: FeatureSystem::default(),
         phonemes,
         phones,
-        allophone_rules: allophone_rules(row.id),
+        allophone_rules: if is_rp {
+            rp::allophone_rules()
+        } else {
+            allophone_rules(row.id)
+        },
         epenthesis_rules: epenthesis_rules(),
         weak_forms: weak_forms(row.id),
-        orthographic_unit_pronunciations: orthographic_unit_pronunciations(row.id),
-        pronunciation_lexicons: vec![CMUDICT_ID.into()],
+        orthographic_unit_pronunciations: orthographic_units,
+        pronunciation_lexicons: vec![if is_rp {
+            CMUDICT_RP_ID.into()
+        } else {
+            CMUDICT_ID.into()
+        }],
         pronunciation_selection_rules: pronunciation_selection_rules(),
         pronunciation_pipeline: Some(
             crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA.into(),
@@ -242,8 +264,16 @@ pub fn variety(id: &str) -> LinguisticVariety {
         number_names: Some(english_number_names()),
         punctuation: Some(crate::data::varieties::english_punctuation_profile()),
         question_contours: Some(crate::data::varieties::english_question_contour_profile()),
-        connected_speech: Vec::new(),
-        phonotactics: Some(phonotactics(row.singing)),
+        connected_speech: if is_rp {
+            rp::connected_speech()
+        } else {
+            Vec::new()
+        },
+        phonotactics: Some(if is_rp {
+            rp::phonotactics()
+        } else {
+            phonotactics(row.singing)
+        }),
         orthography: Some(Orthography {
             name: "English Latin orthography".into(),
             pronunciation: Some(crate::data::varieties::ORTHOGRAPHY_PROFILE_ALIAS.into()),
@@ -256,7 +286,11 @@ pub fn variety(id: &str) -> LinguisticVariety {
         acoustic_profile: Some(acoustic_profile),
         prosody_profile: Some(crate::data::varieties::prosody_profile(
             crate::data::varieties::PROSODY_RHYTHM_STRESS_TIMED,
-            4.6,
+            if is_rp {
+                rp::default_rate_syllables_per_second()
+            } else {
+                4.6
+            },
         )),
         status: VarietyStatus::Attested,
         implementation_status: match row.implementation_status {
@@ -543,7 +577,7 @@ fn orthographic_unit(
         unit: unit.to_string(),
         pronunciation: symbols
             .iter()
-            .map(|symbol| arpabet::phoneme_id(variety_id, symbol))
+            .map(|symbol| english_phoneme_id(variety_id, symbol))
             .collect(),
         source_pronunciation: symbols
             .iter()
@@ -645,7 +679,7 @@ fn weak_form(
         lexical_item: lexical_item.into(),
         pronunciation: symbols
             .iter()
-            .map(|symbol| arpabet::phoneme_id(variety_id, symbol))
+            .map(|symbol| english_phoneme_id(variety_id, symbol))
             .collect(),
         source_pronunciation: symbols
             .iter()
@@ -667,13 +701,13 @@ fn phoneme_inventory(variety_id: &str) -> PhonemeInventory {
             (phoneme.id.clone(), phoneme)
         })
         .collect::<HashMap<_, _>>();
-    if let Some(ah) = phonemes.get_mut(&arpabet::phoneme_id(variety_id, "AH")) {
+    if let Some(ah) = phonemes.get_mut(&english_phoneme_id(variety_id, "AH")) {
         ah.default_phone = Some(SCHWA);
         if !ah.possible_phones.contains(&SCHWA) {
             ah.possible_phones.insert(0, SCHWA);
         }
     }
-    if let Some(er) = phonemes.get_mut(&arpabet::phoneme_id(variety_id, "ER")) {
+    if let Some(er) = phonemes.get_mut(&english_phoneme_id(variety_id, "ER")) {
         er.default_phone = Some(R_COLORED_SCHWA);
         if !er.possible_phones.contains(&R_COLORED_SCHWA) {
             er.possible_phones.insert(0, R_COLORED_SCHWA);
@@ -3104,13 +3138,11 @@ fn allophone_rules(variety_id: &str) -> Vec<AllophoneRule> {
             name: format!("American English unaspirated /{symbol}/ after /s/"),
             input: phoneme_pattern(variety_id, symbol),
             environment: Environment {
-                before: vec![SegmentMatcher::Phoneme(arpabet::phoneme_id(
-                    variety_id, "S",
-                ))],
+                before: vec![SegmentMatcher::Phoneme(english_phoneme_id(variety_id, "S"))],
                 ..Default::default()
             },
             conditions: vec![RuleCondition::PreviousMatches(SegmentMatcher::Phoneme(
-                arpabet::phoneme_id(variety_id, "S"),
+                english_phoneme_id(variety_id, "S"),
             ))],
             output: PhonePattern {
                 phone: Spec::Known(phone),
@@ -3367,8 +3399,16 @@ fn allophone_rules(variety_id: &str) -> Vec<AllophoneRule> {
 
 fn phoneme_pattern(variety_id: &str, symbol: &str) -> PhonemePattern {
     PhonemePattern {
-        phoneme: Spec::Known(arpabet::phoneme_id(variety_id, symbol)),
+        phoneme: Spec::Known(english_phoneme_id(variety_id, symbol)),
         features: Default::default(),
+    }
+}
+
+pub(super) fn english_phoneme_id(variety_id: &str, symbol: &str) -> crate::ids::PhonemeId {
+    if variety_id == rp::ID {
+        rp::phoneme_id(symbol)
+    } else {
+        arpabet::phoneme_id(variety_id, symbol)
     }
 }
 

@@ -35,7 +35,7 @@ pub fn parse_pronunciation_candidate(
     match notation {
         PronunciationNotation::Arpabet => candidate
             .iter()
-            .map(|symbol| parsed_arpabet_token(&variety.id.0, symbol))
+            .map(|symbol| parsed_arpabet_token(variety, symbol))
             .collect(),
         PronunciationNotation::Ipa => candidate
             .iter()
@@ -44,13 +44,34 @@ pub fn parse_pronunciation_candidate(
     }
 }
 
-fn parsed_arpabet_token(variety_id: &str, symbol: &str) -> ParsedPronunciationToken {
+fn parsed_arpabet_token(variety: &LinguisticVariety, symbol: &str) -> ParsedPronunciationToken {
     let cmu = crate::data::lexicons::cmudict::CmuPhoneme::parse(symbol);
     let raw_symbol = cmu.raw_symbol();
+    let inventory_phoneme = variety.phonemes.phonemes.values().find(|phoneme| {
+        phoneme.aliases.iter().any(|alias| {
+            alias.system.eq_ignore_ascii_case("arpabet")
+                && alias.symbol.eq_ignore_ascii_case(&cmu.base)
+        })
+    });
     let mut token = ParsedPronunciationToken {
-        phoneme: arpabet::phoneme_id(variety_id, &raw_symbol),
-        features: arpabet::cmu_token_features(&cmu),
+        phoneme: inventory_phoneme
+            .map(|phoneme| phoneme.id.clone())
+            .unwrap_or_else(|| arpabet::phoneme_id(&variety.id.0, &raw_symbol)),
+        features: inventory_phoneme
+            .map(|phoneme| phoneme.features.clone())
+            .unwrap_or_default(),
     };
+    for (id, value) in arpabet::cmu_token_features(&cmu).values {
+        let is_token_metadata = matches!(
+            id.0.as_str(),
+            "phonology.source_schema" | "phonology.base_symbol" | "phonology.stress"
+        );
+        let is_standard_reduction =
+            id.0 == "phonology.reduced_vowel" && arpabet::entry(&cmu.base).is_some();
+        if is_token_metadata || is_standard_reduction {
+            token.features.values.insert(id, value);
+        }
+    }
     if let Some(phone) = arpabet::reduced_phone_for_cmu(&cmu.base, cmu.stress) {
         token.features.values.insert(
             FeatureId("phonology.default_phone".into()),

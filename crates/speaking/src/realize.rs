@@ -922,23 +922,24 @@ mod tests {
     }
 
     #[test]
-    fn derived_stub_keeps_rule_behavior_and_stub_status() {
+    fn rp_is_complete_and_does_not_inherit_american_flapping() {
         let variety = variety_by_code("en-GB-RP").expect("RP");
         assert_eq!(
             variety.implementation_status,
-            VarietyImplementationStatus::StubDerivedFrom(VarietyId("en-US-GA".into()))
+            VarietyImplementationStatus::Complete
         );
-        let phones = realize_phonemes(
-            &variety,
-            &[
-                phoneme("en-GB-RP", "AA1"),
-                phoneme("en-GB-RP", "T"),
-                phoneme("en-GB-RP", "ER0"),
-            ],
-            &RealizationOptions::default(),
+        assert!(
+            !variety
+                .allophone_rules
+                .iter()
+                .any(|rule| rule.id.contains("flapping"))
         );
-
-        assert_eq!(symbols(&phones), ["ɑ", "ɾ", "ɚ"]);
+        assert!(
+            variety
+                .allophone_rules
+                .iter()
+                .all(|rule| !rule.id.starts_with("american_english"))
+        );
     }
 
     #[test]

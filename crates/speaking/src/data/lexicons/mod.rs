@@ -1,4 +1,5 @@
 pub mod cmudict;
+pub mod cmudict_rp;
 pub mod lexique;
 
 use std::fs;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::data::notation::PronunciationNotation;
 
 pub const CMUDICT_ID: &str = "cmudict";
+pub const CMUDICT_RP_ID: &str = "cmudict-rp";
 pub const LEXIQUE383_ID: &str = "lexique383";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -44,10 +46,14 @@ pub fn lexicon_ids() -> impl Iterator<Item = &'static str> {
 }
 
 fn lexicon_adapters() -> impl Iterator<Item = LexiconAdapter> {
-    [cmudict::REGISTRATIONS, lexique::REGISTRATIONS]
-        .into_iter()
-        .flatten()
-        .copied()
+    [
+        cmudict::REGISTRATIONS,
+        cmudict_rp::REGISTRATIONS,
+        lexique::REGISTRATIONS,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
 }
 
 pub(crate) fn runtime_file_candidates(file_names: &[&str]) -> Vec<PathBuf> {

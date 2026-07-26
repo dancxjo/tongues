@@ -217,6 +217,9 @@ pub enum ConnectedSpeechRule {
     DeleteFinalPhoneBeforeConsonant {
         phone: String,
     },
+    LinkingR {
+        phone: String,
+    },
     Liaison {
         #[serde(default)]
         entries: Vec<ConnectedSpeechEntry>,

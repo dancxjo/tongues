@@ -2146,6 +2146,19 @@ fn apply_declared_connected_speech(
                     phones.pop();
                 }
             }
+            ConnectedSpeechRule::LinkingR { phone } => {
+                if next_is_vowel
+                    && previous_word.is_some_and(word_has_historical_final_r)
+                    && final_phone_symbol(phones) != Some(phone.as_str())
+                {
+                    phones.push(connected_speech_phone_token(
+                        variety,
+                        phone,
+                        "connected-speech linking r",
+                        0.95,
+                    ));
+                }
+            }
             ConnectedSpeechRule::Liaison { entries } => {
                 if !next_is_vowel {
                     continue;
@@ -2167,6 +2180,13 @@ fn apply_declared_connected_speech(
             }
         }
     }
+}
+
+fn word_has_historical_final_r(word: &str) -> bool {
+    let normalized = word
+        .trim_matches(|character: char| !character.is_alphabetic())
+        .to_lowercase();
+    normalized.ends_with('r') || normalized.ends_with("re")
 }
 
 fn phoneme_token_is_syllabic(variety: &LinguisticVariety, token: &PhonemeToken) -> bool {
@@ -4822,7 +4842,7 @@ mod tests {
     }
 
     #[test]
-    fn aliases_and_stub_status_are_data_driven() {
+    fn aliases_and_implementation_status_are_data_driven() {
         let en_us = VarietyDataPhonemicizer
             .phonemicize(&request("okay", "en-US"))
             .expect("en-US alias");
@@ -4831,10 +4851,73 @@ mod tests {
             .expect("GA");
         assert_eq!(phoneme_symbols(&en_us), phoneme_symbols(&ga));
 
-        let rp = variety_by_code("en-GB-RP").expect("RP");
+        let rp = variety_by_code("en-GB.RP").expect("RP alias");
         assert_eq!(
             rp.implementation_status,
-            VarietyImplementationStatus::StubDerivedFrom(VarietyId("en-US-GA".into()))
+            VarietyImplementationStatus::Complete
+        );
+        assert_eq!(rp.id.0, "en-GB-RP");
+    }
+
+    #[test]
+    fn rp_uses_its_own_vowels_non_rhoticity_and_yod() {
+        for (word, expected_phonemes, expected_phones) in [
+            ("lot", vec!["ɒ"], vec!["l", "ɒ", "t"]),
+            ("bath", vec!["ɑː"], vec!["b", "ɑː", "θ"]),
+            ("goat", vec!["əʊ"], vec!["ɡ", "əʊ", "t"]),
+            ("nurse", vec!["ɜː"], vec!["n", "ɜː", "s"]),
+            ("near", vec!["ɪə"], vec!["n", "ɪə"]),
+            ("water", vec!["ɔː", "ə"], vec!["w", "ɔː", "t", "ə"]),
+            ("tune", vec!["uː"], vec!["t", "j", "uː", "n"]),
+        ] {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request(word, "en-GB-RP"))
+                .unwrap_or_else(|error| panic!("{word} should phonemicize: {error}"));
+            let phonemes = phoneme_symbols(&output);
+            for expected in expected_phonemes {
+                assert!(phonemes.iter().any(|symbol| symbol == expected), "{word}");
+            }
+            assert_eq!(phone_symbols(&output), expected_phones, "{word}");
+        }
+    }
+
+    #[test]
+    fn rp_linking_r_only_surfaces_before_a_following_vowel() {
+        let before_vowel = VarietyDataPhonemicizer
+            .phonemicize(&request("far away", "en-GB-RP"))
+            .expect("linking r phrase");
+        let before_consonant = VarietyDataPhonemicizer
+            .phonemicize(&request("far north", "en-GB-RP"))
+            .expect("non-rhotic phrase");
+
+        assert_eq!(
+            phone_symbols(&before_vowel)
+                .into_iter()
+                .filter(|symbol| symbol != "|")
+                .collect::<Vec<_>>(),
+            ["f", "ɑː", "ɹ", "ə", "w", "eɪ"]
+        );
+        assert_eq!(
+            phone_symbols(&before_consonant)
+                .into_iter()
+                .filter(|symbol| symbol != "|")
+                .collect::<Vec<_>>(),
+            ["f", "ɑː", "n", "ɔː", "θ"]
+        );
+    }
+
+    #[test]
+    fn rp_uses_british_letter_names_and_non_rhotic_four() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request("R Z 4", "en-GB-RP"))
+            .expect("RP orthographic units");
+
+        assert_eq!(
+            phone_symbols(&output)
+                .into_iter()
+                .filter(|symbol| symbol != "|")
+                .collect::<Vec<_>>(),
+            ["ɑː", "z", "e", "d", "f", "ɔː"]
         );
     }
 

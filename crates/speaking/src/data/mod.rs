@@ -23,6 +23,9 @@ mod tests {
         assert_eq!(canonical_variety_id("EN-us").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("eng").unwrap().0, "en-US-GA");
         assert_eq!(canonical_variety_id("en-US-GA").unwrap().0, "en-US-GA");
+        assert_eq!(canonical_variety_id("en-GB").unwrap().0, "en-GB-RP");
+        assert_eq!(canonical_variety_id("en-GB.RP").unwrap().0, "en-GB-RP");
+        assert_eq!(canonical_variety_id("rp").unwrap().0, "en-GB-RP");
         assert!(variety_by_code("en-US").is_some());
         assert!(variety_by_code("eo").is_some());
         assert_eq!(canonical_variety_id("fra").unwrap().0, "fr-FR-Standard");
@@ -43,8 +46,15 @@ mod tests {
     }
 
     #[test]
-    fn english_stub_status_is_explicit_data() {
-        for code in ["en-GB-RP", "en-GB-ScotE", "en-US-AAE"] {
+    fn english_implementation_status_is_explicit_data() {
+        let rp = variety_by_code("en-GB-RP").expect("RP");
+        assert_eq!(
+            rp.implementation_status,
+            VarietyImplementationStatus::Complete
+        );
+        assert_eq!(rp.name, "Received Pronunciation");
+
+        for code in ["en-GB-ScotE", "en-US-AAE"] {
             let variety = variety_by_code(code).expect("variety");
             assert_eq!(
                 variety.implementation_status,
