@@ -13,6 +13,7 @@ front-end integration.
 | `glow` | `tongues-tts` on Burn | Glow-TTS -> pinned per-bin standardizer -> MultiBand-MelGAN | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
 | `xtts` | `tongues-tts` on Burn | XTTS v2 GPT -> native HiFi decoder with reference voice conditioning | active local-package path |
+| `pocket-tts` | planned native `tongues-tts` integration | Kyutai Pocket TTS causal append-only text/audio generator with stateful streaming | evaluation track |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
 | `mock` | deterministic local backend | synthetic waveform for integration tests | active test path |
@@ -119,6 +120,37 @@ streaming WAV to equal one-shot decoding for the same seed. It also writes
 `xtts-benchmark.json` with reference preparation, GPT first-code latency,
 stable first-audio latency, steady RTF, overlap-recompute decode cost, and
 separate peak RAM/GPU-memory fields.
+
+## Pocket TTS causal streaming evaluation track
+
+Pocket TTS is tracked as an **evaluation-only causal renderer** until its
+streaming semantics, artifact provenance, and native parity are proven. This is
+specifically append-only causal generation (stateful text/audio continuation),
+not sentence chunking and not ledger-level suffix replacement.
+
+Evidence and architecture requirements:
+
+- pin upstream code/model revision, config/tokenizer/voice assets, license
+  evidence, checksum, and size in offline-verifiable metadata;
+- treat upstream Python as an oracle fixture only while measuring cold/warm
+  first-audio latency, steady RTF, CPU threads, memory, cancellation, and long
+  incremental text behavior across the six declared languages;
+- document recurrent/cache state, chunk boundaries, withheld/finalized tails,
+  and explicit behavior when text is appended during active synthesis;
+- decompose provider-neutral ports for plan projection/tokenization, causal text
+  encoder state, acoustic/token generator state, reference conditioning, decoder
+  waveform chunks, stability/finalization, and cancellation/disposal.
+
+Integration guardrails are explicit:
+
+- append-only causal generation is **not** revision-safe replacement;
+- revision-safe replacement of unplayed audio remains enforced by
+  `TtsPlaybackLedger` and `RevisionWaveformAssembler`;
+- predicted-but-unobserved emissions must remain unplayable until committed in
+  the shared ledger;
+- Pocket TTS promotion is gated on measurable first-audio or steady-state
+  advantage over the canonical FastPitch + HiFi-GAN Tier A path without raising
+  premature commitment or audible repair.
 
 ## Safe Coqui package import
 
@@ -441,6 +473,44 @@ cargo test -p tongues-tts --lib \
   freevc::tests::published_artifacts_convert_without_python \
   --no-default-features -- --ignored
 ```
+
+## NeuTTS Nano and NeuCodec issue-64 due diligence
+
+Issue [#64](https://github.com/dancxjo/tongues/issues/64) is currently
+evaluated as **not planned** for native integration.
+
+Phase-1 findings are explicit before any native port work:
+
+- The upstream NeuTTS README identifies the expected Nano family artifact IDs
+  (`neutts-nano`, `neutts-nano-french`, `neutts-nano-german`,
+  `neutts-nano-spanish`) and their Q4/Q8 GGUF variants, plus NeuCodec
+  (`neucodec`, `distill-neucodec`, ONNX decoder variants).
+- The same upstream source states the architecture target in this ticket:
+  ~120M active / ~229M total params, 50 Hz single-codebook NeuCodec, 2048-token
+  context, short-reference cloning, and watermark-enabled outputs.
+- NeuTTS Nano model terms are **NeuTTS Open License v1.0**, not Apache-2.0.
+  That license includes a commercial-use threshold condition and requires
+  preserving license/attribution conditions on redistribution.
+- NeuCodec source is Apache-2.0, but model/codec artifacts still require
+  independent weight/package provenance, checksums, and redistribution review.
+- Independent artifact pinning is incomplete in this environment: the GGUF
+  model hubs were not directly retrievable here, so exact per-file revision,
+  byte-size, and checksum evidence for each Q4/Q8 variant could not be
+  verified from first principles.
+
+Go/no-go result for this ticket:
+
+- Without independent Q4/Q8 artifact identity + benchmark evidence, the
+  integration gate fails by design.
+- Portfolio fit is also not a clear upgrade yet: Tongues already has a Tier A
+  resident revision path (FastPitch-family composition) and Tier C expressive
+  reference-conditioned paths (XTTS/YourTTS). NeuTTS Nano's small GGUF runtime
+  is interesting, but this issue did not establish a unique production
+  capability advantage that justifies another constrained license stack.
+- Therefore issue #64 should remain closed as **not planned** unless a future
+  revisit provides: (1) full per-artifact checksum/size pinning, (2) measured
+  independent Q4/Q8 latency/RTF/RAM, (3) native NeuCodec parity fixtures,
+  including watermark behavior through decode.
 
 ## Usage
 

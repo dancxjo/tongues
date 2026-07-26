@@ -142,6 +142,14 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         explanation: "Native end-to-end waveform synthesis with learned speaker and language embeddings when declared by the checkpoint.",
     },
     NativeSpeechComponent {
+        id: "pocket-tts-causal",
+        display_name: "Pocket TTS",
+        architecture: "pocket-tts",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Experimental,
+        explanation: "Causal append-only streaming renderer under evaluation for native integration; runtime registration is intentionally deferred until artifact pinning, parity, and ledger integration are complete.",
+    },
+    NativeSpeechComponent {
         id: "speaker-encoder",
         display_name: "Coqui ResNet Speaker Encoder",
         architecture: "speaker-encoder",
@@ -1420,5 +1428,20 @@ mod tests {
         assert!(error
             .to_string()
             .contains("violates its declared output contract"));
+    }
+
+    #[test]
+    fn pocket_tts_component_is_present_as_experimental_only() {
+        let pocket = native_speech_components()
+            .iter()
+            .find(|component| component.id == "pocket-tts-causal")
+            .expect("Pocket TTS component must be listed for architecture tracking");
+        assert_eq!(pocket.display_name, "Pocket TTS");
+        assert_eq!(pocket.architecture, "pocket-tts");
+        assert_eq!(pocket.kind, NativeSpeechComponentKind::EndToEnd);
+        assert_eq!(
+            pocket.readiness,
+            NativeSpeechComponentReadiness::Experimental
+        );
     }
 }

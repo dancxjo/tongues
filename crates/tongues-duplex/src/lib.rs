@@ -237,6 +237,135 @@ impl Default for SimulatorConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationDecision {
+    Accept,
+    Retry,
+    Fallback,
+    Abstain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationRepairCause {
+    LinguisticDisagreement,
+    AcceptedProjectionLoss,
+    AcousticMismatch,
+    TimingMismatch,
+    RecognizerUncertain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationDimension {
+    Morpheme,
+    Phone,
+    Stress,
+    Boundary,
+    Timing,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerificationEvidence {
+    pub dimension: VerificationDimension,
+    pub intended: String,
+    pub recovered: String,
+    pub accepted_projection_loss: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct VerificationSequence {
+    #[serde(default)]
+    pub morphemes: Vec<String>,
+    #[serde(default)]
+    pub phones: Vec<String>,
+    #[serde(default)]
+    pub stress: Vec<String>,
+    #[serde(default)]
+    pub boundaries: Vec<String>,
+    #[serde(default)]
+    pub timings_ms: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClosedLoopVerificationRequest {
+    pub intended: VerificationSequence,
+    pub recovered: VerificationSequence,
+    #[serde(default)]
+    pub accepted_projection_losses: Vec<String>,
+    pub recognizer_confidence: f32,
+    pub held_audio_replaceable: bool,
+    pub verification_latency_ms: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClosedLoopVerificationPolicy {
+    pub min_recognizer_confidence: f32,
+    pub min_morpheme_agreement: f32,
+    pub max_phone_error_rate: f32,
+    pub max_verification_latency_ms: f32,
+    pub max_retries: u8,
+}
+
+impl Default for ClosedLoopVerificationPolicy {
+    fn default() -> Self {
+        Self {
+            min_recognizer_confidence: 0.45,
+            min_morpheme_agreement: 0.75,
+            max_phone_error_rate: 0.35,
+            max_verification_latency_ms: 250.0,
+            max_retries: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct VerificationMetrics {
+    pub verification_latency_ms: f32,
+    pub false_rejection: f32,
+    pub false_acceptance: f32,
+    pub phone_error_rate: f32,
+    pub word_agreement: f32,
+    pub morpheme_agreement: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClosedLoopVerificationResult {
+    pub decision: VerificationDecision,
+    #[serde(default)]
+    pub evidence: Vec<VerificationEvidence>,
+    #[serde(default)]
+    pub repair_causes: Vec<VerificationRepairCause>,
+    pub metrics: VerificationMetrics,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MelPredictionCandidate {
+    pub id: CompletionHypothesisId,
+    pub prior_probability: f64,
+    #[serde(default)]
+    pub predicted_mel: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcousticRescoreRequest {
+    #[serde(default)]
+    pub observed_mel: Vec<f32>,
+    #[serde(default)]
+    pub candidates: Vec<MelPredictionCandidate>,
+    pub acoustic_weight: f64,
+    pub prior_weight: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcousticRescore {
+    pub id: CompletionHypothesisId,
+    pub acoustic_log_likelihood: f64,
+    pub prior_log_probability: f64,
+    pub combined_score: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommittedMorpheme {
     pub key: String,
@@ -275,6 +404,9 @@ pub enum SimulatorEventKind {
         to: usize,
         committed: Vec<CommittedMorpheme>,
     },
+    VerificationEvaluated {
+        result: ClosedLoopVerificationResult,
+    },
 }
 
 impl SimulatorEventKind {
@@ -286,6 +418,7 @@ impl SimulatorEventKind {
             | Self::HypothesisRepaired { .. }
             | Self::BeamInferred { .. } => "inference",
             Self::CommitFrontierAdvanced { .. } => "commitment",
+            Self::VerificationEvaluated { .. } => "verification",
         }
     }
 }
@@ -321,6 +454,8 @@ pub struct SimulatorState {
     pub shared_prefix: Vec<String>,
     #[serde(default)]
     pub committed: Vec<CommittedMorpheme>,
+    #[serde(default)]
+    pub verifications: Vec<ClosedLoopVerificationResult>,
 }
 
 impl SimulatorState {
@@ -334,6 +469,7 @@ impl SimulatorState {
             selected_hypotheses: Vec::new(),
             shared_prefix: Vec::new(),
             committed: Vec::new(),
+            verifications: Vec::new(),
         }
     }
 
@@ -449,6 +585,9 @@ impl SimulatorState {
                 }
                 self.committed.extend(committed.iter().cloned());
             }
+            SimulatorEventKind::VerificationEvaluated { result } => {
+                self.verifications.push(result.clone());
+            }
         }
         self.revision = self.revision.saturating_add(1);
         Ok(())
@@ -492,6 +631,12 @@ pub enum SimulatorError {
     UnsupportedCommit(String),
     #[error("journal state mismatch: {0}")]
     JournalStateMismatch(String),
+    #[error("rescore candidate list cannot be empty")]
+    EmptyRescoreCandidates,
+    #[error("rescore observed mel must be non-empty")]
+    EmptyObservedMel,
+    #[error("rescore weights must be finite and non-negative")]
+    InvalidRescoreWeights,
 }
 
 impl From<CompletionProviderError> for SimulatorError {
@@ -634,6 +779,19 @@ impl<P: CompletionProvider> DuplexSimulator<P> {
 
     pub fn into_parts(self) -> (SimulatorJournal, SimulatorState) {
         (self.journal, self.state)
+    }
+
+    pub fn verify_held_audio(
+        &mut self,
+        request: ClosedLoopVerificationRequest,
+        policy: ClosedLoopVerificationPolicy,
+        retry_count: u8,
+    ) -> Result<ClosedLoopVerificationResult, SimulatorError> {
+        let result = verify_closed_loop(&request, &policy, retry_count);
+        self.record(SimulatorEventKind::VerificationEvaluated {
+            result: result.clone(),
+        })?;
+        Ok(result)
     }
 
     fn record(&mut self, kind: SimulatorEventKind) -> Result<(), SimulatorError> {
@@ -810,6 +968,242 @@ pub fn tokenize_morphemes(text: &str) -> Vec<String> {
 
 fn normalize_key(key: &str) -> String {
     key.trim().to_lowercase()
+}
+
+fn agreement_ratio(intended: &[String], recovered: &[String]) -> f32 {
+    let denominator = intended.len().max(recovered.len());
+    if denominator == 0 {
+        return 1.0;
+    }
+    let matches = intended
+        .iter()
+        .zip(recovered.iter())
+        .filter(|(left, right)| normalize_key(left) == normalize_key(right))
+        .count();
+    matches as f32 / denominator as f32
+}
+
+fn phone_error_rate(intended: &[String], recovered: &[String]) -> f32 {
+    let denominator = intended.len().max(recovered.len());
+    if denominator == 0 {
+        return 0.0;
+    }
+    let distance = levenshtein_distance(intended, recovered);
+    distance as f32 / denominator as f32
+}
+
+fn levenshtein_distance(left: &[String], right: &[String]) -> usize {
+    let mut prev = (0..=right.len()).collect::<Vec<_>>();
+    let mut next = vec![0; right.len() + 1];
+    for (i, left_item) in left.iter().enumerate() {
+        next[0] = i + 1;
+        for (j, right_item) in right.iter().enumerate() {
+            let substitution_cost =
+                usize::from(normalize_key(left_item) != normalize_key(right_item));
+            let deletion = prev[j + 1] + 1;
+            let insertion = next[j] + 1;
+            let substitution = prev[j] + substitution_cost;
+            next[j + 1] = deletion.min(insertion).min(substitution);
+        }
+        std::mem::swap(&mut prev, &mut next);
+    }
+    prev[right.len()]
+}
+
+fn accepted_projection_loss(
+    intended: &str,
+    recovered: &str,
+    accepted_projection_losses: &[String],
+) -> bool {
+    let intended = normalize_key(intended);
+    let recovered = normalize_key(recovered);
+    accepted_projection_losses.iter().any(|entry| {
+        let normalized = normalize_key(entry);
+        normalized == recovered
+            || normalized == intended
+            || normalized == format!("{intended}->{recovered}")
+    })
+}
+
+pub fn verify_closed_loop(
+    request: &ClosedLoopVerificationRequest,
+    policy: &ClosedLoopVerificationPolicy,
+    retry_count: u8,
+) -> ClosedLoopVerificationResult {
+    let raw_morpheme_agreement =
+        agreement_ratio(&request.intended.morphemes, &request.recovered.morphemes);
+    let phone_error_rate = phone_error_rate(&request.intended.phones, &request.recovered.phones);
+    let mut accepted_projection_count = 0usize;
+
+    let mut evidence = Vec::new();
+    let mut repair_causes = Vec::new();
+    let mut linguistic_disagreements = 0usize;
+    for (intended, recovered) in request
+        .intended
+        .morphemes
+        .iter()
+        .zip(request.recovered.morphemes.iter())
+    {
+        if normalize_key(intended) == normalize_key(recovered) {
+            continue;
+        }
+        let accepted =
+            accepted_projection_loss(intended, recovered, &request.accepted_projection_losses);
+        evidence.push(VerificationEvidence {
+            dimension: VerificationDimension::Morpheme,
+            intended: intended.clone(),
+            recovered: recovered.clone(),
+            accepted_projection_loss: accepted,
+        });
+        if accepted {
+            accepted_projection_count += 1;
+            if !repair_causes.contains(&VerificationRepairCause::AcceptedProjectionLoss) {
+                repair_causes.push(VerificationRepairCause::AcceptedProjectionLoss);
+            }
+        } else {
+            linguistic_disagreements += 1;
+            if !repair_causes.contains(&VerificationRepairCause::LinguisticDisagreement) {
+                repair_causes.push(VerificationRepairCause::LinguisticDisagreement);
+            }
+        }
+    }
+    let denominator = request
+        .intended
+        .morphemes
+        .len()
+        .max(request.recovered.morphemes.len());
+    let effective_morpheme_agreement = if denominator == 0 {
+        1.0
+    } else {
+        (raw_morpheme_agreement * denominator as f32 + accepted_projection_count as f32)
+            / denominator as f32
+    };
+    let word_agreement = effective_morpheme_agreement;
+
+    if request.recognizer_confidence < policy.min_recognizer_confidence {
+        repair_causes.push(VerificationRepairCause::RecognizerUncertain);
+        return ClosedLoopVerificationResult {
+            decision: VerificationDecision::Abstain,
+            evidence,
+            repair_causes,
+            metrics: VerificationMetrics {
+                verification_latency_ms: request.verification_latency_ms,
+                false_rejection: 0.0,
+                false_acceptance: 0.0,
+                phone_error_rate,
+                word_agreement,
+                morpheme_agreement: effective_morpheme_agreement,
+            },
+        };
+    }
+
+    if phone_error_rate > policy.max_phone_error_rate
+        && !repair_causes.contains(&VerificationRepairCause::AcousticMismatch)
+    {
+        repair_causes.push(VerificationRepairCause::AcousticMismatch);
+    }
+
+    let timing_mismatch = request
+        .intended
+        .timings_ms
+        .iter()
+        .zip(request.recovered.timings_ms.iter())
+        .any(|(left, right)| left.abs_diff(*right) > 80);
+    if timing_mismatch {
+        repair_causes.push(VerificationRepairCause::TimingMismatch);
+    }
+
+    let accepted = linguistic_disagreements == 0
+        && effective_morpheme_agreement >= policy.min_morpheme_agreement
+        && phone_error_rate <= policy.max_phone_error_rate;
+    let retry_allowed = request.held_audio_replaceable
+        && request.verification_latency_ms <= policy.max_verification_latency_ms
+        && retry_count < policy.max_retries;
+
+    let decision = if accepted {
+        VerificationDecision::Accept
+    } else if retry_allowed {
+        VerificationDecision::Retry
+    } else {
+        VerificationDecision::Fallback
+    };
+
+    let false_rejection = if !accepted && linguistic_disagreements == 0 {
+        1.0
+    } else {
+        0.0
+    };
+    let false_acceptance = if accepted && linguistic_disagreements > 0 {
+        1.0
+    } else {
+        0.0
+    };
+
+    ClosedLoopVerificationResult {
+        decision,
+        evidence,
+        repair_causes,
+        metrics: VerificationMetrics {
+            verification_latency_ms: request.verification_latency_ms,
+            false_rejection,
+            false_acceptance,
+            phone_error_rate,
+            word_agreement,
+            morpheme_agreement: effective_morpheme_agreement,
+        },
+    }
+}
+
+pub fn rescore_completion_hypotheses(
+    request: &AcousticRescoreRequest,
+) -> Result<Vec<AcousticRescore>, SimulatorError> {
+    if request.candidates.is_empty() {
+        return Err(SimulatorError::EmptyRescoreCandidates);
+    }
+    if request.observed_mel.is_empty() {
+        return Err(SimulatorError::EmptyObservedMel);
+    }
+    if !request.acoustic_weight.is_finite()
+        || !request.prior_weight.is_finite()
+        || request.acoustic_weight < 0.0
+        || request.prior_weight < 0.0
+    {
+        return Err(SimulatorError::InvalidRescoreWeights);
+    }
+
+    let mut rescored = Vec::with_capacity(request.candidates.len());
+    for candidate in &request.candidates {
+        let overlap = request
+            .observed_mel
+            .len()
+            .min(candidate.predicted_mel.len());
+        let mut distance = 0.0_f64;
+        for index in 0..overlap {
+            distance += (request.observed_mel[index] - candidate.predicted_mel[index]).abs() as f64;
+        }
+        distance += request
+            .observed_mel
+            .len()
+            .abs_diff(candidate.predicted_mel.len()) as f64;
+
+        let acoustic_log_likelihood = -distance;
+        let prior_log_probability = candidate.prior_probability.max(1e-12).ln();
+        let combined_score = request.acoustic_weight * acoustic_log_likelihood
+            + request.prior_weight * prior_log_probability;
+        rescored.push(AcousticRescore {
+            id: candidate.id.clone(),
+            acoustic_log_likelihood,
+            prior_log_probability,
+            combined_score,
+        });
+    }
+    rescored.sort_by(|left, right| {
+        right
+            .combined_score
+            .total_cmp(&left.combined_score)
+            .then_with(|| left.id.0.cmp(&right.id.0))
+    });
+    Ok(rescored)
 }
 
 /// A deterministic provider useful for arbitrary CLI text or mock-acoustic
@@ -1142,7 +1536,8 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
                 let new_len = self.provisional.len().saturating_sub(committed.len());
                 self.provisional = self.provisional[self.provisional.len() - new_len..].to_vec();
             }
-            SimulatorEventKind::EvidenceObserved { .. } => {}
+            SimulatorEventKind::EvidenceObserved { .. }
+            | SimulatorEventKind::VerificationEvaluated { .. } => {}
         }
     }
 }
@@ -1517,5 +1912,143 @@ mod tests {
                 fixture.id
             );
         }
+    }
+
+    fn verification_sequence(words: &[&str], phones: &[&str]) -> VerificationSequence {
+        VerificationSequence {
+            morphemes: words.iter().map(|value| (*value).to_string()).collect(),
+            phones: phones.iter().map(|value| (*value).to_string()).collect(),
+            stress: Vec::new(),
+            boundaries: Vec::new(),
+            timings_ms: vec![100; words.len()],
+        }
+    }
+
+    #[test]
+    fn closed_loop_retries_replaceable_incorrect_output() {
+        let request = ClosedLoopVerificationRequest {
+            intended: verification_sequence(
+                &["turn", "left"],
+                &["t", "ɝ", "n", "l", "ɛ", "f", "t"],
+            ),
+            recovered: verification_sequence(&["turn", "right"], &["t", "ɝ", "n", "ɹ", "aɪ", "t"]),
+            accepted_projection_losses: Vec::new(),
+            recognizer_confidence: 0.95,
+            held_audio_replaceable: true,
+            verification_latency_ms: 45.0,
+        };
+        let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
+        assert_eq!(result.decision, VerificationDecision::Retry);
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::LinguisticDisagreement)
+        );
+    }
+
+    #[test]
+    fn closed_loop_distinguishes_projection_loss_from_disagreement() {
+        let request = ClosedLoopVerificationRequest {
+            intended: verification_sequence(&["read.future"], &["ɹ", "iː", "d"]),
+            recovered: verification_sequence(&["read"], &["ɹ", "iː", "d"]),
+            accepted_projection_losses: vec!["read.future->read".into()],
+            recognizer_confidence: 0.9,
+            held_audio_replaceable: true,
+            verification_latency_ms: 30.0,
+        };
+        let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
+        assert_eq!(result.decision, VerificationDecision::Accept);
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::AcceptedProjectionLoss)
+        );
+        assert!(
+            !result
+                .repair_causes
+                .contains(&VerificationRepairCause::LinguisticDisagreement)
+        );
+    }
+
+    #[test]
+    fn closed_loop_abstains_when_recognizer_is_uncertain() {
+        let request = ClosedLoopVerificationRequest {
+            intended: verification_sequence(&["hello"], &["h", "ə", "l", "oʊ"]),
+            recovered: verification_sequence(&["hello"], &["h", "ə", "l", "oʊ"]),
+            accepted_projection_losses: Vec::new(),
+            recognizer_confidence: 0.2,
+            held_audio_replaceable: true,
+            verification_latency_ms: 20.0,
+        };
+        let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
+        assert_eq!(result.decision, VerificationDecision::Abstain);
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::RecognizerUncertain)
+        );
+    }
+
+    #[test]
+    fn mel_level_rescoring_combines_acoustic_and_prior_without_relabeling() {
+        let rescored = rescore_completion_hypotheses(&AcousticRescoreRequest {
+            observed_mel: vec![0.2, 0.1, 0.5, -0.3],
+            candidates: vec![
+                MelPredictionCandidate {
+                    id: CompletionHypothesisId("a".into()),
+                    prior_probability: 0.9,
+                    predicted_mel: vec![0.9, 0.9, 0.9, 0.9],
+                },
+                MelPredictionCandidate {
+                    id: CompletionHypothesisId("b".into()),
+                    prior_probability: 0.1,
+                    predicted_mel: vec![0.2, 0.12, 0.45, -0.28],
+                },
+            ],
+            acoustic_weight: 1.0,
+            prior_weight: 0.2,
+        })
+        .expect("rescoring succeeds");
+
+        assert_eq!(rescored[0].id.0, "b");
+        assert!(
+            rescored[0].acoustic_log_likelihood > rescored[1].acoustic_log_likelihood,
+            "acoustic evidence should remain distinct and directly comparable"
+        );
+        assert!(
+            rescored[0].prior_log_probability < rescored[1].prior_log_probability,
+            "prior should stay as prior instead of replacing acoustic evidence"
+        );
+    }
+
+    #[test]
+    fn verification_results_are_recorded_as_typed_journal_events() {
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId("verify".into()),
+            VarietyId("en-US-GA".into()),
+            SimulatorConfig::default(),
+            OracleCompletionProvider,
+        )
+        .expect("simulator");
+        let result = simulator
+            .verify_held_audio(
+                ClosedLoopVerificationRequest {
+                    intended: verification_sequence(&["hello"], &["h", "ə", "l", "oʊ"]),
+                    recovered: verification_sequence(&["hullo"], &["h", "ʊ", "l", "oʊ"]),
+                    accepted_projection_losses: Vec::new(),
+                    recognizer_confidence: 0.9,
+                    held_audio_replaceable: true,
+                    verification_latency_ms: 35.0,
+                },
+                ClosedLoopVerificationPolicy::default(),
+                0,
+            )
+            .expect("verification event");
+        assert_eq!(result.decision, VerificationDecision::Retry);
+        assert!(matches!(
+            simulator.journal().events.last().map(|event| &event.event),
+            Some(SimulatorEventKind::VerificationEvaluated { .. })
+        ));
+        assert_eq!(simulator.state().verifications.len(), 1);
     }
 }
