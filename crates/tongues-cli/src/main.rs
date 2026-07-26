@@ -87,11 +87,7 @@ const DEFAULT_EMOTIONS_MODEL_DIR: &str = "models/emotions/v0";
 const DEFAULT_WHISPER_TRANSCRIPT_MAX_WER: f64 = 0.70;
 static QUIET_OUTPUT: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
-enum DeviceArg {
-    Cpu,
-    Cuda,
-}
+type DeviceArg = speech::ResolvedSpeechDevice;
 
 #[derive(Clone, Copy, Debug)]
 struct OutputMode {
@@ -129,9 +125,13 @@ fn quiet_output() -> bool {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Use CPU instead of CUDA GPU
-    #[arg(long, global = true)]
+    /// Use CPU instead of probing CUDA device 0
+    #[arg(long, global = true, conflicts_with = "cuda_device")]
     cpu: bool,
+
+    /// Require a specific CUDA device index instead of automatic selection
+    #[arg(long, global = true, value_name = "INDEX", conflicts_with = "cpu")]
+    cuda_device: Option<usize>,
 
     /// Silence status bars and diagnostic progress output
     #[arg(long, global = true, conflicts_with = "verbose")]
@@ -1761,11 +1761,11 @@ enum RefinementSourceArg {
     SightWords,
 }
 
-fn cuda_probe_failure_reason() -> Option<String> {
+fn cuda_probe_failure_reason(index: usize) -> Option<String> {
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
     let result = panic::catch_unwind(|| {
-        let device = CudaDevice::default();
+        let device = CudaDevice::new(index);
         type B = Cuda<f32, i32>;
         let tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
         let _ = tensor.into_data();
@@ -1806,30 +1806,33 @@ fn main() -> Result<()> {
     // Determine target device only for commands that use a Burn model. Avoid
     // initializing a CUDA context for data preparation and other CPU-only work.
     let needs_device = command_needs_device(&command);
-    let cuda_failure = (!cli.cpu && needs_device)
-        .then(cuda_probe_failure_reason)
-        .flatten();
-    let device_arg = if cli.cpu || !needs_device {
-        DeviceArg::Cpu
-    } else if cuda_failure.is_none() {
-        DeviceArg::Cuda
+    let requested_device = if !needs_device || cli.cpu {
+        speech::SpeechDeviceRequest::Cpu
+    } else if let Some(index) = cli.cuda_device {
+        speech::SpeechDeviceRequest::Cuda { index }
     } else {
-        // Only warn for commands that actually run model computations on the device
-        if command_needs_device(&command) && output_mode.verbose() {
+        speech::SpeechDeviceRequest::Auto
+    };
+    let device_selection = speech::resolve_speech_device(requested_device, |index| {
+        cuda_probe_failure_reason(index).map_or(Ok(()), Err)
+    })?;
+    let device_arg = device_selection.resolved;
+    if let Some(reason) = device_selection.fallback_reason.as_deref() {
+        if needs_device && output_mode.verbose() {
             eprintln!(
                 "Warning: CUDA is not available ({}). Falling back to CPU.",
-                cuda_failure.as_deref().unwrap_or("unknown reason")
+                reason
             );
         }
-        DeviceArg::Cpu
-    };
+    }
     if needs_device && output_mode.verbose() {
+        eprintln!("device: {}", device_arg.display_name());
         eprintln!(
-            "device: {}",
-            match device_arg {
-                DeviceArg::Cpu => "CPU",
-                DeviceArg::Cuda => "CUDA GPU",
-            }
+            "device_metadata_json: {}",
+            serde_json::json!({
+                "kind": device_arg.kind(),
+                "index": device_arg.index(),
+            })
         );
     }
 
@@ -2893,9 +2896,9 @@ fn cmd_sentence_parser_train(
                 &mut rng,
             )?;
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             train_seq2seq_examples::<CudaTrainBackend, _>(
                 &model_config,
                 &train_config,
@@ -3513,7 +3516,7 @@ fn cmd_head2phones_train(
         "  estimated_logits_memory_per_batch: {}",
         format_bytes(logits_bytes)
     );
-    if matches!(device_arg, DeviceArg::Cuda) && logits_bytes >= 2 * 1024 * 1024 * 1024 {
+    if matches!(device_arg, DeviceArg::Cuda { .. }) && logits_bytes >= 2 * 1024 * 1024 * 1024 {
         println!(
             "  warning: large CUDA logits allocation; lower --batch-size if training hits GPU memory errors"
         );
@@ -3544,9 +3547,9 @@ fn cmd_head2phones_train(
                 &mut rng,
             )?;
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             train_seq2seq_examples::<CudaTrainBackend, _>(
                 &model_config,
                 &train_config,
@@ -3591,8 +3594,8 @@ fn cmd_head2phones_infer(
                 load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
             predict_sentence_boundary(&model, &input, &vocab, &device)
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model =
                 load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
             predict_sentence_boundary(&model, &input, &vocab, &device)
@@ -3607,8 +3610,8 @@ fn cmd_be(command: BeCommand, device_arg: DeviceArg) -> Result<()> {
         DeviceArg::Cpu => {
             cmd_be_backend::<CpuInferBackend>(command, NdArrayDevice::Cpu, "CPU", false)
         }
-        DeviceArg::Cuda => {
-            cmd_be_backend::<CudaInferBackend>(command, CudaDevice::default(), "CUDA", true)
+        DeviceArg::Cuda { index } => {
+            cmd_be_backend::<CudaInferBackend>(command, CudaDevice::new(index), "CUDA", true)
         }
     }
 }
@@ -5003,9 +5006,9 @@ fn cmd_head2phones_eval(
                 &sample_indexes,
             )
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             run_head2phones_eval::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -5125,8 +5128,8 @@ fn cmd_sentence_parser_infer(
                 load_model::<CpuInferBackend>(&model_config, &model_dir.join("model"), &device)?;
             predict_sentence_boundary(&model, &input, &vocab, &device)
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model =
                 load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
             predict_sentence_boundary(&model, &input, &vocab, &device)
@@ -5178,8 +5181,8 @@ fn cmd_sentence_parser_stream(
                 &device,
             )
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model =
                 load_model::<CudaInferBackend>(&model_config, &model_dir.join("model"), &device)?;
             run_sentence_parser_stream_with_model(
@@ -6681,9 +6684,9 @@ fn write_and_train_wiktionary_seq2seq(
                 seed,
             )
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             run_wiktionary_train::<CudaTrainBackend>(
                 &device,
                 &model_config,
@@ -7025,8 +7028,8 @@ fn cmd_wiktionary_infer(
                 output_mode,
             )
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             run_wiktionary_infer::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -8601,8 +8604,8 @@ fn cmd_interpretation_train(
                 &mut rng,
             )?
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let mut rng = StdRng::seed_from_u64(train_config.seed);
             tongues_interpretation::train::<CudaTrainBackend, _>(
                 &model_config,
@@ -8683,8 +8686,8 @@ fn cmd_interpretation_eval(
             )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model = tongues_interpretation::load_model::<CudaInferBackend>(
                 &model_config,
                 model_dir,
@@ -8738,8 +8741,8 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
             )?;
             println!("{}", serde_json::to_string_pretty(&event)?);
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model = tongues_interpretation::load_model::<CudaInferBackend>(
                 &model_config,
                 model_dir,
@@ -9854,8 +9857,8 @@ fn cmd_discrepancies(
             wiktionary_variety,
             output_mode,
         ),
-        DeviceArg::Cuda => cmd_discrepancies_backend::<CudaInferBackend>(
-            &CudaDevice::default(),
+        DeviceArg::Cuda { index } => cmd_discrepancies_backend::<CudaInferBackend>(
+            &CudaDevice::new(index),
             out,
             limit,
             max_rarity,
@@ -11087,9 +11090,9 @@ fn cmd_train(
                 seed,
             )?;
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             run_train::<CudaTrainBackend>(
                 &device,
                 &model_config,
@@ -11212,9 +11215,9 @@ fn cmd_eval(
                 &train_lexemes,
             )?;
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             run_eval::<CudaInferBackend>(
                 &device,
                 &model_config,
@@ -11732,9 +11735,9 @@ fn cmd_refine(
                 }
             }
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
-            println!("  device: CUDA GPU");
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
             match source {
                 RefinementSourceArg::Discrepancies => collect_discrepancies::<CudaInferBackend>(
                     &device,
@@ -11831,8 +11834,8 @@ fn cmd_refine(
                 seed,
             )?;
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             run_train::<CudaTrainBackend>(
                 &device,
                 &model_config,
@@ -12370,12 +12373,12 @@ fn cmd_predict(
                 output_mode,
             )?;
         }
-        DeviceArg::Cuda => {
+        DeviceArg::Cuda { index } => {
             if output_mode.verbose() {
                 println!("Initializing CUDA GPU device...");
             }
             let start_dev = std::time::Instant::now();
-            let device = CudaDevice::default();
+            let device = CudaDevice::new(index);
             if output_mode.verbose() {
                 println!(
                     "  ✓ Initialized CUDA GPU device in {:?}",
@@ -12506,10 +12509,10 @@ fn cmd_repl(
             println!("  ✓ Initialized CPU device in {:?}", start_dev.elapsed());
             run_repl::<CpuInferBackend>(&device, &model_config, model_dir, &vocab, task_str)?;
         }
-        DeviceArg::Cuda => {
+        DeviceArg::Cuda { index } => {
             println!("Initializing CUDA GPU device...");
             let start_dev = std::time::Instant::now();
-            let device = CudaDevice::default();
+            let device = CudaDevice::new(index);
             println!(
                 "  ✓ Initialized CUDA GPU device in {:?}",
                 start_dev.elapsed()
@@ -12851,10 +12854,47 @@ mod tests {
 
             assert!(!cli.cpu, "{backend} should not force CPU by default");
             assert!(
+                cli.cuda_device.is_none(),
+                "{backend} should use the automatic policy by default"
+            );
+            assert!(
                 command_needs_device(cli.command.as_ref().expect("speak command")),
                 "{backend} should probe CUDA before falling back to CPU"
             );
         }
+    }
+
+    #[test]
+    fn speech_cli_accepts_an_explicit_cuda_device_index() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "--cuda-device",
+            "3",
+            "speak",
+            "--backend",
+            "vits",
+            "Indexed CUDA routing test.",
+        ])
+        .expect("explicit CUDA device should parse");
+
+        assert_eq!(cli.cuda_device, Some(3));
+        assert!(!cli.cpu);
+    }
+
+    #[test]
+    fn speech_cli_rejects_cpu_with_an_explicit_cuda_device() {
+        let error = Cli::try_parse_from([
+            "tongues",
+            "--cpu",
+            "--cuda-device",
+            "1",
+            "speak",
+            "Conflicting device routing test.",
+        ])
+        .expect_err("CPU and explicit CUDA must conflict");
+
+        assert!(error.to_string().contains("--cpu"));
+        assert!(error.to_string().contains("--cuda-device"));
     }
 
     #[test]

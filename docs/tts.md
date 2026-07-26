@@ -164,13 +164,21 @@ fail at the boundary.
 - synchronized, structured profiling at native model boundaries;
 - ONNX voice compatibility for registered voice bundles.
 
-Burn synthesis uses CUDA when it is available and the command supports it, with
-`--cpu` available for deterministic fallback. Release builds are strongly
-recommended for real synthesis:
+Burn synthesis uses one device policy across native model components. By
+default, `auto` probes CUDA device 0 and falls back to CPU when CUDA cannot be
+initialized. Use `--cpu` for an explicit CPU request, or `--cuda-device INDEX`
+to require a particular CUDA device. Explicit CUDA requests never fall back:
+an unavailable or invalid index exits with an error before model loading.
+Release builds are strongly recommended for real synthesis:
 
 ```sh
 cargo run --release --bin tongues -- speak --backend vits --speaker p225 "Hello."
+cargo run --release --bin tongues -- --cuda-device 1 speak --backend vits --speaker p225 "Hello."
 ```
+
+Before cache checks or model loading, verbose output reports the resolved device
+and emits `device_metadata_json` with `kind` and nullable `index` fields. Native
+startup profiles repeat those fields as `device` and `device_index`.
 
 The native SpeedySpeech pipeline keeps mel features on the Burn device between
 the acoustic model and HiFi-GAN, avoiding a GPU-to-host-to-GPU round trip. VITS
@@ -238,8 +246,14 @@ for an admitted active synthesis to finish, then drops loaded engines and clears
 cached load failures. The next request reloads the current model files
 deliberately.
 
-The resident runtime uses CUDA by default. Set
-`TONGUES_SPEECH_DEVICE=cpu` before server startup to force CPU inference.
+The resident runtime uses the same automatic CUDA-0-then-CPU policy by default.
+Set `TONGUES_SPEECH_DEVICE=cpu` before server startup to force CPU inference,
+`TONGUES_SPEECH_DEVICE=cuda` to require CUDA device 0, or
+`TONGUES_SPEECH_DEVICE=cuda:1` to require CUDA device 1. Invalid or unavailable
+explicit CUDA selections stop server startup with a clear indexed error. The
+`/api/speech/runtime` response includes `device` and `device_index`; individual
+`/api/speak` requests may set `cuda_device` to require a different indexed
+resident engine, or `cpu: true` to force CPU.
 Mutable engines are serialized through one registry mutex behind a bounded FIFO
 admission gate. The default permits one active request and one queued request;
 additional requests receive HTTP 429 with `Retry-After: 1`. Set

@@ -1,31 +1,33 @@
 use anyhow::Context as _;
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{
-        Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
+    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn_cuda::{Cuda, CudaDevice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
+use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Semaphore, broadcast};
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tokio::sync::{broadcast, Semaphore};
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
@@ -57,6 +59,7 @@ struct AppState {
     speech: ResidentSpeechRegistry,
     speech_admission: SpeechAdmission,
     speech_phase: Arc<AtomicU8>,
+    speech_device: tongues_tts::ResolvedSpeechDevice,
 }
 
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
@@ -99,6 +102,27 @@ async fn main() {
     let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
     let cert_dir = workspace_root.join(".certs");
     let speech_max_in_flight = speech_max_in_flight();
+    let requested_speech_device = std::env::var("TONGUES_SPEECH_DEVICE")
+        .unwrap_or_else(|_| "auto".into())
+        .parse::<tongues_tts::SpeechDeviceRequest>()
+        .unwrap_or_else(|error| {
+            eprintln!("Invalid TONGUES_SPEECH_DEVICE: {error}");
+            std::process::exit(2);
+        });
+    let speech_device_selection =
+        tongues_tts::resolve_speech_device(requested_speech_device, |index| {
+            cuda_probe_failure_reason(index).map_or(Ok(()), Err)
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("Invalid resident speech device: {error}");
+            std::process::exit(2);
+        });
+    if let Some(reason) = speech_device_selection.fallback_reason.as_deref() {
+        eprintln!(
+            "Warning: CUDA device 0 is not available ({reason}). Resident speech is falling back to CPU."
+        );
+    }
+    let speech_device = speech_device_selection.resolved;
     let state = AppState {
         workspace_root: workspace_root.clone(),
         static_dir: static_dir.clone(),
@@ -106,6 +130,7 @@ async fn main() {
         speech: Arc::new(Mutex::new(ResidentSpeechService::default())),
         speech_admission: SpeechAdmission::new(speech_max_in_flight),
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
+        speech_device,
     };
 
     let app = build_app(state);
@@ -142,6 +167,7 @@ async fn main() {
         "Resident speech admission: 1 active + {} queued",
         speech_max_in_flight.saturating_sub(1)
     );
+    println!("Resident speech device: {}", speech_device.display_name());
 
     let http_app = app.clone();
     let http = async move {
@@ -1753,6 +1779,7 @@ struct ResidentSpeechService {
 struct ResidentSpeechRuntimeResponse {
     state: &'static str,
     device: String,
+    device_index: Option<usize>,
     concurrency: &'static str,
     busy: bool,
     capacity: usize,
@@ -1778,17 +1805,24 @@ struct ResidentSynthesisOutput {
     audio_seconds: f64,
     real_time_factor: f64,
     profile: Vec<tongues_tts::SynthesisProfileEvent>,
+    device: tongues_tts::ResolvedSpeechDevice,
 }
 
 impl ResidentSpeechService {
-    fn snapshot(&self, phase: u8, admission: &SpeechAdmission) -> ResidentSpeechRuntimeResponse {
+    fn snapshot(
+        &self,
+        phase: u8,
+        admission: &SpeechAdmission,
+        device: tongues_tts::ResolvedSpeechDevice,
+    ) -> ResidentSpeechRuntimeResponse {
         let mut loaded = self.engines.keys().cloned().collect::<Vec<_>>();
         loaded.sort();
         let active = phase != SPEECH_PHASE_IDLE;
         let (active_count, queued) = admission.counts(active);
         ResidentSpeechRuntimeResponse {
             state: speech_runtime_state(phase, !loaded.is_empty(), !self.failures.is_empty()),
-            device: resident_speech_device().into(),
+            device: device.kind().into(),
+            device_index: device.index(),
             concurrency: "bounded-fifo",
             busy: active,
             capacity: admission.capacity,
@@ -1808,9 +1842,9 @@ impl ResidentSpeechService {
         payload: &SpeakRequest,
         context: &ResidentSynthesisContext,
         phase: &AtomicU8,
+        device: tongues_tts::ResolvedSpeechDevice,
     ) -> anyhow::Result<ResidentSynthesisOutput> {
         let backend_name = payload.backend.as_deref().unwrap_or("burn");
-        let device = resident_speech_device_for(payload);
         let engine_key = resident_engine_key(backend_name, device, payload)?;
         let mut loaded_now = false;
         let load_started = std::time::Instant::now();
@@ -1893,22 +1927,52 @@ impl ResidentSpeechService {
             audio_seconds,
             real_time_factor,
             profile,
+            device,
         })
     }
 }
 
-fn resident_speech_device() -> &'static str {
-    match std::env::var("TONGUES_SPEECH_DEVICE") {
-        Ok(value) if value.eq_ignore_ascii_case("cpu") => "cpu",
-        _ => "cuda",
+fn cuda_probe_failure_reason(index: usize) -> Option<String> {
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(|| {
+        let device = CudaDevice::new(index);
+        type B = Cuda<f32, i32>;
+        let tensor = burn::tensor::Tensor::<B, 1>::from_floats([1.0, 2.0, 3.0], &device);
+        let _ = tensor.into_data();
+    });
+    panic::set_hook(default_hook);
+
+    match result {
+        Ok(_) => None,
+        Err(payload) => Some(format_panic_payload(payload.as_ref())),
     }
 }
 
-fn resident_speech_device_for(payload: &SpeakRequest) -> &'static str {
-    if payload.cpu.unwrap_or(false) {
-        "cpu"
+fn format_panic_payload(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
     } else {
-        resident_speech_device()
+        "unknown CUDA initialization failure".to_string()
+    }
+}
+
+fn resident_speech_device_for(
+    payload: &SpeakRequest,
+    default_device: tongues_tts::ResolvedSpeechDevice,
+) -> anyhow::Result<tongues_tts::ResolvedSpeechDevice> {
+    if payload.cpu.unwrap_or(false) {
+        Ok(tongues_tts::ResolvedSpeechDevice::Cpu)
+    } else if let Some(index) = payload.cuda_device {
+        Ok(tongues_tts::resolve_speech_device(
+            tongues_tts::SpeechDeviceRequest::Cuda { index },
+            |index| cuda_probe_failure_reason(index).map_or(Ok(()), Err),
+        )?
+        .resolved)
+    } else {
+        Ok(default_device)
     }
 }
 
@@ -1941,43 +2005,52 @@ impl Drop for SpeechPhaseReset {
 
 fn resident_engine_key(
     backend: &str,
-    device: &str,
+    device: tongues_tts::ResolvedSpeechDevice,
     payload: &SpeakRequest,
 ) -> anyhow::Result<String> {
+    let device_key = match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => "cpu".to_string(),
+        tongues_tts::ResolvedSpeechDevice::Cuda { index: 0 } => "cuda".to_string(),
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => format!("cuda-{index}"),
+    };
     Ok(match backend {
-        "onnx" => format!("onnx-{}-{device}", selected_onnx_voice_model()?),
+        "onnx" => format!("onnx-{}-{device_key}", selected_onnx_voice_model()?),
         "styletts2" => "styletts2-en-us".into(),
         "mock" => format!("mock-{}", payload.sample_rate_hz.unwrap_or(24_000)),
-        _ => format!("{backend}-{device}"),
+        _ => format!("{backend}-{device_key}"),
     })
 }
 
 fn load_resident_speech_backend(
     backend: &str,
-    device: &str,
+    device: tongues_tts::ResolvedSpeechDevice,
     payload: &SpeakRequest,
 ) -> anyhow::Result<ResidentSpeechBackend> {
     let home = resolve_mortar_home();
     match (backend, device) {
-        ("burn", "cpu") => Ok(ResidentSpeechBackend::BurnCpu(Box::new(
-            load_resident_burn(&home, NdArrayDevice::Cpu)?,
-        ))),
-        ("burn", "cuda") => Ok(ResidentSpeechBackend::BurnCuda(Box::new(
-            load_resident_burn(&home, CudaDevice::default())?,
-        ))),
-        ("vits", "cpu") => Ok(ResidentSpeechBackend::VitsCpu(Box::new(
-            load_resident_vits(&home, NdArrayDevice::Cpu)?,
-        ))),
-        ("vits", "cuda") => Ok(ResidentSpeechBackend::VitsCuda(Box::new(
-            load_resident_vits(&home, CudaDevice::default())?,
-        ))),
+        ("burn", tongues_tts::ResolvedSpeechDevice::Cpu) => Ok(ResidentSpeechBackend::BurnCpu(
+            Box::new(load_resident_burn(&home, NdArrayDevice::Cpu)?),
+        )),
+        ("burn", tongues_tts::ResolvedSpeechDevice::Cuda { index }) => {
+            Ok(ResidentSpeechBackend::BurnCuda(Box::new(
+                load_resident_burn(&home, CudaDevice::new(index))?,
+            )))
+        }
+        ("vits", tongues_tts::ResolvedSpeechDevice::Cpu) => Ok(ResidentSpeechBackend::VitsCpu(
+            Box::new(load_resident_vits(&home, NdArrayDevice::Cpu)?),
+        )),
+        ("vits", tongues_tts::ResolvedSpeechDevice::Cuda { index }) => {
+            Ok(ResidentSpeechBackend::VitsCuda(Box::new(
+                load_resident_vits(&home, CudaDevice::new(index))?,
+            )))
+        }
         ("onnx", _) => {
             let model_id = selected_onnx_voice_model()?;
             let model_path = onnx_voice_model_path(&home, &model_id)?;
             let config = tongues_tts::VoiceConfig::from_json_file(
                 &tongues_tts::voice_config_path(&model_path),
             )?;
-            let engine = if device == "cpu" {
+            let engine = if matches!(device, tongues_tts::ResolvedSpeechDevice::Cpu) {
                 tongues_tts::OnnxSpeechBackend::load_cpu(&model_path, config)?
             } else {
                 tongues_tts::OnnxSpeechBackend::load(&model_path, config)?
@@ -1990,7 +2063,10 @@ fn load_resident_speech_backend(
         ("mock", _) => Ok(ResidentSpeechBackend::Mock(
             styletts2::MockStyleTts2Backend::new(payload.sample_rate_hz.unwrap_or(24_000)),
         )),
-        _ => anyhow::bail!("resident speech does not support backend `{backend}` on `{device}`"),
+        _ => anyhow::bail!(
+            "resident speech does not support backend `{backend}` on `{}`",
+            device.display_name()
+        ),
     }
 }
 
@@ -2206,6 +2282,7 @@ fn encode_wav_mono_f32(sample_rate_hz: u32, samples: &[f32]) -> anyhow::Result<V
 struct SpeakRequest {
     text: String,
     cpu: Option<bool>,
+    cuda_device: Option<usize>,
     quiet: Option<bool>,
     verbose: Option<bool>,
     variety: Option<String>,
@@ -2251,6 +2328,10 @@ async fn speak(
         Ok(context) => context,
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
+    let speech_device = match resident_speech_device_for(&payload, state.speech_device) {
+        Ok(device) => device,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
     let permit = match state.speech_admission.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
@@ -2275,7 +2356,7 @@ async fn speak(
         registry
             .lock()
             .map_err(|_| anyhow::anyhow!("resident speech registry lock is poisoned"))?
-            .synthesize(&request, &context, &phase)
+            .synthesize(&request, &context, &phase, speech_device)
     })
     .await;
     match result {
@@ -2285,6 +2366,8 @@ async fn speak(
                     "resident_speech_profile_json: {}",
                     json!({
                         "engine": output.engine_key,
+                        "device": output.device.kind(),
+                        "device_index": output.device.index(),
                         "loaded_now": output.loaded_now,
                         "load_ms": output.load_ms,
                         "synthesis_ms": output.synthesis_ms,
@@ -2297,6 +2380,14 @@ async fn speak(
             Response::builder()
                 .header("Content-Type", "audio/wav")
                 .header("X-Tongues-Speech-Engine", output.engine_key)
+                .header("X-Tongues-Speech-Device", output.device.kind())
+                .header(
+                    "X-Tongues-Speech-Device-Index",
+                    output
+                        .device
+                        .index()
+                        .map_or_else(String::new, |index| index.to_string()),
+                )
                 .header(
                     "X-Tongues-Model-Loaded",
                     if output.loaded_now { "cold" } else { "reused" },
@@ -2430,12 +2521,14 @@ async fn get_speech_speakers(Query(query): Query<SpeechSpeakersQuery>) -> impl I
 async fn get_speech_runtime(State(state): State<AppState>) -> impl IntoResponse {
     let phase = state.speech_phase.load(Ordering::Acquire);
     match state.speech.try_lock() {
-        Ok(service) => Json(service.snapshot(phase, &state.speech_admission)).into_response(),
+        Ok(service) => Json(service.snapshot(phase, &state.speech_admission, state.speech_device))
+            .into_response(),
         Err(std::sync::TryLockError::WouldBlock) => {
             let (active, queued) = state.speech_admission.counts(true);
             Json(ResidentSpeechRuntimeResponse {
                 state: speech_runtime_state(phase, false, false),
-                device: resident_speech_device().into(),
+                device: state.speech_device.kind().into(),
+                device_index: state.speech_device.index(),
                 concurrency: "bounded-fifo",
                 busy: true,
                 capacity: state.speech_admission.capacity,
@@ -2468,6 +2561,7 @@ async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoRespon
     let registry = Arc::clone(&state.speech);
     let phase = Arc::clone(&state.speech_phase);
     let admission = state.speech_admission.clone();
+    let speech_device = state.speech_device;
     match tokio::task::spawn_blocking(move || {
         let _phase_reset = SpeechPhaseReset(Arc::clone(&phase));
         let mut service = registry
@@ -2478,7 +2572,7 @@ async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoRespon
         service.failures.clear();
         phase.store(SPEECH_PHASE_IDLE, Ordering::Release);
         drop(permit);
-        Ok::<_, &'static str>(service.snapshot(SPEECH_PHASE_IDLE, &admission))
+        Ok::<_, &'static str>(service.snapshot(SPEECH_PHASE_IDLE, &admission, speech_device))
     })
     .await
     {
@@ -2575,6 +2669,9 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     }
     if payload.quiet.unwrap_or(false) && payload.verbose.unwrap_or(false) {
         return Err("quiet and verbose cannot both be enabled".into());
+    }
+    if payload.cpu.unwrap_or(false) && payload.cuda_device.is_some() {
+        return Err("cpu and cuda_device cannot both be selected".into());
     }
     if let Some(backend) = payload.backend.as_deref() {
         if !backend.is_empty()
@@ -3176,9 +3273,15 @@ mod tests {
             .insert("vits-cuda".into(), "fixture load failure".into());
         let admission = SpeechAdmission::new(2);
 
-        let response = service.snapshot(SPEECH_PHASE_IDLE, &admission);
+        let response = service.snapshot(
+            SPEECH_PHASE_IDLE,
+            &admission,
+            tongues_tts::ResolvedSpeechDevice::Cuda { index: 2 },
+        );
 
         assert_eq!(response.state, "failed");
+        assert_eq!(response.device, "cuda");
+        assert_eq!(response.device_index, Some(2));
         assert_eq!(response.concurrency, "bounded-fifo");
         assert_eq!(response.capacity, 2);
         assert_eq!(response.active, 0);
@@ -3187,6 +3290,47 @@ mod tests {
         assert_eq!(
             response.failed.get("vits-cuda").map(String::as_str),
             Some("fixture load failure")
+        );
+    }
+
+    #[test]
+    fn resident_engine_keys_distinguish_explicit_cuda_indices() {
+        let payload: SpeakRequest =
+            serde_json::from_value(json!({"text": "Indexed resident speech."}))
+                .expect("minimal speech request");
+
+        assert_eq!(
+            resident_engine_key(
+                "vits",
+                tongues_tts::ResolvedSpeechDevice::Cuda { index: 0 },
+                &payload,
+            )
+            .unwrap(),
+            "vits-cuda"
+        );
+        assert_eq!(
+            resident_engine_key(
+                "vits",
+                tongues_tts::ResolvedSpeechDevice::Cuda { index: 3 },
+                &payload,
+            )
+            .unwrap(),
+            "vits-cuda-3"
+        );
+    }
+
+    #[test]
+    fn resident_request_rejects_conflicting_cpu_and_cuda_selection() {
+        let payload: SpeakRequest = serde_json::from_value(json!({
+            "text": "Conflicting resident speech.",
+            "cpu": true,
+            "cuda_device": 1,
+        }))
+        .expect("speech request");
+
+        assert_eq!(
+            validate_speak_request(&payload),
+            Err("cpu and cuda_device cannot both be selected".into())
         );
     }
 

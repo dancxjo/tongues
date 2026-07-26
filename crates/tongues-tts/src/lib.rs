@@ -35,6 +35,7 @@ pub mod burn_vits_flow;
 pub mod burn_vits_text;
 pub mod burn_vocoder;
 pub mod components;
+pub mod device;
 pub mod model_config;
 pub mod phoneme_projector;
 pub mod profiling;
@@ -71,6 +72,10 @@ pub use components::{
     ReferenceEncoder, Spectrogram, SpectrogramContract, SpectrogramDomain, SpectrogramKind,
     SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode, SpectrogramScale,
     SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
+};
+pub use device::{
+    resolve_speech_device, ResolvedSpeechDevice, SpeechDeviceRequest, SpeechDeviceSelection,
+    SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
 pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
 pub use phoneme_projector::{

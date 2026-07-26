@@ -110,8 +110,8 @@ fn run_discover(
             )?;
             crate::predict_sentence_boundary(&model, &input, &vocab, &device)
         }
-        DeviceArg::Cuda => {
-            let device = CudaDevice::default();
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
             let model = tongues_g2p2g::load_model::<crate::CudaInferBackend>(
                 &model_config,
                 &head2phones_model.join("model"),

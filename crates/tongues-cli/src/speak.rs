@@ -339,6 +339,7 @@ enum BackendInstance {
 }
 
 struct BackendStartupProfile {
+    device: DeviceArg,
     cache_check_ms: f64,
     model_load_ms: f64,
     model_load_profile: Vec<speech::ModelLoadProfileEvent>,
@@ -674,13 +675,13 @@ fn load_backend(
                         &mut |event| model_load_profile.push(event),
                     )?))
                 }
-                DeviceArg::Cuda => {
+                DeviceArg::Cuda { index } => {
                     BackendInstance::BurnCuda(Box::new(load_burn_pipeline::<Cuda<f32, i32>>(
                         &acoustic_config,
                         &acoustic_checkpoint,
                         &vocoder_config,
                         &vocoder_checkpoint,
-                        CudaDevice::default(),
+                        CudaDevice::new(index),
                         &mut |event| model_load_profile.push(event),
                     )?))
                 }
@@ -711,12 +712,12 @@ fn load_backend(
                     )
                     .context("failed to load Burn VITS speech model on CPU")?,
                 )),
-                DeviceArg::Cuda => BackendInstance::VitsCuda(Box::new(
+                DeviceArg::Cuda { index } => BackendInstance::VitsCuda(Box::new(
                     speech::BurnVitsSpeech::load_profiled(
                         &config,
                         &checkpoint,
                         &speakers,
-                        CudaDevice::default(),
+                        CudaDevice::new(index),
                         &mut |event| model_load_profile.push(event),
                     )
                     .context("failed to load Burn VITS speech model on CUDA")?,
@@ -768,7 +769,7 @@ fn load_backend(
                 let config = VoiceConfig::from_json_file(&config_path)?;
                 let backend = match device_arg {
                     DeviceArg::Cpu => OnnxSpeechBackend::load_cpu(&primary_model, config)?,
-                    DeviceArg::Cuda => OnnxSpeechBackend::load(&primary_model, config)?,
+                    DeviceArg::Cuda { .. } => OnnxSpeechBackend::load(&primary_model, config)?,
                 };
                 BackendInstance::Onnx(backend)
             }
@@ -782,6 +783,7 @@ fn load_backend(
     Ok((
         backend,
         BackendStartupProfile {
+            device: device_arg,
             cache_check_ms,
             model_load_ms,
             model_load_profile,
@@ -801,13 +803,14 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
     }
 
     let (mut backend, startup) = load_backend(&command, device_arg)?;
-    run_speak_with_backend(command, &mut backend, &startup)
+    run_speak_with_backend(command, &mut backend, &startup, false)
 }
 
 fn run_speak_with_backend(
     command: SpeakCommand,
     backend: &mut BackendInstance,
     startup: &BackendStartupProfile,
+    model_reused: bool,
 ) -> Result<()> {
     let options = SpeechSynthesisOptions::from(&command);
     let target_sample_rate = match command.backend {
@@ -819,14 +822,36 @@ fn run_speak_with_backend(
     };
     let backend_label = backend.label();
     if command.timings {
+        let cache_check_ms = if model_reused {
+            0.0
+        } else {
+            startup.cache_check_ms
+        };
+        let model_load_ms = if model_reused {
+            0.0
+        } else {
+            startup.model_load_ms
+        };
+        let cold_start_ms = if model_reused {
+            0.0
+        } else {
+            startup.cold_start_ms
+        };
         println!(
             "startup_profile_json: {}",
             serde_json::json!({
                 "backend": backend_label,
-                "download_cache_check_ms": startup.cache_check_ms,
-                "config_model_construction_weight_upload_ms": startup.model_load_ms,
-                "model_load_stages": &startup.model_load_profile,
-                "total_cold_start_ms": startup.cold_start_ms,
+                "device": startup.device.kind(),
+                "device_index": startup.device.index(),
+                "model_reused": model_reused,
+                "download_cache_check_ms": cache_check_ms,
+                "config_model_construction_weight_upload_ms": model_load_ms,
+                "model_load_stages": if model_reused {
+                    &[][..]
+                } else {
+                    startup.model_load_profile.as_slice()
+                },
+                "total_cold_start_ms": cold_start_ms,
             })
         );
     }
@@ -934,7 +959,7 @@ fn run_speak_with_backend(
             let elapsed_ms = synthesis_started.elapsed().as_secs_f64() * 1_000.0;
             let audio_seconds = artifact.pcm.len() as f64 / artifact.sample_rate_hz as f64;
             let real_time_factor = elapsed_ms / 1_000.0 / audio_seconds;
-            let cold_end_to_end_ms = (run_index == 0).then_some(
+            let cold_end_to_end_ms = (run_index == 0 && !model_reused).then_some(
                 startup.cold_start_ms + planning_ms + diagnostic_projection_ms + elapsed_ms,
             );
             if command.timings {
@@ -942,7 +967,8 @@ fn run_speak_with_backend(
                     "inference_profile_json: {}",
                     serde_json::json!({
                         "run": run_index + 1,
-                        "temperature": if run_index == 0 { "cold" } else { "warm" },
+                        "temperature": if run_index == 0 && !model_reused { "cold" } else { "warm" },
+                        "model_reused": model_reused,
                         "planning_ms": planning_ms,
                         "diagnostic_checkpoint_projection_ms": diagnostic_projection_ms,
                         "first_playable_audio_latency_ms": first_audio_latency_ms,
@@ -1182,6 +1208,7 @@ struct ResidentDemoBackend {
     kind: SpeakBackend,
     instance: BackendInstance,
     startup: BackendStartupProfile,
+    uses: usize,
 }
 
 pub fn run_speech_demo(command: SpeechDemoCommand, device_arg: DeviceArg) -> Result<()> {
@@ -1200,10 +1227,7 @@ pub fn run_speech_demo(command: SpeechDemoCommand, device_arg: DeviceArg) -> Res
     }
 
     let cases = speech_demo_cases(&command);
-    let requested_device = match device_arg {
-        DeviceArg::Cpu => "CPU",
-        DeviceArg::Cuda => "CUDA",
-    };
+    let requested_device = device_arg.display_name();
     println!(
         "Speech demo: preloading 5 unique backends once ({requested_device}); all engines remain resident"
     );
@@ -1232,6 +1256,7 @@ pub fn run_speech_demo(command: SpeechDemoCommand, device_arg: DeviceArg) -> Res
             kind,
             instance,
             startup,
+            uses: 0,
         });
     }
     println!("Speech demo: all 5 unique backends are resident; beginning synthesis");
@@ -1247,8 +1272,15 @@ pub fn run_speech_demo(command: SpeechDemoCommand, device_arg: DeviceArg) -> Res
             .iter_mut()
             .find(|resident| resident.kind == case.command.backend)
             .expect("demo backend was preloaded");
-        run_speak_with_backend(case.command, &mut resident.instance, &resident.startup)
-            .with_context(|| format!("speech demo case {} failed", index + 1))?;
+        let model_reused = resident.uses > 0;
+        run_speak_with_backend(
+            case.command,
+            &mut resident.instance,
+            &resident.startup,
+            model_reused,
+        )
+        .with_context(|| format!("speech demo case {} failed", index + 1))?;
+        resident.uses += 1;
     }
 
     println!("Speech demo complete; each unique model was loaded exactly once.");
