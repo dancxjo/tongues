@@ -14,6 +14,11 @@
 //!
 //! Input is already-projected model token IDs. Text cleaning, phonemization,
 //! IPA handling, and vocabulary projection belong outside this module.
+//!
+//! Source provenance: `audit-required`. This module targets published Coqui
+//! checkpoint structure and behavior; no claim of independent implementation
+//! or source adaptation should be made until the ledger in
+//! `docs/provenance.md` records a file-by-file comparison.
 
 use std::fmt;
 use std::path::Path;
@@ -767,7 +772,7 @@ pub struct DurationPredictor<B: Backend> {
 }
 
 impl<B: Backend> DurationPredictor<B> {
-    fn init(
+    pub(crate) fn init(
         channels_in: usize,
         hidden_channels: usize,
         kernel_size: usize,
@@ -797,7 +802,7 @@ impl<B: Backend> DurationPredictor<B> {
         }
     }
 
-    fn forward(&self, input: Tensor<B, 3>, mask: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub(crate) fn forward(&self, input: Tensor<B, 3>, mask: Tensor<B, 3>) -> Tensor<B, 3> {
         let mut output = relu(self.conv_1.forward(input * mask.clone()));
         output = self.norm_1.forward(output);
         // Dropout is deliberately inactive during deterministic inference.
@@ -809,12 +814,12 @@ impl<B: Backend> DurationPredictor<B> {
 
 #[derive(Module, Debug)]
 pub struct PositionalEncoding<B: Backend> {
-    pub pe: Param<Tensor<B, 3>>,
-    channels: usize,
+    pub(crate) pe: Param<Tensor<B, 3>>,
+    pub(crate) channels: usize,
 }
 
 impl<B: Backend> PositionalEncoding<B> {
-    fn init(channels: usize, device: &B::Device) -> Self {
+    pub(crate) fn init(channels: usize, device: &B::Device) -> Self {
         let mut values = vec![0.0f32; channels * POSITIONAL_ENCODING_LIMIT];
         for channel in 0..channels {
             let pair = channel / 2;
@@ -844,7 +849,7 @@ impl<B: Backend> PositionalEncoding<B> {
         }
     }
 
-    fn forward(
+    pub(crate) fn forward(
         &self,
         input: Tensor<B, 3>,
         mask: Tensor<B, 3>,
@@ -868,7 +873,7 @@ pub struct AlignmentNetwork<B: Backend> {
 }
 
 impl<B: Backend> AlignmentNetwork<B> {
-    fn init(
+    pub(crate) fn init(
         query_channels: usize,
         key_channels: usize,
         attention_channels: usize,
@@ -1140,7 +1145,7 @@ fn checkpoint_tensor(path: &str, _container: &str) -> bool {
     !path.ends_with(".num_batches_tracked")
 }
 
-fn expand_by_durations<B: Backend>(
+pub(crate) fn expand_by_durations<B: Backend>(
     encoded: Tensor<B, 3>,
     durations: Tensor<B, 2>,
     max_output_frames: usize,

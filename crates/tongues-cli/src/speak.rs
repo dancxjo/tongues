@@ -43,6 +43,13 @@ pub struct SpeakCommand {
     pub backend: SpeakBackend,
     #[arg(
         long,
+        value_enum,
+        default_value_t = SpeakVocoder::Hifigan,
+        help = "Native vocoder composed with Burn acoustic backends"
+    )]
+    pub vocoder: SpeakVocoder,
+    #[arg(
+        long,
         short,
         help = "WAV output path. If omitted, writes speech audio to stdout where supported."
     )]
@@ -118,6 +125,38 @@ pub struct SpeakCommand {
     pub noise_scale: Option<f32>,
     #[arg(long, help = "Duration noise scale for stochastic speech backends")]
     pub duration_noise_scale: Option<f32>,
+    #[arg(
+        long,
+        help = "FastPitch normalized pitch-conditioning multiplier; must be positive"
+    )]
+    pub pitch_scale: Option<f32>,
+    #[arg(long, help = "FastPitch normalized pitch-conditioning offset")]
+    pub pitch_shift: Option<f32>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "FastPitch per-token normalized pitch values, comma-separated"
+    )]
+    pub pitch: Option<Vec<f32>>,
+    #[arg(
+        long,
+        help = "FastSpeech-family normalized energy-conditioning multiplier; must be positive"
+    )]
+    pub energy_scale: Option<f32>,
+    #[arg(long, help = "FastSpeech-family normalized energy-conditioning offset")]
+    pub energy_shift: Option<f32>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "FastSpeech-family per-token normalized energy values, comma-separated"
+    )]
+    pub energy: Option<Vec<f32>>,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "FastPitch per-token mel-frame durations, comma-separated"
+    )]
+    pub durations: Option<Vec<u32>>,
     #[arg(long, help = "RNG seed for repeatable stochastic speech inference")]
     pub seed: Option<u64>,
     #[arg(long, help = "Print pronunciation planning diagnostics")]
@@ -144,6 +183,7 @@ impl Default for SpeakCommand {
             text: None,
             variety: "en-US".into(),
             backend: SpeakBackend::Burn,
+            vocoder: SpeakVocoder::Hifigan,
             output: None,
             sample_rate_hz: 24_000,
             speaker: None,
@@ -165,6 +205,13 @@ impl Default for SpeakCommand {
             speed: DEFAULT_SPEED,
             noise_scale: None,
             duration_noise_scale: None,
+            pitch_scale: None,
+            pitch_shift: None,
+            pitch: None,
+            energy_scale: None,
+            energy_shift: None,
+            energy: None,
+            durations: None,
             seed: None,
             debug_pronunciation: false,
             timings: false,
@@ -199,10 +246,26 @@ pub struct SpeechDemoCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum SpeakBackend {
     Burn,
+    Fastpitch,
     Vits,
     Mock,
     Styletts2,
     Onnx,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
+pub enum SpeakVocoder {
+    Hifigan,
+    MultibandMelgan,
+}
+
+impl SpeakVocoder {
+    fn model_id(self) -> &'static str {
+        match self {
+            Self::Hifigan => crate::models::DEFAULT_NEURAL_VOCODER_ID,
+            Self::MultibandMelgan => crate::models::MULTIBAND_MELGAN_VOCODER_ID,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -254,6 +317,13 @@ fn onnx_synthesis_options(options: &SpeechSynthesisOptions) -> Result<speech::Sy
         length_scale: Some((1.0 / options.speed) as f32),
         noise_scale: options.noise_scale,
         noise_w: options.duration_noise_scale,
+        pitch_scale: options.pitch_scale,
+        pitch_shift: options.pitch_shift,
+        durations: options.durations.clone(),
+        pitch: options.pitch.clone(),
+        energy_scale: options.energy_scale,
+        energy_shift: options.energy_shift,
+        energy: options.energy.clone(),
         seed: None,
     })
 }
@@ -281,6 +351,13 @@ pub struct SpeechSynthesisOptions {
     pub speed: f64,
     pub noise_scale: Option<f32>,
     pub duration_noise_scale: Option<f32>,
+    pub pitch_scale: Option<f32>,
+    pub pitch_shift: Option<f32>,
+    pub pitch: Option<Vec<f32>>,
+    pub energy_scale: Option<f32>,
+    pub energy_shift: Option<f32>,
+    pub energy: Option<Vec<f32>>,
+    pub durations: Option<Vec<u32>>,
     pub seed: Option<u64>,
     pub max_tts_symbols: usize,
     pub no_tts_chunking: bool,
@@ -305,6 +382,13 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
             speed: command.speed,
             noise_scale: command.noise_scale,
             duration_noise_scale: command.duration_noise_scale,
+            pitch_scale: command.pitch_scale,
+            pitch_shift: command.pitch_shift,
+            pitch: command.pitch.clone(),
+            energy_scale: command.energy_scale,
+            energy_shift: command.energy_shift,
+            energy: command.energy.clone(),
+            durations: command.durations.clone(),
             seed: command.seed,
             max_tts_symbols: command.max_tts_symbols,
             no_tts_chunking: command.no_tts_chunking,
@@ -355,6 +439,13 @@ fn unified_cli_request(
             embedding_scale: Some(options.embedding_scale),
         }),
         speed: options.speed as f32,
+        pitch_scale: options.pitch_scale,
+        pitch_shift: options.pitch_shift,
+        pitch: options.pitch.clone(),
+        energy_scale: options.energy_scale,
+        energy_shift: options.energy_shift,
+        energy: options.energy.clone(),
+        durations: options.durations.clone(),
         seed: options.seed.or_else(|| {
             matches!(command.backend, SpeakBackend::Styletts2).then_some(options.style_seed)
         }),
@@ -371,8 +462,14 @@ fn unified_cli_request(
     }
 }
 
-type CpuBurnBackend = speech::BurnSpeedySpeechPipeline<NdArray<f32>>;
-type CudaBurnBackend = speech::BurnSpeedySpeechPipeline<Cuda<f32, i32>>;
+type CpuBurnBackend =
+    speech::BurnSpeedySpeechPipeline<NdArray<f32>, speech::BurnVocoder<NdArray<f32>>>;
+type CudaBurnBackend =
+    speech::BurnSpeedySpeechPipeline<Cuda<f32, i32>, speech::BurnVocoder<Cuda<f32, i32>>>;
+type CpuFastPitchBackend =
+    speech::BurnFastPitchPipeline<NdArray<f32>, speech::BurnVocoder<NdArray<f32>>>;
+type CudaFastPitchBackend =
+    speech::BurnFastPitchPipeline<Cuda<f32, i32>, speech::BurnVocoder<Cuda<f32, i32>>>;
 type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
 type CudaVitsBackend = speech::BurnVitsSpeech<Cuda<f32, i32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
@@ -381,6 +478,8 @@ type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
 enum BackendInstance {
     BurnCpu(Box<CpuBurnBackend>),
     BurnCuda(Box<CudaBurnBackend>),
+    FastPitchCpu(Box<CpuFastPitchBackend>),
+    FastPitchCuda(Box<CudaFastPitchBackend>),
     VitsCpu(Box<CpuVitsBackend>),
     VitsCuda(Box<CudaVitsBackend>),
     Mock(MockStyleTts2Backend),
@@ -407,6 +506,8 @@ impl BackendInstance {
         match self {
             Self::BurnCpu(_) => "burn-cpu",
             Self::BurnCuda(_) => "burn-cuda",
+            Self::FastPitchCpu(_) => "fastpitch-cpu",
+            Self::FastPitchCuda(_) => "fastpitch-cuda",
             Self::VitsCpu(_) => "vits-cpu",
             Self::VitsCuda(_) => "vits-cuda",
             Self::Mock(_) => "mock",
@@ -438,6 +539,9 @@ impl BackendInstance {
             styles: speech::StyleCapabilities::unsupported(),
             reference_audio: Default::default(),
             speed: true,
+            pitch: speech::PitchCapabilities::default(),
+            energy: speech::EnergyCapabilities::default(),
+            durations: false,
             seed: true,
             devices: devices.clone(),
             output: output(sample_rate_hz),
@@ -451,6 +555,23 @@ impl BackendInstance {
                     speech::SpeechModelFamily::AcousticModel,
                     22_050,
                 );
+                capabilities.provenance = vec!["Published Coqui release artifacts".into()];
+                capabilities
+            }
+            Self::FastPitchCpu(_) | Self::FastPitchCuda(_) => {
+                let mut capabilities = base(
+                    "fastpitch",
+                    "fastpitch-ljspeech+hifigan-v2",
+                    speech::SpeechModelFamily::AcousticModel,
+                    22_050,
+                );
+                capabilities.pitch = speech::PitchCapabilities {
+                    scale: true,
+                    shift: true,
+                    explicit_values: true,
+                };
+                capabilities.durations = true;
+                capabilities.seed = false;
                 capabilities.provenance = vec!["Published Coqui release artifacts".into()];
                 capabilities
             }
@@ -490,6 +611,9 @@ impl BackendInstance {
                     source: false,
                 },
                 speed: true,
+                pitch: speech::PitchCapabilities::default(),
+                energy: speech::EnergyCapabilities::default(),
+                durations: false,
                 seed: true,
                 devices,
                 output: output(24_000),
@@ -522,6 +646,9 @@ impl BackendInstance {
                     styles: speech::StyleCapabilities::unsupported(),
                     reference_audio: Default::default(),
                     speed: true,
+                    pitch: speech::PitchCapabilities::default(),
+                    energy: speech::EnergyCapabilities::default(),
+                    durations: false,
                     seed: false,
                     devices,
                     output: output(config.sample_rate_hz),
@@ -548,6 +675,12 @@ impl BackendInstance {
                 synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::BurnCuda(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::FastPitchCpu(ref mut backend) => {
+                synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::FastPitchCuda(ref mut backend) => {
                 synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::VitsCpu(ref mut backend) => {
@@ -719,6 +852,20 @@ impl BackendInstance {
                     .project(plan)
                     .context("failed to project SpeedySpeech checkpoint input")?,
             )),
+            Self::FastPitchCpu(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project FastPitch checkpoint input")?,
+            )),
+            Self::FastPitchCuda(backend) => Ok(Some(
+                backend
+                    .acoustic_model()
+                    .projector()
+                    .project(plan)
+                    .context("failed to project FastPitch checkpoint input")?,
+            )),
             Self::VitsCpu(backend) => Ok(Some(
                 backend
                     .projected_input(plan)
@@ -760,6 +907,9 @@ fn vits_cli_capabilities(
         styles: speech::StyleCapabilities::unsupported(),
         reference_audio: Default::default(),
         speed: true,
+        pitch: speech::PitchCapabilities::default(),
+        energy: speech::EnergyCapabilities::default(),
+        durations: false,
         seed: true,
         devices,
         output: speech::OutputAudioContract {
@@ -790,6 +940,13 @@ fn synthesize_burn_engine(
             length_scale: Some((1.0 / options.speed) as f32),
             noise_scale: options.noise_scale,
             noise_w: options.duration_noise_scale,
+            pitch_scale: options.pitch_scale,
+            pitch_shift: options.pitch_shift,
+            durations: options.durations.clone(),
+            pitch: options.pitch.clone(),
+            energy_scale: options.energy_scale,
+            energy_shift: options.energy_shift,
+            energy: options.energy.clone(),
             seed: options.seed,
         },
     };
@@ -860,6 +1017,8 @@ fn load_backend(
     device_arg: DeviceArg,
 ) -> Result<(BackendInstance, BackendStartupProfile)> {
     let options = SpeechSynthesisOptions::from(command);
+    #[cfg(not(feature = "styletts2-onnx"))]
+    let _ = &options;
     let startup_started = Instant::now();
     let mut cache_check_ms = 0.0;
     let mut model_load_ms = 0.0;
@@ -870,7 +1029,7 @@ fn load_backend(
             let acoustic_checkpoint =
                 crate::models::ensure_model_available(crate::models::DEFAULT_ACOUSTIC_MODEL_ID)?;
             let vocoder_checkpoint =
-                crate::models::ensure_model_available(crate::models::DEFAULT_NEURAL_VOCODER_ID)?;
+                crate::models::ensure_model_available(command.vocoder.model_id())?;
             cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
             let acoustic_config = component_config_path(&acoustic_checkpoint)?;
             let vocoder_config = component_config_path(&vocoder_checkpoint)?;
@@ -888,6 +1047,43 @@ fn load_backend(
                 }
                 DeviceArg::Cuda { index } => {
                     BackendInstance::BurnCuda(Box::new(load_burn_pipeline::<Cuda<f32, i32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        CudaDevice::new(index),
+                        &mut |event| model_load_profile.push(event),
+                    )?))
+                }
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
+        }
+        SpeakBackend::Fastpitch => {
+            let started = Instant::now();
+            let acoustic_checkpoint =
+                crate::models::ensure_model_available(crate::models::FASTPITCH_ACOUSTIC_MODEL_ID)?;
+            let vocoder_checkpoint =
+                crate::models::ensure_model_available(command.vocoder.model_id())?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let acoustic_config = component_config_path(&acoustic_checkpoint)?;
+            let vocoder_config = component_config_path(&vocoder_checkpoint)?;
+            let started = Instant::now();
+            let backend = match device_arg {
+                DeviceArg::Cpu => BackendInstance::FastPitchCpu(Box::new(
+                    load_fast_pitch_pipeline::<NdArray<f32>>(
+                        &acoustic_config,
+                        &acoustic_checkpoint,
+                        &vocoder_config,
+                        &vocoder_checkpoint,
+                        NdArrayDevice::Cpu,
+                        &mut |event| model_load_profile.push(event),
+                    )?,
+                )),
+                DeviceArg::Cuda { index } => {
+                    BackendInstance::FastPitchCuda(Box::new(load_fast_pitch_pipeline::<
+                        Cuda<f32, i32>,
+                    >(
                         &acoustic_config,
                         &acoustic_checkpoint,
                         &vocoder_config,
@@ -1025,7 +1221,7 @@ fn run_speak_with_backend(
 ) -> Result<()> {
     let options = SpeechSynthesisOptions::from(&command);
     let target_sample_rate = match command.backend {
-        SpeakBackend::Burn => 22_050,
+        SpeakBackend::Burn | SpeakBackend::Fastpitch => 22_050,
         SpeakBackend::Vits => 22_050,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
@@ -1209,10 +1405,11 @@ fn run_speak_with_backend(
         let artifact = output_artifact.context("synthesis produced no benchmark runs")?;
 
         let backend_symbols = match (&checkpoint_input, command.backend) {
-            (Some(projected), SpeakBackend::Burn | SpeakBackend::Vits) => {
-                projected.projected_symbols.clone()
-            }
-            (None, SpeakBackend::Burn | SpeakBackend::Vits) => {
+            (
+                Some(projected),
+                SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits,
+            ) => projected.projected_symbols.clone(),
+            (None, SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits) => {
                 anyhow::bail!("native Burn backend did not expose its checkpoint projection")
             }
             (_, SpeakBackend::Mock | SpeakBackend::Styletts2) => {
@@ -1286,6 +1483,31 @@ fn run_speak_with_backend(
                     .unwrap_or_else(|| "<checkpoint default>".into())
             );
         }
+        if matches!(command.backend, SpeakBackend::Fastpitch) {
+            println!("fastpitch_controls:");
+            println!(
+                "  pitch_scale: {}",
+                options
+                    .pitch_scale
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "1".into())
+            );
+            println!(
+                "  pitch_shift: {}",
+                options
+                    .pitch_shift
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "0".into())
+            );
+            println!(
+                "  explicit_pitch: {}",
+                options.pitch.as_ref().map(Vec::len).unwrap_or(0)
+            );
+            println!(
+                "  explicit_durations: {}",
+                options.durations.as_ref().map(Vec::len).unwrap_or(0)
+            );
+        }
 
         if matches!(command.backend, SpeakBackend::Styletts2) {
             println!("styletts2_controls:");
@@ -1307,7 +1529,7 @@ fn run_speak_with_backend(
 
         println!("chunks:");
         match command.backend {
-            SpeakBackend::Burn | SpeakBackend::Vits => {
+            SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits => {
                 println!("  1: {backend_symbols}");
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
@@ -1564,11 +1786,41 @@ fn speech_demo_cases(command: &SpeechDemoCommand) -> Vec<SpeechDemoCase> {
 fn demo_backend_name(backend: SpeakBackend) -> &'static str {
     match backend {
         SpeakBackend::Burn => "Burn components",
+        SpeakBackend::Fastpitch => "FastPitch + HiFi-GAN",
         SpeakBackend::Vits => "VITS",
         SpeakBackend::Onnx => "ONNX compatibility voice",
         SpeakBackend::Styletts2 => "StyleTTS2",
         SpeakBackend::Mock => "mock",
     }
+}
+
+fn load_fast_pitch_pipeline<B: Backend>(
+    acoustic_config: &Path,
+    acoustic_checkpoint: &Path,
+    vocoder_config: &Path,
+    vocoder_checkpoint: &Path,
+    device: B::Device,
+    profiler: &mut dyn FnMut(speech::ModelLoadProfileEvent),
+) -> Result<speech::BurnFastPitchPipeline<B, speech::BurnVocoder<B>>>
+where
+    B::Device: Clone,
+{
+    let acoustic = speech::BurnFastPitchAcoustic::load_profiled(
+        acoustic_config,
+        acoustic_checkpoint,
+        device.clone(),
+        &mut *profiler,
+    )
+    .context("failed to load Burn FastPitch acoustic model")?;
+    let vocoder = speech::BurnVocoder::load_profiled(
+        vocoder_config,
+        vocoder_checkpoint,
+        device,
+        &mut *profiler,
+    )
+    .context("failed to load native Burn vocoder")?;
+    speech::BurnFastPitchPipeline::new(acoustic, vocoder)
+        .context("FastPitch and selected vocoder components are incompatible")
 }
 
 fn load_burn_pipeline<B: Backend>(
@@ -1578,7 +1830,7 @@ fn load_burn_pipeline<B: Backend>(
     vocoder_checkpoint: &Path,
     device: B::Device,
     profiler: &mut dyn FnMut(speech::ModelLoadProfileEvent),
-) -> Result<speech::BurnSpeedySpeechPipeline<B>>
+) -> Result<speech::BurnSpeedySpeechPipeline<B, speech::BurnVocoder<B>>>
 where
     B::Device: Clone,
 {
@@ -1589,19 +1841,22 @@ where
         &mut *profiler,
     )
     .context("failed to load Burn SpeedySpeech acoustic model")?;
-    let vocoder = speech::BurnHifiganVocoder::load_profiled(
+    let vocoder = speech::BurnVocoder::load_profiled(
         vocoder_config,
         vocoder_checkpoint,
         device,
         &mut *profiler,
     )
-    .context("failed to load Burn HiFi-GAN vocoder")?;
+    .context("failed to load native Burn vocoder")?;
     speech::BurnSpeedySpeechPipeline::new(acoustic, vocoder)
         .context("Burn speech components are incompatible")
 }
 
 fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
-    if matches!(command.backend, SpeakBackend::Burn) {
+    if matches!(
+        command.backend,
+        SpeakBackend::Burn | SpeakBackend::Fastpitch
+    ) {
         println!("speakers: <none> (single-speaker acoustic model)");
         return Ok(());
     }

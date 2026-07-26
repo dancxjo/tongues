@@ -33,9 +33,14 @@ pub struct ModelCatalogEntry {
     pub display_name: String,
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// A backend-neutral architecture identifier. New provenance families do
-    /// not require a runtime API enum change.
+    /// A provider-neutral neural architecture identifier. Serialization and
+    /// distribution ancestry belong in `provenance` and `compatible_with`.
     pub architecture: String,
+    /// External checkpoint, configuration, or runtime contracts accepted by
+    /// this entry. Values are searchable compatibility labels, not Tongues
+    /// architecture identities.
+    #[serde(default)]
+    pub compatible_with: Vec<String>,
     pub package_version: u32,
     #[serde(default)]
     pub languages: Vec<String>,
@@ -62,8 +67,8 @@ pub struct CatalogSpeakers {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogLicense {
     pub expression: String,
-    /// Stable upstream evidence for the declared license. An expression
-    /// without evidence is not sufficient for installation.
+    /// Stable upstream evidence for the declared license or `NOASSERTION`
+    /// status. A value without evidence is not sufficient for installation.
     pub evidence: String,
 }
 
@@ -248,6 +253,7 @@ impl ModelCatalog {
                 ]
                 .into_iter()
                 .chain(entry.aliases.iter().map(String::as_str))
+                .chain(entry.compatible_with.iter().map(String::as_str))
                 .chain(entry.languages.iter().map(String::as_str))
                 .chain(entry.varieties.iter().map(String::as_str))
                 .chain(entry.capabilities.iter().map(String::as_str))
@@ -270,6 +276,13 @@ impl ModelCatalogEntry {
         ensure!(
             !self.architecture.trim().is_empty(),
             "catalog model `{}` has no architecture",
+            self.id
+        );
+        ensure!(
+            self.compatible_with
+                .iter()
+                .all(|value| !value.trim().is_empty()),
+            "catalog model `{}` has an empty compatibility identifier",
             self.id
         );
         ensure!(
@@ -486,6 +499,7 @@ impl ModelStore {
             display_name: id.into(),
             aliases: Vec::new(),
             architecture: package.manifest.architecture.as_str().into(),
+            compatible_with: Vec::new(),
             package_version: version,
             languages: package
                 .manifest
@@ -1184,6 +1198,7 @@ mod tests {
         let catalog = ModelCatalog::embedded().expect("embedded catalog");
         for id in [
             "speedy-speech-ljspeech",
+            "fastpitch-ljspeech",
             "hifigan-v2-ljspeech",
             "vits-vctk",
             "styletts2-en-us",
@@ -1243,6 +1258,7 @@ mod tests {
             display_name: "Fixture".into(),
             aliases: Vec::new(),
             architecture: "fixture".into(),
+            compatible_with: Vec::new(),
             package_version: 1,
             languages: Vec::new(),
             varieties: Vec::new(),
@@ -1288,6 +1304,7 @@ mod tests {
             display_name: "Local Fixture".into(),
             aliases: Vec::new(),
             architecture: "fairseq".into(),
+            compatible_with: Vec::new(),
             package_version: 1,
             languages: vec!["en".into()],
             varieties: Vec::new(),
@@ -1338,8 +1355,36 @@ mod tests {
     #[test]
     fn search_is_backend_neutral() {
         let catalog = ModelCatalog::embedded().expect("embedded catalog");
-        assert_eq!(catalog.search("coqui").len(), 3);
+        assert_eq!(catalog.search("coqui").len(), 6);
         assert_eq!(catalog.search("onnx").len(), 4);
         assert_eq!(catalog.search("109").len(), 0);
+    }
+
+    #[test]
+    fn embedded_architectures_are_provider_neutral_and_compatibility_is_explicit() {
+        let catalog = ModelCatalog::embedded().expect("embedded catalog");
+        for entry in &catalog.entries {
+            assert!(
+                !entry.architecture.starts_with("coqui-")
+                    && !entry.architecture.starts_with("piper-"),
+                "{} leaks provider identity into architecture {}",
+                entry.id,
+                entry.architecture
+            );
+        }
+
+        let speedy = catalog.find("speedy-speech-ljspeech").unwrap();
+        assert_eq!(speedy.architecture, "speedy-speech");
+        assert!(speedy
+            .compatible_with
+            .iter()
+            .any(|value| value == "coqui-speedy-speech"));
+
+        let piper_voice = catalog.find("voice-ljspeech-high").unwrap();
+        assert_eq!(piper_voice.architecture, "vits");
+        assert!(piper_voice
+            .compatible_with
+            .iter()
+            .any(|value| value == "piper-onnx"));
     }
 }

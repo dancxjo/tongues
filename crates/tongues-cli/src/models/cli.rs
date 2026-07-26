@@ -4,7 +4,7 @@ use inquire::Select;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 
-use crate::models::download::fetch_model;
+use crate::models::download::{fetch_all_models, fetch_model};
 use crate::models::manifest::{
     bundle_required_assets, find_bundle, ModelKind, MODEL_ASSETS, MODEL_BUNDLES,
 };
@@ -18,9 +18,9 @@ use crate::models::selection::{
 pub enum ModelsCommand {
     #[command(about = "Choose the active LLM model")]
     Menu,
-    #[command(about = "List licensed catalog models")]
+    #[command(about = "List verified catalog metadata and installation state")]
     List(ModelsListCommand),
-    #[command(about = "Search licensed catalog metadata")]
+    #[command(about = "Search model catalog metadata")]
     Search(ModelsSearchCommand),
     #[command(about = "Install a verified catalog model or local Tongues package")]
     Install(ModelsInstallCommand),
@@ -34,7 +34,7 @@ pub enum ModelsCommand {
     Status,
     #[command(about = "Select the active LLM model")]
     Use(ModelsUseCommand),
-    #[command(about = "Fetch default runtime models, or a named model")]
+    #[command(about = "Fetch default runtime models, every catalog model, or a named model")]
     Fetch(ModelsFetchCommand),
     #[command(
         name = "import-coqui",
@@ -56,6 +56,9 @@ pub struct ModelsUseCommand {
 
 #[derive(Debug, Args)]
 pub struct ModelsFetchCommand {
+    /// Fetch every model bundle in the registry, including every voice
+    #[arg(long, conflicts_with = "model")]
+    all: bool,
     model: Option<String>,
     #[arg(long)]
     force: bool,
@@ -134,7 +137,7 @@ pub struct ModelsImportCoquiCommand {
     /// Coqui JSON or JSON5 configuration
     #[arg(long)]
     config: PathBuf,
-    /// Modern ZIP-based PyTorch checkpoint
+    /// Modern ZIP-based PyTorch checkpoint, or a supported legacy MelGAN checkpoint
     #[arg(long)]
     checkpoint: PathBuf,
     /// Destination directory for manifest, neutral config, tensor index, and SafeTensors
@@ -184,7 +187,11 @@ pub fn run(command: Option<ModelsCommand>) -> Result<()> {
         ModelsCommand::Status => print_status(),
         ModelsCommand::Use(command) => select_model(&command.model),
         ModelsCommand::Fetch(command) => {
-            fetch_model(command.model.as_deref(), command.force)?;
+            if command.all {
+                fetch_all_models(command.force)?;
+            } else {
+                fetch_model(command.model.as_deref(), command.force)?;
+            }
             Ok(())
         }
         ModelsCommand::ImportCoqui(command) => import_coqui(command),
@@ -570,7 +577,7 @@ fn list_models(command: ModelsListCommand) -> Result<()> {
     }
     println!(
         "{} (home: {}, cache: {}, offline: {})",
-        "Licensed model catalog".bold(),
+        "Model catalog".bold(),
         store.root().display(),
         store.cache().display(),
         store.offline()

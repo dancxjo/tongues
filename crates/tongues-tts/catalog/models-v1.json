@@ -6,7 +6,8 @@
       "id": "speedy-speech-ljspeech",
       "display_name": "SpeedySpeech LJSpeech",
       "aliases": ["speedy-speech", "speedyspeech", "coqui-speedy-speech"],
-      "architecture": "coqui-speedy-speech",
+      "architecture": "speedy-speech",
+      "compatible_with": ["coqui-speedy-speech", "coqui-tts-v0.6.1"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],
@@ -14,8 +15,8 @@
       "sample_rate_hz": 22050,
       "capabilities": ["acoustic-model", "phonemes", "speed", "seed"],
       "license": {
-        "expression": "Apache-2.0",
-        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+        "expression": "NOASSERTION",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
       },
       "provenance": {
         "format": "coqui-pytorch-zip",
@@ -41,10 +42,50 @@
       ]
     },
     {
+      "id": "fastpitch-ljspeech",
+      "display_name": "FastPitch LJSpeech",
+      "aliases": ["fast-pitch", "fastpitch", "coqui-fastpitch"],
+      "architecture": "fastpitch",
+      "compatible_with": ["coqui-fastpitch", "coqui-tts-v0.6.1"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["acoustic-model", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "NOASSERTION",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--fast_pitch.zip",
+          "sha256": "4629d701f25db0573014174a4a508430138c16358313e84b3dfacdd7a65fe89e",
+          "size_bytes": 458071694,
+          "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/tts_models--en--ljspeech--fast_pitch.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--en--ljspeech--fast_pitch/model_file.pth",
+              "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth"
+            },
+            {
+              "archive_path": "tts_models--en--ljspeech--fast_pitch/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/config.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "hifigan-v2-ljspeech",
       "display_name": "HiFi-GAN v2 LJSpeech",
       "aliases": ["hifigan", "hifigan-v2", "coqui-hifigan"],
-      "architecture": "coqui-hifigan",
+      "architecture": "hifigan-v2",
+      "compatible_with": ["coqui-hifigan", "coqui-tts-v0.6.1"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],
@@ -52,8 +93,8 @@
       "sample_rate_hz": 22050,
       "capabilities": ["neural-vocoder", "mel-spectrogram-input"],
       "license": {
-        "expression": "Apache-2.0",
-        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+        "expression": "NOASSERTION",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
       },
       "provenance": {
         "format": "coqui-pytorch-zip",
@@ -79,10 +120,93 @@
       ]
     },
     {
+      "id": "glow-tts-ljspeech",
+      "display_name": "Glow-TTS LJSpeech",
+      "aliases": ["glow-tts", "glowtts", "coqui-glow-tts"],
+      "architecture": "glow-tts",
+      "compatible_with": ["coqui-glow-tts", "coqui-tts-v0.0.9"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["acoustic-model", "phonemes", "speed", "explicit-durations", "seed"],
+      "license": {
+        "expression": "MPL-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.0.9/TTS/.models.json"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.0.9"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.0.9/tts_models--en--ljspeech--glow-tts.zip",
+          "sha256": "3d772a62c35be04ea763d96d99be786f0753a6883e60adc98793a011b79f18a5",
+          "size_bytes": 315065867,
+          "install_path": "models/speech/coqui/en/ljspeech/glow-tts/tts_models--en--ljspeech--glow-tts.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--en--ljspeech--glow-tts/model_file.pth.tar",
+              "install_path": "models/speech/coqui/en/ljspeech/glow-tts/model_file.pth.tar"
+            },
+            {
+              "archive_path": "tts_models--en--ljspeech--glow-tts/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/glow-tts/config.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multiband-melgan-ljspeech",
+      "display_name": "MultiBand-MelGAN LJSpeech",
+      "aliases": ["multiband-melgan", "mb-melgan", "coqui-multiband-melgan"],
+      "architecture": "multiband-melgan",
+      "compatible_with": ["coqui-multiband-melgan", "coqui-tts-v0.6.1"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 0, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["neural-vocoder", "mel-spectrogram-input", "pqmf-synthesis"],
+      "license": {
+        "expression": "MPL-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-legacy",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--multiband-melgan.zip",
+          "sha256": "fc5c4222be98751ee55f07bcdbad9fa3fe2635ca542e340b70fbe62fe9ba1b4f",
+          "size_bytes": 82847752,
+          "install_path": "models/speech/coqui/en/ljspeech/multiband-melgan/vocoder_models--en--ljspeech--multiband-melgan.zip",
+          "members": [
+            {
+              "archive_path": "vocoder_models--en--ljspeech--multiband-melgan/model_file.pth",
+              "install_path": "models/speech/coqui/en/ljspeech/multiband-melgan/model_file.pth"
+            },
+            {
+              "archive_path": "vocoder_models--en--ljspeech--multiband-melgan/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/multiband-melgan/config.json"
+            },
+            {
+              "archive_path": "vocoder_models--en--ljspeech--multiband-melgan/scale_stats.npy",
+              "install_path": "models/speech/coqui/en/ljspeech/multiband-melgan/scale_stats.npy"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "vits-vctk",
       "display_name": "VITS VCTK",
       "aliases": ["vctk-vits", "coqui-vits-vctk"],
-      "architecture": "coqui-vits",
+      "architecture": "vits",
+      "compatible_with": ["coqui-vits", "coqui-tts-v0.6.1"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-GB"],
@@ -94,8 +218,8 @@
       "sample_rate_hz": 22050,
       "capabilities": ["end-to-end-speech", "phonemes", "speakers", "streaming", "speed", "seed"],
       "license": {
-        "expression": "Apache-2.0",
-        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+        "expression": "NOASSERTION",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
       },
       "provenance": {
         "format": "coqui-pytorch-zip",
@@ -128,7 +252,8 @@
       "id": "styletts2-en-us",
       "display_name": "StyleTTS2 en-US ONNX",
       "aliases": ["styletts2", "styletts2-en", "style-tts-2"],
-      "architecture": "styletts2-onnx",
+      "architecture": "styletts2",
+      "compatible_with": ["styletts2-onnx"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],
@@ -198,7 +323,8 @@
       "id": "voice-ljspeech-high",
       "display_name": "LJSpeech High Voice",
       "aliases": ["ljspeech", "voice", "voice-ljspeech"],
-      "architecture": "piper-onnx",
+      "architecture": "vits",
+      "compatible_with": ["piper-onnx", "piper-voice-config"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],
@@ -234,7 +360,8 @@
       "id": "voice-ryan-medium",
       "display_name": "Ryan Medium Voice",
       "aliases": ["ryan", "voice-ryan"],
-      "architecture": "piper-onnx",
+      "architecture": "vits",
+      "compatible_with": ["piper-onnx", "piper-voice-config"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],
@@ -270,7 +397,8 @@
       "id": "voice-amy-medium",
       "display_name": "Amy Medium Voice",
       "aliases": ["amy", "voice-amy"],
-      "architecture": "piper-onnx",
+      "architecture": "vits",
+      "compatible_with": ["piper-onnx", "piper-voice-config"],
       "package_version": 1,
       "languages": ["en"],
       "varieties": ["en-US"],

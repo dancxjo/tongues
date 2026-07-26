@@ -53,6 +53,7 @@ pub enum LinguisticInputKind {
 pub struct ModelInputContract {
     pub kind: LinguisticInputKind,
     pub vocabulary_fingerprint: String,
+    /// Supported canonical varieties, registered aliases, variety prefixes, or `*`.
     pub supported_varieties: Vec<String>,
     pub consumes: BTreeSet<LinguisticIntent>,
 }
@@ -110,10 +111,13 @@ impl ModelInputContract {
 fn variety_matches(supported: &str, requested: &str) -> bool {
     supported == "*"
         || supported.eq_ignore_ascii_case(requested)
-        || (!supported.contains('-')
-            && requested
-                .split_once('-')
-                .is_some_and(|(language, _)| supported.eq_ignore_ascii_case(language)))
+        || speaking::canonical_variety_id(supported)
+            .zip(speaking::canonical_variety_id(requested))
+            .is_some_and(|(supported, requested)| supported == requested)
+        || requested
+            .get(..supported.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(supported))
+            && matches!(requested.as_bytes().get(supported.len()), Some(b'-' | b'.'))
 }
 
 /// Terminal, model-owned lowering from Tongues' linguistic IR.
@@ -334,6 +338,15 @@ pub enum SpectrogramNormalization {
         mean: Vec<f32>,
         scale: Vec<f32>,
     },
+    /// Mean/variance normalization whose safe, path-independent identity is
+    /// the digest of an upstream opaque statistics artifact.
+    ///
+    /// Some legacy Coqui bundles store statistics as pickled NumPy objects.
+    /// Composition needs their exact identity, but native inference does not
+    /// need to execute or deserialize that object.
+    OpaqueStandardized {
+        sha256: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +384,8 @@ pub struct SpectrogramContract {
     pub hop_size: usize,
     pub bins: usize,
     pub centered: bool,
+    /// Explicit time-domain padding applied before a non-centered STFT.
+    pub frame_padding: Option<(usize, usize)>,
     pub pad_mode: SpectrogramPadMode,
     pub preemphasis: Option<f32>,
     pub mel_filter_bank: Option<MelFilterBank>,
@@ -392,6 +407,12 @@ impl SpectrogramContract {
         );
         ensure!(self.hop_size > 0, "spectrogram hop size must be positive");
         ensure!(self.bins > 0, "spectrogram bin count must be positive");
+        if let Some((left, right)) = self.frame_padding {
+            ensure!(
+                !self.centered && (left > 0 || right > 0),
+                "explicit spectrogram frame padding requires a non-centered STFT and at least one padded sample"
+            );
+        }
         if let Some(preemphasis) = self.preemphasis {
             ensure!(
                 preemphasis.is_finite() && (0.0..1.0).contains(&preemphasis),
@@ -489,6 +510,16 @@ fn validate_normalization(normalization: &SpectrogramNormalization, bins: usize)
                 mean.iter().all(|value| value.is_finite())
                     && scale.iter().all(|value| value.is_finite() && *value != 0.0),
                 "spectrogram standardization vectors contain invalid values"
+            );
+            Ok(())
+        }
+        SpectrogramNormalization::OpaqueStandardized { sha256 } => {
+            ensure!(
+                sha256.len() == 64
+                    && sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                "opaque standardization SHA-256 must be 64 lowercase hexadecimal characters"
             );
             Ok(())
         }
@@ -918,6 +949,7 @@ mod tests {
             hop_size,
             bins: 80,
             centered: true,
+            frame_padding: None,
             pad_mode: SpectrogramPadMode::Reflect,
             preemphasis: None,
             mel_filter_bank: Some(MelFilterBank::Slaney),
@@ -983,6 +1015,37 @@ mod tests {
             .expect("regional English");
         regional.variety = VarietyId("fr-FR".into());
         assert!(contract.ensure_supports(&regional).is_err());
+    }
+
+    #[test]
+    fn variety_contract_accepts_registered_aliases_in_either_direction() {
+        let mut contract = input_contract();
+        let mut plan = request().plan;
+        plan.variety = VarietyId("en-US-GA".into());
+
+        contract
+            .ensure_supports(&plan)
+            .expect("en-US should match its canonical en-US-GA variety");
+
+        contract.supported_varieties = vec!["en-US-GA".into()];
+        plan.variety = VarietyId("en-US".into());
+        contract
+            .ensure_supports(&plan)
+            .expect("canonical en-US-GA should match its en-US alias");
+    }
+
+    #[test]
+    fn locale_contract_accepts_more_specific_varieties_but_not_sibling_locales() {
+        let contract = input_contract();
+        let mut plan = request().plan;
+        plan.variety = VarietyId("en-US-AAE".into());
+
+        contract
+            .ensure_supports(&plan)
+            .expect("en-US should support a more specific US English variety");
+
+        plan.variety = VarietyId("en-GB-RP".into());
+        assert!(contract.ensure_supports(&plan).is_err());
     }
 
     struct MockAcousticModel {

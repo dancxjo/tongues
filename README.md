@@ -22,7 +22,7 @@ pneumocryptology -> ˌnuː.məˈkɹɪp.təˌloʊ.dʒiː
 ```
 
 The same workspace now also runs speech synthesis end to end. The native Burn
-paths include a SpeedySpeech acoustic model paired with HiFi-GAN and a
+paths include SpeedySpeech, FastPitch, and Glow-TTS acoustic models, plus a
 speaker-conditioned VCTK VITS model. ONNX voice compatibility, StyleTTS2,
 streaming front ends, ASR-oriented interpretation, common-phone decoding, and
 emotion modeling share the same linguistic and artifact infrastructure.
@@ -36,7 +36,7 @@ emotion modeling share the same linguistic and artifact infrastructure.
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
 - Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
-- Native Burn TTS using SpeedySpeech + HiFi-GAN or end-to-end multi-speaker VITS.
+- Native Burn TTS using SpeedySpeech + HiFi-GAN, controllable FastPitch + HiFi-GAN, or end-to-end multi-speaker VITS.
 - ONNX-compatible voices, StyleTTS2 synthesis and style controls, and a deterministic mock backend.
 - Streaming sentence/head detection, LibriSpeech interpretation, common-phone CTC, and emotion-model scaffolds.
 
@@ -90,6 +90,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Emotions](docs/emotions.md)
 - [Native audio and feature extraction](docs/audio.md)
 - [Text to speech](docs/tts.md)
+- [Speech system provenance](docs/provenance.md)
 - [Speech synthesis smoke measurements](docs/speech-smoke.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)
@@ -137,6 +138,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 
 | Command | Purpose |
 |---|---|
+| `just fetch` | Fetch pronunciation lexicons and every registered model/voice bundle. |
 | `just prepare` | Prepare default OpenEPD G2P2G data. |
 | `just run ...` | Forward directly to `cargo run --bin tongues -- ...`. |
 | `just train` | Train the default `g2p2g` model. |
@@ -151,6 +153,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
 | `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |
+| `just speak --backend fastpitch "hello world"` | Synthesize with native Burn FastPitch + HiFi-GAN. |
 | `just speak --backend vits --speaker p225 "hello world"` | Synthesize with native Burn multi-speaker VITS. |
 | `just speech-demo` | Run a shuffled sentence through every built-in speech backend. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |
@@ -240,6 +243,10 @@ features.
 
 ## License
 
-MIT.
+Tongues-authored source is MIT licensed. Compatibility code, model weights,
+voices, datasets, fixtures, and other third-party material may carry separate
+terms; the repository license does not erase those terms.
 
-Generated datasets and audio may include or point to material with different terms. Review [licensing notes](docs/licensing.md) before redistributing prepared data or generated artifacts.
+Review the [third-party notices](THIRD_PARTY_NOTICES.md), [speech provenance
+ledger](docs/provenance.md), and [licensing notes](docs/licensing.md) before
+redistributing source, prepared data, models, or generated artifacts.

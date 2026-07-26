@@ -54,7 +54,10 @@ pub const DEFAULT_ASR_MODEL_ID: &str = "whisper-large-v3-turbo";
 pub const DEFAULT_STYLETTS2_MODEL_ID: &str = "styletts2-en-us";
 pub const DEFAULT_VOICE_MODEL_ID: &str = "voice-ljspeech-high";
 pub const DEFAULT_ACOUSTIC_MODEL_ID: &str = "speedy-speech-ljspeech";
+pub const FASTPITCH_ACOUSTIC_MODEL_ID: &str = "fastpitch-ljspeech";
+pub const GLOW_TTS_ACOUSTIC_MODEL_ID: &str = "glow-tts-ljspeech";
 pub const DEFAULT_NEURAL_VOCODER_ID: &str = "hifigan-v2-ljspeech";
+pub const MULTIBAND_MELGAN_VOCODER_ID: &str = "multiband-melgan-ljspeech";
 pub const DEFAULT_END_TO_END_SPEECH_MODEL_ID: &str = "vits-vctk";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
@@ -325,9 +328,21 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--speedy-speech.zip",
         sha256: Some("ae772bc84c6b4d8fe97234f4d2a1282b925bf325659f319f03610edc4eb8023a"),
         size_bytes: Some(53_437_190),
-        license: Some("Apache-2.0"),
+        license: Some("NOASSERTION"),
         source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
         notes: Some("Published Coqui SpeedySpeech acoustic-model release archive."),
+    },
+    ModelAsset {
+        id: "coqui-fastpitch-ljspeech-release",
+        filename: "tts_models--en--ljspeech--fast_pitch.zip",
+        relative_path:
+            "models/speech/coqui/en/ljspeech/fast-pitch/tts_models--en--ljspeech--fast_pitch.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--fast_pitch.zip",
+        sha256: Some("4629d701f25db0573014174a4a508430138c16358313e84b3dfacdd7a65fe89e"),
+        size_bytes: Some(458_071_694),
+        license: Some("NOASSERTION"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
+        notes: Some("Published Coqui FastPitch LJSpeech acoustic-model release archive."),
     },
     ModelAsset {
         id: "coqui-hifigan-v2-ljspeech-release",
@@ -337,9 +352,35 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         url: "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--hifigan_v2.zip",
         sha256: Some("4378dc0afb12ae3f50c1614cb143c4084d066b28fde35b58f45fc6b56b1c75f3"),
         size_bytes: Some(3_802_006),
-        license: Some("Apache-2.0"),
+        license: Some("NOASSERTION"),
         source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
         notes: Some("Published Coqui HiFi-GAN v2 neural-vocoder release archive."),
+    },
+    ModelAsset {
+        id: "coqui-glow-tts-ljspeech-release",
+        filename: "tts_models--en--ljspeech--glow-tts.zip",
+        relative_path:
+            "models/speech/coqui/en/ljspeech/glow-tts/tts_models--en--ljspeech--glow-tts.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.0.9/tts_models--en--ljspeech--glow-tts.zip",
+        sha256: Some("3d772a62c35be04ea763d96d99be786f0753a6883e60adc98793a011b79f18a5"),
+        size_bytes: Some(315_065_867),
+        license: Some("MPL-2.0"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.0.9"),
+        notes: Some("Published Coqui Glow-TTS LJSpeech acoustic-model release archive."),
+    },
+    ModelAsset {
+        id: "coqui-multiband-melgan-ljspeech-release",
+        filename: "vocoder_models--en--ljspeech--multiband-melgan.zip",
+        relative_path:
+            "models/speech/coqui/en/ljspeech/multiband-melgan/vocoder_models--en--ljspeech--multiband-melgan.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--multiband-melgan.zip",
+        sha256: Some("fc5c4222be98751ee55f07bcdbad9fa3fe2635ca542e340b70fbe62fe9ba1b4f"),
+        size_bytes: Some(82_847_752),
+        license: Some("MPL-2.0"),
+        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
+        notes: Some(
+            "Published Coqui MultiBand-MelGAN release with four-band PQMF synthesis.",
+        ),
     },
     ModelAsset {
         id: "coqui-vits-vctk-release",
@@ -348,13 +389,27 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--vctk--vits.zip",
         sha256: Some("ad753e5200614907627495b6177a08d755df1dbbde30eb6e31264caa2a3f3eaa"),
         size_bytes: Some(147_691_678),
-        license: Some("Apache-2.0"),
+        license: Some("NOASSERTION"),
         source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
         notes: Some("Published Coqui VCTK VITS release with 109 learned speaker embeddings."),
     },
 ];
 
 pub const MODEL_ARCHIVES: &[ModelArchive] = &[
+    ModelArchive {
+        asset_id: "coqui-fastpitch-ljspeech-release",
+        primary_member_path: "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth",
+        members: &[
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--fast_pitch/model_file.pth",
+                relative_path: "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth",
+            },
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--fast_pitch/config.json",
+                relative_path: "models/speech/coqui/en/ljspeech/fast-pitch/config.json",
+            },
+        ],
+    },
     ModelArchive {
         asset_id: "coqui-speedy-speech-ljspeech-release",
         primary_member_path: "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth",
@@ -380,6 +435,38 @@ pub const MODEL_ARCHIVES: &[ModelArchive] = &[
             ArchiveMember {
                 member_path: "vocoder_models--en--ljspeech--hifigan_v2/config.json",
                 relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/config.json",
+            },
+        ],
+    },
+    ModelArchive {
+        asset_id: "coqui-glow-tts-ljspeech-release",
+        primary_member_path: "models/speech/coqui/en/ljspeech/glow-tts/model_file.pth.tar",
+        members: &[
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--glow-tts/model_file.pth.tar",
+                relative_path: "models/speech/coqui/en/ljspeech/glow-tts/model_file.pth.tar",
+            },
+            ArchiveMember {
+                member_path: "tts_models--en--ljspeech--glow-tts/config.json",
+                relative_path: "models/speech/coqui/en/ljspeech/glow-tts/config.json",
+            },
+        ],
+    },
+    ModelArchive {
+        asset_id: "coqui-multiband-melgan-ljspeech-release",
+        primary_member_path: "models/speech/coqui/en/ljspeech/multiband-melgan/model_file.pth",
+        members: &[
+            ArchiveMember {
+                member_path: "vocoder_models--en--ljspeech--multiband-melgan/model_file.pth",
+                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/model_file.pth",
+            },
+            ArchiveMember {
+                member_path: "vocoder_models--en--ljspeech--multiband-melgan/config.json",
+                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/config.json",
+            },
+            ArchiveMember {
+                member_path: "vocoder_models--en--ljspeech--multiband-melgan/scale_stats.npy",
+                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/scale_stats.npy",
             },
         ],
     },
@@ -526,6 +613,19 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         ],
     },
     ModelBundle {
+        id: FASTPITCH_ACOUSTIC_MODEL_ID,
+        display_name: "FastPitch LJSpeech",
+        kind: ModelKind::AcousticModel,
+        primary_asset_id: "coqui-fastpitch-ljspeech-release",
+        required_asset_ids: &["coqui-fastpitch-ljspeech-release"],
+        aliases: &[
+            "fast-pitch",
+            "fastpitch",
+            "coqui-fastpitch",
+            "coqui-fastpitch-ljspeech",
+        ],
+    },
+    ModelBundle {
         id: DEFAULT_NEURAL_VOCODER_ID,
         display_name: "HiFi-GAN v2 LJSpeech",
         kind: ModelKind::NeuralVocoder,
@@ -536,6 +636,32 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
             "hifigan",
             "coqui-hifigan",
             "coqui-hifigan-v2-ljspeech",
+        ],
+    },
+    ModelBundle {
+        id: GLOW_TTS_ACOUSTIC_MODEL_ID,
+        display_name: "Glow-TTS LJSpeech",
+        kind: ModelKind::AcousticModel,
+        primary_asset_id: "coqui-glow-tts-ljspeech-release",
+        required_asset_ids: &["coqui-glow-tts-ljspeech-release"],
+        aliases: &[
+            "glow-tts",
+            "glowtts",
+            "coqui-glow-tts",
+            "coqui-glow-tts-ljspeech",
+        ],
+    },
+    ModelBundle {
+        id: MULTIBAND_MELGAN_VOCODER_ID,
+        display_name: "MultiBand-MelGAN LJSpeech",
+        kind: ModelKind::NeuralVocoder,
+        primary_asset_id: "coqui-multiband-melgan-ljspeech-release",
+        required_asset_ids: &["coqui-multiband-melgan-ljspeech-release"],
+        aliases: &[
+            "multiband-melgan",
+            "mb-melgan",
+            "coqui-multiband-melgan",
+            "coqui-multiband-melgan-ljspeech",
         ],
     },
     ModelBundle {
@@ -676,6 +802,10 @@ mod tests {
             ModelKind::AcousticModel
         );
         assert_eq!(
+            find_bundle("fastpitch").unwrap().kind,
+            ModelKind::AcousticModel
+        );
+        assert_eq!(
             find_bundle("hifigan").unwrap().kind,
             ModelKind::NeuralVocoder
         );
@@ -688,6 +818,7 @@ mod tests {
     #[test]
     fn coqui_archives_have_integrity_and_registered_entrypoints() {
         for (bundle_id, member_count) in [
+            ("fastpitch-ljspeech", 2),
             ("speedy-speech-ljspeech", 2),
             ("hifigan-v2-ljspeech", 2),
             ("vits-vctk", 3),

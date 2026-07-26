@@ -1,9 +1,4 @@
-//! Tensor-preserving native SpeedySpeech + HiFi-GAN inference.
-//!
-//! The generic component contracts intentionally use host-owned artifacts.
-//! This specialized composition keeps the mel tensor on the Burn device
-//! between the two native models and performs a single device-to-host copy for
-//! the completed waveform.
+//! Tensor-preserving native FastPitch + HiFi-GAN inference.
 
 use std::time::Instant;
 
@@ -12,23 +7,23 @@ use burn::tensor::backend::Backend;
 
 use crate::profiling::{finish_host_stage, reborrow_profiler};
 use crate::{
-    AcousticModel, AcousticOutputContract, AudioChunk, AudioSink, BurnHifiganVocoder,
-    BurnSpeedySpeechAcoustic, BurnTensorVocoder, SpeechModelCapabilities, SpeechSynthesisEngine,
+    AcousticModel, AcousticOutputContract, AudioChunk, AudioSink, BurnFastPitchAcoustic,
+    BurnHifiganVocoder, BurnTensorVocoder, SpeechModelCapabilities, SpeechSynthesisEngine,
     SpeechSynthesisRequest, SynthesisDimension, SynthesisProfiler, SynthesisStage,
     WaveformContract,
 };
 
-pub struct BurnSpeedySpeechPipeline<B: Backend, V = BurnHifiganVocoder<B>> {
-    acoustic: BurnSpeedySpeechAcoustic<B>,
+pub struct BurnFastPitchPipeline<B: Backend, V = BurnHifiganVocoder<B>> {
+    acoustic: BurnFastPitchAcoustic<B>,
     vocoder: V,
     output_contract: WaveformContract,
 }
 
-impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
-    pub fn new(acoustic: BurnSpeedySpeechAcoustic<B>, vocoder: V) -> Result<Self> {
-        let acoustic_contract = acoustic.output_contract();
-        let AcousticOutputContract::Spectrogram(spectrogram_contract) = acoustic_contract else {
-            anyhow::bail!("SpeedySpeech must emit a spectrogram");
+impl<B: Backend, V: BurnTensorVocoder<B>> BurnFastPitchPipeline<B, V> {
+    pub fn new(acoustic: BurnFastPitchAcoustic<B>, vocoder: V) -> Result<Self> {
+        let AcousticOutputContract::Spectrogram(spectrogram_contract) = acoustic.output_contract()
+        else {
+            anyhow::bail!("FastPitch must emit a spectrogram");
         };
         spectrogram_contract.ensure_compatible_with(vocoder.input_contract())?;
         let output_contract = vocoder.output_contract();
@@ -40,7 +35,7 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
         })
     }
 
-    pub fn acoustic_model(&self) -> &BurnSpeedySpeechAcoustic<B> {
+    pub fn acoustic_model(&self) -> &BurnFastPitchAcoustic<B> {
         &self.acoustic
     }
 
@@ -65,7 +60,6 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
             .vocoder
             .synthesize_tensor(mel, reborrow_profiler(&mut profiler))?;
         let sample_count = waveform.dims()[2];
-
         let started = Instant::now();
         let samples = waveform
             .into_data()
@@ -86,7 +80,6 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
             samples.iter().all(|sample| sample.is_finite()),
             "Burn vocoder waveform contains non-finite samples"
         );
-
         let started = Instant::now();
         sink.emit(AudioChunk {
             chunk_index: 0,
@@ -105,7 +98,7 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
     }
 }
 
-impl<B: Backend, V: BurnTensorVocoder<B>> SpeechSynthesisEngine for BurnSpeedySpeechPipeline<B, V> {
+impl<B: Backend, V: BurnTensorVocoder<B>> SpeechSynthesisEngine for BurnFastPitchPipeline<B, V> {
     fn capabilities(&self) -> SpeechModelCapabilities {
         self.acoustic.capabilities()
     }

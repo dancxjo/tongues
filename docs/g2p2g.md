@@ -181,13 +181,14 @@ Metrics currently include:
 
 Use exact match for strict whole-output correctness and token accuracy for "mostly got the pronunciation/spelling right."
 
-## Lexicons
+## Lexicons and runtime assets
 
 ```sh
 just fetch
 ```
 
-Direct form:
+This also fetches every registered model and voice bundle, including all Piper
+ONNX voices. To fetch only the pronunciation lexicons, use the direct commands:
 
 ```sh
 cargo run --release -- fetch-cmudict --out data/cmudict.dict

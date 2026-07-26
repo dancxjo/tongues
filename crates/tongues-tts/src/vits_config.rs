@@ -452,8 +452,11 @@ pub(crate) fn test_imported_vits_config() -> ImportedVitsConfig {
             max_norm: 4.0,
             clip_norm: true,
             stats_path: None,
+            stats_sha256: None,
             do_amp_to_db_mel: true,
             stft_pad_mode: "reflect".into(),
+            centered: true,
+            stft_manual_padding: None,
         },
     }
 }

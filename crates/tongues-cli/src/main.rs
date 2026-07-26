@@ -2047,7 +2047,10 @@ fn command_needs_device(command: &Commands) -> bool {
         }
         Commands::Speak(command) => matches!(
             command.backend,
-            speak::SpeakBackend::Burn | speak::SpeakBackend::Vits | speak::SpeakBackend::Onnx
+            speak::SpeakBackend::Burn
+                | speak::SpeakBackend::Fastpitch
+                | speak::SpeakBackend::Vits
+                | speak::SpeakBackend::Onnx
         ),
         Commands::SpeechDemo(_) => true,
         Commands::Train { .. }
@@ -10360,7 +10363,7 @@ fn fetch_url_with_fallback(
     println!("Fetching {label} from {url}");
 
     if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent).context("creating output directory")?;
+        ensure_fetch_output_directory(parent)?;
     }
 
     let part = out.with_extension(format!(
@@ -10434,6 +10437,50 @@ fn fetch_url_with_fallback(
         "Could not download {label}. Please download manually from:\n  {url}\nand save to {}",
         out.display()
     )
+}
+
+fn ensure_fetch_output_directory(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(path).with_context(|| {
+                format!("inspecting existing output directory {}", path.display())
+            })?;
+            if !metadata.file_type().is_symlink() {
+                return Err(error)
+                    .with_context(|| format!("creating output directory {}", path.display()));
+            }
+
+            let link_target = fs::read_link(path)
+                .with_context(|| format!("reading output directory symlink {}", path.display()))?;
+            let target = if link_target.is_absolute() {
+                link_target
+            } else {
+                path.parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .join(link_target)
+            };
+            println!(
+                "Output directory {} points to missing {}; creating it",
+                path.display(),
+                target.display()
+            );
+            fs::create_dir_all(&target).with_context(|| {
+                format!(
+                    "creating target {} for output directory symlink {}",
+                    target.display(),
+                    path.display()
+                )
+            })
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("creating output directory {}", path.display()))
+        }
+    }
 }
 
 fn copy_bundled_fetch_fallback(
@@ -12681,6 +12728,31 @@ pub fn detect_task(input: &str) -> Task {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn fetch_output_directory_creates_missing_relative_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "tongues-fetch-output-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        let output_dir = root.join("data");
+        let target = root.join("private-data/data");
+        fs::create_dir_all(&root).expect("create temp root");
+        symlink("private-data/data", &output_dir).expect("create output symlink");
+
+        ensure_fetch_output_directory(&output_dir).expect("create symlink target");
+
+        assert!(target.is_dir());
+        assert!(output_dir.is_dir());
+        fs::remove_dir_all(&root).expect("remove temp root");
+    }
+
     #[test]
     fn format_count_adds_thousands_separators() {
         assert_eq!(format_count(0), "0");
@@ -12853,7 +12925,7 @@ mod tests {
 
     #[test]
     fn speech_accelerator_backends_probe_cuda_by_default() {
-        for backend in ["burn", "vits", "onnx"] {
+        for backend in ["burn", "fastpitch", "vits", "onnx"] {
             let cli = Cli::try_parse_from([
                 "tongues",
                 "speak",

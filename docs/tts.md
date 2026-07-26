@@ -8,7 +8,8 @@ front-end integration.
 
 | CLI backend | Implementation | Model shape | Status |
 |---|---|---|---|
-| `burn` | `tongues-tts` on Burn | SpeedySpeech acoustic model -> HiFi-GAN v2 vocoder | active |
+| `burn` | `tongues-tts` on Burn | SpeedySpeech acoustic model -> selectable native vocoder | active |
+| `fastpitch` | `tongues-tts` on Burn | controllable FastPitch acoustic model -> selectable native vocoder | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
@@ -16,9 +17,39 @@ front-end integration.
 
 The native Burn implementations import published checkpoint configuration and
 weights, but inference runs through Tongues' Rust model components. The
-registered SpeedySpeech, HiFi-GAN, and VITS bundles are published Coqui release
-artifacts; the model registry records their sources, sizes, checksums, and
-licenses.
+registered SpeedySpeech, FastPitch, Glow-TTS, HiFi-GAN, and VITS bundles are
+published Coqui release artifacts; the model registry records their sources,
+sizes, checksums, and current license evidence. It does not claim that Tongues
+invented those architectures. See [Speech system provenance](provenance.md).
+
+FastSpeech, FastSpeech 2, and DelightfulTTS are available as native,
+model-neutral acoustic components and through the safe Coqui package importer.
+They are currently import-only rather than named CLI backends because the
+upstream Coqui releases do not provide a redistributable, checksum-pinned model
+artifact for these configurations. FastSpeech uses duration prediction only;
+FastSpeech 2 additionally exposes pitch and energy prediction; DelightfulTTS
+adds Conformer encoding/decoding, explicit variance adaptation, implicit
+utterance/phoneme prosody, and optional speaker conditioning. Any of these
+acoustic components can be composed with a compatible native vocoder whose mel
+contract matches the imported model.
+
+Tacotron 2 is available as a native, import-only acoustic component. The safe
+importer accepts plain, DDC, and Capacitron configurations, reloads converted
+weights through the Burn graph, and records the exact variant in `model.json`.
+DDC's coarse decoder is a training regularizer and is not used during upstream
+inference; released DDC packages may therefore omit it. Capacitron packages
+declare a style-embedding contract in
+`capacitron-standard-normal-latent-v1`; callers may supply that latent or let
+the model sample its standard-normal prior. Reference-mel posterior encoding is
+not claimed yet. Tacotron 1 configs are identified, but import fails before
+writing because the native CBHG/decoder graph is not implemented.
+
+Autoregressive safety is explicit. Location-sensitive attention retains both
+the previous and cumulative alignment, stop probabilities are returned with
+the mel, and reaching `max_decoder_steps` is an actionable attention failure
+rather than a successful truncated synthesis. Released configs that require
+prenet dropout at inference keep that behavior even on non-autodiff Burn
+backends.
 
 ## Safe Coqui package import
 
@@ -31,7 +62,7 @@ cargo run --bin tongues -- models import-coqui \
   --checkpoint /path/to/model_file.pth \
   --speakers /path/to/speaker_ids.json \
   --out /path/to/tongues-package \
-  --license Apache-2.0 \
+  --license LicenseRef-Documented-Upstream-Terms \
   --source https://example.invalid/upstream-model \
   --coqui-version 0.6.1
 ```
@@ -55,10 +86,15 @@ Inspect without writing anything:
 cargo run --bin tongues -- models import-coqui \
   --config /path/to/config.json \
   --checkpoint /path/to/model_file.pth \
-  --license Apache-2.0 \
+  --license LicenseRef-Documented-Upstream-Terms \
   --source https://example.invalid/upstream-model \
   --dry-run --json
 ```
+
+The `LicenseRef` above is an explicit placeholder, not a license grant. Replace
+it with the model artifact's documented SPDX expression or a locally defined
+`LicenseRef` backed by retained evidence; do not copy the source repository's
+license onto weights by assumption.
 
 Validate an existing package and every recorded file checksum:
 
@@ -66,15 +102,27 @@ Validate an existing package and every recorded file checksum:
 cargo run --bin tongues -- models inspect-package /path/to/tongues-package
 ```
 
-The importer accepts only modern ZIP-based PyTorch checkpoints. Before tensor
-loading, it scans `data.pkl`, permits only the storage/tensor reconstruction
-globals needed by published checkpoints, and rejects arbitrary globals,
-`STACK_GLOBAL`, unapproved object-construction opcodes, unsafe archive paths,
-unsupported protocols, and oversized metadata. Parsing and conversion are
-Rust-only: Python is never started, modules are never imported, and pickle
-callables are never executed. Unknown inference fields are errors;
-training-only fields are sorted into `ignored_training_fields` in the manifest
-rather than silently discarded.
+The importer normally accepts modern ZIP-based PyTorch checkpoints. Before
+tensor loading, it scans `data.pkl`, permits only the storage/tensor
+reconstruction globals needed by published checkpoints, and rejects arbitrary
+globals, `STACK_GLOBAL`, unapproved object-construction opcodes, unsafe archive
+paths, unsupported protocols, and oversized metadata. The MelGAN-family adapter
+also accepts the published protocol-2 legacy checkpoint: its data-only parser
+allows the same constrained tensor types, and normalizes the inert
+`collections.Counter` metadata global to `collections.OrderedDict` in a
+temporary copy before tensor loading. Parsing and conversion are Rust-only:
+Python is never started, modules are never imported, and pickle callables are
+never executed. Unknown inference fields are errors; training-only fields are
+sorted into `ignored_training_fields` in the manifest rather than silently
+discarded.
+
+Plain MelGAN also recognizes the root state-dictionary layout used by the
+MIT-licensed Descript `melgan-neurips` checkpoints. The importer preserves
+those source tensor names in SafeTensors, records
+`descript-pytorch-legacy` provenance, and applies an explicit checked mapping
+into the same native generator topology at load time. The committed Linda
+Johnson configuration records its log10 mel contract, zero inference padding,
+and the original non-centered STFT's explicit 384-sample reflection padding.
 
 Schema v1 packages are deterministic: they contain no timestamps or local
 source paths, JSON fields and tensor names have stable ordering, writes use
@@ -86,15 +134,32 @@ versions it cannot safely interpret.
 Package compatibility proves structure and safe loading. Cross-runtime
 numerical and audio conformance remains the separate #4 responsibility.
 
-## Licensed model catalog and offline cache
+For the licensed LJSpeech Tacotron2-DDC fixture, set
+`TONGUES_TEST_COQUI_TACOTRON2_CONFIG` and
+`TONGUES_TEST_COQUI_TACOTRON2_MODEL`, then run:
+
+```sh
+cargo test --release -p tongues-tts tacotron --lib -- --nocapture
+```
+
+The opt-in tests validate the original checkpoint, the converted SafeTensors
+package path, native stop/attention behavior, and finite 80-bin mel synthesis.
+The release profile is intentional: the unoptimized 1024-channel
+autoregressive CPU graph is not a useful throughput measurement.
+
+## Verified model catalog and offline cache
 
 Tongues has a schema-v1 backend-neutral model catalog for the native
-SpeedySpeech, HiFi-GAN, VITS, StyleTTS2, and ONNX voice backends. Entries record
-architecture, package version, languages and varieties, speakers, sample rate,
-capabilities, source format, provenance, license evidence, artifact sizes, and
-SHA-256 checksums. Source formats are strings rather than runtime enums, so a
-private catalog can describe Coqui, Fairseq, ONNX, or organization-specific
-artifacts without changing synthesis APIs.
+SpeedySpeech, FastPitch, Glow-TTS, HiFi-GAN, MultiBand-MelGAN, VITS,
+StyleTTS2, and ONNX voice backends.
+Entries record architecture, package version, languages and varieties,
+speakers, sample rate, capabilities, compatibility contracts, source format,
+provenance, license evidence, artifact sizes, and SHA-256 checksums.
+`architecture` is the provider-neutral neural family (`vits`, not
+`coqui-vits` or `piper-onnx`); provider/runtime identities remain under
+`compatible_with`, `provenance`, and legacy aliases. Source formats are strings
+rather than runtime enums, so a private catalog can describe Coqui, Fairseq,
+ONNX, or organization-specific artifacts without changing synthesis APIs.
 
 ```sh
 # Catalog metadata and installation state
@@ -112,12 +177,14 @@ cargo run --bin tongues -- models install \
   --package /path/to/tongues-package --id private-voice
 ```
 
-`models fetch` remains a compatibility alias for registered runtime bundles,
-but cataloged speech models now use the same verified installer. Downloads are
-resumable in `*.part` files, checked for the exact size and SHA-256 before an
-atomic cache rename, then installed atomically. Archive extraction is limited
-to registered normalized members. Installed records checksum every runtime
-file, and the CLI and server refuse corrupt or mismatched artifacts.
+`models fetch` remains a compatibility alias for the default runtime bundles,
+while `models fetch --all` installs every registered bundle, including every
+Piper ONNX voice. `just fetch` uses the latter after fetching the pronunciation
+lexicons. Cataloged speech models use the same verified installer. Downloads
+are resumable in `*.part` files, checked for the exact size and SHA-256 before
+an atomic cache rename, then installed atomically. Archive extraction is
+limited to registered normalized members. Installed records checksum every
+runtime file, and the CLI and server refuse corrupt or mismatched artifacts.
 
 Paths and offline behavior are explicit:
 
@@ -130,9 +197,12 @@ Paths and offline behavior are explicit:
 
 Commands also accept repeatable `--catalog /path/catalog.json`. Private
 catalogs may add ids but cannot replace official ids or install over another
-entry's paths. Installation requires both a license expression and a stable
-license-evidence location; an artifact without that evidence or a pinned hash
-is rejected rather than presented as redistributable.
+entry's paths. Installation metadata requires both a license value and a stable
+evidence location, plus a pinned hash. `NOASSERTION` explicitly means the
+catalog has not established redistributable terms; executability is not
+permission to redistribute. The current Coqui `v0.6.1` model registry leaves
+the relevant licenses `TBD` or blank, so those entries use `NOASSERTION` rather
+than incorrectly inheriting the source repository's license.
 
 The server exposes the same metadata and verification state at
 `GET /api/models/catalog`. Resident speech backends pass catalog verification
@@ -151,6 +221,27 @@ just speak \
   --output /tmp/tongues-burn.wav \
   "Morning light rested on the cedar trees."
 ```
+
+Use FastPitch's backend-neutral duration and normalized pitch-conditioning
+controls:
+
+```sh
+just speak \
+  --backend fastpitch \
+  --speed 0.9 \
+  --pitch-scale 1.08 \
+  --pitch-shift 0.15 \
+  --output /tmp/tongues-fastpitch.wav \
+  "Morning light rested on the cedar trees."
+```
+
+`--pitch`, `--energy`, and `--durations` accept comma-separated values with
+exactly one value per checkpoint-projected token. These explicit controls are
+intended for reproducible programmatic synthesis; verbose CLI output reports
+the projected token IDs and count. Pitch and energy values and shifts use the
+checkpoint's normalized conditioning space, not physical units. Capability
+discovery gates these fields: original FastSpeech does not advertise or accept
+pitch/energy controls, while FastSpeech 2 and DelightfulTTS do.
 
 Use a named speaker from the VCTK VITS model:
 
@@ -285,9 +376,12 @@ device, and chunking/streaming intent.
 Every imported implementation exposes `BackendCapabilities` and implements
 `SynthesizerBackend`. Capability validation happens before inference and
 returns typed errors for unsupported features, unsupported catalog values,
-missing required selections, and malformed controls. The resident server keeps
-boxed implementations of that trait, so its synthesis path does not branch on
-VITS, SpeedySpeech + HiFi-GAN, StyleTTS2, or ONNX output shapes.
+missing required selections, and malformed controls. FastPitch advertises
+pitch scaling, pitch shifting, explicit per-token pitch, and explicit
+per-token duration support through this same capability object. The resident
+server keeps boxed implementations of that trait, so its synthesis path does
+not branch on VITS, SpeedySpeech + HiFi-GAN, FastPitch + HiFi-GAN, StyleTTS2,
+or ONNX output shapes.
 
 Audio from every backend is normalized to interleaved `f32` chunks with sample
 rate, channel count, frame offset, chunk/final markers, and common completion
@@ -302,7 +396,14 @@ count, audio duration, streaming mode, and backend timing stages.
   conditioning, vocoders, and waveforms;
 - published-config import and validation;
 - native SpeedySpeech text/acoustic inference;
+- native FastPitch duration, pitch, and mel inference with explicit controls;
+- native Glow-TTS text encoding, deterministic or stochastic duration
+  prediction, monotonic expansion, seeded Gaussian latent sampling, and
+  reverse flow;
+- SC-GlowTTS speaker conditioning through the shared typed embedding contract;
 - native HiFi-GAN waveform generation;
+- native MelGAN waveform generation and MultiBand-MelGAN generation with PQMF
+  synthesis;
 - native VITS text encoding, stochastic duration prediction, flow, and waveform
   decoding;
 - named-speaker lookup for the VCTK model;
@@ -326,8 +427,30 @@ Before cache checks or model loading, verbose output reports the resolved device
 and emits `device_metadata_json` with `kind` and nullable `index` fields. Native
 startup profiles repeat those fields as `device` and `device_index`.
 
-The native SpeedySpeech pipeline keeps mel features on the Burn device between
-the acoustic model and HiFi-GAN, avoiding a GPU-to-host-to-GPU round trip. VITS
+The native SpeedySpeech, FastPitch, and Glow-TTS pipelines are generic over a
+Burn tensor vocoder and keep mel features on the device between components,
+avoiding a GPU-to-host-to-GPU round trip. Select a cataloged CLI implementation
+with `--vocoder hifigan` or `--vocoder multiband-melgan` where that acoustic
+backend exposes the option. Construction compares the
+complete spectrogram contract: layout, bins, hop size, frequency bounds, log
+scale, mel filter bank, and normalization identity must all match. The
+published MultiBand-MelGAN bundle requires its exact standardized feature
+statistics, so the current LJSpeech acoustic bundles are rejected rather than
+silently composed with it.
+
+Glow-TTS deliberately emits its neutral checkpoint mel contract. The
+historical Coqui LJSpeech release names MultiBand-MelGAN as its default
+vocoder, but that vocoder expects a separate standardized feature space.
+Tongues does not guess that transformation, so Glow-TTS is exposed through the
+unified `AcousticModel` request and generic library pipeline rather than a
+waveform-producing `speak` CLI backend. Library callers can compose a vocoder
+that declares the exact neutral contract.
+
+The model historically published under the SC-GlowTTS name uses SC to mean
+speaker conditioning: it consumes a 256-value Coqui speaker-encoder d-vector
+and retains deterministic durations. Stochastic duration is a separate,
+config-driven `use_sdp` mode. Reference audio must first be lowered by a
+compatible speaker encoder into `SpeakerReferenceSource::Embedding`. VITS
 decodes the complete latent sequence once and slices the resulting host
 waveform into sink chunks; it does not repeatedly launch the decoder over
 overlapping latent windows.
@@ -338,24 +461,31 @@ The normal CI workflow checks the default, no-default, and declared feature
 combinations, runs the workspace tests, and compiles the speech CLI in release
 mode. These jobs do not download multi-gigabyte speech checkpoints.
 
-Run the opt-in full-model harness on a machine with the registered Coqui and
-ONNX model bundles:
+Run the opt-in full-model harness on a machine with the pinned Coqui, Descript,
+and ONNX model artifacts:
 
 ```sh
 scripts/speech-conformance.sh
 ```
 
 The harness builds a container pinned to Coqui TTS revision
-`0cf3265a4686d7e856bd472cdaf1572d61cab2b8` and PyTorch 1.13.1 CPU, verifies
-every model artifact by SHA-256, and atomically writes reference evidence under
-`target/speech-conformance/`. Missing or mismatched large artifacts are hard
-failures, never successful skips.
+`0cf3265a4686d7e856bd472cdaf1572d61cab2b8`, Descript MelGAN revision
+`6488045bfba1975602288de07a58570c7b4d66ea`, and PyTorch 1.13.1 CPU. It
+verifies every model artifact by SHA-256 and atomically writes reference
+evidence under `target/speech-conformance/`. Missing or mismatched large
+artifacts are hard failures, never successful skips.
 
 The reference and native implementations use the same multiword sentence and
 zero acoustic/duration noise. Conformance covers:
 
 - SpeedySpeech token IDs, predicted durations, encoder expansion, positional
   encoding, mel frames, and HiFi-GAN output;
+- FastPitch token IDs, predicted durations, normalized pitch conditioning, and
+  mel frames;
+- plain MelGAN waveform samples from the licensed Descript Linda Johnson
+  checkpoint and a deterministic mel input;
+- MultiBand-MelGAN generator and PQMF waveform samples from a deterministic mel
+  input;
 - VITS token IDs, speaker rows p225, p330, and p376, duration expansion, text
   prior, reverse flow, and integrated waveform decoder;
 - the registered ONNX voice through an actual CLI synthesis;
@@ -370,10 +500,10 @@ to the repository; model weights and generated audio are not.
 
 ## Resident server execution
 
-`tongues-server` owns a resident registry for the `burn`, `vits`, `onnx`,
-`styletts2`, and `mock` backends. The first request loads the selected model;
-subsequent `POST /api/speak` requests reuse it. Speech requests do not invoke
-`cargo run`.
+`tongues-server` owns a resident registry for the `burn`, `fastpitch`, `vits`,
+`onnx`, `styletts2`, and `mock` backends. The first request loads the selected
+model; subsequent `POST /api/speak` requests reuse it. Speech requests do not
+invoke `cargo run`.
 Responses include `X-Tongues-Model-Loaded`, `X-Tongues-Speech-Engine`,
 `X-Tongues-Real-Time-Factor`, and `Server-Timing` headers.
 

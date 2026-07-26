@@ -115,7 +115,7 @@ text
   -> speaking phonemicization and phonetic realization
   -> UtterancePlan
   -> checkpoint-specific linguistic projector
-  -> SpeedySpeech -> HiFi-GAN
+  -> SpeedySpeech or FastPitch -> HiFi-GAN
      or end-to-end VITS
      or ONNX/StyleTTS2 compatibility backend
   -> streaming waveform chunks and playback/WAV output
@@ -140,7 +140,8 @@ the StyleTTS2 ONNX execution providers. CI runs those matrices, the full
 workspace test suite, and a JavaScript syntax check.
 
 `scripts/speech-smoke.sh` performs real release-mode synthesis with Burn, VITS
-p225, VITS p330, ONNX, and StyleTTS2. It records machine-readable latency,
+p225, VITS p330, ONNX, and StyleTTS2. FastPitch's full-model stage comparison
+is part of `scripts/speech-conformance.sh`. The smoke harness records machine-readable latency,
 memory, audio format, duration, level, hash, and real-time-factor evidence under
 `target/speech-smoke/`. See
 [Speech synthesis smoke measurements](speech-smoke.md).

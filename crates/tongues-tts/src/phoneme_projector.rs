@@ -49,6 +49,7 @@ pub struct PhonemeVocabularyProjector {
     config: PhonemeTokenizerConfig,
     vocabulary: Vec<char>,
     symbol_to_id: BTreeMap<char, i64>,
+    blank_id: Option<i64>,
     contract: ModelInputContract,
 }
 
@@ -60,6 +61,25 @@ impl PhonemeVocabularyProjector {
     }
 
     pub fn from_config(config: PhonemeTokenizerConfig) -> Result<Self> {
+        Self::from_config_with_duplicate_policy(config, false)
+    }
+
+    /// Builds a projector for legacy checkpoints whose serialized vocabulary
+    /// intentionally contains duplicate entries.
+    ///
+    /// The vocabulary length and positions remain checkpoint-exact; lookup
+    /// follows the upstream dictionary construction and selects the last
+    /// occurrence.
+    pub(crate) fn from_legacy_config_with_duplicates(
+        config: PhonemeTokenizerConfig,
+    ) -> Result<Self> {
+        Self::from_config_with_duplicate_policy(config, true)
+    }
+
+    fn from_config_with_duplicate_policy(
+        config: PhonemeTokenizerConfig,
+        allow_duplicates: bool,
+    ) -> Result<Self> {
         ensure!(
             config.use_phonemes,
             "phoneme vocabulary projector currently requires a phoneme-input model"
@@ -83,12 +103,21 @@ impl PhonemeVocabularyProjector {
         prepend_special(&mut symbols, config.characters.eos.as_deref());
         prepend_special(&mut symbols, config.characters.pad.as_deref());
         symbols.extend(config.characters.punctuations.chars());
+        let blank_id = (allow_duplicates && config.add_blank && config.characters.blank.is_none())
+            .then(|| {
+                let id = i64::try_from(symbols.len()).expect("vocabulary size already validated");
+                // Old Coqui text processing appends a synthetic blank ID at
+                // `len(phonemes)` without assigning it a printable symbol.
+                symbols.push('\0');
+                id
+            });
 
         let mut symbol_to_id = BTreeMap::new();
         for (id, symbol) in symbols.iter().copied().enumerate() {
             let id = i64::try_from(id).context("phoneme vocabulary is too large")?;
+            let previous = symbol_to_id.insert(symbol, id);
             ensure!(
-                symbol_to_id.insert(symbol, id).is_none(),
+                allow_duplicates || previous.is_none(),
                 "phoneme vocabulary contains duplicate symbol {symbol:?}"
             );
         }
@@ -120,6 +149,7 @@ impl PhonemeVocabularyProjector {
             config,
             vocabulary: symbols,
             symbol_to_id,
+            blank_id,
             contract,
         })
     }
@@ -150,12 +180,16 @@ impl PhonemeVocabularyProjector {
             .collect::<Result<Vec<_>>>()?;
 
         if self.config.add_blank {
-            let blank = special_char(self.config.characters.blank.as_deref())
-                .or_else(|| special_char(self.config.characters.pad.as_deref()))
-                .context("add_blank requires a blank or pad symbol")?;
-            let blank_id = self
-                .symbol_id(blank)
-                .context("model blank symbol is absent from the vocabulary")?;
+            let blank_id = match self.blank_id {
+                Some(id) => id,
+                None => {
+                    let blank = special_char(self.config.characters.blank.as_deref())
+                        .or_else(|| special_char(self.config.characters.pad.as_deref()))
+                        .context("add_blank requires a blank or pad symbol")?;
+                    self.symbol_id(blank)
+                        .context("model blank symbol is absent from the vocabulary")?
+                }
+            };
             let mut interspersed = vec![blank_id; ids.len() * 2 + 1];
             for (slot, id) in interspersed.iter_mut().skip(1).step_by(2).zip(ids) {
                 *slot = id;
@@ -456,6 +490,22 @@ mod tests {
         );
         assert_eq!(projector.symbol_id('_'), Some(0));
         assert_eq!(projector.symbol_id('k'), Some(3));
+    }
+
+    #[test]
+    fn legacy_vocabulary_preserves_duplicates_and_synthetic_blank_id() {
+        let source = CONFIG
+            .replace("\"add_blank\": false", "\"add_blank\": true")
+            .replace("\"phonemes\": \"tkɚʃ\"", "\"phonemes\": \"tk'\"")
+            .replace("\"punctuations\": \"!?., \"", "\"punctuations\": \"' \"")
+            .replace("\"blank\": null,", "");
+        let config: PhonemeTokenizerConfig = json5::from_str(&source).expect("legacy config");
+        assert!(PhonemeVocabularyProjector::from_config(config.clone()).is_err());
+        let projector = PhonemeVocabularyProjector::from_legacy_config_with_duplicates(config)
+            .expect("legacy projector");
+        assert_eq!(projector.vocabulary().len(), 9);
+        assert_eq!(projector.blank_id, Some(8));
+        assert_eq!(projector.symbol_id('\''), Some(6));
     }
 
     #[test]
