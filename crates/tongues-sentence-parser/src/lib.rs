@@ -4,10 +4,10 @@
 //! prefix can be emitted as a complete sentence, should continue buffering, or
 //! needs to repair a previously emitted boundary.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, thread};
 
@@ -24,7 +24,6 @@ use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{GrammarParser, SentenceSyntaxAnalysis, VarietyGrammarParser};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::Seq2SeqExample;
-use tongues_neural::{write_manifest, ModelArtifactManifest};
 
 pub const FAMILY: &str = "sentence-parser";
 pub const ARCHITECTURE: &str = "seq2seq-transformer";
@@ -587,43 +586,6 @@ pub fn prepare_dataset_with_progress(
         Some(&report),
     )?;
     Ok(report)
-}
-
-pub fn write_scaffold_model(out: &Path, config: &SentenceParserConfig) -> Result<()> {
-    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    let tokenizer = TokenizerSpec {
-        lowercase: config.lowercase,
-        ..TokenizerSpec::default()
-    };
-    fs::write(out.join("model.bin"), b"sentence-parser-scaffold\n")?;
-    fs::write(
-        out.join("model_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_state.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "status": "scaffold",
-            "epochs": 0
-        }))?,
-    )?;
-    fs::write(
-        out.join("tokenizer.json"),
-        serde_json::to_string_pretty(&tokenizer)?,
-    )?;
-    fs::write(
-        out.join("label_schema.json"),
-        serde_json::to_string_pretty(&LabelSchema::default())?,
-    )?;
-    write_manifest(
-        out,
-        &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id)
-            .with_task("cursor-boundary"),
-    )
 }
 
 fn detect_sentences_for_text(

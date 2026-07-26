@@ -1,6 +1,6 @@
 # Interpretation
 
-`interpretation` is an utterance-level ASR and interpretation scaffold. It
+`interpretation` is an experimental, trainable utterance-level ASR and interpretation family. It
 prepares LibriSpeech FLAC/transcript pairs into durable acoustic feature files,
 enriches each transcript with `seams` sentence boundaries, and phonemicizes each
 detected sentence with the `speaking` crate.

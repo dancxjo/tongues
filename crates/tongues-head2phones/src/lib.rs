@@ -5,11 +5,11 @@
 //! and the Unicode grapheme-cluster split offset for the first complete
 //! TTS-speakable head chunk.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::collections::BTreeMap;
 use std::{env, thread};
 
 use anyhow::{Context, Result};
@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::{OllamaVerifierConfig, Seq2SeqExample};
-use tongues_neural::{write_manifest, ModelArtifactManifest};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub const FAMILY: &str = "head2phones";
@@ -3403,31 +3402,6 @@ fn dataset_readme(
         CONFIDENCE,
         ERROR_REPAIR,
         ROLLBACK_GRAPHEMES
-    )
-}
-
-pub fn write_scaffold_model(out: &Path, config: &Head2PhonesConfig) -> Result<()> {
-    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    fs::write(out.join("model.bin"), b"head2phones-scaffold\n")?;
-    fs::write(
-        out.join("model_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_state.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "status": "scaffold",
-            "epochs": 0
-        }))?,
-    )?;
-    write_manifest(
-        out,
-        &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id)
-            .with_task("head-chunk-to-phones"),
     )
 }
 

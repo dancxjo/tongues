@@ -765,7 +765,7 @@ enum SentenceParserCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
-    /// Prepare a sentence parser dataset scaffold
+    /// Prepare sentence parser training data
     Prepare {
         /// TOML config file for the sentence parser pipeline
         #[arg(long, default_value = "configs/sentence-parser/default.toml")]
@@ -780,7 +780,7 @@ enum SentenceParserCommands {
         out: PathBuf,
     },
 
-    /// Write a sentence parser model scaffold
+    /// Train the sentence parser model
     Train {
         /// TOML config file for the sentence parser pipeline
         #[arg(long, default_value = "configs/sentence-parser/default.toml")]
@@ -1365,7 +1365,7 @@ enum CommonPhoneCommands {
         seed: u64,
     },
 
-    /// Train the compact-frame phone and feature-axis CTC scaffold
+    /// Train the experimental compact-frame phone and feature-axis CTC model
     Train {
         /// Prepared data directory
         #[arg(long, default_value = DEFAULT_COMMON_PHONE_DATA_DIR)]
@@ -6937,8 +6937,12 @@ fn write_and_train_wiktionary_seq2seq(
     )?;
     write_manifest(
         out,
-        &ModelArtifactManifest::new("wiktionary", "seq2seq-transformer", data_id_from_path(data))
-            .with_task(task_label.to_string()),
+        &ModelArtifactManifest::new(
+            tongues_wiktionary::FAMILY,
+            tongues_wiktionary::ARCHITECTURE,
+            data_id_from_path(data),
+        )
+        .with_task(task_label.to_string()),
     )?;
 
     let model_path = out.join("model");
@@ -7976,7 +7980,7 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
             );
             println!("  Note: v0 writes model-latest.bin at initialization and every 2,000 minibatches during epochs; epoch checkpoints and best model are written after validation.");
             let pb = status_spinner(format!(
-                "Training Common Phone compact-frame CTC scaffold from {}",
+                "Training experimental Common Phone compact-frame CTC model from {}",
                 data.display()
             ));
             let progress = {

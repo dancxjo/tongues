@@ -60,7 +60,7 @@ speech-runtime components rather than one monolithic model:
 - `wiktionary`: multilingual orthography/phonology tasks;
 - `sentence-parser`: cursor-time sentence boundaries, continuations, and repair;
 - `head2phones`: rolling text heads to speakable phone sequences;
-- `interpretation`: LibriSpeech acoustic interpretation scaffold with compact
+- `interpretation`: experimental LibriSpeech acoustic interpretation with compact
   audio features, streaming CTC-style heads, frame-level auxiliary heads, and a
   lightweight after-utterance transcript head;
 - `common-phone`: compact acoustic frames to phones, phonemes, and feature axes;
@@ -284,7 +284,7 @@ remain recoverable through Git history. No active variety module is removed:
 the maintained `crates/speaking` versions are equal to or newer than those
 top-level copies.
 
-## Interpretation Scaffold
+## Experimental Interpretation Model
 
 ```text
 [log_mel, delta_mel, energy, vad, zcr, centroid, flux, f0, voiced_prob]
@@ -294,8 +294,8 @@ top-level copies.
        -> after-utterance transcript head
 ```
 
-The interpretation family is intentionally a scaffold rather than a finished
-ASR system. The streaming heads are meant to learn monotonic partial output and
+The interpretation family is an experimental trainable model rather than a
+production-ready ASR system. The streaming heads learn monotonic partial output and
 alignment. The after-utterance head is meant to learn correction with more
 context. Both share the same cheap acoustic frontend and model artifact layout.
 

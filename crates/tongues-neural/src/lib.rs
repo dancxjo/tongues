@@ -1,6 +1,7 @@
 //! Shared neural-model artifact metadata.
 
 use std::fs;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -11,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 pub const ARTIFACT_MANIFEST_FILE: &str = "manifest.json";
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const LEGACY_SCAFFOLD_MIGRATION_MESSAGE: &str =
+    "legacy scaffold artifact is not runnable; remove it and train the model family to create a real checkpoint";
 
 pub type FullPrecisionBinRecorder = BinFileRecorder<FullPrecisionSettings>;
 
@@ -120,6 +123,16 @@ pub struct ModelArtifactManifest {
     pub data_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    #[serde(default)]
+    pub artifact_kind: ModelArtifactKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelArtifactKind {
+    #[default]
+    TrainedModel,
+    FamilyTemplate,
 }
 
 impl ModelArtifactManifest {
@@ -135,11 +148,17 @@ impl ModelArtifactManifest {
             created_by: "tongues".to_string(),
             data_id: data_id.into(),
             task: None,
+            artifact_kind: ModelArtifactKind::TrainedModel,
         }
     }
 
     pub fn with_task(mut self, task: impl Into<String>) -> Self {
         self.task = Some(task.into());
+        self
+    }
+
+    pub fn as_family_template(mut self) -> Self {
+        self.artifact_kind = ModelArtifactKind::FamilyTemplate;
         self
     }
 }
@@ -153,7 +172,50 @@ pub fn write_manifest(dir: &Path, manifest: &ModelArtifactManifest) -> Result<()
 
 pub fn read_manifest(path: &Path) -> Result<ModelArtifactManifest> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+    let manifest: ModelArtifactManifest =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    anyhow::ensure!(
+        manifest.artifact_kind == ModelArtifactKind::TrainedModel,
+        "model artifact at {} is a non-runnable family template; implement and train the family before loading it",
+        path.display()
+    );
+    anyhow::ensure!(
+        !manifest
+            .architecture
+            .to_ascii_lowercase()
+            .contains("scaffold"),
+        "{}: {}",
+        path.display(),
+        LEGACY_SCAFFOLD_MIGRATION_MESSAGE
+    );
+    reject_legacy_scaffold_marker(path)?;
+    Ok(manifest)
+}
+
+fn reject_legacy_scaffold_marker(manifest_path: &Path) -> Result<()> {
+    let Some(dir) = manifest_path.parent() else {
+        return Ok(());
+    };
+    let model_path = dir.join("model.bin");
+    let mut file = match fs::File::open(&model_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("opening {}", model_path.display()))
+        }
+    };
+    let mut bytes = [0_u8; 256];
+    let bytes_read = file
+        .read(&mut bytes)
+        .with_context(|| format!("reading {}", model_path.display()))?;
+    let marker = String::from_utf8_lossy(&bytes[..bytes_read]).to_ascii_lowercase();
+    anyhow::ensure!(
+        !marker.contains("scaffold"),
+        "{}: {}",
+        model_path.display(),
+        LEGACY_SCAFFOLD_MIGRATION_MESSAGE
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -184,5 +246,71 @@ mod tests {
         assert_eq!(json["created_by"], "tongues");
         assert_eq!(json["data_id"], "openepd-v0");
         assert_eq!(json["task"], "both");
+        assert_eq!(json["artifact_kind"], "trained_model");
+    }
+
+    #[test]
+    fn reads_pre_artifact_kind_manifests_as_trained_models() {
+        let manifest: ModelArtifactManifest = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "family": "g2p2g",
+                "architecture": "seq2seq-transformer",
+                "created_by": "tongues",
+                "data_id": "openepd-v0"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.artifact_kind, ModelArtifactKind::TrainedModel);
+    }
+
+    #[test]
+    fn rejects_legacy_scaffold_marker_bytes_with_migration_message() {
+        let dir = std::env::temp_dir().join(format!(
+            "tongues-neural-scaffold-rejection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        write_manifest(
+            &dir,
+            &ModelArtifactManifest::new(
+                "sentence-parser",
+                "seq2seq-transformer",
+                "sentence-parser-v0",
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("model.bin"), b"sentence-parser-scaffold\n").unwrap();
+
+        let error = read_manifest(&dir.join(ARTIFACT_MANIFEST_FILE)).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains(LEGACY_SCAFFOLD_MIGRATION_MESSAGE));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rejects_non_runnable_family_templates() {
+        let dir = std::env::temp_dir().join(format!(
+            "tongues-neural-family-template-rejection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        write_manifest(
+            &dir,
+            &ModelArtifactManifest::new(
+                "allophone-realizer",
+                "unimplemented-family-template",
+                "v0",
+            )
+            .as_family_template(),
+        )
+        .unwrap();
+
+        let error = read_manifest(&dir.join(ARTIFACT_MANIFEST_FILE)).unwrap_err();
+        assert!(error.to_string().contains("non-runnable family template"));
+        let _ = fs::remove_dir_all(dir);
     }
 }

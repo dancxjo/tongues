@@ -275,7 +275,7 @@ as a future hook but is not wired yet.
 
 ## Difference From Interpretation
 
-`interpretation` is a broader ASR and utterance-understanding scaffold with
+`interpretation` is a broader experimental ASR and utterance-understanding model with
 transcript, sentence repair, syntax, word-context, seq-style correction, and
 masked-audio objectives.
 

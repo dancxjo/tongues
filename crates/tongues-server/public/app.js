@@ -510,7 +510,7 @@ const commandPages = [
         path: '/sentence-parser/train',
         command: 'tongues sentence-parser train',
         group: 'Sentence Parser',
-        summary: 'Train or scaffold the sentence parser model.',
+        summary: 'Train the experimental sentence parser model.',
         fields: ['--config', '--data', '--out', { name: '--prepare', type: 'flag' }, '--training-set'],
         advanced: ['--input', { name: '--wait-for-prepare', type: 'flag' }, '--learning-rate', '--weight-decay', '--dropout', '--batch-size', '--epochs', '--patience', '--seed'],
     },

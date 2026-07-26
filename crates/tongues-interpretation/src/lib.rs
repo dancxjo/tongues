@@ -1,4 +1,4 @@
-//! LibriSpeech utterance-level streaming ASR scaffold.
+//! Experimental LibriSpeech utterance-level streaming ASR model family.
 //!
 //! V1 prepares LibriSpeech-style FLAC/transcript pairs, writes log-Mel feature
 //! files durably, enriches each utterance with seams sentence splits and speech

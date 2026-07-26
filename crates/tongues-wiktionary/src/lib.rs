@@ -2,8 +2,8 @@
 //!
 //! This family downloads the English Wiktionary MediaWiki XML dump and expands
 //! extracted orthography/pronunciation pairs into multilingual seq2seq-style training rows.
-//! The XML/wikitext extraction itself is intentionally stubbed until the parser
-//! policy for Wiktionary pronunciation templates is implemented.
+//! Its streaming XML/wikitext parser extracts pronunciation, etymology, and
+//! related template data into durable preparation artifacts.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
@@ -22,11 +22,10 @@ use serde::{Deserialize, Serialize};
 use speaking::data::spanish;
 use tongues_core::Vocab;
 use tongues_data::OllamaVerifierConfig;
-use tongues_neural::{write_manifest, ModelArtifactManifest};
 use unicode_normalization::UnicodeNormalization;
 
 pub const FAMILY: &str = "wiktionary";
-pub const ARCHITECTURE: &str = "wiktionary-pronunciation-seq2seq-scaffold";
+pub const ARCHITECTURE: &str = "seq2seq-transformer";
 pub const DEFAULT_DATASET_ID: &str = "enwiktionary-2026-06-01-v0";
 pub const DEFAULT_DUMP_INDEX_URL: &str =
     "https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/";
@@ -4575,30 +4574,6 @@ fn pie_dataset_readme(config: &WiktionaryConfig, source_paths: &[PathBuf]) -> St
             .collect::<Vec<_>>()
             .join("`, `"),
         config.languages.join(", ")
-    )
-}
-
-pub fn write_scaffold_model(out: &Path, config: &WiktionaryConfig) -> Result<()> {
-    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-    fs::write(out.join("model.bin"), b"wiktionary scaffold\n")?;
-    fs::write(
-        out.join("model_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_state.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "status": "scaffold",
-            "epochs": 0
-        }))?,
-    )?;
-    write_manifest(
-        out,
-        &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id),
     )
 }
 

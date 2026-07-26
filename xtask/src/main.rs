@@ -30,6 +30,7 @@ fn run() -> Result<(), String> {
             }
             new_family(&family)
         }
+        Some("audit-family-maturity") => audit_family_maturity(),
         Some("race") => {
             let args = args.collect::<Vec<_>>();
             if args.iter().any(|arg| arg == "-h" || arg == "--help") {
@@ -66,7 +67,127 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a model-family scaffold\n  race [options] [words...] Run round-trip inference benchmarks\n  continue [options]       Generate text, phones, and speech chunks continuously\n  speech-demo [options]    Run every speech backend in one resident process\n"
+    "Usage: cargo xtask <command>\n\nCommands:\n  new-family <family-slug>  Create a non-runnable model-family scaffold\n  audit-family-maturity    Verify runnable-family labels and readiness docs\n  race [options] [words...] Run round-trip inference benchmarks\n  continue [options]       Generate text, phones, and speech chunks continuously\n  speech-demo [options]    Run every speech backend in one resident process\n"
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EstablishedFamily {
+    id: &'static str,
+    readiness: &'static str,
+    crate_lib: &'static str,
+}
+
+const ESTABLISHED_MODEL_FAMILIES: &[EstablishedFamily] = &[
+    EstablishedFamily {
+        id: "g2p2g",
+        readiness: "active",
+        crate_lib: "crates/tongues-g2p2g/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "wiktionary",
+        readiness: "active",
+        crate_lib: "crates/tongues-wiktionary/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "sentence-parser",
+        readiness: "experimental",
+        crate_lib: "crates/tongues-sentence-parser/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "head2phones",
+        readiness: "experimental",
+        crate_lib: "crates/tongues-head2phones/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "common-phone",
+        readiness: "experimental",
+        crate_lib: "crates/tongues-common-phone/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "interpretation",
+        readiness: "experimental",
+        crate_lib: "crates/tongues-interpretation/src/lib.rs",
+    },
+    EstablishedFamily {
+        id: "emotions",
+        readiness: "experimental",
+        crate_lib: "crates/tongues-emotions/src/lib.rs",
+    },
+];
+
+fn audit_family_maturity() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "xtask has no workspace parent".to_string())?;
+    let mut errors = Vec::new();
+    let readme = read_audit_file(root, "README.md", &mut errors);
+
+    for family in ESTABLISHED_MODEL_FAMILIES {
+        let crate_source = read_audit_file(root, family.crate_lib, &mut errors);
+        if crate_source.to_ascii_lowercase().contains("scaffold") {
+            errors.push(format!(
+                "{} is established but its public crate surface still contains `scaffold`",
+                family.id
+            ));
+        }
+
+        let expected_status = format!("| `{}` |", family.id);
+        let status_matches = readme.lines().any(|line| {
+            line.starts_with(&expected_status)
+                && line
+                    .rsplit('|')
+                    .nth(1)
+                    .is_some_and(|status| status.trim() == family.readiness)
+        });
+        if !status_matches {
+            errors.push(format!(
+                "README.md must list `{}` with code-owned readiness `{}`",
+                family.id, family.readiness
+            ));
+        }
+    }
+
+    for path in [
+        "crates/tongues-cli/src/main.rs",
+        "crates/tongues-server/public/app.js",
+        "docs/architecture.md",
+        "docs/common-phone.md",
+        "docs/interpretation.md",
+        "docs/sentence-parser.md",
+        "docs/wiktionary.md",
+        "README.md",
+    ] {
+        let text = read_audit_file(root, path, &mut errors);
+        if text.to_ascii_lowercase().contains("scaffold") {
+            errors.push(format!(
+                "{path} labels an established runnable family as a scaffold"
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        println!(
+            "Family maturity audit passed for {} established model families.",
+            ESTABLISHED_MODEL_FAMILIES.len()
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "family maturity audit failed:\n- {}",
+            errors.join("\n- ")
+        ))
+    }
+}
+
+fn read_audit_file(root: &Path, relative: &str, errors: &mut Vec<String>) -> String {
+    let path = root.join(relative);
+    match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            errors.push(format!("could not read {}: {error}", path.display()));
+            String::new()
+        }
+    }
 }
 
 fn race_usage() -> &'static str {
@@ -1454,8 +1575,9 @@ fn continue_dot_is_abbreviation(buffer: &str, dot_index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_prediction, primary_script, round_trip_score_pass, same_primary_script,
-        wiktionary_round_trip_cases, wiktionary_task_demo_inputs, Script,
+        audit_family_maturity, crate_lib_rs, extract_prediction, primary_script,
+        round_trip_score_pass, same_primary_script, wiktionary_round_trip_cases,
+        wiktionary_task_demo_inputs, Script,
     };
 
     #[test]
@@ -1519,6 +1641,22 @@ mod tests {
         assert!(round_trip_score_pass("brötchen", "Bröttchen"));
         assert!(!round_trip_score_pass("कर्म", "क्रम"));
         assert!(!round_trip_score_pass("धर्मक्षेत्र", "URक्GACATSA"));
+    }
+
+    #[test]
+    fn established_family_inventory_has_no_stale_scaffold_labels() {
+        audit_family_maturity().unwrap();
+    }
+
+    #[test]
+    fn new_family_template_is_explicitly_non_runnable() {
+        let source = crate_lib_rs("allophone-realizer");
+
+        assert!(source.contains("unimplemented-family-template"));
+        assert!(source.contains(".as_family_template()"));
+        assert!(source.contains("write_family_template"));
+        assert!(!source.contains("model.bin"));
+        assert!(!source.contains("train_state.json"));
     }
 }
 
@@ -1792,7 +1930,7 @@ use serde::{{Deserialize, Serialize}};
 use tongues_neural::{{write_manifest, ModelArtifactManifest}};
 
 pub const FAMILY: &str = "{family}";
-pub const ARCHITECTURE: &str = "scaffold";
+pub const ARCHITECTURE: &str = "unimplemented-family-template";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FamilyConfig {{
@@ -1820,27 +1958,19 @@ pub fn prepare_dataset(out: &Path, config: &FamilyConfig) -> Result<()> {{
     Ok(())
 }}
 
-pub fn write_scaffold_model(out: &Path, config: &FamilyConfig) -> Result<()> {{
+/// Write metadata for a family that has not implemented a runnable model yet.
+///
+/// This deliberately does not create checkpoint or training-state files.
+pub fn write_family_template(out: &Path, config: &FamilyConfig) -> Result<()> {{
     fs::create_dir_all(out).with_context(|| format!("creating {{}}", out.display()))?;
-    fs::write(out.join("model.bin"), format!("{{}} scaffold\n", FAMILY))?;
     fs::write(
-        out.join("model_config.json"),
+        out.join("family_config.json"),
         serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_config.json"),
-        serde_json::to_string_pretty(config)?,
-    )?;
-    fs::write(
-        out.join("train_state.json"),
-        serde_json::to_string_pretty(&serde_json::json!({{
-            "status": "scaffold",
-            "epochs": 0
-        }}))?,
     )?;
     write_manifest(
         out,
-        &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id),
+        &ModelArtifactManifest::new(FAMILY, ARCHITECTURE, &config.dataset_id)
+            .as_family_template(),
     )
 }}
 

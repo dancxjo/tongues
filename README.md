@@ -38,7 +38,7 @@ emotion modeling share the same linguistic and artifact infrastructure.
 - Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
 - Native Burn TTS using SpeedySpeech + HiFi-GAN, controllable FastPitch + HiFi-GAN, or end-to-end multi-speaker VITS.
 - ONNX-compatible voices, StyleTTS2 synthesis and style controls, and a deterministic mock backend.
-- Streaming sentence/head detection, LibriSpeech interpretation, common-phone CTC, and emotion-model scaffolds.
+- Trainable experimental sentence/head detection, LibriSpeech interpretation, common-phone CTC, and emotion models.
 
 ## Quick Start
 
@@ -126,7 +126,7 @@ crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluatio
 crates/tongues-wiktionary        Wiktionary pronunciation data, training, and inference
 crates/tongues-sentence-parser   cursor-time sentence boundary, continuation, and repair
 crates/tongues-head2phones       streaming head-chunk-to-phone model family
-crates/tongues-common-phone      compact acoustic frame -> phone/feature CTC scaffold
+crates/tongues-common-phone      compact acoustic frame -> phone/feature CTC model
 crates/tongues-interpretation    utterance-level Mel ASR with sentence/phoneme supervision
 crates/tongues-emotions          pooled-log-mel audio emotion classifier
 crates/tongues-tts               native Burn and ONNX-compatible speech synthesis
@@ -254,7 +254,7 @@ incoming text stream
   -> playback queue / barge-in control
 ```
 
-Tongues contains implementations or research scaffolds for each layer in that
+Tongues contains active or experimental implementations for each layer in that
 path. Its shared `UtterancePlan`-style linguistic representation keeps
 phonology and phonetics independent of a checkpoint's private vocabulary, and
 `tongues-tts` performs the final model-specific projection and waveform
