@@ -26,6 +26,9 @@ use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub mod burn_acoustic;
+pub mod burn_fast_pitch;
+pub mod burn_fast_pitch_acoustic;
+pub mod burn_fast_pitch_pipeline;
 pub mod burn_hifigan;
 pub mod burn_pipeline;
 pub mod burn_speedy_speech;
@@ -49,6 +52,12 @@ pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
 
+pub use burn_fast_pitch::{
+    FastPitch, FastPitchConfig, FastPitchControls, FastPitchError, FastPitchOutput,
+    FeedForwardTransformerConfig,
+};
+pub use burn_fast_pitch_acoustic::BurnFastPitchAcoustic;
+pub use burn_fast_pitch_pipeline::BurnFastPitchPipeline;
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
 pub use burn_pipeline::BurnSpeedySpeechPipeline;
 pub use burn_speedy_speech::{
@@ -103,9 +112,9 @@ pub use model_package::{
 pub use orchestration::{
     variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
     CapabilityValue, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,
-    OutputAudioContract, PlanEngineBackend, ReferenceAudioCapabilities, ReferenceAudioRequest,
-    SpeakerCapabilities, SpeakerSelection, StyleCapabilities, StyleSelection,
-    SynthesisContractError, SynthesisMetadata, SynthesisTiming, SynthesizerBackend,
+    OutputAudioContract, PitchCapabilities, PlanEngineBackend, ReferenceAudioCapabilities,
+    ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection, StyleCapabilities,
+    StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming, SynthesizerBackend,
     SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
 };
 pub use phoneme_projector::{
@@ -236,6 +245,14 @@ pub struct SynthesisOptions {
     pub length_scale: Option<f32>,
     pub noise_scale: Option<f32>,
     pub noise_w: Option<f32>,
+    /// Multiplies FastPitch's normalized token-level pitch prediction.
+    pub pitch_scale: Option<f32>,
+    /// Adds an offset in the checkpoint's normalized pitch-conditioning space.
+    pub pitch_shift: Option<f32>,
+    /// Explicit per-token frame durations for duration-controllable models.
+    pub durations: Option<Vec<u32>>,
+    /// Explicit per-token values in the model's pitch-conditioning space.
+    pub pitch: Option<Vec<f32>>,
     /// Backend RNG seed for repeatable stochastic inference.
     pub seed: Option<u64>,
 }
@@ -248,6 +265,10 @@ impl Default for SynthesisOptions {
             length_scale: None,
             noise_scale: None,
             noise_w: None,
+            pitch_scale: None,
+            pitch_shift: None,
+            durations: None,
+            pitch: None,
             seed: None,
         }
     }

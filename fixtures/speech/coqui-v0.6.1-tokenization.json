@@ -5,6 +5,11 @@
     "torch": "1.13.1+cpu"
   },
   "schema": "tongues-speech-tokenization-v1",
+  "fast_pitch": {
+    "checkpoint_symbols": "mɔɹnɪŋ laɪt ɹɛstɪd ɔn ðə sidɚ tɹiz waɪl ðə kɛtəl bɪɡæn tə sɪŋ.",
+    "text": "Morning light rested on the cedar trees while the kettle began to sing.",
+    "token_ids": [14, 43, 77, 15, 63, 33, 129, 13, 3, 63, 21, 129, 77, 50, 20, 21, 63, 6, 129, 43, 15, 129, 30, 48, 129, 20, 10, 6, 49, 129, 21, 77, 10, 27, 129, 24, 3, 63, 13, 129, 30, 48, 129, 12, 50, 21, 48, 13, 129, 4, 63, 55, 28, 15, 129, 21, 48, 129, 20, 63, 33, 125]
+  },
   "speedy_speech_hifigan": {
     "checkpoint_symbols": "mɔɹnɪŋ laɪt ɹɛstɪd ɔn ðə sidɚ tɹiz waɪl ðə kɛtəl bɪɡæn tə sɪŋ.",
     "text": "Morning light rested on the cedar trees while the kettle began to sing.",

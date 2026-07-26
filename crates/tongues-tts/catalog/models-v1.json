@@ -41,6 +41,44 @@
       ]
     },
     {
+      "id": "fastpitch-ljspeech",
+      "display_name": "FastPitch LJSpeech",
+      "aliases": ["fast-pitch", "fastpitch", "coqui-fastpitch"],
+      "architecture": "coqui-fastpitch",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["acoustic-model", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "Apache-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--fast_pitch.zip",
+          "sha256": "4629d701f25db0573014174a4a508430138c16358313e84b3dfacdd7a65fe89e",
+          "size_bytes": 458071694,
+          "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/tts_models--en--ljspeech--fast_pitch.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--en--ljspeech--fast_pitch/model_file.pth",
+              "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth"
+            },
+            {
+              "archive_path": "tts_models--en--ljspeech--fast_pitch/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/fast-pitch/config.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "hifigan-v2-ljspeech",
       "display_name": "HiFi-GAN v2 LJSpeech",
       "aliases": ["hifigan", "hifigan-v2", "coqui-hifigan"],

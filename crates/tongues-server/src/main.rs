@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{
-        Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
+    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
@@ -22,18 +22,19 @@ use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Semaphore, broadcast};
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tokio::sync::{broadcast, Semaphore};
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 const VITS_SPEAKER_RELATIVE_PATH: &str = "models/speech/coqui/en/vctk/vits/speaker_ids.json";
 const SPEEDY_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/speedy-speech";
+const FASTPITCH_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/fast-pitch";
 const HIFIGAN_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/hifigan-v2";
 const VITS_RELATIVE_DIR: &str = "models/speech/coqui/en/vctk/vits";
 const VITS_SPEAKER_COUNT: u32 = 109;
@@ -2017,6 +2018,10 @@ fn unified_synthesis_request(
         },
         style,
         speed: payload.speed.unwrap_or(1.0) as f32,
+        pitch_scale: payload.pitch_scale,
+        pitch_shift: payload.pitch_shift,
+        pitch: payload.pitch.clone(),
+        durations: payload.durations.clone(),
         seed: payload
             .seed
             .or_else(|| (backend == "styletts2").then_some(payload.style_seed.unwrap_or(0))),
@@ -2164,6 +2169,10 @@ const RESIDENT_BACKEND_PROVIDERS: &[ResidentBackendProvider] = &[
         load: load_burn_provider,
     },
     ResidentBackendProvider {
+        id: "fastpitch",
+        load: load_fastpitch_provider,
+    },
+    ResidentBackendProvider {
         id: "vits",
         load: load_vits_provider,
     },
@@ -2200,6 +2209,30 @@ fn load_burn_provider(
                 capabilities,
                 device,
                 load_resident_burn::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
+            )))
+        }
+    }
+}
+
+fn load_fastpitch_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_fastpitch::<NdArray<f32>>(home, NdArrayDevice::Cpu)?,
+            )))
+        }
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_fastpitch::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
             )))
         }
     }
@@ -2313,6 +2346,7 @@ fn speech_model_id(
     let requested_model = requested_model.filter(|model| !model.trim().is_empty());
     let fixed_model = match backend {
         "burn" => Some("speedyspeech-ljspeech+hifigan-v2"),
+        "fastpitch" => Some("fastpitch-ljspeech+hifigan-v2"),
         "vits" => Some("vits-vctk"),
         "styletts2" => Some("styletts2-en-us"),
         "mock" => Some("deterministic-mock"),
@@ -2377,7 +2411,29 @@ fn speech_backend_capabilities(
             styles: unsupported_styles(),
             reference_audio: Default::default(),
             speed: true,
+            pitch: Default::default(),
+            durations: false,
             seed: true,
+            devices,
+            output: output(22_050),
+            provenance: vec!["Published Coqui release artifacts".into()],
+        },
+        "fastpitch" => tongues_tts::BackendCapabilities {
+            backend: "fastpitch".into(),
+            model: "fastpitch-ljspeech+hifigan-v2".into(),
+            family: tongues_tts::SpeechModelFamily::AcousticModel,
+            varieties: fixed_english(),
+            speakers: unsupported_speakers(),
+            styles: unsupported_styles(),
+            reference_audio: Default::default(),
+            speed: true,
+            pitch: tongues_tts::PitchCapabilities {
+                scale: true,
+                shift: true,
+                explicit_values: true,
+            },
+            durations: true,
+            seed: false,
             devices,
             output: output(22_050),
             provenance: vec!["Published Coqui release artifacts".into()],
@@ -2417,6 +2473,8 @@ fn speech_backend_capabilities(
                 styles: unsupported_styles(),
                 reference_audio: Default::default(),
                 speed: true,
+                pitch: Default::default(),
+                durations: false,
                 seed: true,
                 devices,
                 output: output(22_050),
@@ -2463,6 +2521,8 @@ fn speech_backend_capabilities(
                 styles: unsupported_styles(),
                 reference_audio: Default::default(),
                 speed: true,
+                pitch: Default::default(),
+                durations: false,
                 seed: false,
                 devices,
                 output: output(
@@ -2491,6 +2551,8 @@ fn speech_backend_capabilities(
                 source: false,
             },
             speed: true,
+            pitch: Default::default(),
+            durations: false,
             seed: true,
             devices,
             output: output(24_000),
@@ -2505,6 +2567,8 @@ fn speech_backend_capabilities(
             styles: unsupported_styles(),
             reference_audio: Default::default(),
             speed: false,
+            pitch: Default::default(),
+            durations: false,
             seed: false,
             devices,
             output: output(mock_sample_rate_hz),
@@ -2534,6 +2598,28 @@ where
         device,
     )?;
     tongues_tts::BurnSpeedySpeechPipeline::new(acoustic, vocoder)
+}
+
+fn load_resident_fastpitch<B: burn::tensor::backend::Backend>(
+    home: &FsPath,
+    device: B::Device,
+) -> anyhow::Result<tongues_tts::BurnFastPitchPipeline<B>>
+where
+    B::Device: Clone,
+{
+    let acoustic_dir = home.join(FASTPITCH_RELATIVE_DIR);
+    let vocoder_dir = home.join(HIFIGAN_RELATIVE_DIR);
+    let acoustic = tongues_tts::BurnFastPitchAcoustic::load(
+        acoustic_dir.join("config.json"),
+        acoustic_dir.join("model_file.pth"),
+        device.clone(),
+    )?;
+    let vocoder = tongues_tts::BurnHifiganVocoder::load(
+        vocoder_dir.join("config.json"),
+        vocoder_dir.join("model_file.pth"),
+        device,
+    )?;
+    tongues_tts::BurnFastPitchPipeline::new(acoustic, vocoder)
 }
 
 fn load_resident_vits<B: burn::tensor::backend::Backend>(
@@ -2595,6 +2681,10 @@ struct SpeakRequest {
     speed: Option<f64>,
     noise_scale: Option<f32>,
     duration_noise_scale: Option<f32>,
+    pitch_scale: Option<f32>,
+    pitch_shift: Option<f32>,
+    pitch: Option<Vec<f32>>,
+    durations: Option<Vec<u32>>,
     seed: Option<u64>,
     sample_rate_hz: Option<u32>,
     max_tts_symbols: Option<usize>,
@@ -2929,6 +3019,8 @@ fn discover_speech_model(
             styles: tongues_tts::StyleCapabilities::unsupported(),
             reference_audio: Default::default(),
             speed: false,
+            pitch: Default::default(),
+            durations: false,
             seed: false,
             devices: Vec::new(),
             output: tongues_tts::OutputAudioContract {
@@ -2951,6 +3043,7 @@ fn discover_speech_model(
 fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
     match backend {
         "burn" => "SpeedySpeech + HiFi-GAN",
+        "fastpitch" => "FastPitch + HiFi-GAN",
         "vits" => "VITS VCTK",
         "styletts2" => "StyleTTS2 en-US",
         "mock" => "Deterministic Mock",
@@ -2967,6 +3060,12 @@ fn speech_backend_installation_error(
         "burn" => vec![
             home.join(SPEEDY_RELATIVE_DIR).join("config.json"),
             home.join(SPEEDY_RELATIVE_DIR).join("model_file.pth"),
+            home.join(HIFIGAN_RELATIVE_DIR).join("config.json"),
+            home.join(HIFIGAN_RELATIVE_DIR).join("model_file.pth"),
+        ],
+        "fastpitch" => vec![
+            home.join(FASTPITCH_RELATIVE_DIR).join("config.json"),
+            home.join(FASTPITCH_RELATIVE_DIR).join("model_file.pth"),
             home.join(HIFIGAN_RELATIVE_DIR).join("config.json"),
             home.join(HIFIGAN_RELATIVE_DIR).join("model_file.pth"),
         ],
@@ -3034,14 +3133,16 @@ fn verify_catalog_backend(home: &FsPath, backend: &str, model: Option<&str>) -> 
             "speedy-speech-ljspeech".to_string(),
             "hifigan-v2-ljspeech".to_string(),
         ],
+        "fastpitch" => vec![
+            "fastpitch-ljspeech".to_string(),
+            "hifigan-v2-ljspeech".to_string(),
+        ],
         "vits" => vec!["vits-vctk".to_string()],
         "styletts2" => vec!["styletts2-en-us".to_string()],
-        "onnx" => vec![
-            model
-                .filter(|model| !model.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or(speech_model_id(home, backend, None)?),
-        ],
+        "onnx" => vec![model
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(speech_model_id(home, backend, None)?)],
         "mock" => return Ok(()),
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     };
@@ -3817,7 +3918,7 @@ mod tests {
 
     #[test]
     fn single_speaker_backends_return_an_empty_optional_catalog() {
-        for backend in ["burn", "onnx", "styletts2", "mock"] {
+        for backend in ["burn", "fastpitch", "onnx", "styletts2", "mock"] {
             let response = speech_speakers_response(FsPath::new("."), backend);
             assert_eq!(response.backend, backend);
             assert!(response.installed);
@@ -3849,7 +3950,7 @@ mod tests {
         )
         .expect("write ONNX config");
 
-        let discovered = ["burn", "vits", "styletts2", "onnx"]
+        let discovered = ["burn", "fastpitch", "vits", "styletts2", "onnx"]
             .into_iter()
             .map(|backend| {
                 speech_backend_capabilities(
@@ -3868,22 +3969,27 @@ mod tests {
                 .iter()
                 .map(|model| model.backend.as_str())
                 .collect::<Vec<_>>(),
-            ["burn", "vits", "styletts2", "onnx"]
+            ["burn", "fastpitch", "vits", "styletts2", "onnx"]
         );
         assert_eq!(discovered[0].model, "speedyspeech-ljspeech+hifigan-v2");
+        assert_eq!(discovered[1].model, "fastpitch-ljspeech+hifigan-v2");
+        assert!(discovered[1].pitch.scale);
+        assert!(discovered[1].pitch.shift);
+        assert!(discovered[1].pitch.explicit_values);
+        assert!(discovered[1].durations);
         assert_eq!(
-            discovered[1].speakers.values,
+            discovered[2].speakers.values,
             tongues_tts::CapabilityValue::Listed(vec![
                 tongues_tts::NamedCapability::new("p225", "p225").with_numeric_id(0),
                 tongues_tts::NamedCapability::new("p330", "p330").with_numeric_id(90),
             ])
         );
-        assert!(discovered[2].reference_audio.speaker);
-        assert!(discovered[2].reference_audio.style);
-        assert_eq!(discovered[2].styles.embedding_dimensions, Some(256));
-        assert_eq!(discovered[3].output.sample_rate_hz, 22_050);
+        assert!(discovered[3].reference_audio.speaker);
+        assert!(discovered[3].reference_audio.style);
+        assert_eq!(discovered[3].styles.embedding_dimensions, Some(256));
+        assert_eq!(discovered[4].output.sample_rate_hz, 22_050);
         let json = serde_json::to_value(SpeechModelDiscovery {
-            capabilities: discovered[1].clone(),
+            capabilities: discovered[2].clone(),
             display_name: "VITS VCTK".into(),
             selected: true,
             installed: true,

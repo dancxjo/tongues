@@ -53,6 +53,7 @@ pub enum LinguisticInputKind {
 pub struct ModelInputContract {
     pub kind: LinguisticInputKind,
     pub vocabulary_fingerprint: String,
+    /// Supported canonical varieties, registered aliases, variety prefixes, or `*`.
     pub supported_varieties: Vec<String>,
     pub consumes: BTreeSet<LinguisticIntent>,
 }
@@ -110,10 +111,13 @@ impl ModelInputContract {
 fn variety_matches(supported: &str, requested: &str) -> bool {
     supported == "*"
         || supported.eq_ignore_ascii_case(requested)
-        || (!supported.contains('-')
-            && requested
-                .split_once('-')
-                .is_some_and(|(language, _)| supported.eq_ignore_ascii_case(language)))
+        || speaking::canonical_variety_id(supported)
+            .zip(speaking::canonical_variety_id(requested))
+            .is_some_and(|(supported, requested)| supported == requested)
+        || requested
+            .get(..supported.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(supported))
+            && matches!(requested.as_bytes().get(supported.len()), Some(b'-' | b'.'))
 }
 
 /// Terminal, model-owned lowering from Tongues' linguistic IR.
@@ -983,6 +987,37 @@ mod tests {
             .expect("regional English");
         regional.variety = VarietyId("fr-FR".into());
         assert!(contract.ensure_supports(&regional).is_err());
+    }
+
+    #[test]
+    fn variety_contract_accepts_registered_aliases_in_either_direction() {
+        let mut contract = input_contract();
+        let mut plan = request().plan;
+        plan.variety = VarietyId("en-US-GA".into());
+
+        contract
+            .ensure_supports(&plan)
+            .expect("en-US should match its canonical en-US-GA variety");
+
+        contract.supported_varieties = vec!["en-US-GA".into()];
+        plan.variety = VarietyId("en-US".into());
+        contract
+            .ensure_supports(&plan)
+            .expect("canonical en-US-GA should match its en-US alias");
+    }
+
+    #[test]
+    fn locale_contract_accepts_more_specific_varieties_but_not_sibling_locales() {
+        let contract = input_contract();
+        let mut plan = request().plan;
+        plan.variety = VarietyId("en-US-AAE".into());
+
+        contract
+            .ensure_supports(&plan)
+            .expect("en-US should support a more specific US English variety");
+
+        plan.variety = VarietyId("en-GB-RP".into());
+        assert!(contract.ensure_supports(&plan).is_err());
     }
 
     struct MockAcousticModel {

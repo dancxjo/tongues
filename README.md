@@ -22,8 +22,8 @@ pneumocryptology -> ˌnuː.məˈkɹɪp.təˌloʊ.dʒiː
 ```
 
 The same workspace now also runs speech synthesis end to end. The native Burn
-paths include a SpeedySpeech acoustic model paired with HiFi-GAN and a
-speaker-conditioned VCTK VITS model. ONNX voice compatibility, StyleTTS2,
+paths include SpeedySpeech and FastPitch acoustic models paired with HiFi-GAN,
+plus a speaker-conditioned VCTK VITS model. ONNX voice compatibility, StyleTTS2,
 streaming front ends, ASR-oriented interpretation, common-phone decoding, and
 emotion modeling share the same linguistic and artifact infrastructure.
 
@@ -36,7 +36,7 @@ emotion modeling share the same linguistic and artifact infrastructure.
 - Interactive REPL for loaded-model prediction.
 - Discrepancy and sight-word refinement workflows.
 - Lexicon-backed and rule-based phonemicization/realization helpers in the local `speaking` crate.
-- Native Burn TTS using SpeedySpeech + HiFi-GAN or end-to-end multi-speaker VITS.
+- Native Burn TTS using SpeedySpeech + HiFi-GAN, controllable FastPitch + HiFi-GAN, or end-to-end multi-speaker VITS.
 - ONNX-compatible voices, StyleTTS2 synthesis and style controls, and a deterministic mock backend.
 - Streaming sentence/head detection, LibriSpeech interpretation, common-phone CTC, and emotion-model scaffolds.
 
@@ -151,6 +151,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
 | `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |
+| `just speak --backend fastpitch "hello world"` | Synthesize with native Burn FastPitch + HiFi-GAN. |
 | `just speak --backend vits --speaker p225 "hello world"` | Synthesize with native Burn multi-speaker VITS. |
 | `just speech-demo` | Run a shuffled sentence through every built-in speech backend. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |

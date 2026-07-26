@@ -1184,6 +1184,7 @@ mod tests {
         let catalog = ModelCatalog::embedded().expect("embedded catalog");
         for id in [
             "speedy-speech-ljspeech",
+            "fastpitch-ljspeech",
             "hifigan-v2-ljspeech",
             "vits-vctk",
             "styletts2-en-us",
@@ -1338,7 +1339,7 @@ mod tests {
     #[test]
     fn search_is_backend_neutral() {
         let catalog = ModelCatalog::embedded().expect("embedded catalog");
-        assert_eq!(catalog.search("coqui").len(), 3);
+        assert_eq!(catalog.search("coqui").len(), 4);
         assert_eq!(catalog.search("onnx").len(), 4);
         assert_eq!(catalog.search("109").len(), 0);
     }

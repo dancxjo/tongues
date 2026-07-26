@@ -148,6 +148,16 @@ pub struct ReferenceAudioCapabilities {
     pub source: bool,
 }
 
+/// Discoverable token-level controls exposed by pitch-conditioned acoustic
+/// models. Each flag is independent so callers can avoid sending controls a
+/// selected backend cannot honor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PitchCapabilities {
+    pub scale: bool,
+    pub shift: bool,
+    pub explicit_values: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputAudioContract {
     pub sample_rate_hz: u32,
@@ -167,6 +177,10 @@ pub struct BackendCapabilities {
     pub styles: StyleCapabilities,
     pub reference_audio: ReferenceAudioCapabilities,
     pub speed: bool,
+    #[serde(default)]
+    pub pitch: PitchCapabilities,
+    #[serde(default)]
+    pub durations: bool,
     pub seed: bool,
     pub devices: Vec<SpeechDeviceRequest>,
     pub output: OutputAudioContract,
@@ -210,6 +224,50 @@ impl BackendCapabilities {
         }
         if request.speed != 1.0 && !self.speed {
             return Err(unsupported_feature(&self.backend, "speed"));
+        }
+        if let Some(value) = request.pitch_scale {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "pitch_scale",
+                    reason: "must be finite and positive".into(),
+                });
+            }
+            if !self.pitch.scale {
+                return Err(unsupported_feature(&self.backend, "pitch_scale"));
+            }
+        }
+        if let Some(value) = request.pitch_shift {
+            if !value.is_finite() {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "pitch_shift",
+                    reason: "must be finite".into(),
+                });
+            }
+            if !self.pitch.shift {
+                return Err(unsupported_feature(&self.backend, "pitch_shift"));
+            }
+        }
+        if let Some(values) = request.pitch.as_ref() {
+            if values.is_empty() || !values.iter().all(|value| value.is_finite()) {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "pitch",
+                    reason: "must contain finite pitch-conditioning values".into(),
+                });
+            }
+            if !self.pitch.explicit_values {
+                return Err(unsupported_feature(&self.backend, "pitch"));
+            }
+        }
+        if let Some(values) = request.durations.as_ref() {
+            if values.is_empty() || values.contains(&0) {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "durations",
+                    reason: "must contain positive frame counts".into(),
+                });
+            }
+            if !self.durations {
+                return Err(unsupported_feature(&self.backend, "durations"));
+            }
         }
         if request.seed.is_some() && !self.seed {
             return Err(unsupported_feature(&self.backend, "seed"));
@@ -490,6 +548,14 @@ pub struct UnifiedSynthesisRequest {
     #[serde(default = "default_speed")]
     pub speed: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_shift: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durations: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise_scale: Option<f32>,
@@ -528,6 +594,10 @@ impl UnifiedSynthesisRequest {
             reference_audio: ReferenceAudioRequest::default(),
             style: None,
             speed: 1.0,
+            pitch_scale: None,
+            pitch_shift: None,
+            pitch: None,
+            durations: None,
             seed: None,
             noise_scale: None,
             duration_noise_scale: None,
@@ -767,6 +837,10 @@ impl<E: SpeechSynthesisEngine + Send> SynthesizerBackend for PlanEngineBackend<E
                 length_scale: Some(1.0 / request.speed),
                 noise_scale: request.noise_scale,
                 noise_w: request.duration_noise_scale,
+                pitch_scale: request.pitch_scale,
+                pitch_shift: request.pitch_shift,
+                durations: request.durations.clone(),
+                pitch: request.pitch.clone(),
                 seed: request.seed,
             },
         };
@@ -925,6 +999,8 @@ mod tests {
             styles: StyleCapabilities::unsupported(),
             reference_audio: ReferenceAudioCapabilities::default(),
             speed: true,
+            pitch: PitchCapabilities::default(),
+            durations: false,
             seed: true,
             devices: vec![SpeechDeviceRequest::Cpu],
             output: OutputAudioContract {
@@ -951,6 +1027,37 @@ mod tests {
                 feature: "reference_audio.speaker",
             })
         );
+    }
+
+    #[test]
+    fn fastpitch_controls_are_validated_through_discoverable_capabilities() {
+        let mut capabilities = fixture_capabilities();
+        capabilities.speakers = SpeakerCapabilities::unsupported();
+        capabilities.pitch = PitchCapabilities {
+            scale: true,
+            shift: true,
+            explicit_values: true,
+        };
+        capabilities.durations = true;
+
+        let mut request = UnifiedSynthesisRequest::new("hello", "en-US");
+        request.device = SpeechDeviceRequest::Cpu;
+        request.pitch_scale = Some(1.1);
+        request.pitch_shift = Some(-0.25);
+        request.pitch = Some(vec![0.2, -0.1]);
+        request.durations = Some(vec![3, 4]);
+        capabilities
+            .validate(&request)
+            .expect("supported FastPitch controls");
+
+        request.durations = Some(vec![3, 0]);
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(SynthesisContractError::InvalidRequest {
+                field: "durations",
+                ..
+            })
+        ));
     }
 
     #[test]

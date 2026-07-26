@@ -9,6 +9,7 @@ front-end integration.
 | CLI backend | Implementation | Model shape | Status |
 |---|---|---|---|
 | `burn` | `tongues-tts` on Burn | SpeedySpeech acoustic model -> HiFi-GAN v2 vocoder | active |
+| `fastpitch` | `tongues-tts` on Burn | controllable FastPitch acoustic model -> HiFi-GAN v2 vocoder | active |
 | `vits` | `tongues-tts` on Burn | end-to-end VCTK VITS with named speakers | active |
 | `onnx` | `tongues-tts` ONNX compatibility adapter | registered single- or multi-speaker voice bundle | active compatibility path |
 | `styletts2` | `styletts2` ONNX backend | reference/style-conditioned synthesis | experimental |
@@ -16,9 +17,9 @@ front-end integration.
 
 The native Burn implementations import published checkpoint configuration and
 weights, but inference runs through Tongues' Rust model components. The
-registered SpeedySpeech, HiFi-GAN, and VITS bundles are published Coqui release
-artifacts; the model registry records their sources, sizes, checksums, and
-licenses.
+registered SpeedySpeech, FastPitch, HiFi-GAN, and VITS bundles are published
+Coqui release artifacts; the model registry records their sources, sizes,
+checksums, and licenses.
 
 ## Safe Coqui package import
 
@@ -89,12 +90,12 @@ numerical and audio conformance remains the separate #4 responsibility.
 ## Licensed model catalog and offline cache
 
 Tongues has a schema-v1 backend-neutral model catalog for the native
-SpeedySpeech, HiFi-GAN, VITS, StyleTTS2, and ONNX voice backends. Entries record
-architecture, package version, languages and varieties, speakers, sample rate,
-capabilities, source format, provenance, license evidence, artifact sizes, and
-SHA-256 checksums. Source formats are strings rather than runtime enums, so a
-private catalog can describe Coqui, Fairseq, ONNX, or organization-specific
-artifacts without changing synthesis APIs.
+SpeedySpeech, FastPitch, HiFi-GAN, VITS, StyleTTS2, and ONNX voice backends.
+Entries record architecture, package version, languages and varieties,
+speakers, sample rate, capabilities, source format, provenance, license
+evidence, artifact sizes, and SHA-256 checksums. Source formats are strings
+rather than runtime enums, so a private catalog can describe Coqui, Fairseq,
+ONNX, or organization-specific artifacts without changing synthesis APIs.
 
 ```sh
 # Catalog metadata and installation state
@@ -151,6 +152,25 @@ just speak \
   --output /tmp/tongues-burn.wav \
   "Morning light rested on the cedar trees."
 ```
+
+Use FastPitch's backend-neutral duration and normalized pitch-conditioning
+controls:
+
+```sh
+just speak \
+  --backend fastpitch \
+  --speed 0.9 \
+  --pitch-scale 1.08 \
+  --pitch-shift 0.15 \
+  --output /tmp/tongues-fastpitch.wav \
+  "Morning light rested on the cedar trees."
+```
+
+`--pitch` and `--durations` accept comma-separated values with exactly one
+value per checkpoint-projected token. These explicit controls are intended for
+reproducible programmatic synthesis; verbose CLI output reports the projected
+token IDs and count. Pitch values and shifts use the checkpoint's normalized
+conditioning space, not hertz.
 
 Use a named speaker from the VCTK VITS model:
 
@@ -285,9 +305,12 @@ device, and chunking/streaming intent.
 Every imported implementation exposes `BackendCapabilities` and implements
 `SynthesizerBackend`. Capability validation happens before inference and
 returns typed errors for unsupported features, unsupported catalog values,
-missing required selections, and malformed controls. The resident server keeps
-boxed implementations of that trait, so its synthesis path does not branch on
-VITS, SpeedySpeech + HiFi-GAN, StyleTTS2, or ONNX output shapes.
+missing required selections, and malformed controls. FastPitch advertises
+pitch scaling, pitch shifting, explicit per-token pitch, and explicit
+per-token duration support through this same capability object. The resident
+server keeps boxed implementations of that trait, so its synthesis path does
+not branch on VITS, SpeedySpeech + HiFi-GAN, FastPitch + HiFi-GAN, StyleTTS2,
+or ONNX output shapes.
 
 Audio from every backend is normalized to interleaved `f32` chunks with sample
 rate, channel count, frame offset, chunk/final markers, and common completion
@@ -302,6 +325,7 @@ count, audio duration, streaming mode, and backend timing stages.
   conditioning, vocoders, and waveforms;
 - published-config import and validation;
 - native SpeedySpeech text/acoustic inference;
+- native FastPitch duration, pitch, and mel inference with explicit controls;
 - native HiFi-GAN waveform generation;
 - native VITS text encoding, stochastic duration prediction, flow, and waveform
   decoding;
@@ -326,11 +350,11 @@ Before cache checks or model loading, verbose output reports the resolved device
 and emits `device_metadata_json` with `kind` and nullable `index` fields. Native
 startup profiles repeat those fields as `device` and `device_index`.
 
-The native SpeedySpeech pipeline keeps mel features on the Burn device between
-the acoustic model and HiFi-GAN, avoiding a GPU-to-host-to-GPU round trip. VITS
-decodes the complete latent sequence once and slices the resulting host
-waveform into sink chunks; it does not repeatedly launch the decoder over
-overlapping latent windows.
+The native SpeedySpeech and FastPitch pipelines keep mel features on the Burn
+device between the acoustic model and HiFi-GAN, avoiding a
+GPU-to-host-to-GPU round trip. VITS decodes the complete latent sequence once
+and slices the resulting host waveform into sink chunks; it does not repeatedly
+launch the decoder over overlapping latent windows.
 
 ## Speech conformance
 
@@ -356,6 +380,8 @@ zero acoustic/duration noise. Conformance covers:
 
 - SpeedySpeech token IDs, predicted durations, encoder expansion, positional
   encoding, mel frames, and HiFi-GAN output;
+- FastPitch token IDs, predicted durations, normalized pitch conditioning, and
+  mel frames;
 - VITS token IDs, speaker rows p225, p330, and p376, duration expansion, text
   prior, reverse flow, and integrated waveform decoder;
 - the registered ONNX voice through an actual CLI synthesis;
@@ -370,10 +396,10 @@ to the repository; model weights and generated audio are not.
 
 ## Resident server execution
 
-`tongues-server` owns a resident registry for the `burn`, `vits`, `onnx`,
-`styletts2`, and `mock` backends. The first request loads the selected model;
-subsequent `POST /api/speak` requests reuse it. Speech requests do not invoke
-`cargo run`.
+`tongues-server` owns a resident registry for the `burn`, `fastpitch`, `vits`,
+`onnx`, `styletts2`, and `mock` backends. The first request loads the selected
+model; subsequent `POST /api/speak` requests reuse it. Speech requests do not
+invoke `cargo run`.
 Responses include `X-Tongues-Model-Loaded`, `X-Tongues-Speech-Engine`,
 `X-Tongues-Real-Time-Factor`, and `Server-Timing` headers.
 

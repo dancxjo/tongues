@@ -22,8 +22,9 @@ use zip::ZipArchive;
 
 use crate::vits_config::ImportedVitsConfig;
 use crate::{
-    AudioFeatureConfig, BurnVitsSpeech, HifiganBundleConfig, PhonemeTokenizerConfig,
-    PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig, VitsInferenceConfig,
+    AudioFeatureConfig, BurnVitsSpeech, FastPitchConfig, HifiganBundleConfig,
+    PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig,
+    VitsInferenceConfig,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;
@@ -40,6 +41,7 @@ const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPackageArchitecture {
+    FastPitch,
     SpeedySpeech,
     HifiGan,
     Vits,
@@ -49,6 +51,7 @@ pub enum ModelPackageArchitecture {
 impl ModelPackageArchitecture {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::FastPitch => "fast_pitch",
             Self::SpeedySpeech => "speedy_speech",
             Self::HifiGan => "hifi_gan",
             Self::Vits => "vits",
@@ -272,6 +275,12 @@ pub struct CoquiImportInspection {
 
 #[derive(Debug)]
 enum ParsedConfig {
+    FastPitch {
+        model: FastPitchConfig,
+        audio: AudioFeatureConfig,
+        parameters: Value,
+        symbols: Vec<String>,
+    },
     Speedy {
         model: SpeedySpeechConfig,
         audio: AudioFeatureConfig,
@@ -296,6 +305,7 @@ enum ParsedConfig {
 impl ParsedConfig {
     fn architecture(&self) -> ModelPackageArchitecture {
         match self {
+            Self::FastPitch { .. } => ModelPackageArchitecture::FastPitch,
             Self::Speedy { .. } => ModelPackageArchitecture::SpeedySpeech,
             Self::HifiGan { .. } => ModelPackageArchitecture::HifiGan,
             Self::Vits { .. } => ModelPackageArchitecture::Vits,
@@ -305,7 +315,8 @@ impl ParsedConfig {
 
     fn parameters(&self) -> &Value {
         match self {
-            Self::Speedy { parameters, .. }
+            Self::FastPitch { parameters, .. }
+            | Self::Speedy { parameters, .. }
             | Self::HifiGan { parameters, .. }
             | Self::Vits { parameters, .. }
             | Self::SpeakerEncoder { parameters, .. } => parameters,
@@ -314,7 +325,7 @@ impl ParsedConfig {
 
     fn audio(&self) -> Option<PackageAudio> {
         let audio = match self {
-            Self::Speedy { audio, .. } => audio,
+            Self::FastPitch { audio, .. } | Self::Speedy { audio, .. } => audio,
             Self::HifiGan { model, .. } => &model.audio,
             Self::Vits { inference, .. } => &inference.audio,
             Self::SpeakerEncoder { model, .. } => {
@@ -338,7 +349,9 @@ impl ParsedConfig {
 
     fn symbols(&self) -> Vec<String> {
         match self {
-            Self::Speedy { symbols, .. } | Self::Vits { symbols, .. } => symbols.clone(),
+            Self::FastPitch { symbols, .. }
+            | Self::Speedy { symbols, .. }
+            | Self::Vits { symbols, .. } => symbols.clone(),
             Self::HifiGan { .. } | Self::SpeakerEncoder { .. } => Vec::new(),
         }
     }
@@ -734,6 +747,58 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
         .context("Coqui config root must be an object")?;
     let architecture = detect_architecture(object)?;
     let parsed = match architecture {
+        ModelPackageArchitecture::FastPitch => {
+            reject_model_args(
+                object,
+                &[
+                    "d_vector_dim",
+                    "decoder_params",
+                    "decoder_type",
+                    "detach_duration_predictor",
+                    "duration_predictor_dropout_p",
+                    "duration_predictor_hidden_channels",
+                    "duration_predictor_kernel_size",
+                    "encoder_params",
+                    "encoder_type",
+                    "hidden_channels",
+                    "length_scale",
+                    "max_duration",
+                    "num_chars",
+                    "num_speakers",
+                    "out_channels",
+                    "pitch_embedding_kernel_size",
+                    "pitch_predictor_dropout_p",
+                    "pitch_predictor_hidden_channels",
+                    "pitch_predictor_kernel_size",
+                    "poisitonal_encoding_use_scale",
+                    "positional_encoding",
+                    "use_aligner",
+                    "use_d_vector",
+                ],
+            )?;
+            let model = FastPitchConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
+            let audio = AudioFeatureConfig::from_json5_str(&source)?;
+            let tokenizer: PhonemeTokenizerConfig =
+                json5::from_str(&source).context("invalid FastPitch tokenizer config")?;
+            let projector = PhonemeVocabularyProjector::from_config(tokenizer.clone())?;
+            ensure!(
+                projector.vocabulary().len() == model.num_chars,
+                "FastPitch symbol count {} does not match num_chars {}",
+                projector.vocabulary().len(),
+                model.num_chars
+            );
+            let parameters = json!({
+                "model": model,
+                "audio": audio,
+                "tokenizer": tokenizer,
+            });
+            ParsedConfig::FastPitch {
+                model,
+                audio,
+                parameters,
+                symbols: projector.vocabulary().iter().map(char::to_string).collect(),
+            }
+        }
         ModelPackageArchitecture::SpeedySpeech => {
             reject_model_args(
                 object,
@@ -905,6 +970,7 @@ fn detect_architecture(object: &Map<String, Value>) -> Result<ModelPackageArchit
         return Ok(ModelPackageArchitecture::HifiGan);
     }
     match object.get("model").and_then(Value::as_str) {
+        Some("fast_pitch") => Ok(ModelPackageArchitecture::FastPitch),
         Some("speedy_speech") => Ok(ModelPackageArchitecture::SpeedySpeech),
         Some(value) if value.eq_ignore_ascii_case("vits") => Ok(ModelPackageArchitecture::Vits),
         Some("speaker_encoder") | Some("speaker-encoder") => {
@@ -944,7 +1010,9 @@ fn ignored_training_fields(
     architecture: ModelPackageArchitecture,
 ) -> Vec<String> {
     let retained = match architecture {
-        ModelPackageArchitecture::SpeedySpeech | ModelPackageArchitecture::Vits => [
+        ModelPackageArchitecture::FastPitch
+        | ModelPackageArchitecture::SpeedySpeech
+        | ModelPackageArchitecture::Vits => [
             "model",
             "model_args",
             "audio",
@@ -981,6 +1049,15 @@ fn ignored_training_fields(
         .map(|key| key.to_string())
         .collect::<Vec<_>>();
     match architecture {
+        ModelPackageArchitecture::FastPitch => ignored.extend(
+            [
+                "model_args.detach_duration_predictor",
+                "model_args.poisitonal_encoding_use_scale",
+            ]
+            .into_iter()
+            .filter(|path| json_path_exists(object, path))
+            .map(str::to_string),
+        ),
         ModelPackageArchitecture::SpeedySpeech => ignored.extend(
             [
                 "model_args.detach_duration_predictor",
@@ -1159,6 +1236,14 @@ fn validate_runtime_shapes(
     type Cpu = NdArray<f32>;
     let device = NdArrayDevice::Cpu;
     match parsed {
+        ParsedConfig::FastPitch { model, .. } => {
+            model
+                .clone()
+                .init::<Cpu>(&device)
+                .map_err(anyhow::Error::new)?
+                .load_checkpoint(checkpoint_path)
+                .map_err(anyhow::Error::new)?;
+        }
         ParsedConfig::Speedy { model, .. } => {
             model
                 .clone()
@@ -1793,6 +1878,19 @@ mod tests {
             inspection.architecture,
             ModelPackageArchitecture::SpeedySpeech
         );
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn published_fast_pitch_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_FASTPITCH_CONFIG",
+            "TONGUES_TEST_COQUI_FASTPITCH_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("FastPitch import inspection");
+        assert_eq!(inspection.architecture, ModelPackageArchitecture::FastPitch);
         assert!(!inspection.tensors.is_empty());
     }
 

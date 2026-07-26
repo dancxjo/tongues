@@ -2047,7 +2047,10 @@ fn command_needs_device(command: &Commands) -> bool {
         }
         Commands::Speak(command) => matches!(
             command.backend,
-            speak::SpeakBackend::Burn | speak::SpeakBackend::Vits | speak::SpeakBackend::Onnx
+            speak::SpeakBackend::Burn
+                | speak::SpeakBackend::Fastpitch
+                | speak::SpeakBackend::Vits
+                | speak::SpeakBackend::Onnx
         ),
         Commands::SpeechDemo(_) => true,
         Commands::Train { .. }
@@ -12853,7 +12856,7 @@ mod tests {
 
     #[test]
     fn speech_accelerator_backends_probe_cuda_by_default() {
-        for backend in ["burn", "vits", "onnx"] {
+        for backend in ["burn", "fastpitch", "vits", "onnx"] {
             let cli = Cli::try_parse_from([
                 "tongues",
                 "speak",

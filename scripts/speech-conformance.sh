@@ -14,6 +14,7 @@ done
 data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
 model_root="${TONGUES_COQUI_MODEL_ROOT:-$data_root/mortar-sea/models/speech/coqui/en}"
 speedy_dir="$model_root/ljspeech/speedy-speech"
+fastpitch_dir="$model_root/ljspeech/fast-pitch"
 vocoder_dir="$model_root/ljspeech/hifigan-v2"
 vits_dir="$model_root/vctk/vits"
 output_dir="${TONGUES_CONFORMANCE_OUTPUT:-$repo_root/target/speech-conformance}"
@@ -22,6 +23,8 @@ image="${TONGUES_COQUI_REFERENCE_IMAGE:-tongues-coqui-reference}"
 required_artifacts=(
     "$speedy_dir/config.json"
     "$speedy_dir/model_file.pth"
+    "$fastpitch_dir/config.json"
+    "$fastpitch_dir/model_file.pth"
     "$vocoder_dir/config.json"
     "$vocoder_dir/model_file.pth"
     "$vits_dir/config.json"
@@ -62,6 +65,11 @@ jq -S '{
         checkpoint_symbols: .speedy_speech_hifigan.checkpoint_symbols,
         token_ids: .speedy_speech_hifigan.token_ids
     },
+    fast_pitch: {
+        text: .fast_pitch.text,
+        checkpoint_symbols: .fast_pitch.checkpoint_symbols,
+        token_ids: .fast_pitch.token_ids
+    },
     vits: {
         text: .vits.text,
         checkpoint_symbols: .vits.checkpoint_symbols,
@@ -97,6 +105,15 @@ env \
     TONGUES_TEST_COQUI_REFERENCE="$reference" \
     cargo test --release -p tongues-tts \
         burn_vits::tests::published_checkpoint_stage_parity \
+        -- --ignored --exact --nocapture
+
+echo "Comparing native FastPitch duration, pitch, and mel stages: $reference"
+env \
+    TONGUES_TEST_COQUI_FASTPITCH_CONFIG="$fastpitch_dir/config.json" \
+    TONGUES_TEST_COQUI_FASTPITCH_MODEL="$fastpitch_dir/model_file.pth" \
+    TONGUES_TEST_COQUI_REFERENCE="$reference" \
+    cargo test --release -p tongues-tts \
+        burn_fast_pitch::tests::published_checkpoint_stage_parity \
         -- --ignored --exact --nocapture
 
 echo "Synthesizing and validating the registered ONNX voice: $output_dir/onnx"
