@@ -214,6 +214,8 @@ cargo run --bin tongues -- models inspect vits-vctk
 # Verified install, offline reuse, and removal
 cargo run --bin tongues -- models install vits-vctk
 cargo run --bin tongues -- models install vits-vctk --offline
+cargo run --bin tongues -- models verify vits-vctk
+cargo run --bin tongues -- models verify --all
 cargo run --bin tongues -- models remove vits-vctk
 
 # Non-commercial multilingual voice cloning
@@ -315,11 +317,24 @@ preprocessing metadata. CI tests the committed 1,143-entry snapshot and a
 small cross-script fixture matrix; it does not download every checkpoint.
 
 The server exposes the same metadata and verification state at
-`GET /api/models/catalog`. Resident speech backends pass catalog verification
-before model construction, so file presence alone is never treated as an
-installable or loadable model. Previously installed pinned artifacts continue
-to work offline after their archive members are compared with the verified
-source archive.
+`GET /api/models/catalog`. Installation and import perform exhaustive checksum,
+archive-member, package-manifest, and model-metadata verification, then write an
+atomic record under `<model-home>/models/.verification`. The record includes
+the artifact fingerprint, model manifest version, verifier/cache schema
+versions, runtime compatibility version, verified checksums, and file
+size/mtime snapshots.
+
+Startup and catalog discovery never re-hash every registered model. They use
+only file presence, the versioned verification record, and size/mtime checks to
+classify each entry as `verified`, `pending_verification`,
+`changed_since_verification`, `verification_failed`, or `unavailable`.
+Synthesis requires a still-valid cached result for only the selected pipeline;
+its tensor and audio port contracts are then compared in memory before model
+construction. `tongues models verify MODEL` and Studio's **Verify model** or
+**Verify pipeline** actions perform an explicit deep check. `tongues models
+verify --all` exhaustively checks installed catalog models for CI/nightly use.
+Previously verified unchanged artifacts therefore remain immediately usable
+offline without waiting for unrelated catalog entries.
 
 ## Native YourTTS conditioning
 
@@ -470,12 +485,14 @@ Supplying both pipeline and legacy selection is rejected as ambiguous. Legacy
 requests are normalized to the same canonical pipeline before validation,
 resident model lookup, and inference.
 
-Discovery itself is lightweight. Its `verification_ids` list names catalog
-entries whose installed artifacts have not been checked in the current server
-session. `GET /api/speech/models/verify/{model_id}` verifies one entry and
-returns an updated discovery snapshot. Speech Studio runs up to three of these
-bounded requests concurrently and renders readiness progressively instead of
-holding one response open while every model archive is hashed.
+Discovery itself is lightweight. Its `verification_ids` list contains only
+installed entries that are new, changed, previously failed, or lack a valid
+cached result; unavailable entries are never queued. `POST
+/api/speech/models/verify/{model_id}` deeply verifies one entry, persists the
+result, and returns an updated discovery snapshot. Speech Studio processes
+background checks one at a time and also exposes explicit **Verify model**,
+**Verify pipeline**, and **Verify all changed models** actions. A verified,
+unchanged pipeline is ready as soon as the first discovery response arrives.
 
 Force CPU execution with the global CLI flag:
 

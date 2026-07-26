@@ -147,9 +147,7 @@ impl ModelVerificationStatus {
     pub fn needs_deep_verification(self) -> bool {
         matches!(
             self,
-            Self::PendingVerification
-                | Self::ChangedSinceVerification
-                | Self::VerificationFailed
+            Self::PendingVerification | Self::ChangedSinceVerification | Self::VerificationFailed
         )
     }
 }
@@ -760,9 +758,7 @@ impl ModelStore {
                 return Ok(ModelVerificationState {
                     status: ModelVerificationStatus::ChangedSinceVerification,
                     verified_files: 0,
-                    error: Some(format!(
-                        "cached verification metadata is invalid: {error}"
-                    )),
+                    error: Some(format!("cached verification metadata is invalid: {error}")),
                 });
             }
         };
@@ -843,17 +839,16 @@ impl ModelStore {
     ) -> Result<Vec<(PathBuf, Option<u64>)>> {
         let record_path = self.record_path(&entry.id, entry.package_version);
         if record_path.is_file() {
-            if let Ok(record) = serde_json::from_slice::<InstalledModelRecord>(&fs::read(&record_path)?)
+            if let Ok(record) =
+                serde_json::from_slice::<InstalledModelRecord>(&fs::read(&record_path)?)
             {
-                if record.schema_version == INSTALLED_MODEL_SCHEMA_VERSION && record.entry == *entry {
+                if record.schema_version == INSTALLED_MODEL_SCHEMA_VERSION && record.entry == *entry
+                {
                     return record
                         .files
                         .iter()
                         .map(|file| {
-                            Ok((
-                                checked_join(&self.root, &file.path)?,
-                                Some(file.size_bytes),
-                            ))
+                            Ok((checked_join(&self.root, &file.path)?, Some(file.size_bytes)))
                         })
                         .collect();
                 }
@@ -863,11 +858,7 @@ impl ModelStore {
             .artifacts
             .iter()
             .flat_map(|artifact| {
-                std::iter::once((
-                    artifact.install_path.as_str(),
-                    Some(artifact.size_bytes),
-                ))
-                .chain(
+                std::iter::once((artifact.install_path.as_str(), Some(artifact.size_bytes))).chain(
                     artifact
                         .members
                         .iter()
@@ -899,7 +890,11 @@ impl ModelStore {
         self.write_verification_cache_record(entry, error, files)
     }
 
-    fn write_failed_verification_cache(&self, entry: &ModelCatalogEntry, error: &str) -> Result<()> {
+    fn write_failed_verification_cache(
+        &self,
+        entry: &ModelCatalogEntry,
+        error: &str,
+    ) -> Result<()> {
         let files = self
             .quick_verification_files(entry)?
             .into_iter()
@@ -1014,12 +1009,10 @@ impl ModelStore {
                 }
             }
         }
-        let verification_cache =
-            self.verification_cache_path(&entry.id, entry.package_version);
+        let verification_cache = self.verification_cache_path(&entry.id, entry.package_version);
         if verification_cache.is_file() {
-            fs::remove_file(&verification_cache).with_context(|| {
-                format!("failed to remove {}", verification_cache.display())
-            })?;
+            fs::remove_file(&verification_cache)
+                .with_context(|| format!("failed to remove {}", verification_cache.display()))?;
         }
         Ok(())
     }
@@ -1718,8 +1711,7 @@ mod tests {
             ModelVerificationStatus::Verified,
             "display metadata is not an artifact or runtime compatibility change"
         );
-        let verification_path =
-            restarted.verification_cache_path(&entry.id, entry.package_version);
+        let verification_path = restarted.verification_cache_path(&entry.id, entry.package_version);
         let mut stale_cache: serde_json::Value =
             serde_json::from_slice(&fs::read(&verification_path).unwrap()).unwrap();
         stale_cache["verifier_version"] = serde_json::json!(MODEL_VERIFIER_VERSION + 1);

@@ -1746,9 +1746,7 @@ mod tests {
         assert_eq!(step_fixture.len(), model.decoder.blocks.len() * 3);
         assert_eq!(trace_fixture.len(), model.decoder.blocks.len());
         for (index, block) in model.decoder.blocks.iter().rev().enumerate() {
-            mel = block
-                .coupling
-                .reverse(mel, squeezed_mask.clone(), None);
+            mel = block.coupling.reverse(mel, squeezed_mask.clone(), None);
             assert_fixture_probes(
                 &format!("reverse coupling {}", index + 1),
                 mel.clone(),

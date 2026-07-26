@@ -3787,17 +3787,17 @@ async fn build_speech_discovery(state: &AppState) -> SpeechStudioDiscovery {
         .unwrap_or_default();
     let device = state.speech_device;
     tokio::task::spawn_blocking(move || speech_studio_discovery(&home, device, &loaded))
-    .await
-    .unwrap_or_else(|error| SpeechStudioDiscovery {
-        schema_version: 3,
-        paths: Vec::new(),
-        components: Vec::new(),
-        compositions: Vec::new(),
-        compatibility: Vec::new(),
-        presets: Vec::new(),
-        verification_ids: Vec::new(),
-        error: Some(format!("speech model discovery task failed: {error}")),
-    })
+        .await
+        .unwrap_or_else(|error| SpeechStudioDiscovery {
+            schema_version: 3,
+            paths: Vec::new(),
+            components: Vec::new(),
+            compositions: Vec::new(),
+            compatibility: Vec::new(),
+            presets: Vec::new(),
+            verification_ids: Vec::new(),
+            error: Some(format!("speech model discovery task failed: {error}")),
+        })
 }
 
 async fn verify_speech_model(
@@ -5264,10 +5264,8 @@ fn speech_component_inventory(
             component.installed |= installed;
             component.verified |= verified;
             component.verification_pending |= verification_pending;
-            component.verification_status = aggregate_verification_status([
-                component.verification_status,
-                verification_status,
-            ]);
+            component.verification_status =
+                aggregate_verification_status([component.verification_status, verification_status]);
             component.runnable |= runnable;
             component.load_state = load_state;
             component.compatible_paths.extend(compatible_paths);

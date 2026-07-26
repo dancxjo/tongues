@@ -761,9 +761,7 @@ fn list_models(command: ModelsListCommand) -> Result<()> {
             tongues_tts::ModelVerificationStatus::ChangedSinceVerification => {
                 "changed".yellow().to_string()
             }
-            tongues_tts::ModelVerificationStatus::VerificationFailed => {
-                "failed".red().to_string()
-            }
+            tongues_tts::ModelVerificationStatus::VerificationFailed => "failed".red().to_string(),
             tongues_tts::ModelVerificationStatus::Unavailable => "unavailable".dimmed().to_string(),
         };
         println!(
