@@ -55,30 +55,12 @@ const VOWELS: &[RpVowel] = &[
         "unrounded",
     ),
     vowel(RP_HAPPY, None, "i", "IY", "high", "front", "unrounded"),
-    diphthong(
-        RP_FACE,
-        Some("EY"),
-        "eɪ",
-        "EY",
-        "mid",
-        "front",
-        "unrounded",
-        "closing_front",
-    ),
+    front_closing_diphthong(RP_FACE, Some("EY"), "eɪ", "EY", "mid", "front", "unrounded"),
     vowel(RP_PALM, None, "ɑː", "AA", "low", "back", "unrounded"),
     vowel(RP_THOUGHT, Some("AO"), "ɔː", "AO", "low", "back", "rounded"),
-    diphthong(
-        RP_GOAT,
-        Some("OW"),
-        "əʊ",
-        "OW",
-        "mid",
-        "back",
-        "rounded",
-        "closing_back",
-    ),
+    back_closing_diphthong(RP_GOAT, Some("OW"), "əʊ", "OW", "mid", "back", "rounded"),
     vowel(RP_GOOSE, Some("UW"), "uː", "UW", "high", "back", "rounded"),
-    diphthong(
+    front_closing_diphthong(
         RP_PRICE,
         Some("AY"),
         "aɪ",
@@ -86,19 +68,9 @@ const VOWELS: &[RpVowel] = &[
         "low",
         "front",
         "unrounded",
-        "closing_front",
     ),
-    diphthong(
-        RP_CHOICE,
-        Some("OY"),
-        "ɔɪ",
-        "OY",
-        "mid",
-        "back",
-        "rounded",
-        "closing_front",
-    ),
-    diphthong(
+    front_closing_diphthong(RP_CHOICE, Some("OY"), "ɔɪ", "OY", "mid", "back", "rounded"),
+    back_closing_diphthong(
         RP_MOUTH,
         Some("AW"),
         "aʊ",
@@ -106,7 +78,6 @@ const VOWELS: &[RpVowel] = &[
         "low",
         "central",
         "unrounded",
-        "closing_back",
     ),
     vowel(
         RP_NURSE,
@@ -117,36 +88,9 @@ const VOWELS: &[RpVowel] = &[
         "central",
         "unrounded",
     ),
-    diphthong(
-        RP_NEAR,
-        None,
-        "ɪə",
-        "IH",
-        "mid",
-        "front",
-        "unrounded",
-        "centering",
-    ),
-    diphthong(
-        RP_SQUARE,
-        None,
-        "eə",
-        "EH",
-        "mid",
-        "front",
-        "unrounded",
-        "centering",
-    ),
-    diphthong(
-        RP_CURE,
-        None,
-        "ʊə",
-        "UH",
-        "high",
-        "back",
-        "rounded",
-        "centering",
-    ),
+    centering_diphthong(RP_NEAR, None, "ɪə", "IH", "mid", "front", "unrounded"),
+    centering_diphthong(RP_SQUARE, None, "eə", "EH", "mid", "front", "unrounded"),
+    centering_diphthong(RP_CURE, None, "ʊə", "UH", "high", "back", "rounded"),
     RpVowel {
         source: RP_SCHWA,
         arpabet: None,
@@ -182,7 +126,7 @@ const fn vowel(
     }
 }
 
-const fn diphthong(
+const fn front_closing_diphthong(
     source: &'static str,
     arpabet: Option<&'static str>,
     ipa: &'static str,
@@ -190,9 +134,8 @@ const fn diphthong(
     height: &'static str,
     backness: &'static str,
     roundedness: &'static str,
-    trajectory: &'static str,
 ) -> RpVowel {
-    RpVowel {
+    let mut vowel = vowel(
         source,
         arpabet,
         ipa,
@@ -200,9 +143,53 @@ const fn diphthong(
         height,
         backness,
         roundedness,
-        trajectory,
-        reduced: false,
-    }
+    );
+    vowel.trajectory = "closing_front";
+    vowel
+}
+
+const fn back_closing_diphthong(
+    source: &'static str,
+    arpabet: Option<&'static str>,
+    ipa: &'static str,
+    feature_base: &'static str,
+    height: &'static str,
+    backness: &'static str,
+    roundedness: &'static str,
+) -> RpVowel {
+    let mut vowel = vowel(
+        source,
+        arpabet,
+        ipa,
+        feature_base,
+        height,
+        backness,
+        roundedness,
+    );
+    vowel.trajectory = "closing_back";
+    vowel
+}
+
+const fn centering_diphthong(
+    source: &'static str,
+    arpabet: Option<&'static str>,
+    ipa: &'static str,
+    feature_base: &'static str,
+    height: &'static str,
+    backness: &'static str,
+    roundedness: &'static str,
+) -> RpVowel {
+    let mut vowel = vowel(
+        source,
+        arpabet,
+        ipa,
+        feature_base,
+        height,
+        backness,
+        roundedness,
+    );
+    vowel.trajectory = "centering";
+    vowel
 }
 
 pub(super) fn phoneme_id(symbol: &str) -> PhonemeId {

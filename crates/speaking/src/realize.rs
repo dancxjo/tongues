@@ -562,7 +562,6 @@ mod tests {
     use crate::data::lexicons::cmudict::CmuPhoneme;
     use crate::data::notation::arpabet;
     use crate::data::variety_by_code;
-    use crate::ids::VarietyId;
     use crate::variety::VarietyImplementationStatus;
 
     fn phoneme(variety: &str, symbol: &str) -> PhonemeToken {

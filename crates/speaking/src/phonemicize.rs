@@ -4926,6 +4926,19 @@ mod tests {
     }
 
     #[test]
+    fn rp_preserves_pos_sensitive_cmudict_selection() {
+        let noun = VarietyDataPhonemicizer
+            .phonemicize(&request("The lead pipe broke.", "en-GB-RP"))
+            .expect("RP lead noun");
+        let verb = VarietyDataPhonemicizer
+            .phonemicize(&request("They lead the team.", "en-GB-RP"))
+            .expect("RP lead verb");
+
+        assert_eq!(cmudict_symbols_for_word(&noun, 1), ["L", "RP_DRESS1", "D"]);
+        assert_eq!(cmudict_symbols_for_word(&verb, 1), ["L", "RP_FLEECE1", "D"]);
+    }
+
+    #[test]
     fn french_uses_lexique_before_rule_fallback() {
         let phonemicizer =
             phonemicizer_for_variety(&VarietyId("fr-FR-Standard".into())).expect("French");
