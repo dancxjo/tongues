@@ -2,13 +2,14 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use speaking::{UtteranceId, VarietyId};
 use tongues_duplex::{
-    DuplexFixtureSuite, DuplexSimulator, EvidenceModality, FixtureCompletionProvider,
-    NormalizedCompletionHypothesis, ObservedEvidence, OracleCompletionProvider, SimulatorConfig,
-    SimulatorEventKind, SimulatorJournal, SimulatorState, replay_journal,
+    replay_journal, DuplexFixtureSuite, DuplexSimulator, EvidenceModality,
+    FixtureCompletionProvider, NormalizedCompletionHypothesis, ObservedEvidence,
+    OracleCompletionProvider, SimulatorConfig, SimulatorEventKind, SimulatorJournal,
+    SimulatorState,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
@@ -173,11 +174,12 @@ fn load_suite(path: &Path) -> Result<DuplexFixtureSuite> {
 }
 
 fn write_journal_atomic(path: &Path, journal: &SimulatorJournal) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating duplex journal directory {}", parent.display()))?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("creating duplex journal directory {}", parent.display())
+            })?;
+        }
     }
     let part = part_path(path);
     let file = File::create(&part)
@@ -234,10 +236,7 @@ fn print_timeline(
                     hypothesis_text(hypothesis)
                 );
             }
-            SimulatorEventKind::HypothesisWithdrawn {
-                hypothesis,
-                reason,
-            } => println!(
+            SimulatorEventKind::HypothesisWithdrawn { hypothesis, reason } => println!(
                 "[inference] #{:02} withdraw {}: {}",
                 event.sequence, hypothesis.id.0, reason
             ),
@@ -285,8 +284,8 @@ fn print_timeline(
             ),
         }
     }
-    let prediction = state
-        .predicted_suffix()
+    let predicted_suffix = state.predicted_suffix();
+    let prediction = predicted_suffix
         .iter()
         .map(|morpheme| morpheme.surface.as_str())
         .collect::<Vec<_>>()

@@ -1550,7 +1550,20 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn catalog_entry_fingerprint(entry: &ModelCatalogEntry) -> Result<String> {
-    let source = serde_json::to_vec(entry).context("failed to serialize model manifest")?;
+    let artifacts = entry
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            serde_json::json!({
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+                "install_path": artifact.install_path,
+                "members": artifact.members,
+            })
+        })
+        .collect::<Vec<_>>();
+    let source =
+        serde_json::to_vec(&artifacts).context("failed to serialize artifact fingerprints")?;
     Ok(format!("{:x}", Sha256::digest(source)))
 }
 
@@ -1698,6 +1711,24 @@ mod tests {
             ModelVerificationStatus::Verified,
             "a new process should trust unchanged cached verification metadata"
         );
+        let mut display_only_change = entry.clone();
+        display_only_change.display_name = "Renamed fixture".into();
+        assert_eq!(
+            restarted.verification_state(&display_only_change).status,
+            ModelVerificationStatus::Verified,
+            "display metadata is not an artifact or runtime compatibility change"
+        );
+        let verification_path =
+            restarted.verification_cache_path(&entry.id, entry.package_version);
+        let mut stale_cache: serde_json::Value =
+            serde_json::from_slice(&fs::read(&verification_path).unwrap()).unwrap();
+        stale_cache["verifier_version"] = serde_json::json!(MODEL_VERIFIER_VERSION + 1);
+        write_json_atomic(&verification_path, &stale_cache).unwrap();
+        assert_eq!(
+            restarted.verification_state(&entry).status,
+            ModelVerificationStatus::ChangedSinceVerification
+        );
+        restarted.verify(&entry).expect("refresh verifier cache");
         fs::write(&artifact_path, b"changed").unwrap();
         assert_eq!(
             restarted.verification_state(&entry).status,

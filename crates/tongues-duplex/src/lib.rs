@@ -343,9 +343,7 @@ impl SimulatorState {
                     .insert(hypothesis.id.clone(), hypothesis.clone())
                     .is_some()
                 {
-                    return Err(SimulatorError::DuplicateHypothesis(
-                        hypothesis.id.clone(),
-                    ));
+                    return Err(SimulatorError::DuplicateHypothesis(hypothesis.id.clone()));
                 }
             }
             SimulatorEventKind::HypothesisWithdrawn { hypothesis, .. } => {
@@ -564,13 +562,10 @@ impl<P: CompletionProvider> DuplexSimulator<P> {
             .skip(from)
             .take_while(|(index, _)| {
                 selected.iter().all(|hypothesis| {
-                    hypothesis
-                        .morphemes
-                        .get(*index)
-                        .is_some_and(|morpheme| {
-                            morpheme.key == shared[*index].key
-                                && directly_supported_occurrence(morpheme, &self.state.evidence)
-                        })
+                    hypothesis.morphemes.get(*index).is_some_and(|morpheme| {
+                        morpheme.key == shared[*index].key
+                            && directly_supported_occurrence(morpheme, &self.state.evidence)
+                    })
                 })
             })
             .map(|(index, representative)| {
@@ -641,9 +636,7 @@ fn validate_config(config: &SimulatorConfig) -> Result<(), SimulatorError> {
         || config.posterior_mass <= 0.0
         || config.posterior_mass > 1.0
     {
-        return Err(SimulatorError::InvalidPosteriorMass(
-            config.posterior_mass,
-        ));
+        return Err(SimulatorError::InvalidPosteriorMass(config.posterior_mass));
     }
     Ok(())
 }
@@ -666,9 +659,7 @@ pub fn normalize_beam(
     for proposal in &proposals {
         validate_id(&proposal.id.0, "hypothesis")?;
         if !seen.insert(proposal.id.clone()) {
-            return Err(SimulatorError::DuplicateBeamHypothesis(
-                proposal.id.clone(),
-            ));
+            return Err(SimulatorError::DuplicateBeamHypothesis(proposal.id.clone()));
         }
         if !proposal.weight.is_finite() || proposal.weight < 0.0 {
             return Err(SimulatorError::InvalidWeight {
@@ -903,8 +894,9 @@ impl DuplexFixtureSuite {
             if fixture.steps.is_empty() {
                 return Err(FixtureError::EmptyFixture(fixture.id.clone()));
             }
-            validate_config(&fixture.config)
-                .map_err(|error| FixtureError::InvalidFixture(fixture.id.clone(), error.to_string()))?;
+            validate_config(&fixture.config).map_err(|error| {
+                FixtureError::InvalidFixture(fixture.id.clone(), error.to_string())
+            })?;
         }
         Ok(())
     }
