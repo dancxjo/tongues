@@ -343,6 +343,10 @@ fn print_timeline(
                     .collect::<Vec<_>>()
                     .join(" ")
             ),
+            SimulatorEventKind::VerificationEvaluated { result } => println!(
+                "[verification] #{:02} status={} score={:.3}: {}",
+                event.sequence, result.status, result.score, result.reason
+            ),
         }
     }
     let predicted_suffix = state.predicted_suffix();
@@ -414,7 +418,9 @@ mod tests {
             "0.9",
         ])
         .unwrap();
-        let DuplexCommands::Demo(command) = cli.command;
+        let DuplexCommands::Demo(command) = cli.command else {
+            panic!("expected duplex demo command");
+        };
         assert_eq!(command.chunks.len(), 2);
         assert_eq!(command.posterior_mass, Some(0.9));
     }
