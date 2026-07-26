@@ -839,15 +839,31 @@ enum SentenceParserCommands {
         training_set: SentenceParserTrainingSetArg,
     },
 
-    /// Validate a sentence parser artifact scaffold
+    /// Evaluate a trained sentence parser model on a prepared split
     Eval {
         /// Directory containing the parser model
         #[arg(long, default_value = "models/sentence-parser/v0")]
         model: PathBuf,
 
-        /// Split to evaluate on
+        /// Prepared data directory containing split JSONL files
+        #[arg(long, default_value = "datasets/sentence-parser/v0")]
+        data: PathBuf,
+
+        /// Split to evaluate on: train, valid, or test
         #[arg(long, default_value = "test")]
         split: String,
+
+        /// Maximum examples to run (bounded evaluation)
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+
+        /// Random seed for deterministic sampling
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+
+        /// Write machine-readable JSON metrics to this file (optional)
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
 
     /// Parse a sentence into the speech syntax analysis shape
@@ -2801,21 +2817,14 @@ fn run_sentence_parser_command(
             )?;
             Ok(())
         }
-        SentenceParserCommands::Eval { model, split } => {
-            let manifest_path = model.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
-            let manifest = tongues_neural::read_manifest(&manifest_path)?;
-            anyhow::ensure!(
-                manifest.family == tongues_sentence_parser::FAMILY,
-                "expected sentence-parser manifest, found `{}`",
-                manifest.family
-            );
-            println!(
-                "Sentence parser artifact is valid for split `{}`: {}",
-                split,
-                model.display()
-            );
-            Ok(())
-        }
+        SentenceParserCommands::Eval {
+            model,
+            data,
+            split,
+            limit,
+            seed,
+            report,
+        } => cmd_sentence_parser_eval(&model, &data, &split, limit, seed, report.as_deref(), device_arg),
         SentenceParserCommands::Parse { model, text } => {
             let config_path = model.join("model_config.json");
             let lowercase = if config_path.exists() {
@@ -5180,6 +5189,224 @@ fn compact_display(value: &str, max_chars: usize) -> String {
     compact = compact.chars().take(max_chars.saturating_sub(3)).collect();
     compact.push_str("...");
     compact
+}
+
+fn cmd_sentence_parser_eval(
+    model_dir: &Path,
+    data: &Path,
+    split: &str,
+    limit: usize,
+    seed: u64,
+    report: Option<&Path>,
+    device_arg: DeviceArg,
+) -> Result<()> {
+    anyhow::ensure!(limit > 0, "--limit must be greater than zero");
+
+    // Preliminary artifact validation.
+    let manifest_path = model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
+    let manifest = tongues_neural::read_manifest(&manifest_path)
+        .with_context(|| format!("reading manifest from {}", manifest_path.display()))?;
+    anyhow::ensure!(
+        manifest.family == tongues_sentence_parser::FAMILY,
+        "expected sentence-parser manifest, found `{}`",
+        manifest.family
+    );
+
+    let split_path = data.join(format!("{split}.jsonl"));
+    let rows: Vec<tongues_sentence_parser::BoundaryTrainingExample> =
+        read_jsonl_as(&split_path).with_context(|| format!("loading {}", split_path.display()))?;
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "sentence-parser split is empty: {}",
+        split_path.display()
+    );
+
+    let start_config = std::time::Instant::now();
+    let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
+    let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
+    let lowercase = read_json_file::<tongues_sentence_parser::SentenceParserConfig>(
+        &model_dir.join("sentence_parser_config.json"),
+    )
+    .map(|config| config.lowercase)
+    .unwrap_or(false);
+
+    let mut shuffled_indexes: Vec<usize> = (0..rows.len()).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    shuffled_indexes.shuffle(&mut rng);
+    let sample_indexes: Vec<usize> = shuffled_indexes.into_iter().take(limit).collect();
+
+    println!("Sentence parser eval");
+    println!("  model: {}", model_dir.display());
+    println!("  data:  {}", data.display());
+    println!(
+        "  split: {} ({} rows, running {} random examples, seed={})",
+        split,
+        format_count(rows.len()),
+        format_count(sample_indexes.len()),
+        seed,
+    );
+    println!(
+        "  metadata: {} tokens, max_seq_len={} loaded in {:.1} ms",
+        format_count(vocab.size()),
+        format_count(model_config.max_seq_len),
+        elapsed_ms(start_config.elapsed())
+    );
+
+    match device_arg {
+        DeviceArg::Cpu => {
+            let device = NdArrayDevice::Cpu;
+            println!("  device: CPU (ndarray)");
+            run_sentence_parser_eval::<CpuInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &rows,
+                &sample_indexes,
+                lowercase,
+                report,
+            )
+        }
+        DeviceArg::Cuda { index } => {
+            let device = CudaDevice::new(index);
+            println!("  device: CUDA GPU {index}");
+            run_sentence_parser_eval::<CudaInferBackend>(
+                &device,
+                &model_config,
+                model_dir,
+                &vocab,
+                &rows,
+                &sample_indexes,
+                lowercase,
+                report,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_sentence_parser_eval<B: Backend>(
+    device: &B::Device,
+    model_config: &ModelConfig,
+    model_dir: &Path,
+    vocab: &Vocab,
+    rows: &[tongues_sentence_parser::BoundaryTrainingExample],
+    sample_indexes: &[usize],
+    _lowercase: bool,
+    report: Option<&Path>,
+) -> Result<()> {
+    let start_load = std::time::Instant::now();
+    let model = load_model::<B>(model_config, &model_dir.join("model"), device)?;
+    println!(
+        "  weights: loaded in {:.1} ms\n",
+        elapsed_ms(start_load.elapsed())
+    );
+
+    let mut pairs: Vec<(String, String)> = Vec::with_capacity(sample_indexes.len());
+    let mut total_prediction = Duration::ZERO;
+
+    // Maximum disagreements to print.
+    const MAX_DISAGREEMENTS: usize = 8;
+    let mut disagreements: Vec<(usize, &tongues_sentence_parser::BoundaryTrainingExample, String)> =
+        Vec::new();
+
+    for &row_index in sample_indexes {
+        let row = &rows[row_index];
+        let start_prediction = std::time::Instant::now();
+        let predicted = predict_sentence_boundary(&model, &row.input, vocab, device);
+        total_prediction += start_prediction.elapsed();
+        pairs.push((row.output.clone(), predicted.clone()));
+
+        if predicted != row.output && disagreements.len() < MAX_DISAGREEMENTS {
+            disagreements.push((row_index, row, predicted));
+        }
+    }
+
+    let pair_refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(g, p)| (g.as_str(), p.as_str()))
+        .collect();
+    let metrics = tongues_sentence_parser::evaluate_predictions(&pair_refs);
+
+    // Print disagreement sample.
+    if !disagreements.is_empty() {
+        println!("Disagreements (up to {MAX_DISAGREEMENTS}):");
+        for (row_index, row, predicted) in &disagreements {
+            let (gold_action, _) = tongues_sentence_parser::parse_boundary_output(&row.output);
+            let (pred_action, _) = tongues_sentence_parser::parse_boundary_output(predicted);
+            println!(
+                "  row={} gold_action={} pred_action={}",
+                format_count(row_index + 1),
+                gold_action.is_empty().then_some("<invalid>").unwrap_or(gold_action),
+                pred_action.is_empty().then_some("<invalid>").unwrap_or(pred_action),
+            );
+            println!("    input: {}", compact_display(&row.input, 120));
+            println!("    gold:  {}", compact_display(&row.output, 120));
+            println!("    pred:  {}", compact_display(predicted, 120));
+        }
+        println!();
+    }
+
+    let mean_prediction_ms =
+        total_prediction.as_secs_f64() * 1000.0 / sample_indexes.len() as f64;
+
+    println!("Summary:");
+    println!(
+        "  exact action accuracy : {}/{} ({:.1}%)",
+        format_count(metrics.exact_action),
+        format_count(metrics.total),
+        metrics.exact_action_accuracy * 100.0,
+    );
+    println!(
+        "  invalid output rate   : {}/{} ({:.1}%)",
+        format_count(metrics.invalid),
+        format_count(metrics.total),
+        metrics.invalid_rate * 100.0,
+    );
+    println!(
+        "  boundary precision    : {:.3}",
+        metrics.boundary.precision
+    );
+    println!(
+        "  boundary recall       : {:.3}",
+        metrics.boundary.recall
+    );
+    println!("  boundary F1           : {:.3}", metrics.boundary.f1);
+    println!(
+        "  no-boundary precision : {:.3}",
+        metrics.no_boundary.precision
+    );
+    println!(
+        "  no-boundary recall    : {:.3}",
+        metrics.no_boundary.recall
+    );
+    println!(
+        "  no-boundary F1        : {:.3}",
+        metrics.no_boundary.f1
+    );
+    if metrics.repair_count > 0 {
+        println!(
+            "  repair examples       : {}",
+            format_count(metrics.repair_count)
+        );
+        println!(
+            "  mean repair char dist : {:.1}",
+            metrics.mean_repair_char_distance
+        );
+    }
+    println!(
+        "  mean inference        : {:.1} ms / example",
+        mean_prediction_ms
+    );
+
+    if let Some(report_path) = report {
+        let json = serde_json::to_string_pretty(&metrics)?;
+        fs::write(report_path, &json)
+            .with_context(|| format!("writing report to {}", report_path.display()))?;
+        println!("\nReport written to {}", report_path.display());
+    }
+
+    Ok(())
 }
 
 fn cmd_sentence_parser_infer(
