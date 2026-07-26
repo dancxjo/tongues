@@ -56,6 +56,14 @@ or running the model does not grant commercial use or permission to distribute
 modified weights. This model license is independent from both Tongues' MIT
 code and Coqui's MPL-2.0 source implementation.
 
+The Coqui `freevc24` voice-conversion registry entry declares MIT for the
+published FreeVC weights. Its two required auxiliary artifacts are tracked
+separately: WavLM-Large follows Microsoft's MIT-licensed WavLM implementation,
+and the FreeVC speaker encoder follows the MIT-licensed FreeVC distribution.
+The catalog pins all three download URLs, byte sizes, SHA-256 digests, and
+license evidence. Installing the main archive alone is intentionally
+insufficient for execution.
+
 The official XTTS v2 repository publishes its model, tokenizer, conditioning
 statistics, and examples under the Coqui Public Model License 1.0.0
 (`LicenseRef-Coqui-Public-Model-License-1.0.0`). CPML 1.0.0 restricts the model

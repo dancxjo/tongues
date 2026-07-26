@@ -11,8 +11,7 @@ use anyhow::{ensure, Context, Result};
 use burn::module::{Initializer, Module, Param};
 use burn::nn::conv::{Conv1d, Conv1dConfig};
 use burn::nn::{
-    Embedding, EmbeddingConfig, LayerNorm, LayerNormConfig, Linear, LinearConfig,
-    PaddingConfig1d,
+    Embedding, EmbeddingConfig, LayerNorm, LayerNormConfig, Linear, LinearConfig, PaddingConfig1d,
 };
 use burn::tensor::activation::{gelu, sigmoid, softmax};
 use burn::tensor::backend::Backend;
@@ -62,9 +61,7 @@ impl WavLmConfig {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.encoder_layers > 0
-                && self.encoder_embed_dim > 0
-                && self.encoder_ffn_embed_dim > 0,
+            self.encoder_layers > 0 && self.encoder_embed_dim > 0 && self.encoder_ffn_embed_dim > 0,
             "WavLM transformer dimensions must be positive"
         );
         ensure!(
@@ -75,9 +72,7 @@ impl WavLmConfig {
         ensure!(
             self.conv_pos > 0
                 && self.conv_pos_groups > 0
-                && self
-                    .encoder_embed_dim
-                    .is_multiple_of(self.conv_pos_groups),
+                && self.encoder_embed_dim.is_multiple_of(self.conv_pos_groups),
             "WavLM positional convolution topology is invalid"
         );
         if self.relative_position_embedding {
@@ -119,7 +114,11 @@ impl<B: Backend> WavLmFeatureBlock<B> {
 
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let output = self.conv.forward(input);
-        gelu(self.layer_norm.forward(output.swap_dims(1, 2)).swap_dims(1, 2))
+        gelu(
+            self.layer_norm
+                .forward(output.swap_dims(1, 2))
+                .swap_dims(1, 2),
+        )
     }
 }
 
@@ -208,10 +207,7 @@ impl<B: Backend> WeightNormPositionalConv<B> {
 }
 
 fn weight_norm_dim_two<B: Backend>(weight: Tensor<B, 3>) -> Tensor<B, 3> {
-    weight
-        .powf_scalar(2.0)
-        .sum_dims(&[0usize, 1usize])
-        .sqrt()
+    weight.powf_scalar(2.0).sum_dims(&[0usize, 1usize]).sqrt()
 }
 
 #[derive(Module, Debug)]
@@ -230,11 +226,7 @@ struct WavLmAttention<B: Backend> {
 }
 
 impl<B: Backend> WavLmAttention<B> {
-    fn init(
-        config: &WavLmConfig,
-        relative_bias: bool,
-        device: &B::Device,
-    ) -> Self {
+    fn init(config: &WavLmConfig, relative_bias: bool, device: &B::Device) -> Self {
         let embed = config.encoder_embed_dim;
         let num_heads = config.encoder_attention_heads;
         let head_dim = embed / num_heads;
@@ -248,9 +240,9 @@ impl<B: Backend> WavLmAttention<B> {
             grep_linear: config
                 .gru_rel_pos
                 .then(|| LinearConfig::new(head_dim, 8).init(device)),
-            grep_a: config.gru_rel_pos.then(|| {
-                Initializer::Ones.init([1, num_heads, 1, 1], device)
-            }),
+            grep_a: config
+                .gru_rel_pos
+                .then(|| Initializer::Ones.init([1, num_heads, 1, 1], device)),
             num_heads,
             head_dim,
             num_buckets: config.num_buckets,
@@ -260,16 +252,10 @@ impl<B: Backend> WavLmAttention<B> {
 
     fn relative_bias(&self, frames: usize, device: &B::Device) -> Option<Tensor<B, 4>> {
         let embedding = self.relative_attention_bias.as_ref()?;
-        let buckets = relative_position_buckets(
-            frames,
-            frames,
-            self.num_buckets,
-            self.max_distance,
-        );
-        let buckets = Tensor::<B, 2, Int>::from_data(
-            TensorData::new(buckets, [frames, frames]),
-            device,
-        );
+        let buckets =
+            relative_position_buckets(frames, frames, self.num_buckets, self.max_distance);
+        let buckets =
+            Tensor::<B, 2, Int>::from_data(TensorData::new(buckets, [frames, frames]), device);
         Some(
             embedding
                 .forward(buckets)
@@ -285,8 +271,7 @@ impl<B: Backend> WavLmAttention<B> {
         position_bias: Option<Tensor<B, 4>>,
     ) -> (Tensor<B, 3>, Option<Tensor<B, 4>>) {
         let [batch, frames, embed] = input.dims();
-        let position_bias =
-            position_bias.or_else(|| self.relative_bias(frames, &input.device()));
+        let position_bias = position_bias.or_else(|| self.relative_bias(frames, &input.device()));
         let q = self
             .q_proj
             .forward(input.clone())
@@ -315,8 +300,7 @@ impl<B: Backend> WavLmAttention<B> {
                     let first = gates
                         .clone()
                         .slice([0..batch, 0..self.num_heads, 0..frames, 0..1]);
-                    let second =
-                        gates.slice([0..batch, 0..self.num_heads, 0..frames, 1..2]);
+                    let second = gates.slice([0..batch, 0..self.num_heads, 0..frames, 1..2]);
                     let scale = first * (second * gate_a.val() - 1.0) + 2.0;
                     scale * bias.expand([batch, self.num_heads, frames, frames])
                 }
@@ -325,9 +309,7 @@ impl<B: Backend> WavLmAttention<B> {
             scores = scores + scaled_bias;
         }
         let attended = softmax(scores, 3).matmul(v);
-        let attended = attended
-            .swap_dims(1, 2)
-            .reshape([batch, frames, embed]);
+        let attended = attended.swap_dims(1, 2).reshape([batch, frames, embed]);
         (self.out_proj.forward(attended), position_bias)
     }
 }
@@ -379,16 +361,10 @@ impl<B: Backend> WavLmTransformerLayer<B> {
                 device,
             ),
             self_attn_layer_norm: LayerNormConfig::new(config.encoder_embed_dim).init(device),
-            fc1: LinearConfig::new(
-                config.encoder_embed_dim,
-                config.encoder_ffn_embed_dim,
-            )
-            .init(device),
-            fc2: LinearConfig::new(
-                config.encoder_ffn_embed_dim,
-                config.encoder_embed_dim,
-            )
-            .init(device),
+            fc1: LinearConfig::new(config.encoder_embed_dim, config.encoder_ffn_embed_dim)
+                .init(device),
+            fc2: LinearConfig::new(config.encoder_ffn_embed_dim, config.encoder_embed_dim)
+                .init(device),
             final_layer_norm: LayerNormConfig::new(config.encoder_embed_dim).init(device),
         }
     }
@@ -435,7 +411,8 @@ impl<B: Backend> WavLmTransformerEncoder<B> {
     }
 
     fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        let mut output = input.clone() + self.pos_conv.forward(input.swap_dims(1, 2)).swap_dims(1, 2);
+        let mut output =
+            input.clone() + self.pos_conv.forward(input.swap_dims(1, 2)).swap_dims(1, 2);
         let mut position_bias = None;
         for layer in &self.layers {
             (output, position_bias) = layer.forward(output, position_bias);
@@ -465,10 +442,7 @@ impl<B: Backend> WavLm<B> {
         })
     }
 
-    pub fn load_large(
-        checkpoint_path: impl AsRef<Path>,
-        device: &B::Device,
-    ) -> Result<Self> {
+    pub fn load_large(checkpoint_path: impl AsRef<Path>, device: &B::Device) -> Result<Self> {
         let mut model = Self::init(WavLmConfig::large(), device)?;
         let result = crate::checkpoint::load_pytorch_layout_checkpoint(
             &mut model,

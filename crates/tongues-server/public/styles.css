@@ -319,6 +319,88 @@ a {
     gap: 1.25rem;
 }
 
+.pipeline-toolbar {
+    display: grid;
+    grid-template-columns: minmax(240px, 420px);
+    margin: 1rem 0;
+}
+
+.pipeline-workbench {
+    align-items: center;
+    display: grid;
+    gap: 0.45rem;
+    grid-template-columns:
+        minmax(120px, 0.8fr) auto minmax(170px, 1fr) auto
+        minmax(210px, 1.2fr) auto minmax(180px, 1fr) auto minmax(130px, 0.8fr);
+    margin-bottom: 1.25rem;
+    overflow-x: auto;
+    padding: 0.4rem 0.1rem 0.8rem;
+}
+
+.pipeline-stage {
+    align-self: stretch;
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(32, 53, 68, 0.06);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    justify-content: center;
+    min-width: 0;
+    padding: 0.8rem;
+}
+
+.pipeline-stage select {
+    min-width: 0;
+    width: 100%;
+}
+
+.pipeline-stage small {
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
+.pipeline-stage-label {
+    color: var(--primary-hover);
+    font-size: 0.67rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.pipeline-connector,
+.pipeline-branch {
+    color: var(--primary);
+    font-size: 1.35rem;
+    font-weight: 900;
+    text-align: center;
+}
+
+.pipeline-generator-stack {
+    align-self: stretch;
+    display: grid;
+    gap: 0.3rem;
+    grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.pipeline-conditioning {
+    background: #f0f8f6;
+    border-color: #b8ddd5;
+    min-height: 74px;
+}
+
+.pipeline-stage-spanned {
+    background: repeating-linear-gradient(
+        -45deg,
+        #f5f7f8,
+        #f5f7f8 8px,
+        #edf1f3 8px,
+        #edf1f3 16px
+    );
+    border-style: dashed;
+}
+
 .speech-runtime-panel,
 .model-card,
 .result-panel,
@@ -1187,6 +1269,25 @@ audio::-webkit-media-controls-panel {
 
     .controls-grid {
         grid-template-columns: 1fr;
+    }
+
+    .pipeline-toolbar {
+        grid-template-columns: 1fr;
+    }
+
+    .pipeline-workbench {
+        align-items: stretch;
+        grid-template-columns: 1fr;
+        overflow: visible;
+    }
+
+    .pipeline-connector {
+        line-height: 1;
+        transform: rotate(90deg);
+    }
+
+    .pipeline-generator-stack {
+        grid-template-rows: auto auto auto;
     }
 
     .component-inventory,

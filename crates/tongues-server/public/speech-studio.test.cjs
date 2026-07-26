@@ -89,6 +89,72 @@ test('filters varieties from the selected path capability', () => {
     );
 });
 
+test('selects runnable component compositions independently of legacy paths', () => {
+    const pipeline = {
+        input: 'text',
+        projector: 'projector/fastpitch-ljspeech',
+        acoustic_model: 'fastpitch-ljspeech',
+        conditioners: [],
+        vocoder: 'hifigan-v2-ljspeech',
+        output: 'wav',
+    };
+    const unavailable = {
+        id: 'unavailable',
+        backend: 'vits',
+        runnable: false,
+        selected: true,
+        pipeline: { input: 'text', projector: 'projector/vits', end_to_end: 'vits', output: 'wav' },
+    };
+    const ready = {
+        id: 'ready',
+        backend: 'fastpitch',
+        runnable: true,
+        selected: false,
+        pipeline,
+    };
+    assert.equal(studio.selectInitialComposition({ compositions: [unavailable, ready] }).id, 'ready');
+    assert.equal(studio.compositionGenerator(ready), 'fastpitch-ljspeech');
+});
+
+test('reports exact directed compatibility edges', () => {
+    const discovery = {
+        compatibility: [{
+            from_component_id: 'fastpitch-ljspeech',
+            to_component_id: 'hifigan-v2-ljspeech',
+            compatible: true,
+            reason: 'exact contract',
+        }],
+    };
+    assert.equal(
+        studio.compatibilityFor(
+            discovery,
+            'fastpitch-ljspeech',
+            'hifigan-v2-ljspeech',
+        ).reason,
+        'exact contract',
+    );
+    assert.equal(studio.compatibilityFor(discovery, 'hifigan-v2-ljspeech', 'fastpitch-ljspeech'), undefined);
+});
+
+test('builds component-addressed payloads without legacy backend selection', () => {
+    const pipeline = {
+        input: 'text',
+        projector: 'projector/fastpitch-ljspeech',
+        acoustic_model: 'fastpitch-ljspeech',
+        conditioners: [],
+        vocoder: 'hifigan-v2-ljspeech',
+        output: 'wav',
+    };
+    const path = fixturePath({ pipeline });
+    const payload = studio.buildPayload(path, new Map(), {
+        text: 'Composable speech.',
+        variety: 'en-US-GA',
+    });
+    assert.deepEqual(payload.pipeline, pipeline);
+    assert.equal(payload.backend, undefined);
+    assert.equal(payload.model, undefined);
+});
+
 test('builds payloads only from declared controls', () => {
     const values = new Map([
         ['speed', '1.15'],

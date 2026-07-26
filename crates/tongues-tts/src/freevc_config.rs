@@ -60,7 +60,7 @@ impl Default for FreeVcNetworkConfig {
             resblock: "1".into(),
             resblock_kernel_sizes: vec![3, 7, 11],
             resblock_dilation_sizes: vec![vec![1, 3, 5], vec![1, 3, 5], vec![1, 3, 5]],
-            upsample_rates: vec![10, 8, 2, 2],
+            upsample_rates: vec![10, 6, 4, 2],
             upsample_initial_channel: 512,
             upsample_kernel_sizes: vec![16, 16, 4, 4],
             gin_channels: 256,
@@ -137,8 +137,7 @@ impl FreeVcConfig {
             "the published FreeVC24 runtime requires its external speaker encoder"
         );
         ensure!(
-            self.model_args.upsample_rates.len()
-                == self.model_args.upsample_kernel_sizes.len(),
+            self.model_args.upsample_rates.len() == self.model_args.upsample_kernel_sizes.len(),
             "FreeVC upsample rate/kernel counts differ"
         );
         ensure!(
@@ -146,7 +145,8 @@ impl FreeVcConfig {
                 == self.model_args.resblock_dilation_sizes.len(),
             "FreeVC residual kernel/dilation counts differ"
         );
-        self.decoder_config().validate()?;
+        crate::VitsWaveformDecoderConfig::from_generator_config(self.decoder_config())
+            .map_err(anyhow::Error::from)?;
         Ok(())
     }
 
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(config.audio.output_sample_rate, 24_000);
         assert_eq!(
             config.model_args.upsample_rates.iter().product::<usize>(),
-            320
+            480
         );
         assert_eq!(config.decoder_config().cond_channels, 256);
     }

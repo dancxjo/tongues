@@ -52,22 +52,24 @@ pub mod components;
 pub mod d_vectors;
 pub mod delightful_tts_config;
 pub mod device;
-pub mod glow_tts_config;
+pub mod freevc;
 pub mod freevc_config;
+pub mod glow_tts_config;
 pub mod languages;
 pub mod model_catalog;
 pub mod model_config;
 pub mod model_package;
 pub mod orchestration;
 pub mod phoneme_projector;
+pub mod pipeline_registry;
 pub mod profiling;
 pub mod speaker_encoder;
 pub mod speakers;
 pub mod tacotron_config;
 pub mod vits_config;
-pub mod wavlm;
 #[allow(dead_code)]
 mod vits_projector;
+pub mod wavlm;
 pub mod xtts;
 
 pub use burn_delightful_tts::{
@@ -145,8 +147,12 @@ pub use device::{
     resolve_speech_device, ResolvedSpeechDevice, SpeechDeviceRequest, SpeechDeviceSelection,
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
-pub use glow_tts_config::{GlowTtsEncoderConfig, GlowTtsInferenceConfig, GlowTtsNetworkConfig};
+pub use freevc::{
+    FreeVc, FreeVcSpeakerEncoder, FREEVC_BACKEND_ID, FREEVC_MODEL_ID,
+    FREEVC_SPEAKER_EMBEDDING_SPACE,
+};
 pub use freevc_config::{FreeVcAudioConfig, FreeVcConfig, FreeVcNetworkConfig};
+pub use glow_tts_config::{GlowTtsEncoderConfig, GlowTtsInferenceConfig, GlowTtsNetworkConfig};
 pub use languages::LanguageCatalog;
 pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,
@@ -175,11 +181,18 @@ pub use orchestration::{
     LanguageSelection, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,
     OutputAudioContract, PitchCapabilities, PlanEngineBackend, ReferenceAudioCapabilities,
     ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection, StyleCapabilities,
-    StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming,
-    SynthesizerBackend, SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
+    StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming, SynthesizerBackend,
+    SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
 };
 pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
+};
+pub use pipeline_registry::{
+    acoustic_decoder_compatibility, registered_composition_for_legacy,
+    registered_composition_for_pipeline, registered_speech_compositions,
+    registered_speech_pipeline_components, RegisteredSpeechComposition,
+    SpeechPipelineCompatibility, SpeechPipelineComponent, SpeechPipelineSelection,
+    SpeechPipelineStage, SpeechPortContract, TEXT_INPUT_COMPONENT_ID, WAV_OUTPUT_COMPONENT_ID,
 };
 pub use profiling::{
     ModelLoadProfileEvent, ModelLoadStage, SynthesisDimension, SynthesisProfileEvent,
@@ -196,8 +209,8 @@ pub use tacotron_config::{
     DEFAULT_TACOTRON_MAX_DECODER_STEPS,
 };
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
-pub use wavlm::{WavLm, WavLmConfig};
 pub use vits_projector::VitsLinguisticProjector;
+pub use wavlm::{WavLm, WavLmConfig};
 pub use xtts::{
     XttsAudioConfig, XttsModelArgs, XttsStreamAssembler, XttsTokenizer, XttsV2Config,
     XTTS_V2_CONDITIONING_MEL_BINS, XTTS_V2_DEFAULT_STREAM_CODE_CHUNK,

@@ -75,6 +75,20 @@ license-defined non-commercial purposes. Native loading or SafeTensors
 conversion does not relicense the model, tokenizer, conditioning assets, or
 outputs.
 
+## FreeVC and WavLM
+
+Projects: [OlaWod/FreeVC](https://github.com/OlaWod/FreeVC),
+[microsoft/unilm WavLM](https://github.com/microsoft/unilm/tree/master/wavlm),
+and [coqui-ai/TTS](https://github.com/coqui-ai/TTS)
+
+Tongues includes a Rust adaptation of the FreeVC inference graph, its external
+speaker encoder, and the WavLM-Large content encoder. FreeVC and WavLM are
+distributed under MIT licenses; the native implementation preserves their
+project identities and the model catalog retains artifact-specific evidence.
+The Coqui FreeVC24 registry entry also declares its published model artifact
+MIT. Checkpoint files remain separate works and are downloaded only through
+the checksum-pinned catalog.
+
 Repository history includes commit `8e3a9c6`, titled
 `Import/adapt/reverse engineer some components from coqui`. That title does not
 identify which expressions, if any, were translated. The affected VITS modules

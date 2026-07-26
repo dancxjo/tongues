@@ -674,7 +674,10 @@ impl<B: Backend> ResidualCouplingFlow<B> {
                 top_level_key: Some("model"),
                 predicate: Some(flow_tensor),
                 key_remappings: vec![(r"^flow\.".into(), String::new())],
-                map_indices_contiguous: false,
+                // PyTorch's flow ModuleList alternates coupling and Flip
+                // modules, so learned tensors use indices 0, 2, 4, ... .
+                // Burn represents only the learned coupling layers.
+                map_indices_contiguous: true,
                 allow_partial: true,
                 skip_enum_variants: true,
             },

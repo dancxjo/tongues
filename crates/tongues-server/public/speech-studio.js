@@ -8,6 +8,7 @@
     const state = {
         discovery: null,
         pathKey: '',
+        presetId: '',
         values: new Map(),
         samples: [],
         emotions: [],
@@ -20,7 +21,31 @@
     const VERIFICATION_CONCURRENCY = 3;
 
     const pathKey = (path) => `${path.backend}::${path.model}`;
-    const selectedPath = () => state.discovery?.paths.find((path) => pathKey(path) === state.pathKey);
+    const compositionGenerator = (composition) => (
+        composition?.pipeline?.end_to_end || composition?.pipeline?.acoustic_model || ''
+    );
+    const selectedComposition = () => (
+        state.discovery?.compositions?.find((composition) => composition.id === state.pathKey)
+    );
+    const selectedPath = () => {
+        const composition = selectedComposition();
+        if (!composition) {
+            return state.discovery?.paths?.find((path) => pathKey(path) === state.pathKey);
+        }
+        const legacy = state.discovery?.paths?.find((path) => (
+            path.backend === composition.backend && path.model === composition.model
+        )) || {};
+        return {
+            ...legacy,
+            ...(composition.capabilities || {}),
+            ...composition,
+            id: composition.model,
+            complete: true,
+            acoustic_model: composition.pipeline.acoustic_model,
+            vocoder: composition.pipeline.vocoder,
+            voice_model: composition.pipeline.end_to_end,
+        };
+    };
     const listedValues = (capability) => (
         capability?.support === 'listed' ? (capability.values || []) : []
     );
@@ -35,6 +60,24 @@
             || paths[0]
             || null;
     };
+    const availableCompositions = (discovery, includeTest = false) => (
+        (discovery?.compositions || []).filter((composition) => (
+            includeTest || composition.backend !== 'mock'
+        ))
+    );
+    const selectInitialComposition = (discovery) => {
+        const compositions = availableCompositions(discovery);
+        return compositions.find((composition) => composition.selected && composition.runnable)
+            || compositions.find((composition) => composition.runnable)
+            || compositions.find((composition) => composition.selected)
+            || compositions[0]
+            || null;
+    };
+    const compatibilityFor = (discovery, from, to) => (
+        (discovery?.compatibility || []).find((edge) => (
+            edge.from_component_id === from && edge.to_component_id === to
+        ))
+    );
     const varietiesForPath = (path) => listedValues(path?.varieties);
     const controlsForPath = (path, group) => (
         (path?.controls || []).filter((control) => control.group === group)
@@ -69,10 +112,13 @@
         }
         const payload = {
             text: String(context.text || ''),
-            backend: path.backend,
-            model: path.model,
             variety: context.variety || varietiesForPath(path)[0]?.id || null,
         };
+        if (path.pipeline) payload.pipeline = path.pipeline;
+        else {
+            payload.backend = path.backend;
+            payload.model = path.model;
+        }
         if (!payload.text.trim()) throw new Error('Enter text to synthesize.');
         if (path.speakers?.required && !context.speaker) {
             throw new Error('This model requires a speaker.');
@@ -120,7 +166,7 @@
         }
         for (const field of Object.keys(payload)) {
             if (
-                !['text', 'backend', 'model', 'variety', 'speaker', 'emotion_vector'].includes(field)
+                !['text', 'pipeline', 'backend', 'model', 'variety', 'speaker', 'emotion_vector'].includes(field)
                 && !declared.has(field)
                 && !['cpu', 'cuda_device'].includes(field)
             ) {
@@ -134,8 +180,8 @@
         return `
             <main class="glass-panel speech-studio">
                 <div class="page-doc">
-                    <p>Choose a complete text-to-audio path. Tongues reports acoustic models,
-                    vocoders, voices, speakers, varieties, and controls from server discovery.</p>
+                    <p>Assemble a text-to-audio pipeline. Every connection is checked against
+                    the component contracts reported by the resident speech runtime.</p>
                 </div>
                 <section class="speech-runtime-panel" aria-labelledby="speech-runtime-heading">
                     <div class="speech-section-heading">
@@ -154,29 +200,60 @@
                     <div class="form-group">
                         <label for="text">Prompt</label>
                         <textarea id="text" required>Wow, the magic wand actually worked!</textarea>
-                        <small>Text is planned and synthesized through the selected complete path.</small>
+                        <small>Text is planned and synthesized through the selected component pipeline.</small>
                     </div>
-                    <div class="controls-grid">
+                    <div class="pipeline-toolbar">
                         <div class="form-group">
-                            <label for="synthesis-path">Synthesis path</label>
-                            <select id="synthesis-path"></select>
-                            <small id="synthesis-path-detail">Loading server discovery…</small>
+                            <label for="speech-preset">Pipeline preset</label>
+                            <select id="speech-preset"></select>
+                            <small id="synthesis-path-detail">Loading component discovery…</small>
                         </div>
+                    </div>
+                    <section class="pipeline-workbench" aria-label="Speech synthesis pipeline">
+                        <div class="pipeline-stage" data-stage="input">
+                            <span class="pipeline-stage-label">Input</span>
+                            <strong>Text</strong>
+                            <small>Tongues linguistic plan</small>
+                        </div>
+                        <span class="pipeline-connector" aria-hidden="true">→</span>
+                        <div class="pipeline-stage" data-stage="projector">
+                            <label class="pipeline-stage-label" for="pipeline-projector">Projector</label>
+                            <select id="pipeline-projector"></select>
+                            <small id="pipeline-projector-detail"></small>
+                        </div>
+                        <span class="pipeline-connector" aria-hidden="true">→</span>
+                        <div class="pipeline-generator-stack">
+                            <div class="pipeline-stage pipeline-conditioning" data-stage="conditioner">
+                                <span class="pipeline-stage-label">Conditioning</span>
+                                <strong id="pipeline-conditioning-name">Model controls</strong>
+                                <small id="pipeline-conditioning-detail">Speaker, language, style, and prosody</small>
+                            </div>
+                            <span class="pipeline-branch" aria-hidden="true">↓</span>
+                            <div class="pipeline-stage" data-stage="generator">
+                                <label class="pipeline-stage-label" for="pipeline-generator">Acoustic model</label>
+                                <select id="pipeline-generator"></select>
+                                <small id="pipeline-generator-detail"></small>
+                            </div>
+                        </div>
+                        <span class="pipeline-connector" aria-hidden="true">→</span>
+                        <div class="pipeline-stage" id="pipeline-vocoder-stage" data-stage="vocoder">
+                            <label class="pipeline-stage-label" for="pipeline-vocoder">Vocoder</label>
+                            <select id="pipeline-vocoder"></select>
+                            <small id="pipeline-vocoder-detail"></small>
+                        </div>
+                        <span class="pipeline-connector" aria-hidden="true">→</span>
+                        <div class="pipeline-stage" data-stage="output">
+                            <span class="pipeline-stage-label">Output</span>
+                            <strong>WAV audio</strong>
+                            <small>Playback, download, and details</small>
+                        </div>
+                    </section>
+                    <div class="controls-grid">
                         <div class="form-group" id="variety-control">
                             <label for="variety">Linguistic variety</label>
                             <select id="variety"></select>
                             <div id="fixed-variety" class="fixed-value hidden"></div>
                             <small id="variety-detail"></small>
-                        </div>
-                        <div class="form-group hidden" id="acoustic-model-control">
-                            <label for="acoustic-model">Acoustic model</label>
-                            <select id="acoustic-model" disabled></select>
-                            <small>Produces acoustic features; it cannot produce a WAV alone.</small>
-                        </div>
-                        <div class="form-group hidden" id="vocoder-control">
-                            <label for="vocoder">Compatible vocoder</label>
-                            <select id="vocoder"></select>
-                            <small id="vocoder-detail"></small>
                         </div>
                         <div class="form-group hidden" id="speaker-control">
                             <label for="speaker">Speaker</label>
@@ -365,53 +442,143 @@
     }
 
     function renderPathSelector() {
-        const select = byId('synthesis-path');
+        const select = byId('speech-preset');
         select.replaceChildren();
-        const ready = document.createElement('optgroup');
-        ready.label = 'Ready synthesis paths';
-        const unavailable = document.createElement('optgroup');
-        unavailable.label = 'Unavailable synthesis paths';
-        for (const path of availablePaths(state.discovery)) {
-            const option = document.createElement('option');
-            option.value = pathKey(path);
-            option.textContent = `${path.display_name}${path.runnable ? '' : ' — unavailable'}`;
-            option.disabled = !path.complete;
-            (path.runnable ? ready : unavailable).appendChild(option);
+        select.appendChild(new Option('Custom pipeline', 'custom'));
+        for (const preset of state.discovery.presets || []) {
+            if (preset.developer) continue;
+            const composition = state.discovery.compositions.find(
+                (candidate) => candidate.id === preset.composition_id,
+            );
+            const option = new Option(
+                `${preset.display_name}${composition?.runnable ? '' : ' — unavailable'}`,
+                preset.id,
+            );
+            option.disabled = !composition;
+            select.appendChild(option);
         }
-        if (ready.children.length) select.appendChild(ready);
-        if (unavailable.children.length) select.appendChild(unavailable);
-        select.value = state.pathKey;
-        const mock = (state.discovery.paths || []).find((path) => path.backend === 'mock');
+        const matchingPreset = (state.discovery.presets || []).find((preset) => (
+            preset.composition_id === state.pathKey && preset.id === state.presetId
+        ));
+        select.value = matchingPreset?.id || 'custom';
+        const mock = (state.discovery.compositions || []).find((path) => path.backend === 'mock');
         byId('select-mock-path').classList.toggle('hidden', !mock);
     }
 
-    function renderComposition(path) {
-        const acousticGroup = byId('acoustic-model-control');
-        const vocoderGroup = byId('vocoder-control');
-        acousticGroup.classList.toggle('hidden', !path.acoustic_model);
-        vocoderGroup.classList.toggle('hidden', !path.vocoder);
-        if (!path.acoustic_model) return;
-        const acoustic = byId('acoustic-model');
-        acoustic.replaceChildren(new Option(
-            path.catalog.find((item) => item.id === path.acoustic_model)?.display_name
-                || path.acoustic_model,
-            path.acoustic_model,
+    function componentById(id) {
+        return (state.discovery.components || []).find((component) => component.id === id);
+    }
+
+    function componentOptions(select, stage, selectedId, compatibleWith = null) {
+        select.replaceChildren();
+        const candidates = (state.discovery.components || []).filter((component) => (
+            component.stage === stage
         ));
-        const vocoder = byId('vocoder');
-        vocoder.replaceChildren();
-        for (const match of path.compatible_vocoders || []) {
-            const component = state.discovery.components.find((item) => (
-                item.id === match.component_id
-                || item.catalog.some((entry) => entry.id === match.component_id)
-            ));
-            const option = new Option(component?.display_name || match.component_id, match.component_id);
-            option.disabled = !match.compatible;
-            option.title = match.reason;
-            vocoder.appendChild(option);
+        for (const component of candidates) {
+            const option = new Option(component.display_name, component.id);
+            let reason = '';
+            if (compatibleWith) {
+                const edge = compatibilityFor(
+                    state.discovery,
+                    compatibleWith.from === 'selected' ? selectedId : compatibleWith.from,
+                    compatibleWith.to === 'component' ? component.id : compatibleWith.to,
+                );
+                if (!edge?.compatible) reason = edge?.reason || 'No compatible executable connection is registered.';
+            }
+            if (!component.runnable && component.id !== selectedId) {
+                reason ||= component.explanation || 'Component is not ready for runtime synthesis.';
+            }
+            option.disabled = Boolean(reason);
+            option.title = reason;
+            if (reason) option.textContent += ` — ${reason}`;
+            select.appendChild(option);
         }
-        vocoder.value = path.vocoder;
-        const selected = (path.compatible_vocoders || []).find((item) => item.component_id === path.vocoder);
-        byId('vocoder-detail').textContent = selected?.reason || 'Only compatible vocoders are selectable.';
+        if (![...select.options].some((option) => option.value === selectedId)) {
+            select.appendChild(new Option(selectedId, selectedId));
+        }
+        select.value = selectedId;
+    }
+
+    function renderComposition(path) {
+        const pipeline = path.pipeline;
+        if (!pipeline) return;
+        const generatorId = pipeline.end_to_end || pipeline.acoustic_model;
+        const generator = componentById(generatorId);
+        const projector = componentById(pipeline.projector);
+        const generatorSelect = byId('pipeline-generator');
+        generatorSelect.replaceChildren();
+        const generatorIds = new Set((state.discovery.compositions || []).map(compositionGenerator));
+        for (const component of state.discovery.components || []) {
+            if (!['acoustic_model', 'end_to_end'].includes(component.stage)) continue;
+            const option = new Option(component.display_name, component.id);
+            const executable = generatorIds.has(component.id);
+            option.disabled = !executable;
+            if (!executable) {
+                option.title = component.explanation || 'No executable composition is registered.';
+                option.textContent += ` — ${option.title}`;
+            }
+            generatorSelect.appendChild(option);
+        }
+        if (![...generatorSelect.options].some((option) => option.value === generatorId)) {
+            generatorSelect.appendChild(new Option(generatorId, generatorId));
+        }
+        generatorSelect.value = generatorId;
+
+        const projectorSelect = byId('pipeline-projector');
+        projectorSelect.replaceChildren();
+        for (const component of (state.discovery.components || []).filter(
+            (candidate) => candidate.stage === 'projector',
+        )) {
+            const edge = compatibilityFor(state.discovery, component.id, generatorId);
+            const option = new Option(component.display_name, component.id);
+            option.disabled = !edge?.compatible;
+            option.title = edge?.reason || 'No compatible projector contract is registered.';
+            if (option.disabled) option.textContent += ` — ${option.title}`;
+            projectorSelect.appendChild(option);
+        }
+        projectorSelect.value = pipeline.projector;
+        byId('pipeline-projector-detail').textContent = (
+            compatibilityFor(state.discovery, pipeline.projector, generatorId)?.reason
+            || projector?.explanation
+            || 'Checkpoint-bound linguistic projection.'
+        );
+
+        const endToEnd = Boolean(pipeline.end_to_end);
+        const vocoderStage = byId('pipeline-vocoder-stage');
+        vocoderStage.classList.toggle('pipeline-stage-spanned', endToEnd);
+        byId('pipeline-generator').previousElementSibling.textContent = endToEnd
+            ? 'End-to-end model'
+            : 'Acoustic model';
+        byId('pipeline-generator-detail').textContent = endToEnd
+            ? 'This block spans acoustic generation and waveform decoding.'
+            : (generator?.produces?.[0]?.summary || 'Produces features for a compatible vocoder.');
+        const vocoder = byId('pipeline-vocoder');
+        if (endToEnd) {
+            vocoder.replaceChildren(new Option(`Integrated in ${generator?.display_name || generatorId}`, 'integrated'));
+            vocoder.disabled = true;
+            byId('pipeline-vocoder-detail').textContent = 'Waveform decoding is integrated into this model.';
+        } else {
+            vocoder.disabled = false;
+            componentOptions(vocoder, 'vocoder', pipeline.vocoder, {
+                from: generatorId,
+                to: 'component',
+            });
+            byId('pipeline-vocoder-detail').textContent = (
+                compatibilityFor(state.discovery, generatorId, pipeline.vocoder)?.reason
+                || 'Only exact contract matches can be selected.'
+            );
+        }
+        const conditioners = (pipeline.conditioners || []).map((id) => (
+            componentById(id)?.display_name || id
+        ));
+        byId('pipeline-conditioning-name').textContent = conditioners.join(', ')
+            || 'Built-in model conditioning';
+        byId('pipeline-conditioning-detail').textContent = [
+            path.speakers?.required ? 'speaker required' : null,
+            path.languages?.required ? 'model language required' : null,
+            path.reference_audio?.speaker ? 'reference voice' : null,
+            path.styles?.reference_audio ? 'reference style' : null,
+        ].filter(Boolean).join(' · ') || 'Variety and synthesis controls';
     }
 
     function renderVarieties(path) {
@@ -499,7 +666,9 @@
                 const response = await fetch('/api/speech/runtime/unload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ backend: path.backend, model: path.model }),
+                    body: JSON.stringify(path.pipeline
+                        ? { pipeline: path.pipeline }
+                        : { backend: path.backend, model: path.model }),
                 });
                 if (!response.ok) throw new Error(await response.text());
                 renderRuntime(await response.json());
@@ -518,10 +687,9 @@
             return;
         }
         clearError();
-        byId('synthesis-path').value = state.pathKey;
         byId('synthesis-path-detail').textContent = path.runnable
-            ? `${path.display_name} is complete and ready.`
-            : (path.unavailable_reason || 'This path is not runnable.');
+            ? `${path.display_name} is a complete, contract-valid pipeline.`
+            : 'Pipeline unavailable. Inspect its model card for installation or verification details.';
         renderComposition(path);
         renderVarieties(path);
         renderSpeakers(path);
@@ -570,6 +738,9 @@
                     `Architecture: ${component.architecture}`,
                     `State: ${component.readiness}`,
                     `Load: ${component.load_state}`,
+                    component.control_fields?.length
+                        ? `Controls: ${component.control_fields.join(', ')}`
+                        : null,
                     catalog.length ? `License: ${[...new Set(catalog.map((entry) => entry.license.expression))].join(', ')}` : null,
                     component.compatible_paths.length ? `Paths: ${component.compatible_paths.join(', ')}` : null,
                 ].filter(Boolean).join(' · ');
@@ -672,9 +843,11 @@
         download.href = url;
         download.download = `tongues-${metadata.backend || 'speech'}.wav`;
         const fields = [
-            ['Complete path', metadata.path],
+            ['Pipeline', metadata.pipeline_id || metadata.path],
             ['Backend', metadata.backend],
+            ['Projector', metadata.projector],
             ['Acoustic model', metadata.acoustic_model],
+            ['Conditioners', (metadata.conditioners || []).join(', ')],
             ['Vocoder', metadata.vocoder],
             ['Voice / model', metadata.voice_model],
             ['Speaker / reference', metadata.speaker || metadata.reference_voice],
@@ -730,9 +903,17 @@
         ) return false;
         const previous = state.pathKey;
         state.discovery = discovery;
-        if (!(state.discovery.paths || []).some((path) => pathKey(path) === previous)) {
-            const initial = selectInitialPath(state.discovery);
-            state.pathKey = initial ? pathKey(initial) : '';
+        if (
+            !(state.discovery.compositions || []).some((composition) => composition.id === previous)
+            && !(state.discovery.paths || []).some((path) => pathKey(path) === previous)
+        ) {
+            const initial = selectInitialComposition(state.discovery)
+                || selectInitialPath(state.discovery);
+            state.pathKey = initial?.pipeline ? initial.id : (initial ? pathKey(initial) : '');
+            const preset = (state.discovery.presets || []).find(
+                (candidate) => candidate.composition_id === state.pathKey,
+            );
+            state.presetId = preset?.id || '';
         }
         renderPathSelector();
         renderInventory();
@@ -811,9 +992,42 @@
             byId('speech-runtime-state').textContent = 'failed';
         }
 
-        byId('synthesis-path').addEventListener('change', (event) => {
-            state.pathKey = event.target.value;
+        byId('speech-preset').addEventListener('change', (event) => {
+            const preset = state.discovery.presets.find(
+                (candidate) => candidate.id === event.target.value,
+            );
+            if (!preset) return;
+            state.pathKey = preset.composition_id;
+            state.presetId = preset.id;
             renderSelectedPath();
+        });
+        const selectCompositionForStage = (stage, componentId) => {
+            const current = selectedComposition();
+            const candidates = (state.discovery.compositions || []).filter((composition) => {
+                if (stage === 'generator') return compositionGenerator(composition) === componentId;
+                if (stage === 'projector') return composition.pipeline.projector === componentId;
+                if (stage === 'vocoder') return composition.pipeline.vocoder === componentId;
+                return false;
+            });
+            const next = candidates.find((composition) => (
+                composition.runnable
+                && (!current || stage === 'generator'
+                    || compositionGenerator(composition) === compositionGenerator(current))
+            )) || candidates.find((composition) => composition.runnable) || candidates[0];
+            if (!next) return;
+            state.pathKey = next.id;
+            state.presetId = '';
+            renderPathSelector();
+            renderSelectedPath();
+        };
+        byId('pipeline-generator').addEventListener('change', (event) => {
+            selectCompositionForStage('generator', event.target.value);
+        });
+        byId('pipeline-projector').addEventListener('change', (event) => {
+            selectCompositionForStage('projector', event.target.value);
+        });
+        byId('pipeline-vocoder').addEventListener('change', (event) => {
+            selectCompositionForStage('vocoder', event.target.value);
         });
         byId('variety').addEventListener('change', (event) => {
             const path = selectedPath();
@@ -824,16 +1038,11 @@
             if (path) state.values.set(`speaker:${path.id}`, event.target.value);
         });
         byId('select-mock-path').addEventListener('click', () => {
-            const mock = state.discovery.paths.find((path) => path.backend === 'mock');
+            const mock = state.discovery.compositions.find((path) => path.backend === 'mock');
             if (!mock) return;
-            state.pathKey = pathKey(mock);
-            const select = byId('synthesis-path');
-            if (![...select.options].some((option) => option.value === state.pathKey)) {
-                const group = document.createElement('optgroup');
-                group.label = 'Developer / testing';
-                group.appendChild(new Option(mock.display_name, state.pathKey));
-                select.appendChild(group);
-            }
+            state.pathKey = mock.id;
+            state.presetId = '';
+            renderPathSelector();
             renderSelectedPath();
         });
         byId('reload-speech-runtime').addEventListener('click', async (event) => {
@@ -883,7 +1092,9 @@
                         body: JSON.stringify({
                             text: payload.text,
                             variety: payload.variety,
-                            backend: payload.backend,
+                            ...(payload.pipeline
+                                ? { pipeline: payload.pipeline }
+                                : { backend: payload.backend }),
                         }),
                     });
                     if (!projectionResponse.ok) {
@@ -949,7 +1160,10 @@
 
     return {
         availablePaths,
+        availableCompositions,
         buildPayload,
+        compatibilityFor,
+        compositionGenerator,
         controlsForPath,
         init,
         parseNumberArray,
@@ -957,6 +1171,7 @@
         pendingVerificationIds,
         preservesVerificationProgress,
         selectInitialPath,
+        selectInitialComposition,
         varietiesForPath,
     };
 }));

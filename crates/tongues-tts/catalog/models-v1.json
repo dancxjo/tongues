@@ -308,6 +308,67 @@
       ]
     },
     {
+      "id": "freevc24-vctk",
+      "display_name": "FreeVC24 VCTK Voice Conversion",
+      "aliases": ["freevc", "freevc24", "coqui-freevc"],
+      "architecture": "freevc",
+      "compatible_with": ["coqui-freevc-v0.13.0", "wavlm-large", "freevc-speaker-encoder"],
+      "package_version": 1,
+      "languages": [],
+      "varieties": [],
+      "speakers": {"count": 0, "names": [], "names_file": null},
+      "sample_rate_hz": 24000,
+      "capabilities": ["voice-conversion", "reference-audio", "source-audio", "speaker-similarity", "seed"],
+      "license": {
+        "expression": "MIT",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.22.0/TTS/.models.json"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/blob/v0.22.0/TTS/.models.json"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.13.0_models/voice_conversion_models--multilingual--vctk--freevc24.zip",
+          "sha256": "fe0a735f49d906eb5c903b9a4c07a4cabd13b2d9d5be9fcc0c0be2a6ca603dac",
+          "size_bytes": 895709824,
+          "install_path": "models/speech/coqui/multilingual/freevc24/freevc24.zip",
+          "members": [
+            {
+              "archive_path": "voice_conversion_models--multilingual--vctk--freevc24/config.json",
+              "install_path": "models/speech/coqui/multilingual/freevc24/config.json"
+            },
+            {
+              "archive_path": "voice_conversion_models--multilingual--vctk--freevc24/model.pth",
+              "install_path": "models/speech/coqui/multilingual/freevc24/model.pth"
+            }
+          ]
+        },
+        {
+          "url": "https://github.com/coqui-ai/TTS/releases/download/v0.13.0_models/WavLM-Large.pt",
+          "sha256": "6fb4b3c3e6aa567f0a997b30855859cb81528ee8078802af439f7b2da0bf100f",
+          "size_bytes": 1261965425,
+          "install_path": "models/speech/coqui/multilingual/freevc24/WavLM-Large.pt",
+          "license": {
+            "expression": "MIT",
+            "evidence": "https://github.com/microsoft/unilm/blob/master/LICENSE"
+          },
+          "members": []
+        },
+        {
+          "url": "https://github.com/coqui-ai/TTS/releases/download/v0.13.0_models/speaker_encoder.pt",
+          "sha256": "bc7ff82ef75becd495aab2ede3a8220da393a717f178ae9534df355a6173bbca",
+          "size_bytes": 17090379,
+          "install_path": "models/speech/coqui/multilingual/freevc24/speaker_encoder.pt",
+          "license": {
+            "expression": "MIT",
+            "evidence": "https://github.com/OlaWod/FreeVC/blob/main/LICENSE"
+          },
+          "members": []
+        }
+      ]
+    },
+    {
       "id": "styletts2-en-us",
       "display_name": "StyleTTS2 en-US ONNX",
       "aliases": ["styletts2", "styletts2-en", "style-tts-2"],

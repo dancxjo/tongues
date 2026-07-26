@@ -194,7 +194,7 @@ autoregressive CPU graph is not a useful throughput measurement.
 
 Tongues has a schema-v1 backend-neutral model catalog for the native
 SpeedySpeech, FastPitch, Glow-TTS, HiFi-GAN, MultiBand-MelGAN, VITS,
-YourTTS, StyleTTS2, and ONNX voice backends.
+YourTTS, FreeVC, StyleTTS2, and ONNX voice backends.
 Entries record architecture, package version, languages and varieties,
 speakers, sample rate, capabilities, compatibility contracts, source format,
 provenance, license evidence, artifact sizes, and SHA-256 checksums.
@@ -276,6 +276,38 @@ retained in the bounded runtime cache; reference PCM is not cached.
 Precomputed embeddings must declare the exact
 `coqui-resnet-speaker-encoder-0cf3265a-v1` space.
 
+## Native FreeVC voice conversion
+
+The `freevc` backend accepts source content and target-speaker references
+through the unified `ReferenceAudioRequest`: `source` is the utterance to
+convert and `speaker` is the target enrollment WAV. It does not accept text as
+content and does not expose a provider-specific HTTP endpoint.
+
+Inference is fully native: the source is downmixed and resampled to 16 kHz,
+WavLM-Large extracts content features, the FreeVC speaker encoder produces the
+256-value target embedding, and the conditioned FreeVC flow and decoder emit
+24 kHz mono audio. The response metadata retains the original sample rate,
+channel count, frame count, and RMS level for both input files even though the
+runtime converts their internal representation.
+
+Install the checksum-pinned MIT-licensed artifact set with:
+
+```sh
+cargo run --bin tongues -- models install freevc24-vctk
+```
+
+The native artifact conformance test is opt-in because the three checkpoints
+total roughly 2.7 GB:
+
+```sh
+TONGUES_FREEVC_MODEL_DIR=/path/to/freevc24 \
+TONGUES_FREEVC_SOURCE_WAV=/path/to/source.wav \
+TONGUES_FREEVC_TARGET_WAV=/path/to/target.wav \
+cargo test -p tongues-tts --lib \
+  freevc::tests::published_artifacts_convert_without_python \
+  --no-default-features -- --ignored
+```
+
 ## Usage
 
 Write native component synthesis to a WAV file:
@@ -340,16 +372,43 @@ an English model. Imported multilingual VITS packages load
 explicit named or numeric selection, while a one-language embedding may
 default to row zero.
 
-The local server exposes every registered model through
-`GET /api/speech/models`. Each entry includes backend/model identity, model
-family, varieties, learned model languages, named and numeric speakers, style
-and reference-audio support, speed/seed/device support, normalized output
-format, installation state, and provenance. The synthesis UI renders the VITS
-speaker selector from this contract, including the checkpoint embedding ID; it
-does not carry a separate hard-coded speaker list. The older
+The local server exposes every registered model and executable component graph
+through `GET /api/speech/models`. Schema v3 separates `components`,
+directed `compatibility` edges, complete `compositions`, convenient `presets`,
+and the deprecated `paths` compatibility view. Component edges carry exact
+contract-match status and a user-facing mismatch reason. Each composition
+includes backend/model identity, model family, varieties, learned model
+languages, named and numeric speakers, style and reference-audio support,
+speed/seed/device support, normalized output format, installation state, and
+provenance. The synthesis UI renders the VITS speaker selector from this
+contract, including the checkpoint embedding ID; it does not carry a separate
+hard-coded speaker list. The older
 `GET /api/speech/speakers?backend=vits` endpoint remains as a compatibility
 view. Linguistic varieties are independently enumerated from the shared
 variety data registry at `GET /api/linguistic/varieties`.
+
+`POST /api/speak` accepts either the legacy `backend`/`model` pair or a
+component-addressed `pipeline`:
+
+```json
+{
+  "text": "Composable speech.",
+  "variety": "en-US-GA",
+  "pipeline": {
+    "input": "text",
+    "projector": "projector/fastpitch-ljspeech",
+    "acoustic_model": "fastpitch-ljspeech",
+    "conditioners": [],
+    "vocoder": "hifigan-v2-ljspeech",
+    "output": "wav"
+  }
+}
+```
+
+End-to-end graphs use `end_to_end` and omit `acoustic_model` and `vocoder`.
+Supplying both pipeline and legacy selection is rejected as ambiguous. Legacy
+requests are normalized to the same canonical pipeline before validation,
+resident model lookup, and inference.
 
 Discovery itself is lightweight. Its `verification_ids` list names catalog
 entries whose installed artifacts have not been checked in the current server

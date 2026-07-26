@@ -67,7 +67,14 @@ impl VitsWaveformDecoderConfig {
     pub fn from_generator_config(
         generator: HifiganGeneratorConfig,
     ) -> Result<Self, VitsWaveformDecoderError> {
-        generator
+        // Embedded VITS/FreeVC checkpoints store plain pre/post convolution
+        // weights. Validate the shared generator topology using its internal
+        // weight-normalized representation while retaining the checkpoint
+        // contract supplied by the caller.
+        let mut storage_config = generator.clone();
+        storage_config.conv_pre_weight_norm = true;
+        storage_config.conv_post_weight_norm = true;
+        storage_config
             .validate()
             .map_err(VitsWaveformDecoderError::Generator)?;
         Ok(Self { generator })

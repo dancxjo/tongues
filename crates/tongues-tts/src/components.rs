@@ -13,6 +13,7 @@ use crate::{
 #[serde(rename_all = "snake_case")]
 pub enum NativeSpeechComponentKind {
     EndToEnd,
+    VoiceConversion,
     Acoustic,
     Vocoder,
     Voice,
@@ -155,6 +156,14 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         kind: NativeSpeechComponentKind::EndToEnd,
         readiness: NativeSpeechComponentReadiness::Runtime,
         explanation: "Native multilingual voice cloning with grapheme VITS, language embeddings, d-vectors, and the Coqui ResNet speaker encoder.",
+    },
+    NativeSpeechComponent {
+        id: "freevc",
+        display_name: "FreeVC24",
+        architecture: "freevc",
+        kind: NativeSpeechComponentKind::VoiceConversion,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native source-waveform voice conversion using WavLM content features and target-speaker reference audio.",
     },
     NativeSpeechComponent {
         id: "hifigan",
