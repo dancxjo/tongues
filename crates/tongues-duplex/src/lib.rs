@@ -1102,6 +1102,64 @@ mod tests {
     }
 
     #[test]
+    fn fixed_fixture_is_bitwise_deterministic() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("who-shot-john-f").unwrap();
+        let first = run_fixture(fixture).unwrap();
+        let second = run_fixture(fixture).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            serde_json::to_vec(&first.0).unwrap(),
+            serde_json::to_vec(&second.0).unwrap()
+        );
+    }
+
+    #[test]
+    fn later_evidence_withdraws_and_repairs_without_corrupting_commitment() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("garden-path").unwrap();
+        let (journal, state) = run_fixture(fixture).unwrap();
+        assert_eq!(state.committed_text(), "The old man the boats");
+        assert!(
+            journal
+                .events
+                .iter()
+                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisWithdrawn { .. }))
+        );
+        assert!(
+            journal
+                .events
+                .iter()
+                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. }))
+        );
+        assert_eq!(replay_journal(&journal).unwrap(), state);
+    }
+
+    #[test]
+    fn journal_layers_distinguish_evidence_inference_prediction_and_commitment() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let (journal, _) = run_fixture(suite.fixture("who-shot-john-f").unwrap()).unwrap();
+        let layers = journal
+            .events
+            .iter()
+            .map(|event| event.event.layer())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            layers,
+            BTreeSet::from(["evidence", "inference", "prediction", "commitment"])
+        );
+    }
+
+    #[test]
     fn oracle_provider_carries_syntax_prosody_and_keeps_suffix_provisional() {
         let mut simulator = DuplexSimulator::new(
             UtteranceId("oracle".into()),

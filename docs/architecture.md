@@ -68,6 +68,8 @@ speech-runtime components rather than one monolithic model:
 - `tongues-audio`: model-neutral WAV/PCM, channel/resample, STFT/ISTFT, and
   mel/log-mel feature extraction shared by training and inference;
 - `tongues-tts`: native Burn and ONNX-compatible waveform synthesis;
+- `tongues-duplex`: provider-neutral completion beams, deterministic
+  posterior-mass selection, commit-frontier policy, and replayable simulation;
 - `speaking`: shared linguistic varieties, lexicons, phonemicization,
   realization, and speech-runtime types;
 - `styletts2`: StyleTTS2 planning, ONNX inference, and style controls.
@@ -171,12 +173,53 @@ ownership boundary:
 speaking (contracts only)
   <- interpreted evidence from tongues-interpretation / ASR
   <- synthesis delivery updates from tongues-tts / runtime playback
-  <- orchestration policy from future duplex orchestrator
+  <- orchestration policy from tongues-duplex
 ```
 
 `speaking` owns only the backend-neutral IR and invariants. Interpretation,
 TTS, playback, and orchestration crates emit or consume typed events but do not
 introduce reverse dependencies into `speaking`.
+
+### Deterministic duplex simulator
+
+`tongues-duplex` accepts a provider beam whose hypotheses carry normalized
+morpheme sequences, syntax, prosody, evidence references, and provenance. It
+sorts equal-probability branches by stable hypothesis ID, selects the smallest
+highest-probability set covering the configured posterior mass, and computes
+that set's longest common morpheme prefix.
+
+The shared prefix is only a candidate frontier. Each selected branch must tie
+each newly committed morpheme to direct text or acoustic evidence that supports
+the same normalized key. Predicted suffixes remain provisional even when all
+selected branches predict them. New evidence can withdraw or repair those
+branches without mutating the append-only committed prefix.
+
+```text
+direct text / mock acoustic evidence
+  -> CompletionProvider proposals
+  -> normalized completion beam
+  -> posterior-mass hypothesis set
+  -> longest common morpheme prefix
+  -> direct-support gate
+  -> append-only commit frontier
+```
+
+Every evidence, proposal, withdrawal, repair, beam inference, and frontier
+advance is written to a versioned simulator journal. Replay reconstructs the
+same final state without invoking the provider:
+
+```sh
+cargo run -p tongues-cli -- duplex demo --fixture who-shot-john-f
+cargo run -p tongues-cli -- duplex demo \
+  --chunk "Who shot John F." --chunk "Kennedy?"
+cargo run -p tongues-cli -- duplex demo \
+  --mock-acoustic "turn left"
+```
+
+The built-in fixtures cover initials, abbreviations, heteronyms, stress
+changes, garden paths, code switching, end-of-turn uncertainty, chunked
+`Who shot John F.` / `Kennedy?`, and mock acoustic evidence. They use no
+checkpoint, large model, audio device, or live service.
 
 ### Incremental morphology
 
