@@ -48,6 +48,35 @@ pub fn lookup(word: &str) -> LexiconLookup {
     }
 }
 
+pub(crate) fn adapted_symbol_matches_source(adapted: &str, source: &str) -> bool {
+    let adapted = CmuPhoneme::parse(adapted);
+    let source = CmuPhoneme::parse(source);
+    if adapted.stress != source.stress {
+        return false;
+    }
+
+    match adapted.base.as_str() {
+        RP_LOT => source.base == "AA",
+        RP_KIT => source.base == "IH",
+        RP_TRAP => source.base == "AE",
+        RP_STRUT => source.base == "AH",
+        RP_FOOT => source.base == "UH",
+        RP_DRESS => source.base == "EH",
+        RP_FLEECE | RP_HAPPY => source.base == "IY",
+        RP_FACE => source.base == "EY",
+        RP_PALM => matches!(source.base.as_str(), "AA" | "AE"),
+        RP_THOUGHT => matches!(source.base.as_str(), "AO" | "OW"),
+        RP_GOAT => source.base == "OW",
+        RP_GOOSE => source.base == "UW",
+        RP_PRICE => source.base == "AY",
+        RP_CHOICE => source.base == "OY",
+        RP_MOUTH => source.base == "AW",
+        RP_NURSE => source.base == "ER",
+        RP_SCHWA => matches!(source.base.as_str(), "AH" | "ER"),
+        _ => adapted == source,
+    }
+}
+
 fn adapt_candidate(word: &str, candidate: &[String]) -> Vec<String> {
     let parsed = candidate
         .iter()
@@ -201,10 +230,53 @@ fn is_bath_word(word: &str) -> bool {
     has_lexical_stem(
         word,
         &[
-            "after", "answer", "ask", "aunt", "bath", "branch", "can't", "castle", "chance",
-            "class", "command", "dance", "demand", "example", "fast", "glass", "grant", "grass",
-            "half", "last", "laugh", "master", "pass", "past", "path", "plant", "rather", "staff",
+            "advance",
+            "advantage",
+            "after",
+            "afternoon",
+            "answer",
+            "ask",
+            "aunt",
+            "bath",
+            "blanch",
+            "branch",
+            "brass",
+            "can't",
+            "calf",
+            "cast",
+            "castle",
+            "chance",
+            "chant",
+            "class",
+            "command",
+            "contrast",
+            "dance",
+            "demand",
+            "draft",
+            "example",
+            "fast",
+            "flask",
+            "gasp",
+            "glass",
+            "grant",
+            "grass",
+            "half",
+            "last",
+            "laugh",
+            "mask",
+            "master",
+            "pass",
+            "past",
+            "path",
+            "plaster",
+            "plant",
+            "raspberry",
+            "rather",
+            "sample",
+            "shan't",
+            "staff",
             "task",
+            "transfer",
         ],
     )
 }
@@ -225,8 +297,29 @@ fn retains_yod(word: &str) -> bool {
     has_lexical_stem(
         word,
         &[
-            "assume", "consume", "cube", "cue", "due", "duke", "dune", "duty", "enthuse", "lute",
-            "new", "news", "nude", "numeral", "presume", "student", "suit", "tuba", "tube", "tune",
+            "assume",
+            "consume",
+            "cube",
+            "cue",
+            "due",
+            "duke",
+            "dune",
+            "duty",
+            "enthuse",
+            "enthusiasm",
+            "lute",
+            "new",
+            "news",
+            "nude",
+            "numeral",
+            "presume",
+            "student",
+            "stupid",
+            "suit",
+            "tuba",
+            "tube",
+            "tune",
+            "tuesday",
             "tutor",
         ],
     ) && !matches!(word, "suit" | "suits" | "suited" | "suiting")
@@ -253,5 +346,12 @@ mod tests {
         assert_eq!(first("start"), ["S", "T", "RP_PALM1", "T"]);
         assert_eq!(first("near"), ["N", "RP_NEAR1"]);
         assert_eq!(first("tune"), ["T", "Y", "RP_GOOSE1", "N"]);
+    }
+
+    #[test]
+    fn adapted_symbols_still_match_cmu_selection_rules() {
+        assert!(adapted_symbol_matches_source("RP_DRESS1", "EH1"));
+        assert!(adapted_symbol_matches_source("RP_FLEECE1", "IY1"));
+        assert!(!adapted_symbol_matches_source("RP_DRESS1", "IY1"));
     }
 }

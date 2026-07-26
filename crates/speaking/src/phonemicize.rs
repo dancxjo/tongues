@@ -1732,6 +1732,10 @@ fn canonical_pronunciation_pos(part_of_speech: PartOfSpeech) -> PartOfSpeech {
 
 fn candidate_matches_symbols(candidate: &[String], symbols: &[String]) -> bool {
     candidate == symbols
+        || (candidate.len() == symbols.len()
+            && candidate.iter().zip(symbols).all(|(candidate, source)| {
+                crate::data::lexicons::cmudict_rp::adapted_symbol_matches_source(candidate, source)
+            }))
 }
 
 fn weak_form_rule_applies(
