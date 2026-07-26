@@ -293,16 +293,36 @@ def glow_tts_reference(artifacts: dict[str, Path]) -> dict:
 
     reverse = latent
     reverse_mask = frame_mask
+    final_invertible_weight = model.decoder.flows[-2].weight.detach()
     if model.decoder.num_squeeze > 1:
         reverse, reverse_mask = glow_squeeze(
             reverse, reverse_mask, model.decoder.num_squeeze
         )
     reverse_blocks = []
+    reverse_steps = []
     reversed_flows = list(reversed(model.decoder.flows))
     for flow_index, flow in enumerate(reversed_flows):
         reverse, _ = flow(reverse, reverse_mask, g=None, reverse=True)
+        flat_len = reverse.numel()
+        reverse_steps.append(
+            {
+                "flow_from_output": flow_index + 1,
+                "kind": ("coupling", "invertible_conv", "act_norm")[
+                    flow_index % 3
+                ],
+                **tensor_fixture(
+                    reverse,
+                    [
+                        0,
+                        flat_len // 7,
+                        flat_len // 3,
+                        flat_len // 2,
+                        flat_len - 1,
+                    ],
+                ),
+            }
+        )
         if (flow_index + 1) % 3 == 0:
-            flat_len = reverse.numel()
             reverse_blocks.append(
                 {
                     "block_from_output": (flow_index + 1) // 3,
@@ -394,6 +414,11 @@ def glow_tts_reference(artifacts: dict[str, Path]) -> dict:
                     latent_len - 1,
                 ],
             ),
+            "final_invertible_weight": tensor_fixture(
+                final_invertible_weight,
+                list(range(final_invertible_weight.numel())),
+            ),
+            "reverse_steps": reverse_steps,
             "reverse_flow": reverse_blocks,
             "mel": tensor_fixture(
                 mel,

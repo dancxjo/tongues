@@ -178,9 +178,11 @@ pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,
     private_catalog_paths_from_environment, CatalogArchiveMember, CatalogArtifact, CatalogLicense,
     CatalogProvenance, CatalogSpeakers, InstalledModelFile, InstalledModelRecord, ModelCatalog,
-    ModelCatalogEntry, ModelInstallProgress, ModelStore, VerifiedModel,
+    ModelCatalogEntry, ModelInstallProgress, ModelStore, ModelVerificationState,
+    ModelVerificationStatus, VerifiedModel,
     EMBEDDED_FAIRSEQ_MODEL_CATALOG, EMBEDDED_MODEL_CATALOG, INSTALLED_MODEL_SCHEMA_VERSION,
-    MODEL_CATALOG_SCHEMA_VERSION,
+    MODEL_CATALOG_SCHEMA_VERSION, MODEL_RUNTIME_COMPATIBILITY_VERSION,
+    MODEL_VERIFICATION_CACHE_SCHEMA_VERSION, MODEL_VERIFIER_VERSION,
 };
 pub use model_config::{
     AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams, MelganBundleConfig,

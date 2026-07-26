@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,9 @@ use crate::open_model_package;
 
 pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const INSTALLED_MODEL_SCHEMA_VERSION: u32 = 1;
+pub const MODEL_VERIFICATION_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const MODEL_VERIFIER_VERSION: u32 = 1;
+pub const MODEL_RUNTIME_COMPATIBILITY_VERSION: u32 = 1;
 pub const EMBEDDED_MODEL_CATALOG: &str = include_str!("../catalog/models-v1.json");
 pub const EMBEDDED_FAIRSEQ_MODEL_CATALOG: &str =
     include_str!("../catalog/fairseq-mms-models-v1.json");
@@ -126,6 +130,57 @@ pub struct VerifiedModel {
     pub package_version: u32,
     pub files: Vec<PathBuf>,
     pub package_path: Option<PathBuf>,
+    fingerprints: Vec<InstalledModelFile>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelVerificationStatus {
+    Verified,
+    PendingVerification,
+    ChangedSinceVerification,
+    VerificationFailed,
+    Unavailable,
+}
+
+impl ModelVerificationStatus {
+    pub fn needs_deep_verification(self) -> bool {
+        matches!(
+            self,
+            Self::PendingVerification
+                | Self::ChangedSinceVerification
+                | Self::VerificationFailed
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelVerificationState {
+    pub status: ModelVerificationStatus,
+    pub verified_files: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ModelVerificationCache {
+    schema_version: u32,
+    verifier_version: u32,
+    runtime_compatibility_version: u32,
+    catalog_schema_version: u32,
+    manifest_version: u32,
+    artifact_fingerprint: String,
+    verified_at_unix_seconds: u64,
+    success: bool,
+    error: Option<String>,
+    files: Vec<CachedVerificationFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CachedVerificationFile {
+    path: String,
+    size_bytes: u64,
+    modified_unix_nanos: Option<u64>,
+    sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -565,10 +620,75 @@ impl ModelStore {
         entry.validate()?;
         let record = self.build_record(&entry, Some(&destination))?;
         self.write_record(&record)?;
-        self.verify_record(&record)
+        self.verify(&entry)
     }
 
+    /// Perform exhaustive artifact and package verification and persist the
+    /// result. Normal application startup and synthesis should use
+    /// [`Self::verification_state`] and [`Self::require_cached_verification`]
+    /// instead.
     pub fn verify(&self, entry: &ModelCatalogEntry) -> Result<VerifiedModel> {
+        let result = self.verify_uncached(entry);
+        match result {
+            Ok(verified) => {
+                self.write_verification_cache(entry, &verified, None)?;
+                Ok(verified)
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                let _ = self.write_failed_verification_cache(entry, &message);
+                Err(error)
+            }
+        }
+    }
+
+    /// Return verification state using only manifest/cache reads and file
+    /// metadata. This never hashes an artifact or constructs a model.
+    pub fn verification_state(&self, entry: &ModelCatalogEntry) -> ModelVerificationState {
+        match self.verification_state_checked(entry) {
+            Ok(state) => state,
+            Err(error) => ModelVerificationState {
+                status: ModelVerificationStatus::ChangedSinceVerification,
+                verified_files: 0,
+                error: Some(format!("{error:#}")),
+            },
+        }
+    }
+
+    /// Require a still-valid cached deep verification result without reading
+    /// artifact contents.
+    pub fn require_cached_verification(&self, entry: &ModelCatalogEntry) -> Result<()> {
+        let state = self.verification_state_checked(entry)?;
+        match state.status {
+            ModelVerificationStatus::Verified => Ok(()),
+            ModelVerificationStatus::PendingVerification => {
+                anyhow::bail!("model `{}` is pending verification", entry.id)
+            }
+            ModelVerificationStatus::ChangedSinceVerification => anyhow::bail!(
+                "model `{}` changed since verification{}",
+                entry.id,
+                state
+                    .error
+                    .as_deref()
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default()
+            ),
+            ModelVerificationStatus::VerificationFailed => anyhow::bail!(
+                "model `{}` failed verification{}",
+                entry.id,
+                state
+                    .error
+                    .as_deref()
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default()
+            ),
+            ModelVerificationStatus::Unavailable => {
+                anyhow::bail!("model `{}` is unavailable", entry.id)
+            }
+        }
+    }
+
+    fn verify_uncached(&self, entry: &ModelCatalogEntry) -> Result<VerifiedModel> {
         entry.validate()?;
         let record_path = self.record_path(&entry.id, entry.package_version);
         if record_path.is_file() {
@@ -596,6 +716,232 @@ impl ModelStore {
         // Existing pre-catalog installations can be used offline only after
         // re-verifying every pinned artifact and extracted archive member.
         self.verify_configured_artifacts(entry)
+    }
+
+    fn verification_state_checked(
+        &self,
+        entry: &ModelCatalogEntry,
+    ) -> Result<ModelVerificationState> {
+        entry.validate()?;
+        let expected_files = self.quick_verification_files(entry)?;
+        for (path, _) in &expected_files {
+            match fs::metadata(path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => {
+                    return Ok(ModelVerificationState {
+                        status: ModelVerificationStatus::Unavailable,
+                        verified_files: 0,
+                        error: Some(format!("{} is not a file", path.display())),
+                    });
+                }
+                Err(_) => {
+                    return Ok(ModelVerificationState {
+                        status: ModelVerificationStatus::Unavailable,
+                        verified_files: 0,
+                        error: Some(format!("model artifact is missing: {}", path.display())),
+                    });
+                }
+            }
+        }
+
+        let cache_path = self.verification_cache_path(&entry.id, entry.package_version);
+        if !cache_path.is_file() {
+            return Ok(ModelVerificationState {
+                status: ModelVerificationStatus::PendingVerification,
+                verified_files: 0,
+                error: None,
+            });
+        }
+        let source = fs::read_to_string(&cache_path)
+            .with_context(|| format!("failed to read {}", cache_path.display()))?;
+        let cache: ModelVerificationCache = match serde_json::from_str(&source) {
+            Ok(cache) => cache,
+            Err(error) => {
+                return Ok(ModelVerificationState {
+                    status: ModelVerificationStatus::ChangedSinceVerification,
+                    verified_files: 0,
+                    error: Some(format!(
+                        "cached verification metadata is invalid: {error}"
+                    )),
+                });
+            }
+        };
+        let fingerprint = catalog_entry_fingerprint(entry)?;
+        let context_error = if cache.schema_version != MODEL_VERIFICATION_CACHE_SCHEMA_VERSION {
+            Some(format!(
+                "verification cache schema changed from {} to {}",
+                cache.schema_version, MODEL_VERIFICATION_CACHE_SCHEMA_VERSION
+            ))
+        } else if cache.verifier_version != MODEL_VERIFIER_VERSION {
+            Some(format!(
+                "verifier changed from {} to {}",
+                cache.verifier_version, MODEL_VERIFIER_VERSION
+            ))
+        } else if cache.runtime_compatibility_version != MODEL_RUNTIME_COMPATIBILITY_VERSION {
+            Some(format!(
+                "runtime compatibility changed from {} to {}",
+                cache.runtime_compatibility_version, MODEL_RUNTIME_COMPATIBILITY_VERSION
+            ))
+        } else if cache.catalog_schema_version != MODEL_CATALOG_SCHEMA_VERSION {
+            Some(format!(
+                "model manifest schema changed from {} to {}",
+                cache.catalog_schema_version, MODEL_CATALOG_SCHEMA_VERSION
+            ))
+        } else if cache.manifest_version != entry.package_version {
+            Some(format!(
+                "model manifest changed from {} to {}",
+                cache.manifest_version, entry.package_version
+            ))
+        } else if cache.artifact_fingerprint != fingerprint {
+            Some("artifact fingerprint changed".into())
+        } else {
+            None
+        };
+        if let Some(error) = context_error {
+            return Ok(ModelVerificationState {
+                status: ModelVerificationStatus::ChangedSinceVerification,
+                verified_files: cache.files.len(),
+                error: Some(error),
+            });
+        }
+        for file in &cache.files {
+            let path = checked_join(&self.root, &file.path)?;
+            let metadata = match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => metadata,
+                _ => {
+                    return Ok(ModelVerificationState {
+                        status: ModelVerificationStatus::Unavailable,
+                        verified_files: cache.files.len(),
+                        error: Some(format!("model artifact is missing: {}", path.display())),
+                    });
+                }
+            };
+            if metadata.len() != file.size_bytes
+                || modified_unix_nanos(&metadata) != file.modified_unix_nanos
+            {
+                return Ok(ModelVerificationState {
+                    status: ModelVerificationStatus::ChangedSinceVerification,
+                    verified_files: cache.files.len(),
+                    error: Some(format!("{} changed since verification", path.display())),
+                });
+            }
+        }
+        Ok(ModelVerificationState {
+            status: if cache.success {
+                ModelVerificationStatus::Verified
+            } else {
+                ModelVerificationStatus::VerificationFailed
+            },
+            verified_files: cache.files.len(),
+            error: cache.error,
+        })
+    }
+
+    fn quick_verification_files(
+        &self,
+        entry: &ModelCatalogEntry,
+    ) -> Result<Vec<(PathBuf, Option<u64>)>> {
+        let record_path = self.record_path(&entry.id, entry.package_version);
+        if record_path.is_file() {
+            if let Ok(record) = serde_json::from_slice::<InstalledModelRecord>(&fs::read(&record_path)?)
+            {
+                if record.schema_version == INSTALLED_MODEL_SCHEMA_VERSION && record.entry == *entry {
+                    return record
+                        .files
+                        .iter()
+                        .map(|file| {
+                            Ok((
+                                checked_join(&self.root, &file.path)?,
+                                Some(file.size_bytes),
+                            ))
+                        })
+                        .collect();
+                }
+            }
+        }
+        entry
+            .artifacts
+            .iter()
+            .flat_map(|artifact| {
+                std::iter::once((
+                    artifact.install_path.as_str(),
+                    Some(artifact.size_bytes),
+                ))
+                .chain(
+                    artifact
+                        .members
+                        .iter()
+                        .map(|member| (member.install_path.as_str(), None)),
+                )
+            })
+            .map(|(path, size)| Ok((checked_join(&self.root, path)?, size)))
+            .collect()
+    }
+
+    fn write_verification_cache(
+        &self,
+        entry: &ModelCatalogEntry,
+        verified: &VerifiedModel,
+        error: Option<String>,
+    ) -> Result<()> {
+        let mut files = Vec::with_capacity(verified.fingerprints.len());
+        for fingerprint in &verified.fingerprints {
+            let path = checked_join(&self.root, &fingerprint.path)?;
+            let metadata = fs::metadata(&path)
+                .with_context(|| format!("failed to stat {}", path.display()))?;
+            files.push(CachedVerificationFile {
+                path: fingerprint.path.clone(),
+                size_bytes: fingerprint.size_bytes,
+                modified_unix_nanos: modified_unix_nanos(&metadata),
+                sha256: Some(fingerprint.sha256.clone()),
+            });
+        }
+        self.write_verification_cache_record(entry, error, files)
+    }
+
+    fn write_failed_verification_cache(&self, entry: &ModelCatalogEntry, error: &str) -> Result<()> {
+        let files = self
+            .quick_verification_files(entry)?
+            .into_iter()
+            .filter_map(|(path, _)| {
+                let metadata = fs::metadata(&path).ok()?;
+                let relative = path.strip_prefix(&self.root).ok()?;
+                Some(CachedVerificationFile {
+                    path: relative.to_string_lossy().into_owned(),
+                    size_bytes: metadata.len(),
+                    modified_unix_nanos: modified_unix_nanos(&metadata),
+                    sha256: None,
+                })
+            })
+            .collect();
+        self.write_verification_cache_record(entry, Some(error.into()), files)
+    }
+
+    fn write_verification_cache_record(
+        &self,
+        entry: &ModelCatalogEntry,
+        error: Option<String>,
+        files: Vec<CachedVerificationFile>,
+    ) -> Result<()> {
+        let record = ModelVerificationCache {
+            schema_version: MODEL_VERIFICATION_CACHE_SCHEMA_VERSION,
+            verifier_version: MODEL_VERIFIER_VERSION,
+            runtime_compatibility_version: MODEL_RUNTIME_COMPATIBILITY_VERSION,
+            catalog_schema_version: MODEL_CATALOG_SCHEMA_VERSION,
+            manifest_version: entry.package_version,
+            artifact_fingerprint: catalog_entry_fingerprint(entry)?,
+            verified_at_unix_seconds: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            success: error.is_none(),
+            error,
+            files,
+        };
+        write_json_atomic(
+            &self.verification_cache_path(&entry.id, entry.package_version),
+            &record,
+        )
     }
 
     pub fn installed_records(&self) -> Result<Vec<InstalledModelRecord>> {
@@ -668,6 +1014,13 @@ impl ModelStore {
                 }
             }
         }
+        let verification_cache =
+            self.verification_cache_path(&entry.id, entry.package_version);
+        if verification_cache.is_file() {
+            fs::remove_file(&verification_cache).with_context(|| {
+                format!("failed to remove {}", verification_cache.display())
+            })?;
+        }
         Ok(())
     }
 
@@ -697,15 +1050,22 @@ impl ModelStore {
             package_version: record.entry.package_version,
             files,
             package_path,
+            fingerprints: record.files.clone(),
         })
     }
 
     fn verify_configured_artifacts(&self, entry: &ModelCatalogEntry) -> Result<VerifiedModel> {
         let mut files = Vec::new();
+        let mut fingerprints = Vec::new();
         for artifact in &entry.artifacts {
             let path = checked_join(&self.root, &artifact.install_path)?;
             verify_file(&path, artifact.size_bytes, &artifact.sha256)?;
             files.push(path.clone());
+            fingerprints.push(InstalledModelFile {
+                path: artifact.install_path.clone(),
+                size_bytes: artifact.size_bytes,
+                sha256: artifact.sha256.to_ascii_lowercase(),
+            });
             if !artifact.members.is_empty() {
                 let archive_file = File::open(&path)?;
                 let mut archive = ZipArchive::new(archive_file)
@@ -723,6 +1083,11 @@ impl ModelStore {
                     let (size, sha256) = hash_reader(&mut source)?;
                     verify_file(&installed, size, &sha256)?;
                     files.push(installed);
+                    fingerprints.push(InstalledModelFile {
+                        path: member.install_path.clone(),
+                        size_bytes: size,
+                        sha256,
+                    });
                 }
             }
         }
@@ -731,6 +1096,7 @@ impl ModelStore {
             package_version: entry.package_version,
             files,
             package_path: None,
+            fingerprints,
         })
     }
 
@@ -859,6 +1225,12 @@ impl ModelStore {
     fn record_path(&self, id: &str, version: u32) -> PathBuf {
         self.root
             .join("models/.catalog")
+            .join(format!("{id}-v{version}.json"))
+    }
+
+    fn verification_cache_path(&self, id: &str, version: u32) -> PathBuf {
+        self.root
+            .join("models/.verification")
             .join(format!("{id}-v{version}.json"))
     }
 }
@@ -1177,6 +1549,21 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hash_reader(&mut file)?.1)
 }
 
+fn catalog_entry_fingerprint(entry: &ModelCatalogEntry) -> Result<String> {
+    let source = serde_json::to_vec(entry).context("failed to serialize model manifest")?;
+    Ok(format!("{:x}", Sha256::digest(source)))
+}
+
+fn modified_unix_nanos(metadata: &fs::Metadata) -> Option<u64> {
+    let nanos = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(nanos.min(u64::MAX as u128) as u64)
+}
+
 fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path.parent().context("JSON path has no parent")?;
     fs::create_dir_all(parent)?;
@@ -1300,13 +1687,36 @@ mod tests {
             }],
         };
         let store = ModelStore::new(&root, &cache).with_offline(true);
+        assert_eq!(
+            store.verification_state(&entry).status,
+            ModelVerificationStatus::PendingVerification
+        );
         store.verify(&entry).expect("valid offline artifact");
-        fs::write(&artifact_path, b"bad!!").unwrap();
+        let restarted = ModelStore::new(&root, &cache).with_offline(true);
+        assert_eq!(
+            restarted.verification_state(&entry).status,
+            ModelVerificationStatus::Verified,
+            "a new process should trust unchanged cached verification metadata"
+        );
+        fs::write(&artifact_path, b"changed").unwrap();
+        assert_eq!(
+            restarted.verification_state(&entry).status,
+            ModelVerificationStatus::ChangedSinceVerification
+        );
         assert!(store
             .verify(&entry)
             .unwrap_err()
             .to_string()
-            .contains("checksum mismatch"));
+            .contains("size mismatch"));
+        assert_eq!(
+            restarted.verification_state(&entry).status,
+            ModelVerificationStatus::VerificationFailed
+        );
+        fs::remove_file(&artifact_path).unwrap();
+        assert_eq!(
+            restarted.verification_state(&entry).status,
+            ModelVerificationStatus::Unavailable
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

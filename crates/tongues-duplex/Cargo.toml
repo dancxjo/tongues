@@ -1,0 +1,11 @@
+[package]
+name = "tongues-duplex"
+version = "0.1.0"
+edition = "2024"
+description = "Provider-neutral deterministic duplex completion orchestration"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+speaking = { path = "../speaking" }

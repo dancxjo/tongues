@@ -11,6 +11,7 @@
 //! ```
 
 mod fetch_corpora;
+mod duplex_cmd;
 pub mod models;
 mod speak;
 mod speech_corpus;
@@ -148,6 +149,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Simulate deterministic duplex completion beams and commit frontiers
+    Duplex {
+        #[command(subcommand)]
+        command: duplex_cmd::DuplexCommands,
+    },
+
     /// Ingest, validate, split, and batch native speech corpora
     #[command(name = "speech-corpus")]
     SpeechCorpus {
@@ -1845,6 +1852,7 @@ fn main() -> Result<()> {
     }
 
     match command {
+        Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
         }

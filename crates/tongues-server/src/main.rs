@@ -88,13 +88,11 @@ struct AppState {
     speech_admission: SpeechAdmission,
     speech_phase: Arc<AtomicU8>,
     speech_device: tongues_tts::ResolvedSpeechDevice,
-    speech_verification: SpeechVerificationRegistry,
 }
 
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
 type ResidentSpeechRegistry = Arc<Mutex<ResidentSpeechService>>;
-type SpeechVerification = BTreeMap<String, Result<(), String>>;
-type SpeechVerificationRegistry = Arc<Mutex<SpeechVerification>>;
+type SpeechVerification = BTreeMap<String, tongues_tts::ModelVerificationState>;
 
 #[derive(Clone)]
 struct SpeechAdmission {
@@ -162,7 +160,6 @@ async fn main() {
         speech_admission: SpeechAdmission::new(speech_max_in_flight),
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
         speech_device,
-        speech_verification: Arc::new(Mutex::new(BTreeMap::new())),
     };
 
     let app = build_app(state);
@@ -243,7 +240,7 @@ fn build_app(state: AppState) -> Router {
         .route("/api/speech/models", get(get_speech_models))
         .route(
             "/api/speech/models/verify/{model_id}",
-            get(verify_speech_model),
+            get(verify_speech_model).post(verify_speech_model),
         )
         .route("/api/speech/project", post(project_speech_request))
         .route("/api/speech/speakers", get(get_speech_speakers))
@@ -478,6 +475,7 @@ struct SpeechPathDiscovery {
     installed: bool,
     verified: bool,
     verification_pending: bool,
+    verification_status: tongues_tts::ModelVerificationStatus,
     load_state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     acoustic_model: Option<String>,
@@ -515,6 +513,7 @@ struct SpeechComponentDiscovery {
     installed: bool,
     verified: bool,
     verification_pending: bool,
+    verification_status: tongues_tts::ModelVerificationStatus,
     load_state: &'static str,
     readiness: String,
     statuses: Vec<String>,
@@ -3786,15 +3785,8 @@ async fn build_speech_discovery(state: &AppState) -> SpeechStudioDiscovery {
         .ok()
         .map(|service| service.engines.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    let verification = state
-        .speech_verification
-        .lock()
-        .map(|verification| verification.clone())
-        .unwrap_or_default();
     let device = state.speech_device;
-    tokio::task::spawn_blocking(move || {
-        speech_studio_discovery(&home, device, &loaded, &verification)
-    })
+    tokio::task::spawn_blocking(move || speech_studio_discovery(&home, device, &loaded))
     .await
     .unwrap_or_else(|error| SpeechStudioDiscovery {
         schema_version: 3,
@@ -3824,14 +3816,11 @@ async fn verify_speech_model(
         let cache = tongues_tts::default_model_cache(&home)
             .unwrap_or_else(|_| home.join("cache/model-downloads"));
         let store = tongues_tts::ModelStore::new(home, cache).with_offline(true);
-        let result = store
-            .verify(entry)
-            .map(|_| ())
-            .map_err(|error| format!("{error:#}"));
+        let result = store.verify(entry).map_err(|error| format!("{error:#}"));
         Ok::<_, String>(Some((entry.id.clone(), result)))
     })
     .await;
-    let (model_id, result) = match verification {
+    let (_model_id, result) = match verification {
         Ok(Ok(Some(verification))) => verification,
         Ok(Ok(None)) => {
             return (
@@ -3851,15 +3840,14 @@ async fn verify_speech_model(
                 .into_response();
         }
     };
-    if state
-        .speech_verification
-        .lock()
-        .map(|mut verification| verification.insert(model_id, result))
-        .is_err()
-    {
+    if let Err(error) = result {
+        let discovery = build_speech_discovery(&state).await;
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "speech model verification registry lock is poisoned",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": error,
+                "discovery": discovery,
+            })),
         )
             .into_response();
     }
@@ -3982,19 +3970,16 @@ fn model_catalog_response() -> serde_json::Value {
     let entries = catalog
         .entries
         .iter()
-        .map(|entry| match store.verify(entry) {
-            Ok(verified) => json!({
+        .map(|entry| {
+            let verification = store.verification_state(entry);
+            json!({
                 "entry": entry,
-                "installed": true,
-                "verified_files": verified.files.len(),
-                "error": null,
-            }),
-            Err(error) => json!({
-                "entry": entry,
-                "installed": false,
-                "verified_files": 0,
-                "error": format!("{error:#}"),
-            }),
+                "installed": verification.status
+                    != tongues_tts::ModelVerificationStatus::Unavailable,
+                "verified_files": verification.verified_files,
+                "verification_status": verification.status,
+                "error": verification.error,
+            })
         })
         .collect::<Vec<_>>();
     json!({
@@ -4008,6 +3993,35 @@ fn model_catalog_response() -> serde_json::Value {
     })
 }
 
+fn aggregate_verification_status(
+    statuses: impl IntoIterator<Item = tongues_tts::ModelVerificationStatus>,
+) -> tongues_tts::ModelVerificationStatus {
+    let statuses = statuses.into_iter().collect::<Vec<_>>();
+    for status in [
+        tongues_tts::ModelVerificationStatus::Unavailable,
+        tongues_tts::ModelVerificationStatus::VerificationFailed,
+        tongues_tts::ModelVerificationStatus::ChangedSinceVerification,
+        tongues_tts::ModelVerificationStatus::PendingVerification,
+    ] {
+        if statuses.contains(&status) {
+            return status;
+        }
+    }
+    tongues_tts::ModelVerificationStatus::Verified
+}
+
+fn verification_status_label(status: tongues_tts::ModelVerificationStatus) -> &'static str {
+    match status {
+        tongues_tts::ModelVerificationStatus::Verified => "Verified",
+        tongues_tts::ModelVerificationStatus::PendingVerification => "Pending verification",
+        tongues_tts::ModelVerificationStatus::ChangedSinceVerification => {
+            "Changed since verification"
+        }
+        tongues_tts::ModelVerificationStatus::VerificationFailed => "Verification failed",
+        tongues_tts::ModelVerificationStatus::Unavailable => "Unavailable",
+    }
+}
+
 fn discover_speech_path(
     home: &FsPath,
     backend: &str,
@@ -4016,7 +4030,7 @@ fn discover_speech_path(
     selected: bool,
     device: tongues_tts::ResolvedSpeechDevice,
     catalog: &tongues_tts::ModelCatalog,
-    verification: &BTreeMap<String, Result<(), String>>,
+    verification: &SpeechVerification,
     loaded: &[String],
 ) -> SpeechPathDiscovery {
     let capabilities = speech_backend_capabilities(home, backend, Some(model), device, 24_000)
@@ -4048,36 +4062,33 @@ fn discover_speech_path(
         .filter_map(|id| catalog.find(id).cloned())
         .collect::<Vec<_>>();
     let installed = speech_backend_installation_error(home, backend, Some(model)).is_none();
-    let verification_pending = backend != "mock"
-        && catalog_entries
-            .iter()
-            .any(|entry| !verification.contains_key(&entry.id));
-    let verification_error = if backend == "mock" {
-        None
+    let verification_status = if backend == "mock" {
+        tongues_tts::ModelVerificationStatus::Verified
+    } else if catalog_entries.len() != catalog_ids.len() {
+        tongues_tts::ModelVerificationStatus::Unavailable
     } else {
-        catalog_entries
-            .iter()
-            .find_map(|entry| match verification.get(&entry.id) {
-                Some(Ok(())) => None,
-                Some(Err(error)) => Some(error.clone()),
-                None => Some(format!(
-                    "catalog verification result is missing for `{}`",
-                    entry.id
-                )),
-            })
-            .or_else(|| {
-                (catalog_entries.len() != catalog_ids.len())
-                    .then(|| "one or more path components are absent from the model catalog".into())
-            })
+        aggregate_verification_status(
+            catalog_entries
+                .iter()
+                .filter_map(|entry| verification.get(&entry.id).map(|state| state.status)),
+        )
     };
-    let verified = !verification_pending && verification_error.is_none();
+    let verification_pending =
+        verification_status == tongues_tts::ModelVerificationStatus::PendingVerification;
+    let verification_error = catalog_entries
+        .iter()
+        .filter_map(|entry| verification.get(&entry.id))
+        .find_map(|state| state.error.clone());
+    let verified = verification_status == tongues_tts::ModelVerificationStatus::Verified;
     let runnable = installed && verified;
     let unavailable_reason = if !installed {
         speech_backend_installation_error(home, backend, Some(model))
-    } else if verification_pending {
-        Some("Catalog artifact verification is in progress.".into())
+    } else if verified {
+        None
+    } else if let Some(error) = verification_error {
+        Some(error)
     } else {
-        verification_error
+        Some(verification_status_label(verification_status).into())
     };
     let (acoustic_model, vocoder, voice_model, component_ids) =
         speech_path_components(backend, model);
@@ -4096,9 +4107,8 @@ fn discover_speech_path(
     }
     if verified {
         statuses.push("Verified".into());
-    }
-    if verification_pending {
-        statuses.push("Verifying".into());
+    } else {
+        statuses.push(verification_status_label(verification_status).into());
     }
     if load_state == "loaded" {
         statuses.push("Loaded".into());
@@ -4132,6 +4142,7 @@ fn discover_speech_path(
         installed,
         verified,
         verification_pending,
+        verification_status,
         load_state,
         acoustic_model,
         vocoder,
@@ -4150,7 +4161,6 @@ fn speech_studio_discovery(
     home: &FsPath,
     device: tongues_tts::ResolvedSpeechDevice,
     loaded: &[String],
-    verification: &SpeechVerification,
 ) -> SpeechStudioDiscovery {
     let catalog_paths = tongues_tts::private_catalog_paths_from_environment();
     let catalog = match tongues_tts::ModelCatalog::with_private_catalogs(&catalog_paths) {
@@ -4171,6 +4181,11 @@ fn speech_studio_discovery(
     let cache = tongues_tts::default_model_cache(home)
         .unwrap_or_else(|_| home.join("cache/model-downloads"));
     let store = tongues_tts::ModelStore::new(home, cache).with_offline(true);
+    let verification = catalog
+        .entries
+        .iter()
+        .map(|entry| (entry.id.clone(), store.verification_state(entry)))
+        .collect::<SpeechVerification>();
     let selected_onnx =
         selected_onnx_voice_model_at(home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
     let mut paths = Vec::new();
@@ -4185,7 +4200,7 @@ fn speech_studio_discovery(
                     model.id == selected_onnx,
                     device,
                     &catalog,
-                    verification,
+                    &verification,
                     loaded,
                 ));
             }
@@ -4201,7 +4216,7 @@ fn speech_studio_discovery(
             provider.id != "mock",
             device,
             &catalog,
-            verification,
+            &verification,
             loaded,
         ));
     }
@@ -4222,7 +4237,8 @@ fn speech_studio_discovery(
             developer: composition.backend == "mock",
         })
         .collect();
-    let mut components = speech_component_inventory(&catalog, &store, verification, &paths, loaded);
+    let mut components =
+        speech_component_inventory(&catalog, &store, &verification, &paths, loaded);
     add_pipeline_pseudo_components(&mut components, &registered);
     SpeechStudioDiscovery {
         schema_version: 3,
@@ -4234,7 +4250,11 @@ fn speech_studio_discovery(
         verification_ids: catalog
             .entries
             .iter()
-            .filter(|entry| !verification.contains_key(&entry.id))
+            .filter(|entry| {
+                verification
+                    .get(&entry.id)
+                    .is_some_and(|state| state.status.needs_deep_verification())
+            })
             .map(|entry| entry.id.clone())
             .collect(),
         error: None,
@@ -4427,6 +4447,7 @@ fn add_pipeline_pseudo_components(
             installed: true,
             verified: true,
             verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Verified,
             load_state: "unloaded",
             readiness: native_component_readiness(descriptor.readiness).into(),
             statuses: vec!["Registered".into()],
@@ -4463,6 +4484,7 @@ fn add_pipeline_pseudo_components(
             installed: false,
             verified: false,
             verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Unavailable,
             load_state: "unloaded",
             readiness: "experimental".into(),
             statuses: vec!["Experimental".into()],
@@ -4502,6 +4524,7 @@ fn add_pipeline_pseudo_components(
             installed: true,
             verified: true,
             verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Verified,
             load_state: "loaded",
             readiness: "runtime".into(),
             statuses: vec!["Checkpoint-bound".into()],
@@ -4535,6 +4558,7 @@ fn add_pipeline_pseudo_components(
             installed: true,
             verified: true,
             verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Verified,
             load_state: "unloaded",
             readiness: "runtime".into(),
             statuses: vec!["Registered".into()],
@@ -5166,6 +5190,7 @@ fn native_component_inventory_without_catalog(loaded: &[String]) -> Vec<SpeechCo
             installed: false,
             verified: false,
             verification_pending: false,
+            verification_status: tongues_tts::ModelVerificationStatus::Unavailable,
             load_state: if loaded.iter().any(|engine| engine.contains(component.id)) {
                 "loaded"
             } else {
@@ -5195,8 +5220,13 @@ fn speech_component_inventory(
             .iter()
             .position(|component| component.id == component_id);
         let installed = catalog_entry_files_present(store.root(), entry);
-        let verified = matches!(verification.get(&entry.id), Some(Ok(())));
-        let verification_pending = !verification.contains_key(&entry.id);
+        let verification_status = verification
+            .get(&entry.id)
+            .map(|state| state.status)
+            .unwrap_or(tongues_tts::ModelVerificationStatus::Unavailable);
+        let verified = verification_status == tongues_tts::ModelVerificationStatus::Verified;
+        let verification_pending =
+            verification_status == tongues_tts::ModelVerificationStatus::PendingVerification;
         let compatible_paths = paths
             .iter()
             .filter(|path| {
@@ -5234,6 +5264,10 @@ fn speech_component_inventory(
             component.installed |= installed;
             component.verified |= verified;
             component.verification_pending |= verification_pending;
+            component.verification_status = aggregate_verification_status([
+                component.verification_status,
+                verification_status,
+            ]);
             component.runnable |= runnable;
             component.load_state = load_state;
             component.compatible_paths.extend(compatible_paths);
@@ -5245,6 +5279,7 @@ fn speech_component_inventory(
                 component.installed,
                 component.verified,
                 component.verification_pending,
+                component.verification_status,
                 component.load_state,
                 &component.catalog,
             );
@@ -5279,6 +5314,7 @@ fn speech_component_inventory(
             installed,
             verified,
             verification_pending,
+            verification_status,
             load_state,
             readiness: readiness.into(),
             statuses: component_statuses(
@@ -5287,6 +5323,7 @@ fn speech_component_inventory(
                 installed,
                 verified,
                 verification_pending,
+                verification_status,
                 load_state,
                 &catalog_entries,
             ),
@@ -5314,6 +5351,7 @@ fn speech_component_inventory(
         installed: true,
         verified: true,
         verification_pending: false,
+        verification_status: tongues_tts::ModelVerificationStatus::Verified,
         load_state: if loaded.iter().any(|engine| engine.starts_with("mock-")) {
             "loaded"
         } else {
@@ -5377,7 +5415,8 @@ fn component_statuses(
     runnable: bool,
     installed: bool,
     verified: bool,
-    verification_pending: bool,
+    _verification_pending: bool,
+    verification_status: tongues_tts::ModelVerificationStatus,
     load_state: &str,
     catalog: &[tongues_tts::ModelCatalogEntry],
 ) -> Vec<String> {
@@ -5402,9 +5441,8 @@ fn component_statuses(
     }
     if verified {
         statuses.push("Verified".into());
-    }
-    if verification_pending {
-        statuses.push("Verifying".into());
+    } else if !catalog.is_empty() {
+        statuses.push(verification_status_label(verification_status).into());
     }
     if load_state == "loaded" {
         statuses.push("Loaded".into());
@@ -5664,8 +5702,8 @@ fn verify_catalog_backend(home: &FsPath, backend: &str, model: Option<&str>) -> 
             .find(&id)
             .with_context(|| format!("speech model `{id}` is not in the licensed catalog"))?;
         store
-            .verify(entry)
-            .with_context(|| format!("speech model `{id}` failed verification"))?;
+            .require_cached_verification(entry)
+            .with_context(|| format!("speech model `{id}` is not ready"))?;
     }
     Ok(())
 }
@@ -5719,7 +5757,6 @@ async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoRespon
     let phase = Arc::clone(&state.speech_phase);
     let admission = state.speech_admission.clone();
     let speech_device = state.speech_device;
-    let verification = Arc::clone(&state.speech_verification);
     match tokio::task::spawn_blocking(move || {
         let _phase_reset = SpeechPhaseReset(Arc::clone(&phase));
         let mut service = registry
@@ -5728,10 +5765,6 @@ async fn reload_speech_runtime(State(state): State<AppState>) -> impl IntoRespon
         phase.store(SPEECH_PHASE_RELOADING, Ordering::Release);
         service.engines.clear();
         service.failures.clear();
-        verification
-            .lock()
-            .map_err(|_| "speech model verification registry lock is poisoned")?
-            .clear();
         phase.store(SPEECH_PHASE_IDLE, Ordering::Release);
         drop(permit);
         Ok::<_, &'static str>(service.snapshot(SPEECH_PHASE_IDLE, &admission, speech_device))
@@ -6743,7 +6776,6 @@ mod tests {
             &mortar_home,
             tongues_tts::ResolvedSpeechDevice::Cpu,
             &["fastpitch-cpu".into()],
-            &BTreeMap::new(),
         );
 
         assert!(discovery.error.is_none());
@@ -6775,9 +6807,10 @@ mod tests {
                 && preset.composition_id
                     == preset.pipeline.canonical_id().expect("preset pipeline id")
         }));
-        assert!(discovery
-            .verification_ids
-            .contains(&"fastpitch-ljspeech".into()));
+        assert!(
+            discovery.verification_ids.is_empty(),
+            "unavailable catalog entries must not be queued for deep verification"
+        );
         let fastpitch = discovery
             .paths
             .iter()
@@ -6789,8 +6822,12 @@ mod tests {
         );
         assert_eq!(fastpitch.vocoder.as_deref(), Some("hifigan-v2-ljspeech"));
         assert_eq!(fastpitch.load_state, "loaded");
-        assert!(fastpitch.verification_pending);
+        assert!(!fastpitch.verification_pending);
         assert!(!fastpitch.verified);
+        assert_eq!(
+            fastpitch.verification_status,
+            tongues_tts::ModelVerificationStatus::Unavailable
+        );
         assert!(fastpitch.controls.iter().any(|control| {
             control.field == "pitch" && control.kind == "number_array" && control.group == "expert"
         }));
@@ -6874,25 +6911,6 @@ mod tests {
             listed_capability_ids(&vits.capabilities.varieties),
             vec!["en-GB-RP"]
         );
-
-        let verification = tongues_tts::ModelCatalog::embedded()
-            .expect("embedded catalog")
-            .entries
-            .into_iter()
-            .map(|entry| (entry.id, Ok(())))
-            .collect::<BTreeMap<_, _>>();
-        let verified_discovery = speech_studio_discovery(
-            &mortar_home,
-            tongues_tts::ResolvedSpeechDevice::Cpu,
-            &[],
-            &verification,
-        );
-        assert!(verified_discovery.verification_ids.is_empty());
-        assert!(verified_discovery
-            .paths
-            .iter()
-            .find(|path| path.capabilities.backend == "fastpitch")
-            .is_some_and(|path| path.verified && !path.verification_pending));
 
         std::fs::remove_dir_all(&mortar_home).expect("remove discovery home");
     }

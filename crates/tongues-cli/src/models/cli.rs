@@ -28,6 +28,8 @@ pub enum ModelsCommand {
     Install(ModelsInstallCommand),
     #[command(about = "Inspect and verify a catalog model or local package")]
     Inspect(ModelsInspectCommand),
+    #[command(about = "Deeply verify one installed model or every installed catalog model")]
+    Verify(ModelsVerifyCommand),
     #[command(about = "Remove an installed catalog model")]
     Remove(ModelsRemoveCommand),
     #[command(about = "Print model paths and current selection")]
@@ -128,6 +130,19 @@ pub struct ModelsInspectCommand {
 }
 
 #[derive(Debug, Args)]
+pub struct ModelsVerifyCommand {
+    /// Catalog model id or alias
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    model: Option<String>,
+    /// Deeply verify every installed catalog model
+    #[arg(long)]
+    all: bool,
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub struct ModelsRemoveCommand {
     /// Catalog model id or alias
     model: String,
@@ -205,6 +220,7 @@ pub fn run(command: Option<ModelsCommand>) -> Result<()> {
         ModelsCommand::Search(command) => search_models(command),
         ModelsCommand::Install(command) => install_model(command),
         ModelsCommand::Inspect(command) => inspect_model(command),
+        ModelsCommand::Verify(command) => verify_models(command),
         ModelsCommand::Remove(command) => remove_model(command),
         ModelsCommand::Path(command) => print_paths(command.model.as_deref()),
         ModelsCommand::Status => print_status(),
@@ -505,6 +521,66 @@ fn inspect_model(command: ModelsInspectCommand) -> Result<()> {
     Ok(())
 }
 
+fn verify_models(command: ModelsVerifyCommand) -> Result<()> {
+    let catalog = load_catalog(command.catalogs)?;
+    let store = model_store(true)?;
+    let entries = if command.all {
+        let recorded = store.installed_records()?;
+        recorded
+            .into_iter()
+            .map(|record| {
+                catalog
+                    .find(&record.entry.id)
+                    .cloned()
+                    .unwrap_or(record.entry)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let model = command.model.context("provide a model id or use --all")?;
+        vec![catalog
+            .find(&model)
+            .cloned()
+            .or_else(|| {
+                store
+                    .installed_records()
+                    .ok()?
+                    .into_iter()
+                    .find(|record| record.entry.id == model)
+                    .map(|record| record.entry)
+            })
+            .with_context(|| format!("unknown catalog or installed model `{model}`"))?]
+    };
+    if entries.is_empty() {
+        println!("no installed catalog models to verify");
+        return Ok(());
+    }
+    let mut failures = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        eprintln!(
+            "verify: {}/{} {} v{}",
+            index + 1,
+            entries.len(),
+            entry.id,
+            entry.package_version
+        );
+        match store.verify(entry) {
+            Ok(verified) => println!(
+                "verified {} v{} ({} files)",
+                verified.id,
+                verified.package_version,
+                verified.files.len()
+            ),
+            Err(error) => failures.push(format!("{}: {error:#}", entry.id)),
+        }
+    }
+    anyhow::ensure!(
+        failures.is_empty(),
+        "model verification failed:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}
+
 fn remove_model(command: ModelsRemoveCommand) -> Result<()> {
     let catalog = load_catalog(command.catalogs)?;
     let store = model_store(true)?;
@@ -648,13 +724,25 @@ impl std::fmt::Display for ModelChoice {
 fn list_models(command: ModelsListCommand) -> Result<()> {
     let catalog = load_catalog(command.catalogs)?;
     let store = model_store(true)?;
-    let recorded = store
-        .installed_records()?
-        .into_iter()
-        .map(|record| (record.entry.id, record.entry.package_version))
-        .collect::<std::collections::BTreeSet<_>>();
     if command.json {
-        println!("{}", serde_json::to_string_pretty(&catalog)?);
+        let entries = catalog
+            .entries
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "entry": entry,
+                    "verification": store.verification_state(entry),
+                })
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": catalog.schema_version,
+                "catalog": catalog.id,
+                "entries": entries,
+            }))?
+        );
         return Ok(());
     }
     println!(
@@ -665,13 +753,21 @@ fn list_models(command: ModelsListCommand) -> Result<()> {
         store.offline()
     );
     for entry in &catalog.entries {
-        let state = if recorded.contains(&(entry.id.clone(), entry.package_version)) {
-            "recorded".green().to_string()
-        } else {
-            "available".cyan().to_string()
+        let state = match store.verification_state(entry).status {
+            tongues_tts::ModelVerificationStatus::Verified => "verified".green().to_string(),
+            tongues_tts::ModelVerificationStatus::PendingVerification => {
+                "pending verification".yellow().to_string()
+            }
+            tongues_tts::ModelVerificationStatus::ChangedSinceVerification => {
+                "changed".yellow().to_string()
+            }
+            tongues_tts::ModelVerificationStatus::VerificationFailed => {
+                "failed".red().to_string()
+            }
+            tongues_tts::ModelVerificationStatus::Unavailable => "unavailable".dimmed().to_string(),
         };
         println!(
-            "{:<28} {:<24} v{:<3} {:<10} {} [{}]",
+            "{:<28} {:<24} v{:<3} {:<20} {} [{}]",
             entry.id.bold(),
             entry.architecture,
             entry.package_version,

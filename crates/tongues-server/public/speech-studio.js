@@ -18,7 +18,7 @@
         runtimePollGeneration: 0,
         verificationGeneration: 0,
     };
-    const VERIFICATION_CONCURRENCY = 3;
+    const VERIFICATION_CONCURRENCY = 1;
 
     const pathKey = (path) => `${path.backend}::${path.model}`;
     const compositionGenerator = (composition) => (
@@ -310,6 +310,7 @@
                     <summary>Engines and Models <span id="component-count"></span></summary>
                     <p>All native, catalog, compatibility, and test components are listed even when
                     they cannot independently produce audio.</p>
+                    <button id="verify-all-models" type="button" class="secondary-button">Verify all changed models</button>
                     <div id="component-inventory" class="component-inventory"></div>
                 </details>
             </main>`;
@@ -654,6 +655,7 @@
             ${path.unavailable_reason ? `<p class="inline-error">${escapeHtml(path.unavailable_reason)}</p>` : ''}
             <div class="model-actions">
                 ${path.install_command ? `<button type="button" class="secondary-button copy-install-command" data-command="${escapeAttribute(path.install_command)}">Copy install command</button>` : ''}
+                ${catalog.length && path.verification_status !== 'verified' && path.verification_status !== 'unavailable' ? '<button type="button" class="secondary-button verify-speech-pipeline">Verify pipeline</button>' : ''}
                 ${path.load_state === 'loaded' ? '<button type="button" class="secondary-button unload-speech-path">Unload model</button>' : ''}
             </div>`;
         card.querySelector('.copy-install-command')?.addEventListener('click', async (event) => {
@@ -675,6 +677,16 @@
                 await refreshDiscovery();
             } catch (error) {
                 showError(`Unload failed: ${error.message}`);
+            }
+        });
+        card.querySelector('.verify-speech-pipeline')?.addEventListener('click', async (event) => {
+            event.currentTarget.disabled = true;
+            try {
+                await verifyModelIds(catalog.map((entry) => entry.id));
+            } catch (error) {
+                showError(`Pipeline verification failed: ${error.message}`);
+            } finally {
+                event.currentTarget.disabled = false;
             }
         });
     }
@@ -750,12 +762,39 @@
                     code.textContent = component.install_command;
                     body.appendChild(code);
                 }
+                if (
+                    catalog.length
+                    && component.verification_status !== 'verified'
+                    && component.verification_status !== 'unavailable'
+                ) {
+                    const verify = document.createElement('button');
+                    verify.type = 'button';
+                    verify.className = 'secondary-button';
+                    verify.textContent = 'Verify model';
+                    verify.addEventListener('click', async () => {
+                        verify.disabled = true;
+                        try {
+                            await verifyModelIds(catalog.map((entry) => entry.id));
+                        } catch (error) {
+                            showError(`Model verification failed: ${error.message}`);
+                        } finally {
+                            verify.disabled = false;
+                        }
+                    });
+                    body.appendChild(verify);
+                }
                 details.append(summary, body);
                 section.appendChild(details);
             }
             target.appendChild(section);
         }
         byId('component-count').textContent = `(${state.discovery.components.length})`;
+        const verifyAll = byId('verify-all-models');
+        const pending = pendingVerificationIds(state.discovery);
+        verifyAll.disabled = pending.length === 0;
+        verifyAll.textContent = pending.length
+            ? `Verify all changed models (${pending.length})`
+            : 'All installed models verified';
     }
 
     function renderRuntime(runtime) {
@@ -921,22 +960,24 @@
         return true;
     }
 
-    async function verifyDiscovery(generation, discovery) {
-        const ids = pendingVerificationIds(discovery);
+    async function verifyModelIds(modelIds, generation = null) {
+        const ids = [...new Set((modelIds || []).filter(Boolean))];
+        const activeGeneration = generation ?? (state.verificationGeneration + 1);
+        if (generation == null) state.verificationGeneration = activeGeneration;
         let cursor = 0;
         const failures = [];
         const verifyNext = async () => {
-            while (generation === state.verificationGeneration && cursor < ids.length) {
+            while (activeGeneration === state.verificationGeneration && cursor < ids.length) {
                 const modelId = ids[cursor];
                 cursor += 1;
                 try {
                     const response = await fetch(
                         `/api/speech/models/verify/${encodeURIComponent(modelId)}`,
-                        { cache: 'no-store' },
+                        { method: 'POST', cache: 'no-store' },
                     );
                     if (!response.ok) throw new Error(await response.text());
                     const updated = await response.json();
-                    if (generation === state.verificationGeneration) {
+                    if (activeGeneration === state.verificationGeneration) {
                         acceptDiscovery(updated);
                     }
                 } catch (error) {
@@ -948,7 +989,7 @@
             { length: Math.min(VERIFICATION_CONCURRENCY, ids.length) },
             verifyNext,
         ));
-        if (generation === state.verificationGeneration && ids.length) {
+        if (activeGeneration === state.verificationGeneration && ids.length) {
             try {
                 const response = await fetch('/api/speech/models', { cache: 'no-store' });
                 if (!response.ok) throw new Error(await response.text());
@@ -957,8 +998,16 @@
                 failures.push(`final refresh: ${error.message}`);
             }
         }
-        if (generation === state.verificationGeneration && failures.length) {
-            showError(`Some model verification requests failed: ${failures.join(' · ')}`);
+        if (activeGeneration === state.verificationGeneration && failures.length) {
+            throw new Error(failures.join(' · '));
+        }
+    }
+
+    async function verifyDiscovery(generation, discovery) {
+        try {
+            await verifyModelIds(pendingVerificationIds(discovery), generation);
+        } catch (error) {
+            showError(`Background model verification failed: ${error.message}`);
         }
     }
 
@@ -1044,6 +1093,17 @@
             state.presetId = '';
             renderPathSelector();
             renderSelectedPath();
+        });
+        byId('verify-all-models').addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            try {
+                await verifyModelIds(pendingVerificationIds(state.discovery));
+            } catch (error) {
+                showError(`Model verification failed: ${error.message}`);
+            } finally {
+                renderInventory();
+            }
         });
         byId('reload-speech-runtime').addEventListener('click', async (event) => {
             const button = event.currentTarget;

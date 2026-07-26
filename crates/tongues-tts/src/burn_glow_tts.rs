@@ -911,9 +911,19 @@ impl<B: Backend> GlowDecoder<B> {
         }
         let mut refreshed = Vec::with_capacity(self.blocks.len());
         for block in self.blocks {
+            // Burn Store treats every two-dimensional PyTorch `weight` as a
+            // linear-layer parameter and transposes it into Burn's layout.
+            // Glow's split invertible-convolution matrix is a raw Conv2d
+            // kernel, so restore its checkpoint orientation before caching
+            // the inverse used by reverse inference.
+            let inv_conv = GlowInvertibleConv {
+                weight: Param::from_tensor(block.inv_conv.weight.val().transpose()),
+                inverse: block.inv_conv.inverse,
+                num_splits: block.inv_conv.num_splits,
+            };
             refreshed.push(GlowFlowBlock {
                 act_norm: block.act_norm,
-                inv_conv: block.inv_conv.refresh_inverse()?,
+                inv_conv: inv_conv.refresh_inverse()?,
                 coupling: block.coupling,
             });
         }
@@ -1496,12 +1506,10 @@ mod tests {
             Tensor::from_floats([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]], &device);
         let output = convolution.reverse(input, Tensor::ones([1, 1, 2], &device));
         assert_eq!(output.dims(), [1, 4, 2]);
-        assert!(output
-            .into_data()
-            .to_vec::<f32>()
-            .expect("values")
-            .iter()
-            .all(|value| value.is_finite()));
+        assert_eq!(
+            output.into_data().to_vec::<f32>().expect("values"),
+            vec![-4.0, -4.0, -4.0, -4.0, 9.0, 10.0, 11.0, 12.0]
+        );
     }
 
     #[test]
@@ -1624,6 +1632,31 @@ mod tests {
         let config = GlowTtsInferenceConfig::from_file(config_path).expect("published config");
         let model =
             GlowTts::<TestBackend>::load(config, checkpoint_path, device.clone()).expect("model");
+        let weight_fixture = &fixture["stages"]["final_invertible_weight"];
+        let actual_weight = model
+            .decoder
+            .blocks
+            .last()
+            .expect("final flow block")
+            .inv_conv
+            .weight
+            .val()
+            .into_data()
+            .to_vec::<f32>()
+            .expect("invertible weight");
+        for probe in weight_fixture["probes"]
+            .as_array()
+            .expect("invertible weight probes")
+        {
+            let probe = probe.as_array().expect("invertible weight probe");
+            let index = probe[0].as_u64().expect("weight index") as usize;
+            let expected = probe[1].as_f64().expect("weight value") as f32;
+            assert!(
+                (actual_weight[index] - expected).abs() <= 1.0e-6,
+                "final invertible weight mismatch at {index}: actual={}, expected={expected}",
+                actual_weight[index]
+            );
+        }
         let tokens = ids.len();
         let encoded = model
             .encoder
@@ -1701,22 +1734,49 @@ mod tests {
             &fixture["stages"]["sampled_latent"],
             4.0e-4,
         );
-        let (mel, trace) = model
-            .decoder
-            .reverse_with_trace(latent, expanded.frame_mask, None, true)
-            .expect("reverse flow");
+        let (mut mel, squeezed_mask) =
+            squeeze(latent, expanded.frame_mask, model.decoder.num_squeeze)
+                .expect("squeeze latent");
+        let step_fixture = fixture["stages"]["reverse_steps"]
+            .as_array()
+            .expect("reverse-step fixture");
         let trace_fixture = fixture["stages"]["reverse_flow"]
             .as_array()
             .expect("reverse-flow fixture");
-        assert_eq!(trace.len(), trace_fixture.len());
-        for (index, (actual, expected)) in trace.into_iter().zip(trace_fixture).enumerate() {
+        assert_eq!(step_fixture.len(), model.decoder.blocks.len() * 3);
+        assert_eq!(trace_fixture.len(), model.decoder.blocks.len());
+        for (index, block) in model.decoder.blocks.iter().rev().enumerate() {
+            mel = block
+                .coupling
+                .reverse(mel, squeezed_mask.clone(), None);
+            assert_fixture_probes(
+                &format!("reverse coupling {}", index + 1),
+                mel.clone(),
+                &step_fixture[index * 3],
+                7.0e-4,
+            );
+            mel = block.inv_conv.reverse(mel, squeezed_mask.clone());
+            assert_fixture_probes(
+                &format!("reverse invertible convolution {}", index + 1),
+                mel.clone(),
+                &step_fixture[index * 3 + 1],
+                7.0e-4,
+            );
+            mel = block.act_norm.reverse(mel, squeezed_mask.clone());
+            assert_fixture_probes(
+                &format!("reverse ActNorm {}", index + 1),
+                mel.clone(),
+                &step_fixture[index * 3 + 2],
+                7.0e-4,
+            );
             assert_fixture_probes(
                 &format!("reverse block {}", index + 1),
-                actual,
-                expected,
+                mel.clone(),
+                &trace_fixture[index],
                 7.0e-4,
             );
         }
+        let mel = unsqueeze(mel, squeezed_mask, model.decoder.num_squeeze);
         assert_fixture_probes(
             "mel",
             mel.swap_dims(1, 2),
