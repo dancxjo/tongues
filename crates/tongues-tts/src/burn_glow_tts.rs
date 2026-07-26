@@ -1423,6 +1423,7 @@ fn validate_duration_values(
 #[cfg(test)]
 mod tests {
     use burn::backend::ndarray::{NdArray, NdArrayDevice};
+    use serde_json::Value;
 
     use super::*;
     use crate::GlowTtsInferenceConfig;
@@ -1463,6 +1464,25 @@ mod tests {
             }"#,
         )
         .expect("tiny config")
+    }
+
+    fn assert_fixture_probes(
+        label: &str,
+        tensor: Tensor<TestBackend, 3>,
+        fixture: &Value,
+        tolerance: f32,
+    ) {
+        let actual = tensor.into_data().to_vec::<f32>().expect("f32 tensor");
+        for probe in fixture["probes"].as_array().expect("fixture probes") {
+            let probe = probe.as_array().expect("probe row");
+            let index = probe[0].as_u64().expect("probe index") as usize;
+            let expected = probe[1].as_f64().expect("probe value") as f32;
+            assert!(
+                (actual[index] - expected).abs() <= tolerance,
+                "{label} parity mismatch at flat index {index}: actual={}, expected={expected}, tolerance={tolerance}",
+                actual[index]
+            );
+        }
     }
 
     #[test]
@@ -1578,6 +1598,130 @@ mod tests {
         assert_eq!(
             first.mel.into_data().to_vec::<f32>().expect("first mel"),
             second.mel.into_data().to_vec::<f32>().expect("second mel")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires pinned Glow-TTS reference and model artifacts; run scripts/speech-conformance.sh"]
+    fn published_glow_checkpoint_stage_parity() {
+        let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")
+            .expect("TONGUES_TEST_GLOW_CONFIG is required");
+        let checkpoint_path = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_GLOW_CHECKPOINT is required");
+        let reference_path = std::env::var_os("TONGUES_TEST_COQUI_REFERENCE")
+            .expect("TONGUES_TEST_COQUI_REFERENCE is required");
+        let reference: Value =
+            serde_json::from_slice(&std::fs::read(reference_path).expect("read reference fixture"))
+                .expect("parse reference fixture");
+        let fixture = &reference["glow_tts"];
+        let ids = fixture["token_ids"]
+            .as_array()
+            .expect("Glow token IDs")
+            .iter()
+            .map(|value| value.as_i64().expect("token ID"))
+            .collect::<Vec<_>>();
+        let device = NdArrayDevice::Cpu;
+        let config = GlowTtsInferenceConfig::from_file(config_path).expect("published config");
+        let model =
+            GlowTts::<TestBackend>::load(config, checkpoint_path, device.clone()).expect("model");
+        let tokens = ids.len();
+        let encoded = model
+            .encoder
+            .forward(
+                Tensor::from_data(TensorData::new(ids, [1, tokens]), &device),
+                Tensor::from_data(TensorData::new(vec![tokens as i64], [1]), &device),
+                None,
+            )
+            .expect("encoder");
+        assert_fixture_probes(
+            "encoder mean",
+            encoded.mean.clone(),
+            &fixture["stages"]["encoder_mean"],
+            3.0e-4,
+        );
+        assert_fixture_probes(
+            "encoder log scale",
+            encoded.log_scale.clone(),
+            &fixture["stages"]["encoder_log_scale"],
+            3.0e-4,
+        );
+        assert_fixture_probes(
+            "log durations",
+            encoded.log_durations.clone(),
+            &fixture["stages"]["log_durations"],
+            3.0e-4,
+        );
+        let durations = glow_ceil_durations(
+            encoded.log_durations,
+            encoded.mask,
+            model.config().network.length_scale.into(),
+            DEFAULT_GLOW_MAX_OUTPUT_FRAMES,
+        )
+        .expect("durations");
+        let expected_durations = fixture["durations"]
+            .as_array()
+            .expect("duration fixture")
+            .iter()
+            .map(|value| value.as_f64().expect("duration") as f32)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            durations
+                .clone()
+                .into_data()
+                .to_vec::<f32>()
+                .expect("duration tensor"),
+            expected_durations
+        );
+        let expanded = expand_prior_statistics(
+            encoded.mean,
+            encoded.log_scale,
+            durations,
+            DEFAULT_GLOW_MAX_OUTPUT_FRAMES,
+        )
+        .expect("expanded prior");
+        assert_fixture_probes(
+            "alignment",
+            expanded.path.clone(),
+            &fixture["stages"]["alignment"],
+            0.0,
+        );
+        let [batch, channels, frames] = expanded.mean.dims();
+        let elements = batch * channels * frames;
+        let pattern = (0..elements)
+            .map(|index| -1.0 + 2.0 * index as f32 / (elements - 1) as f32)
+            .collect::<Vec<_>>();
+        let latent = (expanded.mean
+            + expanded.log_scale.exp()
+                * Tensor::from_data(TensorData::new(pattern, [batch, channels, frames]), &device)
+                * 0.33)
+            * expanded.frame_mask.clone();
+        assert_fixture_probes(
+            "sampled latent",
+            latent.clone(),
+            &fixture["stages"]["sampled_latent"],
+            4.0e-4,
+        );
+        let (mel, trace) = model
+            .decoder
+            .reverse_with_trace(latent, expanded.frame_mask, None, true)
+            .expect("reverse flow");
+        let trace_fixture = fixture["stages"]["reverse_flow"]
+            .as_array()
+            .expect("reverse-flow fixture");
+        assert_eq!(trace.len(), trace_fixture.len());
+        for (index, (actual, expected)) in trace.into_iter().zip(trace_fixture).enumerate() {
+            assert_fixture_probes(
+                &format!("reverse block {}", index + 1),
+                actual,
+                expected,
+                7.0e-4,
+            );
+        }
+        assert_fixture_probes(
+            "mel",
+            mel.swap_dims(1, 2),
+            &fixture["stages"]["mel"],
+            1.0e-3,
         );
     }
 
