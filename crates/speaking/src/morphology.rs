@@ -46,6 +46,24 @@ pub struct Morphology {
     pub rules: Vec<MorphologicalRule>,
 }
 
+impl Morphology {
+    /// Returns the stored pronunciation tokens for a productive prefix morpheme
+    /// that exactly matches `surface` (case-insensitively, ignoring a trailing
+    /// hyphen in the registered form).  Returns `None` when no prefix is
+    /// registered for this surface form or its pronunciation list is empty.
+    pub fn prefix_pronunciation(&self, surface: &str) -> Option<Vec<PhonemeToken>> {
+        let lower = surface.to_lowercase();
+        let prefix = self.morphemes.values().find(|m| {
+            m.kind == MorphemeKind::Prefix && m.form.trim_end_matches('-') == lower
+        })?;
+        if prefix.pronunciation.is_empty() {
+            None
+        } else {
+            Some(prefix.pronunciation.clone())
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MorphologicalRule {
     pub id: String,

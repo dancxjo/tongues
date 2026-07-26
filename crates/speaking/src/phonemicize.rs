@@ -11,7 +11,6 @@ use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
-use crate::morphology::MorphemeKind;
 use crate::orthography::GraphemeToken;
 use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
@@ -1544,27 +1543,24 @@ fn pronunciation_for_word(
     pipeline.unknown_word_pronunciation(word, variety, context)
 }
 
-/// Returns the planned phonemes for a hyphenated part when it is recognized as a
-/// productive prefix in the variety's morphology.  Secondary stress on the prefix
-/// vowel is demoted to unstressed because productive prefixes do not carry lexical
-/// stress in connected hyphenated constructions.
+/// Returns the planned phonemes for a hyphenated part when it is recognised as a
+/// productive prefix in the variety's morphology.  The pronunciation is looked up
+/// via [`Morphology::prefix_pronunciation`] so all language-specific data stays
+/// in the variety's data layer.  Secondary stress is demoted to unstressed for the
+/// connected-speech context of a hyphenated compound.
 fn prefix_planned_phonemes(
     part: &OrthographicToken,
     variety: &LinguisticVariety,
 ) -> Option<Vec<PlannedPhoneme>> {
-    let morphology = variety.morphology.as_ref()?;
-    let part_lower = part.text.to_lowercase();
-    let prefix = morphology.morphemes.values().find(|morpheme| {
-        morpheme.kind == MorphemeKind::Prefix
-            && morpheme.form.trim_end_matches('-') == part_lower
-    })?;
+    let tokens = variety.morphology.as_ref()?.prefix_pronunciation(&part.text)?;
     let stress_id = FeatureId("phonology.stress".into());
-    let planned: Vec<PlannedPhoneme> = prefix
-        .pronunciation
-        .iter()
+    let planned: Vec<PlannedPhoneme> = tokens
+        .into_iter()
         .filter_map(|token| {
             if let Spec::Known(id) = &token.phoneme {
                 let mut features = token.features.clone();
+                // Productive prefixes carry reduced stress in connected hyphenated
+                // constructions; demote secondary stress to unstressed.
                 if let Some(Spec::Known(FeatureValue::Category(s))) =
                     features.values.get(&stress_id)
                 {
@@ -1606,9 +1602,9 @@ fn hyphenated_pronunciation_from_parts(
         if normalized.is_empty() {
             return None;
         }
-        // For non-final parts, prefer the morphology's productive prefix pronunciation
-        // over a lexicon lookup so that "re-" → /ɹɪ/ rather than the solfège word "re"
-        // → /ɹeɪ/, "co-" → /koʊ/ rather than a spurious word match, etc.
+        // For non-final parts, check the variety's morphology for a registered productive
+        // prefix before falling back to the general lexicon, avoiding spurious matches
+        // against unrelated dictionary entries for the bare prefix form.
         let prefix_phonemes = if index + 1 < parts.len() {
             prefix_planned_phonemes(part, variety)
         } else {
