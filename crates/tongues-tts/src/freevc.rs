@@ -750,4 +750,100 @@ mod tests {
         l2_normalize(&mut features).unwrap();
         features
     }
+
+    #[test]
+    fn l2_normalize_produces_unit_vector() {
+        let mut values = vec![3.0_f32, 4.0];
+        l2_normalize(&mut values).unwrap();
+        let norm: f32 = values.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1.0e-6, "norm should be 1.0, got {norm}");
+        assert!((values[0] - 0.6).abs() < 1.0e-6);
+        assert!((values[1] - 0.8).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn l2_normalize_rejects_zero_vector() {
+        let mut values = vec![0.0_f32; 256];
+        assert!(
+            l2_normalize(&mut values).is_err(),
+            "zero vector must be rejected"
+        );
+    }
+
+    #[test]
+    fn local_audio_path_strips_file_scheme() {
+        let path = local_audio_path("file:///tmp/speaker.wav").unwrap();
+        assert_eq!(path.to_str().unwrap(), "/tmp/speaker.wav");
+    }
+
+    #[test]
+    fn local_audio_path_accepts_bare_path() {
+        let path = local_audio_path("/workspace/fixtures/source.wav").unwrap();
+        assert_eq!(path.to_str().unwrap(), "/workspace/fixtures/source.wav");
+    }
+
+    #[test]
+    fn local_audio_path_rejects_unsupported_scheme() {
+        assert!(
+            local_audio_path("http://example.com/audio.wav").is_err(),
+            "http URIs must be rejected"
+        );
+        assert!(
+            local_audio_path("s3://bucket/key.wav").is_err(),
+            "s3 URIs must be rejected"
+        );
+    }
+
+    #[test]
+    fn partial_crops_step_correctly_for_long_audio() {
+        // 2 seconds at 16 kHz = 32_000 samples, which spans multiple 160-frame windows
+        let samples = vec![0.1_f32; 32_000];
+        let crops = speaker_partial_crops(&samples);
+        // Must produce more than one crop for audio longer than 160 frames * 160 samples/frame
+        assert!(crops.len() > 1, "long audio must produce multiple crops");
+        // Every crop must be exactly CROP_SAMPLES long
+        for crop in &crops {
+            assert_eq!(crop.len(), 160 * 160);
+        }
+    }
+
+    #[test]
+    fn speaker_mel_config_matches_freevc_encoder_spec() {
+        let config = speaker_mel_config();
+        assert_eq!(config.sample_rate_hz, 16_000);
+        assert_eq!(config.stft.fft_size, 400);
+        assert_eq!(config.stft.hop_size, 160);
+        // Mel config must request 40 bins (the LSTM input dimension)
+        match &config.output {
+            SpectrogramOutput::Mel(mel) => {
+                assert_eq!(mel.bins, 40);
+                assert_eq!(mel.max_frequency_hz, Some(8_000.0));
+            }
+            other => panic!("expected Mel output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn speaker_lstm_layer_forward_produces_correct_shapes() {
+        let device = NdArrayDevice::Cpu;
+        let layer = FreeVcLstmLayer::<NdArray<f32>>::init(40, 256, &device);
+        // Batch=2, frames=5, input_dim=40
+        let input = Tensor::<NdArray<f32>, 3>::zeros([2, 5, 40], &device);
+        let (output, hidden) = layer.forward(input);
+        assert_eq!(output.dims(), [2, 5, 256]);
+        assert_eq!(hidden.dims(), [2, 256]);
+    }
+
+    #[test]
+    fn silent_audio_metadata_reports_minimum_rms_dbfs() {
+        let audio = AudioBuffer {
+            samples: vec![0.0; 480],
+            sample_rate_hz: 24_000,
+            channels: 1,
+        };
+        let metadata = audio_metadata("source", &audio);
+        assert_eq!(metadata.rms_dbfs, -120.0);
+        assert_eq!(metadata.frames, 480);
+        assert_eq!(metadata.channels, 1);
+    }
 }
