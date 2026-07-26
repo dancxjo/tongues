@@ -125,10 +125,7 @@ impl CmudictLexicon {
         let mut lexicon = Self {
             entries: HashMap::new(),
         };
-        lexicon.extend_from_str(
-            include_str!(concat!(env!("OUT_DIR"), "/cmudict.dict")),
-            "base cmu",
-        );
+        lexicon.extend_from_embedded_cmudict();
         lexicon.extend_from_str(
             "\
 mm M
@@ -140,6 +137,32 @@ mmm M
         );
         lexicon.extend_from_str(GENERATED_OVERRIDES, "generated overrides");
         lexicon
+    }
+
+    fn extend_from_embedded_cmudict(&mut self) {
+        let embedded = arpabet_cmudict::load_cmudict();
+        let mut words = embedded.keys().map(String::as_str).collect::<Vec<_>>();
+        words.sort_unstable();
+        for raw_word in words {
+            let Some(phonemes) = embedded.get_polyphone_str(raw_word) else {
+                continue;
+            };
+            let word = raw_word
+                .find('(')
+                .map(|index| &raw_word[..index])
+                .unwrap_or(raw_word);
+            let candidate = phonemes.into_iter().map(CmuPhoneme::parse).collect();
+            let entry = self
+                .entries
+                .entry(word.to_lowercase().into_boxed_str())
+                .or_insert_with(|| LexiconEntry {
+                    candidates: Vec::new(),
+                    source: "base cmu",
+                });
+            if !entry.candidates.contains(&candidate) {
+                entry.candidates.push(candidate);
+            }
+        }
     }
 
     fn load_from_runtime_path() -> Option<Self> {

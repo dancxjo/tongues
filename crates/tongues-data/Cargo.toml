@@ -12,3 +12,4 @@ rand = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ureq = { workspace = true }
+hound = { workspace = true }

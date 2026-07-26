@@ -9,7 +9,8 @@ Treat prepared data directories as local artifacts unless you have reviewed thei
 | Source/backend | Use | License/terms note |
 |---|---|---|
 | OpenEPD (`open-english-pronouncing-dictionary`) | Primary lexical source for spelling, IPA variants, rarity, and source labels. | OpenEPD is documented upstream as CC-BY-SA 4.0 because it includes WikiPron/Wiktionary-derived data. |
-| Lexique383 | Optional/bundled French lexicon source for `speaking` French lookup. | Lexique383 is documented by its maintainers as CC BY-SA 4.0; preserve attribution and share-alike notes when redistributing full derived data. |
+| CMUdict 0.7b | Embedded English ARPAbet lexicon supplied by the checksum-pinned `arpabet_cmudict` crate. | CMUdict's BSD-style license is included in the dependency package; preserve its copyright and conditions in source/binary redistributions. |
+| Lexique383 seed | Repository-bundled French lexicon seed for `speaking` French lookup. | Lexique383 is documented by its maintainers as CC BY-SA 4.0; preserve attribution and share-alike notes when redistributing full derived data. |
 | WikiPron/Wiktionary-derived labels | Preserved through OpenEPD source labels and used to add Wiktionary reference URLs. | WikiPron/Wiktionary material is share-alike; preserve attribution and license notes when redistributing generated data. |
 | `speaking` crate phonemicizer | Derives narrow phones, syllables, stress, and placeholder acoustic features locally. | Project-local code under this repository's license. |
 | eSpeak NG | Optional local WAV generation with a small rotating voice set. | eSpeak NG is GPL-3-or-later; some data/docs mention CC-BY-SA components. Review eSpeak NG terms before redistributing generated audio. |
@@ -27,3 +28,19 @@ Treat prepared data directories as local artifacts unless you have reviewed thei
 - Review share-alike obligations before combining generated data with other datasets.
 - Keep scraped or robots-disallowed resources out of redistributed artifacts.
 - Review terms for local synthesis engines and model checkpoints before publishing generated audio.
+
+## Linguistic Asset Updates
+
+The machine-readable provenance record is
+[`crates/speaking/assets/linguistic-assets.json`](../crates/speaking/assets/linguistic-assets.json).
+Run `just prepare-assets` after changing an asset or dependency. That command
+fetches the exact CMUdict package under Cargo registry checksum verification,
+then rebuilds `speaking` with `CARGO_NET_OFFLINE=true` and verifies both the
+pinned input and deterministic generated-artifact hashes.
+
+For an update:
+
+1. Pin the exact asset or crate version; never use a moving branch or URL.
+2. Recompute the source and generated-artifact SHA-256 values in the manifest.
+3. Review the upstream license and update this page if its obligations changed.
+4. Run `just prepare-assets` twice and compare the generated artifact checksums.

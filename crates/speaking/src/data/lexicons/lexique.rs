@@ -59,10 +59,7 @@ impl LexiqueLexicon {
         let mut lexicon = Self {
             entries: HashMap::new(),
         };
-        lexicon.extend_from_tsv(
-            include_str!(concat!(env!("OUT_DIR"), "/Lexique383.tsv")),
-            LEXIQUE383_ID,
-        );
+        lexicon.extend_from_tsv(include_str!("Lexique383.tsv"), LEXIQUE383_ID);
         lexicon.extend_from_tsv(GENERATED_OVERRIDES, "generated overrides");
         lexicon
     }

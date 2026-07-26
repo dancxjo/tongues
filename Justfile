@@ -3,6 +3,12 @@ set positional-arguments
 default:
     @just --list
 
+# Fetch checksum-pinned Cargo assets and prove the linguistic layer builds offline
+prepare-assets:
+    cargo fetch
+    CARGO_NET_OFFLINE=true cargo check -p speaking
+    python3 scripts/check-linguistic-assets.py
+
 # Create a new model-family crate/config/artifact scaffold
 new-family family:
     cargo run -q -p xtask -- new-family "{{family}}"
@@ -67,6 +73,10 @@ split-sentences:
 # Forward directly to the tongues CLI
 run *args:
     cargo run --bin tongues -- "$@"
+
+# Normalize, validate, split, and batch an LJSpeech/VCTK/generic corpus
+speech-corpus *args:
+    cargo run --bin tongues -- speech-corpus "$@"
 
 # Package or extract versioned release artifacts
 release action family:

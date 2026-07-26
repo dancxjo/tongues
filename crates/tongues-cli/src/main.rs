@@ -13,6 +13,7 @@
 mod fetch_corpora;
 pub mod models;
 mod speak;
+mod speech_corpus;
 mod styletts2_cmds;
 
 use std::fs;
@@ -147,6 +148,13 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Ingest, validate, split, and batch native speech corpora
+    #[command(name = "speech-corpus")]
+    SpeechCorpus {
+        #[command(subcommand)]
+        command: speech_corpus::SpeechCorpusCommands,
+    },
+
     /// Train and run the lexical grapheme/phoneme seq2seq model family
     G2p2g {
         #[command(subcommand)]
@@ -1837,6 +1845,9 @@ fn main() -> Result<()> {
     }
 
     match command {
+        Commands::SpeechCorpus { command } => {
+            speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
+        }
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
