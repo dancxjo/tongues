@@ -3,8 +3,7 @@ use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use burn::tensor::backend::Backend;
-use burn_store::{ModuleSnapshot, PytorchStore};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     HifiganGenerator, HifiganGeneratorConfig, MelFilterBank, SpectrogramContract,
@@ -12,7 +11,7 @@ use crate::{
     SpectrogramPadMode, SpectrogramScale,
 };
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioFeatureConfig {
     pub fft_size: usize,
     pub win_length: usize,
@@ -127,7 +126,7 @@ impl AudioFeatureConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HifiganGeneratorParams {
     pub resblock_type: String,
     pub upsample_factors: Vec<usize>,
@@ -176,7 +175,7 @@ impl HifiganGeneratorParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HifiganBundleConfig {
     pub audio: AudioFeatureConfig,
     pub generator_model: String,
@@ -256,10 +255,16 @@ impl HifiganBundleConfig {
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<HifiganGenerator<B>> {
         let checkpoint_path = checkpoint_path.as_ref();
-        let mut store = PytorchStore::from_file(checkpoint_path)
-            .with_top_level_key("model")
-            .map_indices_contiguous(false);
-        let result = generator.load_from(&mut store).with_context(|| {
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut generator,
+            checkpoint_path,
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                map_indices_contiguous: false,
+                ..Default::default()
+            },
+        )
+        .with_context(|| {
             format!(
                 "failed to load HiFi-GAN checkpoint {}",
                 checkpoint_path.display()

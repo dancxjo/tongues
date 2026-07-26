@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use inquire::Select;
 use owo_colors::OwoColorize;
+use std::path::PathBuf;
 
 use crate::models::download::fetch_model;
 use crate::models::manifest::{
@@ -27,6 +28,16 @@ pub enum ModelsCommand {
     Use(ModelsUseCommand),
     #[command(about = "Fetch default runtime models, or a named model")]
     Fetch(ModelsFetchCommand),
+    #[command(
+        name = "import-coqui",
+        about = "Safely import a Coqui config/checkpoint into a versioned Tongues package"
+    )]
+    ImportCoqui(ModelsImportCoquiCommand),
+    #[command(
+        name = "inspect-package",
+        about = "Validate and print a Tongues model package manifest"
+    )]
+    InspectPackage(ModelsInspectPackageCommand),
 }
 
 #[derive(Debug, Args)]
@@ -47,6 +58,49 @@ pub struct ModelsPathCommand {
     model: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct ModelsImportCoquiCommand {
+    /// Coqui JSON or JSON5 configuration
+    #[arg(long)]
+    config: PathBuf,
+    /// Modern ZIP-based PyTorch checkpoint
+    #[arg(long)]
+    checkpoint: PathBuf,
+    /// Destination directory for manifest, neutral config, tensor index, and SafeTensors
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Optional Coqui speaker_ids.json
+    #[arg(long = "speakers")]
+    speaker_map: Option<PathBuf>,
+    /// Optional Coqui language_ids.json
+    #[arg(long = "languages")]
+    language_map: Option<PathBuf>,
+    /// Tensor dictionary key inside the checkpoint
+    #[arg(long, default_value = "model")]
+    checkpoint_key: String,
+    /// SPDX license expression or explicit LicenseRef
+    #[arg(long)]
+    license: String,
+    /// Stable upstream URL or provenance identifier
+    #[arg(long)]
+    source: String,
+    /// Upstream Coqui version/revision
+    #[arg(long)]
+    coqui_version: Option<String>,
+    /// Validate and inspect without writing a package
+    #[arg(long)]
+    dry_run: bool,
+    /// Print the inspection/manifest as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsInspectPackageCommand {
+    /// Package directory or manifest.json
+    package: PathBuf,
+}
+
 pub fn run(command: Option<ModelsCommand>) -> Result<()> {
     match command.unwrap_or(ModelsCommand::Menu) {
         ModelsCommand::Menu => model_menu(),
@@ -58,7 +112,119 @@ pub fn run(command: Option<ModelsCommand>) -> Result<()> {
             fetch_model(command.model.as_deref(), command.force)?;
             Ok(())
         }
+        ModelsCommand::ImportCoqui(command) => import_coqui(command),
+        ModelsCommand::InspectPackage(command) => inspect_package(command),
     }
+}
+
+fn import_coqui(command: ModelsImportCoquiCommand) -> Result<()> {
+    let output = command
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("model-package"));
+    anyhow::ensure!(
+        command.dry_run || command.out.is_some(),
+        "--out is required unless --dry-run is used"
+    );
+    let mut options = tongues_tts::CoquiImportOptions::new(
+        command.config,
+        command.checkpoint,
+        output,
+        command.license,
+        command.source,
+    );
+    options.speaker_map_path = command.speaker_map;
+    options.language_map_path = command.language_map;
+    options.checkpoint_key = command.checkpoint_key;
+    options.coqui_version = command.coqui_version;
+
+    let mut report_progress = |event| match event {
+        tongues_tts::ModelImportProgress::ReadingConfig { path } => {
+            eprintln!("import: reading config {}", path.display());
+        }
+        tongues_tts::ModelImportProgress::ScanningCheckpoint { path } => {
+            eprintln!(
+                "import: scanning safe tensor-only checkpoint {}",
+                path.display()
+            );
+        }
+        tongues_tts::ModelImportProgress::ValidatingShapes { architecture } => {
+            eprintln!(
+                "import: validating {:?} tensor names and shapes",
+                architecture
+            );
+        }
+        tongues_tts::ModelImportProgress::ValidatingConvertedWeights { architecture, path } => {
+            eprintln!(
+                "import: loading converted {:?} weights through the native runtime from {}",
+                architecture,
+                path.display()
+            );
+        }
+        tongues_tts::ModelImportProgress::ConvertingTensor {
+            current,
+            total,
+            name,
+            output,
+        } => {
+            eprintln!(
+                "import: converting tensor {current}/{total} {name} -> {}",
+                output.display()
+            );
+        }
+        tongues_tts::ModelImportProgress::WritingMetadata { path } => {
+            eprintln!("import: writing {}", path.display());
+        }
+        tongues_tts::ModelImportProgress::Complete { path, sha256 } => {
+            eprintln!(
+                "import: complete {} manifest-sha256={sha256}",
+                path.display()
+            );
+        }
+    };
+    if command.dry_run {
+        let inspection =
+            tongues_tts::inspect_coqui_import_with_progress(&options, &mut report_progress)?;
+        if command.json {
+            println!("{}", serde_json::to_string_pretty(&inspection)?);
+        } else {
+            println!(
+                "compatible {:?} checkpoint: {} tensors, {} speakers, {} languages, {} symbols",
+                inspection.architecture,
+                inspection.tensor_count,
+                inspection.speakers.len(),
+                inspection.languages.len(),
+                inspection.symbols.len()
+            );
+            if !inspection.ignored_training_fields.is_empty() {
+                println!(
+                    "reported training-only fields: {}",
+                    inspection.ignored_training_fields.join(", ")
+                );
+            }
+        }
+    } else {
+        let manifest =
+            tongues_tts::import_coqui_model_with_progress(&options, &mut report_progress)?;
+        if command.json {
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+        } else {
+            println!(
+                "wrote schema-v{} {:?} package to {} ({} tensors)",
+                manifest.schema_version,
+                manifest.architecture,
+                options.output_dir.display(),
+                manifest.tensor_count
+            );
+        }
+    }
+    Ok(())
+}
+
+fn inspect_package(command: ModelsInspectPackageCommand) -> Result<()> {
+    let package = tongues_tts::open_model_package(&command.package)?;
+    println!("{}", serde_json::to_string_pretty(&package.manifest)?);
+    Ok(())
 }
 
 fn model_menu() -> Result<()> {

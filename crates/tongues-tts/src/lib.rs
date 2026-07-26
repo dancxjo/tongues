@@ -35,9 +35,11 @@ pub mod burn_vits_duration;
 pub mod burn_vits_flow;
 pub mod burn_vits_text;
 pub mod burn_vocoder;
+mod checkpoint;
 pub mod components;
 pub mod device;
 pub mod model_config;
+pub mod model_package;
 pub mod orchestration;
 pub mod phoneme_projector;
 pub mod profiling;
@@ -80,6 +82,16 @@ pub use device::{
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
 pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
+pub use model_package::{
+    import_coqui_model, import_coqui_model_with_progress, inspect_coqui_import,
+    inspect_coqui_import_with_progress, migrate_model_package_manifest, open_model_package,
+    read_model_package, scan_safe_pytorch_checkpoint, CoquiImportInspection, CoquiImportOptions,
+    ModelImportProgress, ModelPackage, ModelPackageArchitecture, ModelPackageManifest,
+    NeutralModelConfig, PackageArtifact, PackageAudio, PackageFile, PackageLanguage,
+    PackageLicense, PackageProvenance, PackageSpeaker, SpeakerEncoderPackageConfig, TensorMetadata,
+    MODEL_PACKAGE_CONFIG, MODEL_PACKAGE_FORMAT, MODEL_PACKAGE_MANIFEST,
+    MODEL_PACKAGE_SCHEMA_VERSION, MODEL_PACKAGE_TENSORS, MODEL_PACKAGE_WEIGHTS,
+};
 pub use orchestration::{
     variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
     CapabilityValue, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,

@@ -14,7 +14,6 @@ use burn::nn::PaddingConfig1d;
 use burn::tensor::activation::{gelu, softmax, softplus};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Distribution, Tensor};
-use burn_store::{ModuleSnapshot, PytorchStore};
 
 const LAYER_NORM_EPSILON: f64 = 1e-5;
 const MIN_BIN_WIDTH: f64 = 1e-3;
@@ -442,24 +441,30 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         mut self,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<Self, StochasticDurationError> {
-        let mut store = PytorchStore::from_file(checkpoint_path.as_ref())
-            .with_top_level_key("model")
-            .with_key_remapping(r"^duration_predictor\.", "")
-            .with_key_remapping(r"^flows\.0\.", "affine.")
-            .with_predicate(duration_inference_tensor)
-            .map_indices_contiguous(false)
-            .allow_partial(true)
-            .skip_enum_variants(true);
+        let mut key_remappings = vec![
+            (r"^duration_predictor\.".into(), String::new()),
+            (r"^flows\.0\.".into(), "affine.".into()),
+        ];
         for index in 0..self.spline_flows.len() {
-            store = store.with_key_remapping(
+            key_remappings.push((
                 format!(r"^flows\.{}\.", index + 1),
                 format!("spline_flows.{index}."),
-            );
+            ));
         }
 
-        let result = self
-            .load_from(&mut store)
-            .map_err(|error| StochasticDurationError::Checkpoint(error.to_string()))?;
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path.as_ref(),
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(duration_inference_tensor),
+                key_remappings,
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+            },
+        )
+        .map_err(|error| StochasticDurationError::Checkpoint(error.to_string()))?;
         let mut missing = result
             .missing
             .iter()

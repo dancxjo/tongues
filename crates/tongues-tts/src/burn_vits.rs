@@ -13,7 +13,6 @@ use burn::module::Module;
 use burn::nn::{Embedding, EmbeddingConfig};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
-use burn_store::{ModuleSnapshot, PytorchStore};
 use speaking::UtterancePlan;
 
 use crate::burn_vits_flow::expand_prior_statistics_with_frames;
@@ -35,6 +34,10 @@ use crate::{LinguisticProjector, ModelInputContract};
 const DEFAULT_MAX_OUTPUT_FRAMES: usize = 65_536;
 const STREAM_LATENT_FRAMES: usize = 64;
 
+fn speaker_embedding_tensor(path: &str, _container: &str) -> bool {
+    path.starts_with("emb_g.")
+}
+
 #[derive(Module, Debug)]
 struct SpeakerEmbedding<B: Backend> {
     emb_g: Embedding<B>,
@@ -48,15 +51,19 @@ impl<B: Backend> SpeakerEmbedding<B> {
     }
 
     fn load_checkpoint(mut self, checkpoint_path: &Path) -> Result<Self> {
-        let mut store = PytorchStore::from_file(checkpoint_path)
-            .with_top_level_key("model")
-            .with_predicate(|path, _| path.starts_with("emb_g."))
-            .map_indices_contiguous(false)
-            .allow_partial(true)
-            .skip_enum_variants(true);
-        let result = self
-            .load_from(&mut store)
-            .context("failed to load speaker embedding checkpoint")?;
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path,
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(speaker_embedding_tensor),
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+                ..Default::default()
+            },
+        )
+        .context("failed to load speaker embedding checkpoint")?;
         let unused = result
             .unused
             .iter()

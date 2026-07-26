@@ -25,7 +25,7 @@ use burn::nn::{BatchNorm, BatchNormConfig, Embedding, EmbeddingConfig, PaddingCo
 use burn::tensor::activation::relu;
 use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor};
-use burn_store::{ModuleSnapshot, PytorchStore};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::profiling::finish_backend_stage;
@@ -73,7 +73,7 @@ fn input_error(message: impl Into<String>) -> SpeedySpeechError {
 }
 
 /// Parameters for one residual-convolution stack.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResidualConvConfig {
     pub kernel_size: usize,
     pub dilations: Vec<usize>,
@@ -115,7 +115,7 @@ impl ResidualConvConfig {
 }
 
 /// Model parameters required by the released residual-convolution graph.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeedySpeechConfig {
     pub num_chars: usize,
     pub out_channels: usize,
@@ -952,17 +952,29 @@ pub struct SpeedySpeech<B: Backend> {
 impl<B: Backend> SpeedySpeech<B> {
     /// Load the unmodified `.pth` checkpoint directly through Burn Store.
     pub fn load_checkpoint(mut self, path: impl AsRef<Path>) -> Result<Self, SpeedySpeechError> {
-        let mut store = PytorchStore::from_file(path.as_ref())
-            .with_top_level_key("model")
-            .with_predicate(checkpoint_tensor)
-            .with_key_remapping(r"(\.norm)\.weight$", "$1.gamma")
-            .with_key_remapping(r"(\.norm)\.bias$", "$1.beta")
-            .with_key_remapping(r"^(encoder\.encoder\.postnet\.2)\.weight$", "$1.gamma")
-            .with_key_remapping(r"^(encoder\.encoder\.postnet\.2)\.bias$", "$1.beta")
-            .skip_enum_variants(true);
-        let result = self
-            .load_from(&mut store)
-            .map_err(|error| SpeedySpeechError::Checkpoint(error.to_string()))?;
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            path.as_ref(),
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(checkpoint_tensor),
+                key_remappings: vec![
+                    (r"(\.norm)\.weight$".into(), "$1.gamma".into()),
+                    (r"(\.norm)\.bias$".into(), "$1.beta".into()),
+                    (
+                        r"^(encoder\.encoder\.postnet\.2)\.weight$".into(),
+                        "$1.gamma".into(),
+                    ),
+                    (
+                        r"^(encoder\.encoder\.postnet\.2)\.bias$".into(),
+                        "$1.beta".into(),
+                    ),
+                ],
+                skip_enum_variants: true,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| SpeedySpeechError::Checkpoint(error.to_string()))?;
         let unexpected_unused = result
             .unused
             .iter()

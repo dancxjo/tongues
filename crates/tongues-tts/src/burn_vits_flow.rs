@@ -17,7 +17,6 @@ use burn::tensor::backend::Backend;
 use burn::tensor::module::conv1d;
 use burn::tensor::ops::ConvOptions;
 use burn::tensor::{ElementConversion, Int, Tensor};
-use burn_store::{ModuleSnapshot, PytorchStore};
 
 const PYTORCH_CONV_GAIN: f64 = 0.577_350_269_189_625_8;
 
@@ -663,16 +662,19 @@ impl<B: Backend> ResidualCouplingFlow<B> {
         mut self,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<Self, VitsFlowError> {
-        let mut store = PytorchStore::from_file(checkpoint_path.as_ref())
-            .with_top_level_key("model")
-            .with_key_remapping(r"^flow\.", "")
-            .with_predicate(flow_tensor)
-            .map_indices_contiguous(false)
-            .allow_partial(true)
-            .skip_enum_variants(true);
-        let result = self
-            .load_from(&mut store)
-            .map_err(|error| VitsFlowError::Checkpoint(error.to_string()))?;
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path.as_ref(),
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(flow_tensor),
+                key_remappings: vec![(r"^flow\.".into(), String::new())],
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+            },
+        )
+        .map_err(|error| VitsFlowError::Checkpoint(error.to_string()))?;
         let unexpected_unused = result
             .unused
             .iter()

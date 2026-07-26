@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{ensure, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use speaking::{
     phoneme_default_phone_display_symbol, FeatureBundle, FeatureId, FeatureValue, PauseKind, Spec,
     TerminalPunctuation, UtterancePlan,
@@ -9,7 +9,7 @@ use speaking::{
 
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhonemeCharactersConfig {
     pub pad: Option<String>,
     pub eos: Option<String>,
@@ -24,7 +24,7 @@ pub struct PhonemeCharactersConfig {
     pub is_sorted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhonemeTokenizerConfig {
     #[serde(default)]
     pub use_phonemes: bool,

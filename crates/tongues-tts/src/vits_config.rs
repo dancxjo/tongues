@@ -2,13 +2,13 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AudioFeatureConfig;
 
 const IMPORTED_VITS_BLANK_TOKEN: &str = "<BLNK>";
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ImportedVitsCharactersConfig {
     pub characters_class: Option<String>,
     pub pad: String,
@@ -24,7 +24,7 @@ pub(crate) struct ImportedVitsCharactersConfig {
     pub is_sorted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VitsNetworkConfig {
     pub num_chars: usize,
     pub out_channels: usize,
@@ -67,13 +67,13 @@ pub struct VitsNetworkConfig {
 /// Architecture and signal contract needed to construct a VITS inference
 /// graph. Tokenizer and artifact-container conventions are deliberately not
 /// part of this type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VitsInferenceConfig {
     pub network: VitsNetworkConfig,
     pub audio: AudioFeatureConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ImportedVitsConfig {
     pub(crate) model: String,
     pub(crate) use_phonemes: bool,

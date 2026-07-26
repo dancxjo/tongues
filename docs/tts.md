@@ -20,6 +20,72 @@ registered SpeedySpeech, HiFi-GAN, and VITS bundles are published Coqui release
 artifacts; the model registry records their sources, sizes, checksums, and
 licenses.
 
+## Safe Coqui package import
+
+Legacy Coqui artifacts can be converted once into a backend-neutral, versioned
+Tongues model package:
+
+```sh
+cargo run --bin tongues -- models import-coqui \
+  --config /path/to/config.json \
+  --checkpoint /path/to/model_file.pth \
+  --speakers /path/to/speaker_ids.json \
+  --out /path/to/tongues-package \
+  --license Apache-2.0 \
+  --source https://example.invalid/upstream-model \
+  --coqui-version 0.6.1
+```
+
+Omit `--speakers` for single-speaker acoustic models and vocoders. Use
+`--languages language_ids.json` when a multilingual artifact has a separate
+language map. `--checkpoint-key` defaults to `model`.
+
+The package contains:
+
+| File | Purpose |
+|---|---|
+| `manifest.json` | Schema version, architecture, audio contract, speakers, languages, symbols, license, provenance, and source/package checksums |
+| `model.json` | Canonical backend-neutral inference configuration |
+| `model.safetensors` | Deterministically ordered tensor names and weights |
+| `tensors.json` | Exact dtype and shape index used during validation |
+
+Inspect without writing anything:
+
+```sh
+cargo run --bin tongues -- models import-coqui \
+  --config /path/to/config.json \
+  --checkpoint /path/to/model_file.pth \
+  --license Apache-2.0 \
+  --source https://example.invalid/upstream-model \
+  --dry-run --json
+```
+
+Validate an existing package and every recorded file checksum:
+
+```sh
+cargo run --bin tongues -- models inspect-package /path/to/tongues-package
+```
+
+The importer accepts only modern ZIP-based PyTorch checkpoints. Before tensor
+loading, it scans `data.pkl`, permits only the storage/tensor reconstruction
+globals needed by published checkpoints, and rejects arbitrary globals,
+`STACK_GLOBAL`, unapproved object-construction opcodes, unsafe archive paths,
+unsupported protocols, and oversized metadata. Parsing and conversion are
+Rust-only: Python is never started, modules are never imported, and pickle
+callables are never executed. Unknown inference fields are errors;
+training-only fields are sorted into `ignored_training_fields` in the manifest
+rather than silently discarded.
+
+Schema v1 packages are deterministic: they contain no timestamps or local
+source paths, JSON fields and tensor names have stable ordering, writes use
+`.part` files followed by atomic rename, and importing identical inputs with
+identical provenance produces byte-identical package members. The manifest
+reader includes an explicit v0-to-v1 migration path and rejects future schema
+versions it cannot safely interpret.
+
+Package compatibility proves structure and safe loading. Cross-runtime
+numerical and audio conformance remains the separate #4 responsibility.
+
 ## Usage
 
 Write native component synthesis to a WAV file:

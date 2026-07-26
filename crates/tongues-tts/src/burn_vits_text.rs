@@ -15,7 +15,6 @@ use burn::tensor::activation::{relu, softmax};
 use burn::tensor::backend::Backend;
 use burn::tensor::ops::PadMode;
 use burn::tensor::{Int, Tensor};
-use burn_store::{ModuleSnapshot, PytorchStore};
 
 use crate::VitsInferenceConfig;
 
@@ -192,16 +191,19 @@ impl<B: Backend> VitsTextPriorEncoder<B> {
         mut self,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<Self, VitsTextPriorError> {
-        let mut store = PytorchStore::from_file(checkpoint_path.as_ref())
-            .with_top_level_key("model")
-            .with_key_remapping(r"^text_encoder\.", "")
-            .with_predicate(text_prior_tensor)
-            .map_indices_contiguous(false)
-            .allow_partial(true)
-            .skip_enum_variants(true);
-        let result = self
-            .load_from(&mut store)
-            .map_err(|error| VitsTextPriorError::Checkpoint(error.to_string()))?;
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path.as_ref(),
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(text_prior_tensor),
+                key_remappings: vec![(r"^text_encoder\.".into(), String::new())],
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+            },
+        )
+        .map_err(|error| VitsTextPriorError::Checkpoint(error.to_string()))?;
 
         let mut missing = result
             .missing
