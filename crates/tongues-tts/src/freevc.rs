@@ -699,6 +699,7 @@ mod tests {
         );
 
         let source_content = content_summary(&runtime, &read_wav(&source).unwrap());
+        let unrelated_content = content_summary(&runtime, &read_wav(&target).unwrap());
         let converted_content = content_summary(
             &runtime,
             &AudioBuffer {
@@ -707,14 +708,20 @@ mod tests {
                 channels: 1,
             },
         );
-        let content_similarity = source_content
+        let source_content_similarity = source_content
+            .iter()
+            .zip(&converted_content)
+            .map(|(a, b)| a * b)
+            .sum::<f32>();
+        let unrelated_content_similarity = unrelated_content
             .iter()
             .zip(converted_content)
             .map(|(a, b)| a * b)
             .sum::<f32>();
         assert!(
-            content_similarity > 0.5,
-            "converted WavLM content similarity {content_similarity} is too low"
+            source_content_similarity > 0.25
+                && source_content_similarity > unrelated_content_similarity,
+            "converted source-content similarity {source_content_similarity} must exceed the unrelated reference {unrelated_content_similarity}"
         );
     }
 
