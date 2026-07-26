@@ -413,6 +413,21 @@ pub fn train_vits<B: AutodiffBackend>(
                     &mut progress,
                 )?;
             }
+            if recipe.checkpoints.sample_every_steps > 0
+                && state
+                    .global_step
+                    .is_multiple_of(recipe.checkpoints.sample_every_steps)
+            {
+                save_validation_sample(
+                    layout,
+                    state.global_step,
+                    &generator.valid(),
+                    config,
+                    &valid[0],
+                    device,
+                    &mut progress,
+                )?;
+            }
             if options.max_steps.is_some_and(|limit| new_steps >= limit) {
                 if !checkpoint_due {
                     save_training_checkpoint(
@@ -873,11 +888,11 @@ where
         .context("saving VITS discriminator training state")?;
     recorder.record(
         generator_optimizer.to_record(),
-        &generator_optimizer_part,
+        generator_optimizer_part.clone(),
     )?;
     recorder.record(
         discriminator_optimizer.to_record(),
-        &discriminator_optimizer_part,
+        discriminator_optimizer_part.clone(),
     )?;
     generator
         .valid()

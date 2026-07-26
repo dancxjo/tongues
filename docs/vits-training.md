@@ -1,8 +1,20 @@
 # Native VITS training and fine-tuning
 
-Tongues provides a staged, Python-free Burn path for the first supported VITS
-training slice. It reuses the native inference modules and the shared speech
-corpus/audio contracts; it is not a port of Coqui Trainer.
+Tongues provides an executable, Python-free Burn trainer for the first
+supported VITS slice. It reuses the native inference modules and the shared
+speech corpus/audio contracts; it is not a port of Coqui Trainer.
+
+The smallest complete acceptance run is:
+
+```sh
+cargo run --release --bin tongues -- --cpu vits fixture \
+  --out target/vits-fixture --epochs 4
+```
+
+That command intentionally interrupts after its first step, resumes the exact
+epoch/batch cursor with the generator and discriminator optimizer records,
+overfits the deterministic fixture, writes finite WAV samples, exports the best
+SafeTensors checkpoint, and loads it through `BurnVitsSpeech`.
 
 ## Supported milestone
 
@@ -81,10 +93,33 @@ the baseline and best value of the chosen validation metric in
 `VitsTrainingManifest`; a fine-tune is successful only when the recorded best
 value improves on the baseline.
 
-The native training graph returns every loss component independently. The
-outer trainer should compute differentiable target/generated mel tensors with
-the shared audio geometry, call `combine_vits_generator_losses`, and update
-generator and discriminator parameter groups separately.
+The library-owned runner computes differentiable target/generated mel tensors
+with the shared audio geometry, calls `combine_vits_generator_losses`, and
+updates generator and discriminator parameter groups separately. It applies
+the recipe's freeze groups, AdamW settings, norm clipping, and epoch scheduler.
+
+Initialize and run a prepared corpus with:
+
+```sh
+cargo run --release --bin tongues -- vits initialize \
+  --data target/vctk-prepared \
+  --config /models/vits/config.json \
+  --out models/vits/vctk-native \
+  --source-checkpoint /models/vits/model.pth \
+  --baseline-metric 12.34 \
+  --source-license "MPL-2.0" \
+  --source-provenance "pinned checkpoint SHA-256 recorded by initialize" \
+  --dataset-license "VCTK license" \
+  --dataset-provenance "local VCTK speech-corpus prepare"
+
+cargo run --release --bin tongues -- vits train \
+  --run models/vits/vctk-native
+```
+
+The prepared directory must contain `vits-features/` entries using
+`CachedSpeechFeatures`: checkpoint-local token IDs plus frame-major linear
+spectrogram bins. `train`, `resume`, `evaluate`, and `export` consume this same
+run without custom Rust glue.
 
 ## Checkpoints and resume
 
@@ -97,7 +132,8 @@ reports these paths:
 | `training-manifest.json` | Model/data source, checksums, licenses, provenance, and metric |
 | `README.md` | Reproducible model card and compute requirements |
 | `train_state.json` | Epoch, global step, batch cursor, shuffle seed, learning rates, best metric, and optimizer paths |
-| `model-epoch-N.safetensors` | Completed epoch checkpoint |
+| `trainer-generator-latest.bin` | Full generator including posterior encoder |
+| `trainer-discriminator-latest.bin` | Full MPD/MSD training state |
 | `model-latest.safetensors` | Most recent recoverable checkpoint |
 | `model.safetensors` | Best inference checkpoint |
 | `optim-generator-latest.bin` | Generator optimizer state |
@@ -144,11 +180,12 @@ cargo test -p tongues-tts --lib \
   vits_recipe::tests --no-default-features
 ```
 
-Published-checkpoint fine-tuning remains opt-in because the licensed model and
-corpus are large. A recorded run must pin the checkpoint SHA-256, retain its
-license evidence, state the target metric and baseline, write periodic finite
-WAV samples, and verify the best exported checkpoint with
-`BurnVitsSpeech::load`.
+Published-checkpoint fine-tuning is initiated by `vits initialize
+--source-checkpoint ... --baseline-metric ...`. The safe importer restores the
+inference graph, while training-only modules start separately. The run pins the
+checkpoint SHA-256, retains license/provenance evidence, records an improved
+target metric, writes periodic finite WAV samples, and `vits export` verifies
+the result with `BurnVitsSpeech::load`.
 
 ## Compute guidance
 

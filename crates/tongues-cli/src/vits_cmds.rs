@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tongues_tts::{
     evaluate_vits, export_vits, initialize_vits_run_with_progress,
     load_vits_examples, load_vits_training_model_config, train_vits,
-    BurnVitsSpeech, ResolvedSpeechDevice,
+    write_vits_training_manifest, BurnVitsSpeech, ResolvedSpeechDevice,
     VitsCheckpointPolicy, VitsDatasetManifest, VitsRunLayout, VitsTrainingBackend,
     VitsTrainingManifest, VitsTrainingProgress, VitsTrainingRecipe, VitsTrainOptions,
     VITS_TRAINING_MANIFEST_SCHEMA_VERSION,
@@ -276,6 +276,15 @@ fn run_training(
             print_progress,
         )?,
     };
+    if let Some(metric) = report.best_validation_loss {
+        let mut updated_manifest = manifest;
+        if updated_manifest.record_metric(metric)? {
+            write_vits_training_manifest(&layout, &recipe, &updated_manifest)?;
+            println!(
+                "Recorded improved target metric validation-generator-loss={metric}"
+            );
+        }
+    }
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }

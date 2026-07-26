@@ -176,6 +176,13 @@ interpretation *args:
 common-phone *args:
     cargo run --bin tongues -- common-phone "$@"
 
+# Native VITS initialize/train/resume/evaluate/export and CPU fixture runner
+vits *args:
+    cargo run --bin tongues -- vits "$@"
+
+vits-fixture:
+    cargo run --release --bin tongues -- --cpu vits fixture --out target/vits-fixture --epochs 4
+
 # Alias for the canonical common-phone spelling
 commonphone *args:
     cargo run --bin tongues -- common-phone "$@"
