@@ -44,7 +44,7 @@ pub struct SpeakCommand {
     pub backend: SpeakBackend,
     #[arg(
         long,
-        help = "Catalog model id or alias; required for model-selectable backends such as Fairseq MMS"
+        help = "Catalog model id/alias, or an imported package directory for --backend xtts"
     )]
     pub model: Option<String>,
     #[arg(
@@ -270,6 +270,7 @@ pub enum SpeakBackend {
     Vits,
     Fairseq,
     Yourtts,
+    Xtts,
     Mock,
     Styletts2,
     Onnx,
@@ -511,6 +512,8 @@ type CpuGlowBackend = speech::BurnGlowTtsPipeline<NdArray<f32>, CpuGlowVocoder>;
 type CudaGlowBackend = speech::BurnGlowTtsPipeline<Cuda<f32, i32>, CudaGlowVocoder>;
 type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
 type CudaVitsBackend = speech::BurnVitsSpeech<Cuda<f32, i32>>;
+type CpuXttsBackend = speech::BurnXtts<NdArray<f32>>;
+type CudaXttsBackend = speech::BurnXtts<Cuda<f32, i32>>;
 type AudioCallback<'a> = Option<&'a mut dyn FnMut(&[f32])>;
 
 #[allow(dead_code)]
@@ -531,6 +534,8 @@ enum BackendInstance {
         engine: Box<CudaVitsBackend>,
         entry: speech::ModelCatalogEntry,
     },
+    XttsCpu(Box<CpuXttsBackend>),
+    XttsCuda(Box<CudaXttsBackend>),
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
@@ -563,6 +568,8 @@ impl BackendInstance {
             Self::VitsCuda(_) => "vits-cuda",
             Self::FairseqCpu { .. } => "fairseq-mms-vits-cpu",
             Self::FairseqCuda { .. } => "fairseq-mms-vits-cuda",
+            Self::XttsCpu(_) => "xtts-cpu",
+            Self::XttsCuda(_) => "xtts-cuda",
             Self::Mock(_) => "mock",
             Self::StyleTts2 { .. } => "styletts2",
             Self::Onnx { .. } => "onnx",
@@ -665,6 +672,8 @@ impl BackendInstance {
             Self::FairseqCuda { engine, entry } => {
                 fairseq_cli_capabilities(entry, devices, engine.sample_rate_hz())
             }
+            Self::XttsCpu(engine) => xtts_cli_capabilities(engine.config(), devices),
+            Self::XttsCuda(engine) => xtts_cli_capabilities(engine.config(), devices),
             Self::Mock(_) => {
                 let mut capabilities = base(
                     "mock",
@@ -786,6 +795,12 @@ impl BackendInstance {
                 synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::FairseqCuda { ref mut engine, .. } => {
+                synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::XttsCpu(ref mut engine) => {
+                synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::XttsCuda(ref mut engine) => {
                 synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::Mock(ref mut backend) => {
@@ -999,8 +1014,57 @@ impl BackendInstance {
                     "failed to project Fairseq MMS checkpoint input",
                 )?))
             }
-            Self::Mock(_) | Self::StyleTts2 { .. } | Self::Onnx { .. } => Ok(None),
+            Self::XttsCpu(_)
+            | Self::XttsCuda(_)
+            | Self::Mock(_)
+            | Self::StyleTts2 { .. }
+            | Self::Onnx { .. } => Ok(None),
         }
+    }
+}
+
+fn xtts_cli_capabilities(
+    config: &speech::XttsV2Config,
+    devices: Vec<speech::SpeechDeviceRequest>,
+) -> speech::BackendCapabilities {
+    speech::BackendCapabilities {
+        backend: "xtts".into(),
+        model: "local-xtts-v2-package".into(),
+        family: speech::SpeechModelFamily::CrossLingualVoiceClone,
+        varieties: speech::CapabilityValue::Any,
+        languages: speech::LanguageCapabilities {
+            values: speech::CapabilityValue::Listed(
+                config
+                    .languages
+                    .iter()
+                    .map(|language| speech::NamedCapability::new(language, language))
+                    .collect(),
+            ),
+            required: true,
+            numeric_ids: false,
+        },
+        speakers: speech::SpeakerCapabilities::unsupported(),
+        styles: speech::StyleCapabilities::unsupported(),
+        reference_audio: speech::ReferenceAudioCapabilities {
+            speaker: true,
+            speaker_required: true,
+            ..Default::default()
+        },
+        speed: false,
+        pitch: speech::PitchCapabilities::default(),
+        energy: speech::EnergyCapabilities::default(),
+        durations: false,
+        seed: true,
+        devices,
+        output: speech::OutputAudioContract {
+            sample_rate_hz: config.audio.output_sample_rate,
+            channels: 1,
+            streaming: true,
+        },
+        provenance: vec![
+            "Local XTTS v2 package; artifact and outputs remain subject to recorded model terms"
+                .into(),
+        ],
     }
 }
 
@@ -1532,6 +1596,31 @@ fn load_backend(
             model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
             backend
         }
+        SpeakBackend::Xtts => {
+            let package_dir = command
+                .model
+                .as_deref()
+                .map(Path::new)
+                .context("--backend xtts requires --model /path/to/imported-package")?;
+            anyhow::ensure!(
+                package_dir.is_dir(),
+                "XTTS package directory does not exist: {}",
+                package_dir.display()
+            );
+            let started = Instant::now();
+            let backend = match device_arg {
+                DeviceArg::Cpu => BackendInstance::XttsCpu(Box::new(
+                    speech::BurnXtts::load(package_dir, NdArrayDevice::Cpu)
+                        .context("failed to load native XTTS package on CPU")?,
+                )),
+                DeviceArg::Cuda { index } => BackendInstance::XttsCuda(Box::new(
+                    speech::BurnXtts::load(package_dir, CudaDevice::new(index))
+                        .context("failed to load native XTTS package on CUDA")?,
+                )),
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
+        }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
         }
@@ -1631,6 +1720,7 @@ fn run_speak_with_backend(
         SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Glow => 22_050,
         SpeakBackend::Vits => 22_050,
         SpeakBackend::Fairseq | SpeakBackend::Yourtts => 16_000,
+        SpeakBackend::Xtts => 24_000,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => 22_050,
@@ -1836,6 +1926,7 @@ fn run_speak_with_backend(
             ) => {
                 anyhow::bail!("native Burn backend did not expose its checkpoint projection")
             }
+            (_, SpeakBackend::Xtts) => plan.intended_text.clone().unwrap_or_default(),
             (_, SpeakBackend::Mock | SpeakBackend::Styletts2) => {
                 let styletts2_plan = prepare_styletts2_plan(
                     &plan,
@@ -1890,7 +1981,10 @@ fn run_speak_with_backend(
         }
         if matches!(
             command.backend,
-            SpeakBackend::Glow | SpeakBackend::Vits | SpeakBackend::Yourtts
+            SpeakBackend::Glow
+                | SpeakBackend::Vits
+                | SpeakBackend::Yourtts
+                | SpeakBackend::Xtts
         ) {
             println!(
                 "inference_seed: {}",
@@ -1976,7 +2070,8 @@ fn run_speak_with_backend(
             | SpeakBackend::Glow
             | SpeakBackend::Vits
             | SpeakBackend::Fairseq
-            | SpeakBackend::Yourtts => {
+            | SpeakBackend::Yourtts
+            | SpeakBackend::Xtts => {
                 println!("  1: {backend_symbols}");
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
@@ -2238,6 +2333,7 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
         SpeakBackend::Vits => "VITS",
         SpeakBackend::Fairseq => "Fairseq MMS VITS",
         SpeakBackend::Yourtts => "YourTTS",
+        SpeakBackend::Xtts => "XTTS v2",
         SpeakBackend::Onnx => "ONNX compatibility voice",
         SpeakBackend::Styletts2 => "StyleTTS2",
         SpeakBackend::Mock => "mock",
@@ -2382,6 +2478,10 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
         }
         return Ok(());
     }
+    if matches!(command.backend, SpeakBackend::Xtts) {
+        println!("speakers: <reference WAV required; named speakers are not embedded>");
+        return Ok(());
+    }
     anyhow::ensure!(
         matches!(command.backend, SpeakBackend::Onnx),
         "--list-speakers is currently available for --backend onnx"
@@ -2410,6 +2510,14 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
 }
 
 fn print_available_model_languages(command: &SpeakCommand) -> Result<()> {
+    if matches!(command.backend, SpeakBackend::Xtts) {
+        let config = xtts_config_from_command(command)?;
+        println!("model languages:");
+        for language in config.languages {
+            println!("  {language}");
+        }
+        return Ok(());
+    }
     anyhow::ensure!(
         matches!(command.backend, SpeakBackend::Vits | SpeakBackend::Yourtts),
         "--list-model-languages is currently available for --backend vits or yourtts"
@@ -2436,6 +2544,22 @@ fn print_available_model_languages(command: &SpeakCommand) -> Result<()> {
         println!("  {name} ({id})");
     }
     Ok(())
+}
+
+fn xtts_config_from_command(command: &SpeakCommand) -> Result<speech::XttsV2Config> {
+    let package_dir = command
+        .model
+        .as_deref()
+        .map(Path::new)
+        .context("--backend xtts requires --model /path/to/imported-package")?;
+    let neutral: speech::NeutralModelConfig =
+        serde_json::from_slice(&std::fs::read(package_dir.join(speech::MODEL_PACKAGE_CONFIG))?)
+            .context("invalid XTTS package model.json")?;
+    anyhow::ensure!(
+        neutral.architecture == speech::ModelPackageArchitecture::XttsV2,
+        "model package is not XTTS v2"
+    );
+    serde_json::from_value(neutral.parameters).context("invalid canonical XTTS config")
 }
 
 fn component_config_path(checkpoint_path: &Path) -> Result<PathBuf> {
