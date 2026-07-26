@@ -90,6 +90,14 @@ their URL. Local conversion to SafeTensors does not remove those restrictions.
 Tongues must not catalog or redistribute converted XTTS artifacts under its MIT
 source license.
 
+NeuTTS Nano and NeuTTS-2E artifacts are published under NeuTTS Open License
+v1.0 (not Apache-2.0). That model license allows research use and limited
+commercial use but adds a commercial-use threshold condition for larger
+entities and retains explicit redistribution obligations. NeuCodec source is
+Apache-2.0, but NeuTTS model/codec artifacts still require separate weight-level
+license and provenance evidence (exact URL, revision, size, checksum, and
+license text retention) before any catalog/import decision.
+
 Piper source is MIT, with its notice preserved in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). Piper-distributed voice
 weights keep their individual cataloged license and evidence; Piper's MIT

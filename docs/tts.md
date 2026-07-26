@@ -442,6 +442,44 @@ cargo test -p tongues-tts --lib \
   --no-default-features -- --ignored
 ```
 
+## NeuTTS Nano and NeuCodec issue-64 due diligence
+
+Issue [#64](https://github.com/dancxjo/tongues/issues/64) is currently
+evaluated as **not planned** for native integration.
+
+Phase-1 findings are explicit before any native port work:
+
+- The upstream NeuTTS README identifies the expected Nano family artifact IDs
+  (`neutts-nano`, `neutts-nano-french`, `neutts-nano-german`,
+  `neutts-nano-spanish`) and their Q4/Q8 GGUF variants, plus NeuCodec
+  (`neucodec`, `distill-neucodec`, ONNX decoder variants).
+- The same upstream source states the architecture target in this ticket:
+  ~120M active / ~229M total params, 50 Hz single-codebook NeuCodec, 2048-token
+  context, short-reference cloning, and watermark-enabled outputs.
+- NeuTTS Nano model terms are **NeuTTS Open License v1.0**, not Apache-2.0.
+  That license includes a commercial-use threshold condition and requires
+  preserving license/attribution conditions on redistribution.
+- NeuCodec source is Apache-2.0, but model/codec artifacts still require
+  independent weight/package provenance, checksums, and redistribution review.
+- Independent artifact pinning is incomplete in this environment: the GGUF
+  model hubs were not directly retrievable here, so exact per-file revision,
+  byte-size, and checksum evidence for each Q4/Q8 variant could not be
+  verified from first principles.
+
+Go/no-go result for this ticket:
+
+- Without independent Q4/Q8 artifact identity + benchmark evidence, the
+  integration gate fails by design.
+- Portfolio fit is also not a clear upgrade yet: Tongues already has a Tier A
+  resident revision path (FastPitch-family composition) and Tier C expressive
+  reference-conditioned paths (XTTS/YourTTS). NeuTTS Nano's small GGUF runtime
+  is interesting, but this issue did not establish a unique production
+  capability advantage that justifies another constrained license stack.
+- Therefore issue #64 should remain closed as **not planned** unless a future
+  revisit provides: (1) full per-artifact checksum/size pinning, (2) measured
+  independent Q4/Q8 latency/RTF/RAM, (3) native NeuCodec parity fixtures,
+  including watermark behavior through decode.
+
 ## Usage
 
 Write native component synthesis to a WAV file:
