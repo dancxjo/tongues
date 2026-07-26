@@ -610,6 +610,8 @@ impl BackendInstance {
             devices: devices.clone(),
             output: output(sample_rate_hz),
             provenance: Vec::new(),
+            capability_tier: speech::CapabilityTier::Unassigned,
+            revision_capable: false,
         };
         match self {
             Self::BurnCpu(_) | Self::BurnCuda(_) => {
@@ -716,6 +718,8 @@ impl BackendInstance {
                 devices,
                 output: output(24_000),
                 provenance: Vec::new(),
+                capability_tier: speech::CapabilityTier::TierC,
+                revision_capable: false,
             },
             #[cfg(not(feature = "styletts2-onnx"))]
             Self::StyleTts2 => unreachable!("StyleTTS2 feature is disabled"),
@@ -753,6 +757,8 @@ impl BackendInstance {
                     devices,
                     output: output(config.sample_rate_hz),
                     provenance: vec!["ONNX compatibility voice import".into()],
+                    capability_tier: speech::CapabilityTier::TierB,
+                    revision_capable: false,
                 }
             }
             #[cfg(not(feature = "onnx-tts"))]
@@ -1070,6 +1076,8 @@ fn xtts_cli_capabilities(
             "Local XTTS v2 package; artifact and outputs remain subject to recorded model terms"
                 .into(),
         ],
+        capability_tier: speech::CapabilityTier::TierC,
+        revision_capable: false,
     }
 }
 
@@ -1164,6 +1172,12 @@ fn vits_cli_capabilities(
             streaming: true,
         },
         provenance: vec!["Published Coqui release artifact".into()],
+        capability_tier: if is_yourtts {
+            speech::CapabilityTier::TierC
+        } else {
+            speech::CapabilityTier::TierB
+        },
+        revision_capable: false,
     }
 }
 
@@ -1216,6 +1230,8 @@ fn fairseq_cli_capabilities(
             streaming: true,
         },
         provenance: vec![entry.provenance.source.clone()],
+        capability_tier: speech::CapabilityTier::TierB,
+        revision_capable: false,
     }
 }
 
