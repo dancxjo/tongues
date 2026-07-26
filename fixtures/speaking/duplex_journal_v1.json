@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "utterance_id": "utt-fixture-1",
+  "variety": "en-US-GA",
+  "events": [
+    {
+      "sequence": 0,
+      "action": {
+        "type": "apply_evidence_delta",
+        "data": {
+          "anchor": {
+            "anchor": "morpheme_occurrence",
+            "id": "utt-fixture-1:m1"
+          },
+          "state": "predicted_completion",
+          "confidence": 0.62,
+          "provenance": {
+            "source": "inference",
+            "method": "head2phones",
+            "version": "v1"
+          },
+          "payload": {
+            "text": "hell",
+            "text_span": {
+              "start_char": 0,
+              "end_char": 4
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 1,
+      "action": {
+        "type": "add_completion_hypothesis",
+        "data": {
+          "id": "hyp-1",
+          "anchor": "utt-fixture-1:m1",
+          "confidence": 0.8,
+          "provenance": {
+            "source": "inference",
+            "method": "head2phones",
+            "version": "v1"
+          },
+          "payload": {
+            "text": "hello",
+            "text_span": {
+              "start_char": 0,
+              "end_char": 5
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 2,
+      "action": {
+        "type": "commit_completion_hypothesis",
+        "data": {
+          "hypothesis_id": "hyp-1",
+          "committed_occurrence": "utt-fixture-1:m1",
+          "confidence": 0.97,
+          "provenance": {
+            "source": "manual",
+            "method": "editor",
+            "version": "v1"
+          }
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "action": {
+        "type": "update_commit_frontier",
+        "data": {
+          "type": "advance_morpheme_occurrence",
+          "data": "utt-fixture-1:m1"
+        }
+      }
+    }
+  ]
+}

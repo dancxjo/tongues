@@ -146,6 +146,38 @@ passes the normalized vector to duration prediction, the flow, and the
 waveform decoder. Named speaker selection, precomputed embeddings, and
 reference audio have explicit precedence errors rather than silent fallback.
 
+## Duplex Belief Contracts and Ownership
+
+The shared duplex utterance-belief contract lives in `crates/speaking` as
+provider-neutral, serializable types (`duplex.rs`). It carries evidence states,
+typed deltas/actions, commit-frontier updates, withdrawals/repairs, delivery
+status, and a versioned replayable journal.
+
+```text
+observed_text / observed_acoustics / linguistic_inference / predicted_completion
+   -> BeliefAction events
+   -> BeliefEventJournal (versioned)
+   -> deterministic replay
+   -> UtteranceBeliefState
+```
+
+```text
+delivery state machine:
+planned -> synthesized -> verified -> queued -> played
+```
+
+```text
+ownership boundary:
+speaking (contracts only)
+  <- interpreted evidence from tongues-interpretation / ASR
+  <- synthesis delivery updates from tongues-tts / runtime playback
+  <- orchestration policy from future duplex orchestrator
+```
+
+`speaking` owns only the backend-neutral IR and invariants. Interpretation,
+TTS, playback, and orchestration crates emit or consume typed events but do not
+introduce reverse dependencies into `speaking`.
+
 ## Build and Runtime Verification
 
 `scripts/check-feature-matrix.sh` checks the workspace with default features,
