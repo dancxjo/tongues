@@ -173,7 +173,15 @@ pub fn missing_model_asset_paths(model: &str) -> Result<Vec<PathBuf>> {
 
 pub fn fetch_model(model: Option<&str>, force: bool) -> Result<PathBuf> {
     if let Some(model) = model {
-        let bundle = find_bundle(model).with_context(|| format!("unknown model `{model}`"))?;
+        let Some(bundle) = find_bundle(model) else {
+            let entry = licensed_catalog_entry(model)?
+                .with_context(|| format!("unknown model `{model}`"))?;
+            let verified = licensed_model_store()?.install(&entry, force)?;
+            return verified
+                .package_path
+                .or_else(|| verified.files.first().cloned())
+                .with_context(|| format!("catalog model `{model}` installed no files"));
+        };
         if bundle.kind == ModelKind::Llm {
             write_selected_model(bundle.id)?;
         }
@@ -201,6 +209,7 @@ pub fn fetch_all_models(force: bool) -> Result<()> {
             ensure_styletts2_reference_audio_extracted()?;
         }
     }
+    fetch_default_mms_models(force)?;
     Ok(())
 }
 
@@ -215,11 +224,24 @@ fn fetch_all_runtime_bundles(force: bool) -> Result<()> {
             ensure_styletts2_reference_audio_extracted()?;
         }
     }
+    fetch_default_mms_models(force)?;
+    Ok(())
+}
+
+fn fetch_default_mms_models(force: bool) -> Result<()> {
+    let catalog = tongues_tts::ModelCatalog::embedded()?;
+    let store = licensed_model_store()?;
+    for id in DEFAULT_MMS_SPEECH_MODEL_IDS {
+        let entry = catalog
+            .find(id)
+            .with_context(|| format!("default MMS model `{id}` is not registered"))?;
+        store.install(entry, force)?;
+    }
     Ok(())
 }
 
 fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
-    let mut bundles = vec![
+    Ok(vec![
         selected_bundle()?,
         find_bundle(DEFAULT_FACE_MODEL_ID)
             .context("default face model bundle is not registered")?,
@@ -230,14 +252,7 @@ fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
             .context("default neural vocoder bundle is not registered")?,
         find_bundle(DEFAULT_VOICE_MODEL_ID)
             .context("default voice model bundle is not registered")?,
-    ];
-    for id in DEFAULT_MMS_SPEECH_MODEL_IDS {
-        bundles.push(
-            find_bundle(id)
-                .with_context(|| format!("default MMS model `{id}` is not registered"))?,
-        );
-    }
-    Ok(bundles)
+    ])
 }
 
 fn fetch_bundle(bundle: &ModelBundle, force: bool) -> Result<()> {
@@ -646,8 +661,18 @@ mod tests {
         assert!(ids.contains(&DEFAULT_ACOUSTIC_MODEL_ID));
         assert!(ids.contains(&DEFAULT_NEURAL_VOCODER_ID));
         assert!(ids.contains(&DEFAULT_VOICE_MODEL_ID));
-        assert!(ids.contains(&"fairseq-mms-vits-eng"));
-        assert!(ids.contains(&"fairseq-mms-vits-ckt"));
+    }
+
+    #[test]
+    fn default_runtime_fetch_registers_english_and_chukchi_mms() {
+        let catalog = tongues_tts::ModelCatalog::embedded().expect("embedded model catalog");
+        assert_eq!(
+            DEFAULT_MMS_SPEECH_MODEL_IDS,
+            ["fairseq-mms-vits-eng", "fairseq-mms-vits-ckt"]
+        );
+        for id in DEFAULT_MMS_SPEECH_MODEL_IDS {
+            assert!(catalog.find(id).is_some(), "{id} should be registered");
+        }
     }
 
     #[test]

@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 const DEFAULT_OLLAMA_HOST: &str = "http://127.0.0.1:11434";
 const MIN_CLAUSE_CHARS: usize = 48;
-const MAX_SEGMENT_CHARS: usize = 140;
+const MAX_SEGMENT_CHARS: usize = 64;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
@@ -284,10 +284,10 @@ impl StreamingTextProvider for DeterministicProvider {
                 .find(|message| message.role == "user")
                 .map(|message| message.content.as_str())
                 .unwrap_or("speech");
+            let topic = prompt.chars().take(24).collect::<String>();
             let response = format!(
-                "Here is a live deterministic response about {prompt}. \
-                 Its first sentence becomes speakable while later words are still arriving. \
-                 This final sentence proves that generation and speech can move independently."
+                "Speech starts now. I am answering about {topic}. \
+                 More words are still arriving. Generation and playback continue together."
             );
             for token in response.split_inclusive(' ') {
                 if cancelled.load(Ordering::Acquire) {
@@ -641,6 +641,11 @@ fn find_boundary(text: &str) -> Option<usize> {
                 && (!quote_depth || closes_quote)
                 && (nesting == 0 || closes_quote)
             {
+                if char_count > MAX_SEGMENT_CHARS
+                    && let Some(soft_boundary) = soft
+                {
+                    return Some(soft_boundary);
+                }
                 let mut boundary = end;
                 for &(next_byte, next_char) in chars.iter().skip(position + 1) {
                     if matches!(next_char, '"' | '”' | '»' | '\'' | ')' | ']' | '}')

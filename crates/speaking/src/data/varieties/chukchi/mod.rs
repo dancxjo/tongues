@@ -23,7 +23,7 @@ pub const REGISTRATIONS: &[crate::data::varieties::VarietyRegistration] =
 
 const SEGMENTS: &[&str] = &[
     "a", "e", "i", "o", "u", "ə", "b", "d", "f", "v", "w", "ɣ", "h", "j", "k", "l", "ɬ", "m", "n",
-    "ŋ", "p", "q", "r", "s", "t", "t͡s", "t͡ʃ", "ʃ", "ʒ", "x", "ʔ",
+    "ŋ", "p", "q", "r", "s", "t", "t͡s", "t͡ʃ", "z", "ʃ", "ʒ", "x", "ʔ",
 ];
 
 pub fn variety() -> LinguisticVariety {
@@ -188,7 +188,7 @@ fn grapheme_symbol(chars: &[char], index: usize, ch: char) -> Option<&'static st
         'е' => "e",
         'ё' => "jo",
         'ж' => "ʒ",
-        'з' => "s",
+        'з' => "z",
         'и' => "i",
         'й' => "j",
         'к' => "k",

@@ -554,6 +554,7 @@
                             <button id="duplicate-recipe" type="button" class="secondary-button">Duplicate</button>
                             <button id="save-recipe" type="button">Save recipe</button>
                             <button id="restore-recipe" type="button" class="secondary-button">Restore</button>
+                            <button id="delete-recipe" type="button" class="secondary-button" disabled>Delete saved copy</button>
                         </div>
                     </div>
                     <section class="pipeline-workbench" aria-label="Speech synthesis pipeline">
@@ -870,6 +871,15 @@
 
     function persistUserRecipes() {
         browser?.localStorage?.setItem(USER_RECIPES_KEY, JSON.stringify(state.userRecipes));
+    }
+
+    function deleteUserRecipe(recipes, id) {
+        const index = recipes.findIndex((recipe) => recipe.id === id);
+        if (index < 0) return { recipes, deleted: null };
+        return {
+            recipes: recipes.filter((_recipe, candidateIndex) => candidateIndex !== index),
+            deleted: recipes[index],
+        };
     }
 
     function selectedVariety(path = selectedPath()) {
@@ -1533,13 +1543,14 @@
         byId('open-pipeline-in-speak').disabled = !path.complete || !path.runnable;
         byId('compose-cli').textContent = cliRepresentation(path);
         const name = byId('compose-recipe-name');
+        const userRecipe = state.userRecipes.find((candidate) => candidate.id === state.presetId);
         if (name && document.activeElement !== name) {
             const preset = (state.discovery.presets || []).find(
                 (candidate) => candidate.composition_id === state.pathKey,
             );
-            const userRecipe = state.userRecipes.find((candidate) => candidate.id === state.presetId);
             name.value = userRecipe?.name || preset?.display_name || path.display_name;
         }
+        byId('delete-recipe').disabled = !userRecipe;
         if (!path.runnable) {
             showError(
                 path.unavailable_reason || 'This pipeline is incomplete or unavailable.',
@@ -3138,6 +3149,7 @@
             );
             if (!preset) {
                 state.presetId = '';
+                renderSelectedPath();
                 return;
             }
             state.pathKey = preset.composition_id;
@@ -3328,6 +3340,8 @@
         byId('duplicate-recipe').addEventListener('click', () => {
             byId('compose-recipe-name').value = `${byId('compose-recipe-name').value || selectedPath()?.display_name} copy`;
             state.presetId = '';
+            renderPathSelector();
+            byId('delete-recipe').disabled = true;
         });
         byId('save-recipe').addEventListener('click', () => {
             const recipe = recipeSnapshot(byId('compose-recipe-name').value);
@@ -3348,7 +3362,23 @@
             persistUserRecipes();
             renderPathSelector();
             renderCompareCandidates();
+            byId('delete-recipe').disabled = false;
             byId('compose-test-status').textContent = `Saved ${recipe.name}.`;
+        });
+        byId('delete-recipe').addEventListener('click', () => {
+            const result = deleteUserRecipe(state.userRecipes, state.presetId);
+            if (!result.deleted) return;
+            state.userRecipes = result.recipes;
+            const preset = (state.discovery.presets || []).find(
+                (candidate) => candidate.composition_id === state.pathKey,
+            );
+            state.presetId = preset?.id || '';
+            persistUserRecipes();
+            renderPathSelector();
+            renderSelectedPath();
+            byId('compose-test-status').textContent = (
+                `Deleted saved copy ${result.deleted.name}. The built-in pipeline remains available.`
+            );
         });
         byId('restore-recipe').addEventListener('click', () => {
             const recipe = state.userRecipes.find((candidate) => candidate.id === state.presetId);
@@ -3485,6 +3515,7 @@
         compatibilityFor,
         compositionGenerator,
         controlsForPath,
+        deleteUserRecipe,
         cliRepresentation,
         duplexLines,
         init,

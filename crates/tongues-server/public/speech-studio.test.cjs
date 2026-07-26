@@ -618,9 +618,28 @@ test('recipes persist controls and navigation carries current state between work
     assert.match(studioSource, /tongues\.speech\.user-recipes\.v1/);
     assert.match(studioSource, /controls: controlSnapshot\(path\)/);
     assert.match(studioSource, /compositionId: state\.pathKey/);
+    assert.match(studio.studioShell(), /Delete saved copy/);
     assert.match(studioSource, /show-pipeline/);
     assert.match(studioSource, /add-current-to-compare/);
     assert.match(studioSource, /open-pipeline-in-speak/);
+});
+
+test('deletes only the selected saved pipeline copy', () => {
+    const recipes = [
+        { id: 'user/first', name: 'First copy' },
+        { id: 'user/second', name: 'Second copy' },
+    ];
+    const result = studio.deleteUserRecipe(recipes, 'user/first');
+    assert.deepEqual(result.deleted, recipes[0]);
+    assert.deepEqual(result.recipes, [recipes[1]]);
+    assert.deepEqual(recipes, [
+        { id: 'user/first', name: 'First copy' },
+        { id: 'user/second', name: 'Second copy' },
+    ]);
+
+    const builtIn = studio.deleteUserRecipe(recipes, 'preset/fastpitch');
+    assert.equal(builtIn.deleted, null);
+    assert.equal(builtIn.recipes, recipes);
 });
 
 test('operate keeps targeted verification, jobs, cancellation, and duplex evidence together', () => {
