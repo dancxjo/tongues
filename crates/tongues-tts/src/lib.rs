@@ -39,7 +39,9 @@ pub mod burn_glow_tts;
 pub mod burn_glow_tts_acoustic;
 pub mod burn_glow_tts_pipeline;
 pub mod burn_hifigan;
+pub mod burn_hifigan_trainer;
 pub mod burn_melgan;
+pub mod burn_melgan_trainer;
 pub mod burn_pipeline;
 pub mod burn_speedy_speech;
 pub mod burn_tacotron;
@@ -51,6 +53,8 @@ pub mod burn_vits_duration;
 pub mod burn_vits_flow;
 pub mod burn_vits_text;
 pub mod burn_vocoder;
+pub mod burn_vocoder_discriminators;
+pub mod burn_vocoder_losses;
 pub mod burn_vocoder_training;
 pub mod burn_xtts;
 mod checkpoint;
@@ -78,6 +82,7 @@ pub mod tacotron_config;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
+pub mod vocoder_recipe;
 pub mod wavlm;
 pub mod xtts;
 
@@ -147,9 +152,23 @@ pub use burn_vocoder::{
     BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
     BurnVocoder,
 };
+pub use burn_vocoder_discriminators::{
+    DiscriminatorStackOutput, MultiPeriodDiscriminator, MultiScaleDiscriminator,
+    PeriodSubDiscriminator, ScaleSubDiscriminator, SubDiscriminatorOutput,
+};
+pub use burn_vocoder_losses::{
+    adversarial_discriminator_loss, adversarial_generator_loss, combined_generator_loss,
+    feature_matching_loss, mel_spectrogram_loss, waveform_reconstruction_loss, VocoderLossWeights,
+};
 pub use burn_vocoder_training::{
     BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
     VocoderTrainingPhase,
+};
+pub use burn_hifigan_trainer::HifiganTrainer;
+pub use burn_melgan_trainer::{MelganTrainer, MultibandMelganTrainer};
+pub use vocoder_recipe::{
+    HifiganTrainingRecipe, MelganTrainingRecipe, RecipeMelContract, SerializableLossWeights,
+    VocoderTrainingHyperparams, VocoderTrainingState, RECIPE_SCHEMA_VERSION,
 };
 pub use burn_xtts::{
     xtts_language_has_native_cleaner, BurnXtts, XttsConditioning, XttsGenerationControls,
