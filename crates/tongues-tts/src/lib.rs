@@ -26,7 +26,9 @@ use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub mod burn_acoustic;
+pub mod burn_acoustic_training;
 pub mod burn_align_tts;
+pub mod burn_align_tts_pipeline;
 pub mod burn_delightful_tts;
 pub mod burn_fast_pitch;
 pub mod burn_fast_pitch_acoustic;
@@ -76,9 +78,15 @@ mod vits_projector;
 pub mod wavlm;
 pub mod xtts;
 
-pub use burn_align_tts::{
-    AlignTts, AlignTtsConfig, AlignTtsControls, AlignTtsError, AlignTtsOutput, BurnAlignTtsAcoustic,
+pub use burn_acoustic_training::{
+    AcousticTrainingPhase, BurnAcousticTrainingBatch, BurnAcousticTrainingHooks,
+    BurnAcousticTrainingOutput,
 };
+pub use burn_align_tts::{
+    AlignTts, AlignTtsConfig, AlignTtsControls, AlignTtsError, AlignTtsOutput,
+    AlignTtsTrainingConfig, BurnAlignTtsAcoustic,
+};
+pub use burn_align_tts_pipeline::BurnAlignTtsPipeline;
 pub use burn_delightful_tts::{
     DelightfulTts, DelightfulTtsControls, DelightfulTtsError, DelightfulTtsOutput,
 };

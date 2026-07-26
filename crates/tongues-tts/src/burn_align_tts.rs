@@ -18,6 +18,7 @@ use anyhow::{ensure, Context, Result};
 use burn::module::Module;
 use burn::nn::conv::{Conv1d, Conv1dConfig};
 use burn::nn::{Embedding, EmbeddingConfig, LayerNorm, LayerNormConfig, PaddingConfig1d};
+use burn::tensor::activation::relu;
 use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
 use serde::{Deserialize, Serialize};
@@ -30,10 +31,11 @@ use crate::burn_fast_pitch::{
 use crate::burn_speedy_speech::{expand_by_durations, Conv1dBn, PositionalEncoding};
 use crate::burn_variance_acoustic::tensor_to_artifact;
 use crate::{
-    AcousticArtifact, AcousticModel, AcousticOutputContract, AudioFeatureConfig, EmbeddingContract,
-    InferenceRuntime, LinguisticProjector, ModelInputContract, PhonemeVocabularyProjector,
-    SpectrogramContract, SpectrogramLayout, SpeechModelCapabilities, SpeechModelFamily,
-    SpeechSynthesisRequest,
+    AcousticArtifact, AcousticModel, AcousticOutputContract, AcousticTrainingPhase,
+    AudioFeatureConfig, BurnAcousticTrainingBatch, BurnAcousticTrainingHooks,
+    BurnAcousticTrainingOutput, EmbeddingContract, InferenceRuntime, LinguisticProjector,
+    ModelInputContract, PhonemeVocabularyProjector, SpectrogramContract, SpectrogramLayout,
+    SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisRequest,
 };
 
 const MAX_DURATION: usize = 75;
@@ -70,6 +72,107 @@ fn input_error(message: impl Into<String>) -> AlignTtsError {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlignTtsTrainingConfig {
+    pub phase_start_steps: Option<Vec<u64>>,
+    pub ssim_alpha: f64,
+    pub spec_loss_alpha: f64,
+    pub duration_loss_alpha: f64,
+    pub mdn_alpha: f64,
+}
+
+impl AlignTtsTrainingConfig {
+    fn from_json_value(root: &Value) -> Result<Self, AlignTtsError> {
+        let number = |name: &str, default: f64| {
+            root.get(name)
+                .map(|value| {
+                    value
+                        .as_f64()
+                        .ok_or_else(|| config_error(format!("{name} must be numeric")))
+                })
+                .unwrap_or(Ok(default))
+        };
+        let phase_start_steps = match root.get("phase_start_steps") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(values)) => Some(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        value.as_u64().ok_or_else(|| {
+                            config_error(format!(
+                                "phase_start_steps[{index}] must be a non-negative integer"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            Some(_) => {
+                return Err(config_error(
+                    "phase_start_steps must be null or an array of four steps",
+                ))
+            }
+        };
+        let config = Self {
+            phase_start_steps,
+            ssim_alpha: number("ssim_alpha", 1.0)?,
+            spec_loss_alpha: number("spec_loss_alpha", 1.0)?,
+            duration_loss_alpha: number("dur_loss_alpha", 1.0)?,
+            mdn_alpha: number("mdn_alpha", 1.0)?,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), AlignTtsError> {
+        if let Some(steps) = &self.phase_start_steps {
+            if steps.len() != 4 || steps.windows(2).any(|window| window[0] > window[1]) {
+                return Err(config_error(
+                    "phase_start_steps must contain four non-decreasing steps",
+                ));
+            }
+        }
+        for (name, value) in [
+            ("ssim_alpha", self.ssim_alpha),
+            ("spec_loss_alpha", self.spec_loss_alpha),
+            ("dur_loss_alpha", self.duration_loss_alpha),
+            ("mdn_alpha", self.mdn_alpha),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(config_error(format!(
+                    "{name} must be finite and non-negative"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn phase(&self, global_step: u64) -> AcousticTrainingPhase {
+        let Some(steps) = &self.phase_start_steps else {
+            return AcousticTrainingPhase::Joint;
+        };
+        match steps.iter().filter(|step| **step < global_step).count() {
+            0 => AcousticTrainingPhase::Alignment,
+            1 => AcousticTrainingPhase::Decoder,
+            2 => AcousticTrainingPhase::Acoustic,
+            3 => AcousticTrainingPhase::DurationPredictor,
+            _ => AcousticTrainingPhase::Joint,
+        }
+    }
+}
+
+impl Default for AlignTtsTrainingConfig {
+    fn default() -> Self {
+        Self {
+            phase_start_steps: None,
+            ssim_alpha: 1.0,
+            spec_loss_alpha: 1.0,
+            duration_loss_alpha: 1.0,
+            mdn_alpha: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AlignTtsConfig {
     pub num_chars: usize,
     pub out_channels: usize,
@@ -80,6 +183,7 @@ pub struct AlignTtsConfig {
     pub length_scale: f64,
     pub max_duration: usize,
     pub max_output_frames: usize,
+    pub training: AlignTtsTrainingConfig,
 }
 
 impl AlignTtsConfig {
@@ -147,6 +251,7 @@ impl AlignTtsConfig {
                 .ok_or_else(|| config_error("model_args.length_scale must be numeric"))?,
             max_duration: MAX_DURATION,
             max_output_frames: MAX_OUTPUT_FRAMES,
+            training: AlignTtsTrainingConfig::from_json_value(root)?,
         };
         config.validate()?;
         Ok(config)
@@ -217,6 +322,7 @@ impl AlignTtsConfig {
             out_channels: self.out_channels,
             max_duration: self.max_duration,
             max_output_frames: self.max_output_frames,
+            training: self.training.clone(),
         })
     }
 }
@@ -280,6 +386,18 @@ impl<B: Backend> MdnBlock<B> {
             conv2: Conv1dConfig::new(channels_in, channels_out, 1).init(device),
         }
     }
+
+    fn forward(&self, input: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {
+        let output = self.conv1.forward(input).swap_dims(1, 2);
+        let output = relu(self.norm.forward(output)).swap_dims(1, 2);
+        let output = self.conv2.forward(output);
+        let [batch, output_channels, tokens] = output.dims();
+        let channels = output_channels / 2;
+        (
+            output.clone().slice([0..batch, 0..channels, 0..tokens]),
+            output.slice([0..batch, channels..channels * 2, 0..tokens]),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -318,6 +436,7 @@ pub struct AlignTts<B: Backend> {
     out_channels: usize,
     max_duration: usize,
     max_output_frames: usize,
+    training: AlignTtsTrainingConfig,
 }
 
 impl<B: Backend> AlignTts<B> {
@@ -335,6 +454,8 @@ impl<B: Backend> AlignTts<B> {
                     ),
                     (r"(\.norm_[12])\.weight$".into(), "$1.gamma".into()),
                     (r"(\.norm_[12])\.bias$".into(), "$1.beta".into()),
+                    (r"(\.norm[12])\.weight$".into(), "$1.gamma".into()),
+                    (r"(\.norm[12])\.bias$".into(), "$1.beta".into()),
                     (r"(\.norm)\.weight$".into(), "$1.gamma".into()),
                     (r"(\.norm)\.bias$".into(), "$1.beta".into()),
                 ],
@@ -374,6 +495,10 @@ impl<B: Backend> AlignTts<B> {
             },
             false,
         )
+    }
+
+    pub fn training_config(&self) -> &AlignTtsTrainingConfig {
+        &self.training
     }
 
     pub(crate) fn inference_projected_with_controls(
@@ -463,6 +588,198 @@ impl<B: Backend> AlignTts<B> {
             alignment,
         })
     }
+}
+
+impl<B: Backend> BurnAcousticTrainingHooks<B> for AlignTts<B> {
+    fn training_phase(&self, global_step: u64) -> AcousticTrainingPhase {
+        self.training.phase(global_step)
+    }
+
+    fn training_forward(
+        &self,
+        batch: BurnAcousticTrainingBatch<B>,
+        global_step: u64,
+    ) -> Result<BurnAcousticTrainingOutput<B>> {
+        let [batch_size, tokens] = batch.token_ids.dims();
+        let [mel_batch, frames, mel_bins] = batch.target_mel.dims();
+        ensure!(
+            batch_size > 0 && tokens > 0 && frames > 0,
+            "Align-TTS training batch dimensions must be non-empty"
+        );
+        ensure!(
+            mel_batch == batch_size && mel_bins == self.out_channels,
+            "Align-TTS target mel shape does not match batch/model dimensions"
+        );
+        ensure!(
+            batch.token_lengths.len() == batch_size && batch.mel_lengths.len() == batch_size,
+            "Align-TTS training length vectors must match batch size"
+        );
+        ensure!(
+            batch
+                .token_lengths
+                .iter()
+                .all(|length| *length > 0 && *length <= tokens)
+                && batch
+                    .mel_lengths
+                    .iter()
+                    .all(|length| *length > 0 && *length <= frames),
+            "Align-TTS training lengths are outside their padded dimensions"
+        );
+        ensure!(
+            batch
+                .token_lengths
+                .iter()
+                .zip(&batch.mel_lengths)
+                .all(|(token_length, mel_length)| token_length <= mel_length),
+            "Align-TTS monotonic alignment requires at least one frame per token"
+        );
+        let highest = batch.token_ids.clone().max().into_scalar().elem::<i64>();
+        ensure!(
+            highest >= 0 && (highest as usize) < self.num_chars,
+            "Align-TTS training token ID {highest} is outside the vocabulary"
+        );
+
+        let device = batch.token_ids.device();
+        let token_mask = length_mask::<B>(&batch.token_lengths, tokens, &device);
+        let frame_mask = length_mask::<B>(&batch.mel_lengths, frames, &device);
+        let encoded = self.encoder.encoder.forward(
+            self.emb.forward(batch.token_ids).swap_dims(1, 2),
+            token_mask.clone(),
+        );
+        let (mean, log_scale) = self.mdn_block.forward(encoded.clone());
+        let log_prob = alignment_log_prob(mean, log_scale, batch.target_mel);
+        let alignment = maximum_monotonic_alignment(
+            log_prob.clone(),
+            &batch.token_lengths,
+            &batch.mel_lengths,
+            &device,
+        )?;
+        let durations = alignment.clone().sum_dim(1).reshape([batch_size, tokens]);
+        let aligned_duration_log = (durations.clone() + 1.0).log();
+        let phase = self.training_phase(global_step);
+
+        let predicted_duration_log = matches!(
+            phase,
+            AcousticTrainingPhase::DurationPredictor | AcousticTrainingPhase::Joint
+        )
+        .then(|| {
+            self.duration_predictor
+                .forward(encoded.clone().detach(), token_mask.clone())
+                .reshape([batch_size, tokens])
+        });
+        let predicted_mel = if phase == AcousticTrainingPhase::Alignment {
+            None
+        } else {
+            let decoder_input = if phase == AcousticTrainingPhase::Decoder {
+                encoded.detach()
+            } else {
+                encoded
+            };
+            let expanded = alignment
+                .clone()
+                .matmul(decoder_input.swap_dims(1, 2))
+                .swap_dims(1, 2);
+            let expanded = self
+                .pos_encoder
+                .forward(expanded, frame_mask.clone())
+                .map_err(anyhow::Error::new)?;
+            let decoded = self
+                .decoder
+                .decoder
+                .transformer_block
+                .forward(expanded, frame_mask.clone());
+            Some(
+                self.decoder
+                    .decoder
+                    .postnet
+                    .forward(decoded)
+                    .mul(frame_mask)
+                    .swap_dims(1, 2),
+            )
+        };
+        Ok(BurnAcousticTrainingOutput {
+            phase,
+            predicted_mel,
+            alignment,
+            predicted_duration_log,
+            aligned_duration_log,
+            alignment_log_prob: Some(log_prob),
+        })
+    }
+}
+
+fn length_mask<B: Backend>(lengths: &[usize], padded: usize, device: &B::Device) -> Tensor<B, 3> {
+    let values = lengths
+        .iter()
+        .flat_map(|length| (0..padded).map(move |index| f32::from(index < *length)))
+        .collect::<Vec<_>>();
+    Tensor::from_data(TensorData::new(values, [lengths.len(), 1, padded]), device)
+}
+
+fn alignment_log_prob<B: Backend>(
+    mean: Tensor<B, 3>,
+    log_scale: Tensor<B, 3>,
+    target_mel: Tensor<B, 3>,
+) -> Tensor<B, 3> {
+    let [batch, bins, tokens] = mean.dims();
+    let frames = target_mel.dims()[1];
+    let mean = mean.swap_dims(1, 2).reshape([batch, tokens, 1, bins]);
+    let log_scale = log_scale.swap_dims(1, 2).reshape([batch, tokens, 1, bins]);
+    let target = target_mel.reshape([batch, 1, frames, bins]);
+    let squared_error: Tensor<B, 4> = (target - mean).square() / (log_scale.clone() * 2.0).exp();
+    let exponential: Tensor<B, 4> = squared_error.mean_dim(3) * -0.5;
+    let log_scale_penalty: Tensor<B, 4> = log_scale.mean_dim(3) * 0.5;
+    (exponential - log_scale_penalty).reshape([batch, tokens, frames])
+}
+
+fn maximum_monotonic_alignment<B: Backend>(
+    log_prob: Tensor<B, 3>,
+    token_lengths: &[usize],
+    mel_lengths: &[usize],
+    device: &B::Device,
+) -> Result<Tensor<B, 3>> {
+    let [batch, padded_tokens, padded_frames] = log_prob.dims();
+    let scores = log_prob
+        .into_data()
+        .to_vec::<f32>()
+        .context("Align-TTS alignment likelihoods are not f32")?;
+    let mut output = vec![0.0f32; batch * padded_frames * padded_tokens];
+    for batch_index in 0..batch {
+        let tokens = token_lengths[batch_index];
+        let frames = mel_lengths[batch_index];
+        let mut values = vec![f32::NEG_INFINITY; tokens * frames];
+        let score = |token: usize, frame: usize| {
+            scores[(batch_index * padded_tokens + token) * padded_frames + frame]
+        };
+        values[0] = score(0, 0);
+        for frame in 1..frames {
+            let first_token = tokens.saturating_sub(frames - frame);
+            let last_token = frame.min(tokens - 1);
+            for token in first_token..=last_token {
+                let stay = values[token * frames + frame - 1];
+                let advance = if token > 0 {
+                    values[(token - 1) * frames + frame - 1]
+                } else {
+                    f32::NEG_INFINITY
+                };
+                values[token * frames + frame] = stay.max(advance) + score(token, frame);
+            }
+        }
+        let mut token = tokens - 1;
+        for frame in (0..frames).rev() {
+            output[(batch_index * padded_frames + frame) * padded_tokens + token] = 1.0;
+            if frame > 0
+                && token > 0
+                && values[(token - 1) * frames + frame - 1] > values[token * frames + frame - 1]
+            {
+                token -= 1;
+            }
+        }
+    }
+    Ok(Tensor::from_data(
+        TensorData::new(output, [batch, padded_frames, padded_tokens]),
+        device,
+    ))
 }
 
 fn durations_to_alignment<B: Backend>(
@@ -616,8 +933,18 @@ impl<B: Backend> AcousticModel for BurnAlignTtsAcoustic<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use burn::backend::ndarray::{NdArray, NdArrayDevice};
+
+    type TestBackend = NdArray<f32>;
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/speech/align-tts-mpl-fixture")
+            .join(name)
+    }
 
     fn config() -> AlignTtsConfig {
         AlignTtsConfig {
@@ -640,6 +967,7 @@ mod tests {
             length_scale: 1.0,
             max_duration: 10,
             max_output_frames: 100,
+            training: AlignTtsTrainingConfig::default(),
         }
     }
 
@@ -686,6 +1014,124 @@ mod tests {
                 .unwrap()
                 .hidden_channels_dp,
             256
+        );
+    }
+
+    #[test]
+    fn licensed_upstream_layout_matches_duration_alignment_and_mel_fixture_on_cpu() {
+        let config_source = fs::read_to_string(fixture_path("config.json")).expect("config");
+        let root: Value = json5::from_str(&config_source).expect("JSON5 config");
+        let config = AlignTtsConfig::from_json_value(&root).expect("Align-TTS config");
+        let device = NdArrayDevice::Cpu;
+        let model = config
+            .init::<TestBackend>(&device)
+            .expect("model")
+            .load_checkpoint(fixture_path("model_file.pth"))
+            .expect("MPL fixture checkpoint");
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/speech/align-tts-mpl-fixture/reference.json"
+        ))
+        .expect("reference");
+        let ids = reference["token_ids"]
+            .as_array()
+            .expect("token ids")
+            .iter()
+            .map(|value| value.as_i64().expect("integer token"))
+            .collect::<Vec<_>>();
+        let output = model
+            .inference(
+                Tensor::<TestBackend, 1, Int>::from_ints(ids.as_slice(), &device)
+                    .reshape([1, ids.len()]),
+            )
+            .expect("CPU inference");
+        let expected_durations = reference["durations"]
+            .as_array()
+            .expect("durations")
+            .iter()
+            .map(|value| value.as_f64().expect("duration") as f32)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            output.durations.into_data().to_vec::<f32>().unwrap(),
+            expected_durations
+        );
+        assert_eq!(
+            output.alignment.dims(),
+            [
+                reference["alignment_shape"][0].as_u64().unwrap() as usize,
+                reference["alignment_shape"][1].as_u64().unwrap() as usize,
+                reference["alignment_shape"][2].as_u64().unwrap() as usize,
+            ]
+        );
+        let alignment = output.alignment.into_data().to_vec::<f32>().unwrap();
+        assert_eq!(
+            alignment.iter().filter(|value| **value == 1.0).count(),
+            ids.len()
+        );
+        assert!(alignment.iter().all(|value| matches!(*value, 0.0 | 1.0)));
+
+        let mel_shape = [
+            reference["mel_shape"][0].as_u64().unwrap() as usize,
+            reference["mel_shape"][1].as_u64().unwrap() as usize,
+            reference["mel_shape"][2].as_u64().unwrap() as usize,
+        ];
+        assert_eq!(output.mel.dims(), mel_shape);
+        let mel = output.mel.into_data().to_vec::<f32>().unwrap();
+        for probe in reference["mel_probes"].as_array().expect("mel probes") {
+            let index = probe[0].as_u64().unwrap() as usize;
+            let expected = probe[1].as_f64().unwrap() as f32;
+            assert!(
+                (mel[index] - expected).abs() <= 3e-4,
+                "mel parity mismatch at {index}: actual={}, expected={expected}",
+                mel[index]
+            );
+        }
+    }
+
+    #[test]
+    fn model_neutral_training_hooks_expose_all_phases_and_joint_outputs() {
+        let source = fs::read_to_string(fixture_path("config.json")).expect("config");
+        let root: Value = json5::from_str(&source).expect("JSON5 config");
+        let device = NdArrayDevice::Cpu;
+        let model = AlignTtsConfig::from_json_value(&root)
+            .expect("config")
+            .init::<TestBackend>(&device)
+            .expect("model")
+            .load_checkpoint(fixture_path("model_file.pth"))
+            .expect("checkpoint");
+        assert_eq!(model.training_phase(0), AcousticTrainingPhase::Alignment);
+        assert_eq!(model.training_phase(11), AcousticTrainingPhase::Decoder);
+        assert_eq!(model.training_phase(21), AcousticTrainingPhase::Acoustic);
+        assert_eq!(
+            model.training_phase(31),
+            AcousticTrainingPhase::DurationPredictor
+        );
+        assert_eq!(model.training_phase(41), AcousticTrainingPhase::Joint);
+
+        let output = model
+            .training_forward(
+                BurnAcousticTrainingBatch {
+                    token_ids: Tensor::<TestBackend, 2, Int>::from_ints(
+                        [[15, 110, 44, 112]],
+                        &device,
+                    ),
+                    token_lengths: vec![4],
+                    target_mel: Tensor::<TestBackend, 3>::zeros([1, 6, 80], &device),
+                    mel_lengths: vec![6],
+                },
+                41,
+            )
+            .expect("joint training hook");
+        assert_eq!(output.phase, AcousticTrainingPhase::Joint);
+        assert_eq!(output.alignment.dims(), [1, 6, 4]);
+        assert_eq!(output.predicted_mel.expect("mel").dims(), [1, 6, 80]);
+        assert_eq!(
+            output.predicted_duration_log.expect("durations").dims(),
+            [1, 4]
+        );
+        assert_eq!(output.aligned_duration_log.dims(), [1, 4]);
+        assert_eq!(
+            output.alignment_log_prob.expect("MDN likelihood").dims(),
+            [1, 4, 6]
         );
     }
 }

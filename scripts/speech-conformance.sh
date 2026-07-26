@@ -61,6 +61,25 @@ reference="$output_dir/coqui-reference.json"
 echo "Building pinned Coqui reference runtime: $image"
 docker build --tag "$image" --file tools/speech-conformance/Dockerfile .
 
+align_fixture="$repo_root/fixtures/speech/align-tts-mpl-fixture"
+align_candidate="$output_dir/align-tts-mpl-fixture"
+mkdir -p "$align_candidate"
+echo "Regenerating the licensed Align-TTS fixture: $align_candidate"
+docker run --rm \
+    --entrypoint python \
+    --volume "$repo_root:/workspace" \
+    --volume "$output_dir:/evidence" \
+    "$image" \
+    scripts/align-tts-fixture.py \
+    --out /evidence/align-tts-mpl-fixture
+for artifact in config.json model_file.pth reference.json LICENSE.txt; do
+    if ! cmp --silent "$align_fixture/$artifact" "$align_candidate/$artifact"; then
+        echo "pinned Align-TTS fixture drifted: $artifact" >&2
+        exit 1
+    fi
+done
+echo "Licensed Align-TTS fixture matched"
+
 echo "Generating Coqui stage evidence: $reference.part"
 docker run --rm \
     --volume "$model_root:/models:ro" \
@@ -74,6 +93,9 @@ docker run --rm \
     --output /evidence/coqui-reference.json.part
 mv --force "$reference.part" "$reference"
 echo "Reference evidence committed atomically: $reference"
+
+echo "Checking native Align-TTS import, CPU parity, training hooks, and HiFi-GAN composition"
+cargo test --release -p tongues-tts align_tts -- --nocapture
 
 tokenization="$output_dir/coqui-v0.6.1-tokenization.json"
 jq -S '{
