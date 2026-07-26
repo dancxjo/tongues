@@ -361,7 +361,10 @@ mod tests {
             crossfade_cost_ms: None,
             reference_processing_ms: None,
         };
-        assert!(m.validate().is_empty(), "Tier B does not require revision fields");
+        assert!(
+            m.validate().is_empty(),
+            "Tier B does not require revision fields"
+        );
     }
 
     #[test]
@@ -395,6 +398,9 @@ mod tests {
         assert_eq!(v["cancellation_latency_ms"], 4.0);
         assert_eq!(v["suffix_regeneration_ms"], 20.0);
         assert_eq!(v["crossfade_cost_ms"], 2.0);
-        assert!(v.get("reference_processing_ms").is_none(), "None fields omitted");
+        assert!(
+            v.get("reference_processing_ms").is_none(),
+            "None fields omitted"
+        );
     }
 }

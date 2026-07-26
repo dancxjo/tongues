@@ -10,8 +10,8 @@
 //! tongues sentence-parser parse --model models/sentence-parser/v0 "The quick fox jumps."
 //! ```
 
-mod fetch_corpora;
 mod duplex_cmd;
+mod fetch_corpora;
 pub mod models;
 mod speak;
 mod speech_corpus;

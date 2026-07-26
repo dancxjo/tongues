@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
-    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
@@ -22,12 +22,12 @@ use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, Semaphore};
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio::sync::{Semaphore, broadcast};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
@@ -4237,29 +4237,29 @@ fn discover_speech_path(
         speech_backend_capabilities(home, backend, Some(model), device, 24_000)
     }
     .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
-            backend: backend.into(),
-            model: model.into(),
-            family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
-            varieties: tongues_tts::CapabilityValue::Unsupported,
-            languages: tongues_tts::LanguageCapabilities::unsupported(),
-            speakers: tongues_tts::SpeakerCapabilities::unsupported(),
-            styles: tongues_tts::StyleCapabilities::unsupported(),
-            reference_audio: Default::default(),
-            speed: false,
-            pitch: Default::default(),
-            energy: Default::default(),
-            durations: false,
-            seed: false,
-            devices: Vec::new(),
-            output: tongues_tts::OutputAudioContract {
-                sample_rate_hz: 0,
-                channels: 1,
-                streaming: false,
-            },
-            provenance: Vec::new(),
-            capability_tier: tongues_tts::CapabilityTier::Unassigned,
-            revision_capable: false,
-        });
+        backend: backend.into(),
+        model: model.into(),
+        family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
+        varieties: tongues_tts::CapabilityValue::Unsupported,
+        languages: tongues_tts::LanguageCapabilities::unsupported(),
+        speakers: tongues_tts::SpeakerCapabilities::unsupported(),
+        styles: tongues_tts::StyleCapabilities::unsupported(),
+        reference_audio: Default::default(),
+        speed: false,
+        pitch: Default::default(),
+        energy: Default::default(),
+        durations: false,
+        seed: false,
+        devices: Vec::new(),
+        output: tongues_tts::OutputAudioContract {
+            sample_rate_hz: 0,
+            channels: 1,
+            streaming: false,
+        },
+        provenance: Vec::new(),
+        capability_tier: tongues_tts::CapabilityTier::Unassigned,
+        revision_capable: false,
+    });
     let catalog_ids = speech_path_catalog_ids(home, backend, Some(model)).unwrap_or_default();
     let catalog_entries = catalog_ids
         .iter()
@@ -4907,6 +4907,12 @@ fn speech_path_catalog_ids(
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
         "styletts2" => vec![speech_model_id(home, backend, model)?],
+        "onnx" => vec![
+            model
+                .filter(|model| !model.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or(speech_model_id(home, backend, None)?),
+        ],
         "onnx" => vec![model
             .filter(|model| !model.trim().is_empty())
             .map(str::to_string)
@@ -7112,8 +7118,7 @@ mod tests {
             composition.pipeline.end_to_end.as_deref() == Some(composition.model.as_str())
                 && composition.pipeline.acoustic_model.is_none()
                 && composition.pipeline.vocoder.is_none()
-                && composition.pipeline.projector
-                    == format!("projector/{}", composition.model)
+                && composition.pipeline.projector == format!("projector/{}", composition.model)
         }));
         let scripted = discovery
             .paths
@@ -7169,10 +7174,12 @@ mod tests {
         assert!(fastpitch.controls.iter().any(|control| {
             control.field == "pitch" && control.kind == "number_array" && control.group == "expert"
         }));
-        assert!(fastpitch
-            .compatible_vocoders
-            .iter()
-            .any(|vocoder| vocoder.component_id == "hifigan-v2-ljspeech" && vocoder.compatible));
+        assert!(
+            fastpitch
+                .compatible_vocoders
+                .iter()
+                .any(|vocoder| vocoder.component_id == "hifigan-v2-ljspeech" && vocoder.compatible)
+        );
         assert!(fastpitch.compatible_vocoders.iter().any(|vocoder| {
             vocoder.component_id == "multiband-melgan-ljspeech"
                 && !vocoder.compatible
@@ -7225,10 +7232,12 @@ mod tests {
             fastpitch_component.stage,
             tongues_tts::SpeechPipelineStage::AcousticModel
         );
-        assert!(fastpitch_component
-            .control_fields
-            .iter()
-            .any(|field| field == "pitch"));
+        assert!(
+            fastpitch_component
+                .control_fields
+                .iter()
+                .any(|field| field == "pitch")
+        );
         assert_eq!(fastpitch_component.produces[0].kind, "mel_spectrogram");
 
         let speedy = discovery
@@ -7286,10 +7295,12 @@ mod tests {
             "pipeline": normalized.pipeline,
         }))
         .expect("ambiguous request shape");
-        assert!(normalize_speak_request(ambiguous)
-            .err()
-            .expect("ambiguous request rejected")
-            .contains("cannot be combined"));
+        assert!(
+            normalize_speak_request(ambiguous)
+                .err()
+                .expect("ambiguous request rejected")
+                .contains("cannot be combined")
+        );
     }
 
     #[test]
@@ -7312,43 +7323,45 @@ mod tests {
             })
             .expect("server speech plan");
             assert_eq!(plan.variety, analysis.plan.variety, "{}", case.id);
-            assert_eq!(plan.intended_text, analysis.plan.intended_text, "{}", case.id);
             assert_eq!(
-                plan.intended_morphemes,
-                analysis.plan.intended_morphemes,
+                plan.intended_text, analysis.plan.intended_text,
                 "{}",
                 case.id
             );
             assert_eq!(
-                plan.intended_phonemes,
-                analysis.plan.intended_phonemes,
+                plan.intended_morphemes, analysis.plan.intended_morphemes,
                 "{}",
                 case.id
             );
-            assert_eq!(plan.target_phones, analysis.plan.target_phones, "{}", case.id);
             assert_eq!(
-                plan.target_syllables,
-                analysis.plan.target_syllables,
+                plan.intended_phonemes, analysis.plan.intended_phonemes,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_phones, analysis.plan.target_phones,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_syllables, analysis.plan.target_syllables,
                 "{}",
                 case.id
             );
             assert_eq!(plan.boundaries, analysis.plan.boundaries, "{}", case.id);
             assert_eq!(
-                plan.target_prosody,
-                analysis.plan.target_prosody,
+                plan.target_prosody, analysis.plan.target_prosody,
                 "{}",
                 case.id
             );
             assert_eq!(
-                plan.target_acoustics,
-                analysis.plan.target_acoustics,
+                plan.target_acoustics, analysis.plan.target_acoustics,
                 "{}",
                 case.id
             );
             assert_eq!(plan.speaker, analysis.plan.speaker, "{}", case.id);
             assert_eq!(
-                plan.speaker_reference,
-                analysis.plan.speaker_reference,
+                plan.speaker_reference, analysis.plan.speaker_reference,
                 "{}",
                 case.id
             );
@@ -7481,11 +7494,13 @@ mod tests {
             capabilities.devices,
             vec![tongues_tts::SpeechDeviceRequest::Cpu]
         );
-        assert!(registered_speech_compositions_at(FsPath::new("/tmp"))
-            .iter()
-            .any(|composition| {
-                composition.backend == "freevc" && composition.model == "freevc24-vctk"
-            }));
+        assert!(
+            registered_speech_compositions_at(FsPath::new("/tmp"))
+                .iter()
+                .any(|composition| {
+                    composition.backend == "freevc" && composition.model == "freevc24-vctk"
+                })
+        );
     }
 
     #[test]
