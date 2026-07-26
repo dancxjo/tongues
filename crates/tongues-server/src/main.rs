@@ -5897,6 +5897,7 @@ fn native_component_kind(kind: tongues_tts::NativeSpeechComponentKind) -> &'stat
         tongues_tts::NativeSpeechComponentKind::Acoustic => "acoustic",
         tongues_tts::NativeSpeechComponentKind::Vocoder => "vocoder",
         tongues_tts::NativeSpeechComponentKind::Voice => "voice",
+        tongues_tts::NativeSpeechComponentKind::Trainer => "trainer",
         tongues_tts::NativeSpeechComponentKind::Test => "test",
     }
 }
@@ -5907,6 +5908,7 @@ fn native_component_stage(
     match kind {
         tongues_tts::NativeSpeechComponentKind::EndToEnd
         | tongues_tts::NativeSpeechComponentKind::VoiceConversion
+        | tongues_tts::NativeSpeechComponentKind::Trainer
         | tongues_tts::NativeSpeechComponentKind::Test => {
             tongues_tts::SpeechPipelineStage::EndToEnd
         }
