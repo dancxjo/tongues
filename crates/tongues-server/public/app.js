@@ -406,16 +406,25 @@ const commandPages = [
         path: '/cli/phonemes',
         command: 'tongues phonemes',
         group: 'Speech',
-        summary: 'Convert text into a broad IPA phoneme sequence.',
-        fields: ['text'],
+        summary: 'Project text into a broad IPA phoneme sequence.',
+        fields: ['text', '--variety'],
     },
     {
         title: 'Phones',
         path: '/cli/phones',
         command: 'tongues phones',
         group: 'Speech',
-        summary: 'Convert text into a narrow IPA phone sequence.',
-        fields: ['text'],
+        summary: 'Project text into a realized IPA phone sequence.',
+        fields: ['text', '--variety'],
+    },
+    {
+        title: 'Speaking IR',
+        path: '/cli/speaking',
+        command: 'tongues speaking',
+        group: 'Speech',
+        summary: 'Inspect connected speech or emit the complete typed speaking plan.',
+        fields: ['text', '--variety'],
+        advanced: [{ name: '--careful-style', type: 'flag' }, { name: '--json', type: 'flag' }],
     },
     {
         title: 'G2P2G',
@@ -1495,7 +1504,7 @@ function outDefaultFor(page, module) {
 }
 
 function inputDefaultFor(page) {
-    if (page.command.includes('phonemes') || page.command.includes('phones')) return 'hello world';
+    if (['tongues speaking', 'tongues phonemes', 'tongues phones'].includes(page.command)) return 'hello world';
     if (page.command.includes('wiktionary')) return 'example';
     if (page.command.includes('g2p2g') || page.group === 'Legacy') return 'example';
     return 'hello world';

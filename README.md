@@ -70,6 +70,21 @@ just speak --backend vits --speaker p225 --output /tmp/tongues-vits.wav "Hello f
 just speech-demo
 ```
 
+Inspect the same backend-neutral speaking plan without synthesizing it:
+
+```sh
+cargo run --bin tongues -- speaking "Hello, world?"
+cargo run --bin tongues -- speaking --json "Hello, world?"
+```
+
+`--json` emits the complete typed `speaking::UtterancePlan`, which is the
+canonical backend-neutral IR. The default text form is a deliberately lossy
+connected-speech projection used by streaming training paths. `tongues
+phonemes` and `tongues phones` expose separate broad-phoneme and realized-phone
+views of the same plan; none of those text views is a second IR contract.
+Pronunciation-analysis schema v2 likewise stores the plan once and computes
+text projections through `PronunciationAnalysis` accessors.
+
 Run tests:
 
 ```sh
@@ -152,6 +167,8 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just sight-words` | Fine-tune on built-in Dolch sight words. |
 | `just phonemes "hello world"` | Run the rule-based phoneme helper. |
 | `just phones "hello world"` | Run the rule-based phone helper. |
+| `cargo run --bin tongues -- pronunciation --json "hello world"` | Inspect the versioned pronunciation trace and canonical plan. |
+| `cargo run --bin tongues -- speaking --json "hello world"` | Emit the complete backend-neutral `UtterancePlan`. |
 | `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |
 | `just speak --backend fastpitch "hello world"` | Synthesize with native Burn FastPitch + HiFi-GAN. |
 | `just speak --backend vits --speaker p225 "hello world"` | Synthesize with native Burn multi-speaker VITS. |

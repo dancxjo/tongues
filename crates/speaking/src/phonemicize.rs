@@ -5689,7 +5689,7 @@ mod tests {
             .expect("Spanish phonemicizer")
             .phonemicize(&request("pato", "es"))
             .expect("Spanish should phonemicize from variety aliases");
-        assert_eq!(spanish.variety.0, "es");
+        assert_eq!(spanish.variety.0, "es-ES-Castilian");
         assert_eq!(phoneme_symbols(&spanish), vec!["p", "a", "t", "o"]);
         assert_eq!(spanish.syntax.link_parses.len(), 1);
 

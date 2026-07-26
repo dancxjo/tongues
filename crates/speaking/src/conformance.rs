@@ -4,26 +4,26 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
-    token_stress, EvidenceProvenance, EvidenceSource, FeatureBundle, FeatureId, FeatureValue,
-    PhonemicizeError, PhonemicizeOutput, PhonemicizeRequest, Spec, Stress, VarietyId,
+    EvidenceProvenance, EvidenceSource, PhonemicizeError, PhonemicizeOutput, PhonemicizeRequest,
+    Spec, UtterancePlan, VarietyId, display_plan_connected_speech, display_plan_phonemes,
+    display_plan_phones, phone_display_symbol, phoneme_default_phone_display_symbol,
+    phonemicizer_for_variety,
 };
 
-pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 1;
+pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
 pub const PRONUNCIATION_CONFORMANCE_SCHEMA_VERSION: u32 = 1;
 
+/// Versioned pronunciation diagnostics.
+///
+/// Schema v2 stores one typed [`UtterancePlan`]. IPA strings are pure computed
+/// projections exposed by the accessor methods below.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PronunciationAnalysis {
     pub schema_version: u32,
-    pub input_text: String,
     pub normalized_text: String,
-    pub variety: VarietyId,
     pub lexical_candidates: Vec<LexicalCandidateAnalysis>,
-    pub broad_phonemes: String,
-    pub broad_phoneme_ids: String,
-    pub realized_phones: String,
     pub trace: Vec<PronunciationTraceStep>,
-    pub output: PhonemicizeOutput,
+    pub plan: UtterancePlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -86,9 +86,10 @@ pub fn analyze_pronunciation(
 
 impl PronunciationAnalysis {
     pub fn from_output(output: PhonemicizeOutput) -> Self {
-        let broad_phonemes = format_phonemes(&output);
-        let broad_phoneme_ids = format_phoneme_ids(&output);
-        let realized_phones = format_phones(&output);
+        let plan = UtterancePlan::from(&output);
+        let broad_phonemes = display_plan_phonemes(&plan);
+        let broad_phoneme_ids = format_phoneme_ids(&plan);
+        let realized_phones = display_plan_phones(&plan);
         let lexical_candidates = output
             .lexical_candidates
             .iter()
@@ -101,9 +102,7 @@ impl PronunciationAnalysis {
                     .map(|sequence| {
                         sequence
                             .iter()
-                            .map(|id| {
-                                phoneme_default_phone_display_symbol(id, &output.variety)
-                            })
+                            .map(|id| phoneme_default_phone_display_symbol(id, &output.variety))
                             .collect::<String>()
                     })
                     .collect(),
@@ -163,16 +162,27 @@ impl PronunciationAnalysis {
 
         Self {
             schema_version: PRONUNCIATION_ANALYSIS_SCHEMA_VERSION,
-            input_text: output.text.clone(),
             normalized_text: output.normalized_text.clone(),
-            variety: output.variety.clone(),
             lexical_candidates,
-            broad_phonemes,
-            broad_phoneme_ids,
-            realized_phones,
             trace,
-            output,
+            plan,
         }
+    }
+
+    pub fn broad_phonemes(&self) -> String {
+        display_plan_phonemes(&self.plan)
+    }
+
+    pub fn broad_phoneme_ids(&self) -> String {
+        format_phoneme_ids(&self.plan)
+    }
+
+    pub fn realized_phones(&self) -> String {
+        display_plan_phones(&self.plan)
+    }
+
+    pub fn connected_speech(&self) -> String {
+        display_plan_connected_speech(&self.plan)
     }
 }
 
@@ -201,12 +211,13 @@ fn realization_trace(output: &PhonemicizeOutput) -> Vec<PronunciationTraceStep> 
         }
     }
     if steps.is_empty() {
+        let plan = UtterancePlan::from(output);
         steps.push(PronunciationTraceStep {
             stage: PronunciationStage::VarietyRealization,
             source: output.provenance.source.clone(),
             method: format!("{} default phone realization", output.variety.0),
-            before: format_phonemes(output),
-            after: format_phones(output),
+            before: display_plan_phonemes(&plan),
+            after: display_plan_phones(&plan),
             confidence: minimum_phone_confidence(output),
         });
     }
@@ -231,81 +242,17 @@ fn minimum_phone_confidence(output: &PhonemicizeOutput) -> f32 {
         .unwrap_or(1.0)
 }
 
-fn format_phonemes(output: &PhonemicizeOutput) -> String {
-    format_indexed_symbols(
-        output.phonemes.iter().filter_map(|token| {
+fn format_phoneme_ids(plan: &UtterancePlan) -> String {
+    plan.intended_phonemes
+        .iter()
+        .filter_map(|token| {
             let Spec::Known(id) = &token.phoneme else {
                 return None;
             };
-            let mut symbol = phoneme_default_phone_display_symbol(id, &output.variety);
-            if let Some(stress) = token_stress(token) {
-                symbol.insert_str(
-                    0,
-                    match stress {
-                        Stress::Primary => "ˈ",
-                        Stress::Secondary => "ˌ",
-                        Stress::Unstressed | Stress::Reduced => "",
-                    },
-                );
-            }
-            Some((symbol, token_word_index(&token.features)))
-        }),
-    )
-}
-
-fn format_phoneme_ids(output: &PhonemicizeOutput) -> String {
-    format_indexed_symbols(output.phonemes.iter().filter_map(|token| {
-        let Spec::Known(id) = &token.phoneme else {
-            return None;
-        };
-        Some((
-            crate::phoneme_display_symbol(id).to_string(),
-            token_word_index(&token.features),
-        ))
-    }))
-}
-
-fn format_phones(output: &PhonemicizeOutput) -> String {
-    format_indexed_symbols(output.phones.iter().filter_map(|token| {
-        let Spec::Known(id) = &token.phone else {
-            return None;
-        };
-        (!id.as_str().starts_with("boundary.")).then(|| {
-            (
-                phone_display_symbol(id).to_string(),
-                token_word_index(&token.features),
-            )
+            Some(crate::phoneme_display_symbol(id))
         })
-    }))
-}
-
-fn format_indexed_symbols(
-    symbols: impl IntoIterator<Item = (String, Option<usize>)>,
-) -> String {
-    let mut output = String::new();
-    let mut previous_word = None;
-    for (symbol, word_index) in symbols {
-        if previous_word.is_some() && word_index != previous_word {
-            output.push(' ');
-        }
-        output.push_str(&symbol);
-        if word_index.is_some() {
-            previous_word = word_index;
-        }
-    }
-    output
-}
-
-fn token_word_index(features: &FeatureBundle) -> Option<usize> {
-    match features
-        .values
-        .get(&FeatureId("orthography.word_index".into()))
-    {
-        Some(Spec::Known(FeatureValue::Number(value))) if value.is_finite() && *value >= 0.0 => {
-            Some(*value as usize)
-        }
-        _ => None,
-    }
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -334,6 +281,8 @@ pub struct PronunciationExpectation {
     pub broad_phoneme_ids: AcceptedAlternatives<String>,
     pub realized_phones: AcceptedAlternatives<String>,
     #[serde(default)]
+    pub connected_speech: Option<AcceptedAlternatives<String>>,
+    #[serde(default)]
     pub required_trace_methods: Vec<String>,
 }
 
@@ -354,7 +303,11 @@ pub struct AcceptedAlternatives<T> {
 
 impl<T: PartialEq> AcceptedAlternatives<T> {
     pub fn accepts(&self, actual: &T) -> bool {
-        &self.required == actual || self.accepted_alternatives.iter().any(|value| value == actual)
+        &self.required == actual
+            || self
+                .accepted_alternatives
+                .iter()
+                .any(|value| value == actual)
     }
 }
 
@@ -391,20 +344,28 @@ pub fn compare_conformance_case(
         case,
         PronunciationStage::Phonemicization,
         &case.expected.broad_phonemes,
-        &analysis.broad_phonemes,
+        &analysis.broad_phonemes(),
     )?;
     compare_stage(
         case,
         PronunciationStage::Phonemicization,
         &case.expected.broad_phoneme_ids,
-        &analysis.broad_phoneme_ids,
+        &analysis.broad_phoneme_ids(),
     )?;
     compare_stage(
         case,
         PronunciationStage::VarietyRealization,
         &case.expected.realized_phones,
-        &analysis.realized_phones,
+        &analysis.realized_phones(),
     )?;
+    if let Some(expected) = &case.expected.connected_speech {
+        compare_stage(
+            case,
+            PronunciationStage::VarietyRealization,
+            expected,
+            &analysis.connected_speech(),
+        )?;
+    }
     for required in &case.expected.required_trace_methods {
         if !analysis
             .trace
@@ -442,7 +403,10 @@ where
     Err(ConformanceFailure {
         case_id: case.id.clone(),
         first_divergent_stage: stage,
-        expected: format!("{:?} or {:?}", expected.required, expected.accepted_alternatives),
+        expected: format!(
+            "{:?} or {:?}",
+            expected.required, expected.accepted_alternatives
+        ),
         actual: format!("{actual:?}"),
     })
 }
@@ -466,6 +430,10 @@ mod tests {
             corpus.schema_version,
             PRONUNCIATION_CONFORMANCE_SCHEMA_VERSION
         );
+        assert!(
+            !corpus.cases.is_empty(),
+            "the conformance corpus must exercise real pronunciation cases"
+        );
         for case in &corpus.cases {
             let analysis = analyze_pronunciation(&PhonemicizeRequest {
                 text: case.input_text.clone(),
@@ -475,21 +443,60 @@ mod tests {
                 }),
             })
             .unwrap_or_else(|error| panic!("{} could not be analyzed: {error}", case.id));
-            compare_conformance_case(case, &analysis)
-                .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
+            compare_conformance_case(case, &analysis).unwrap_or_else(|failure| {
+                panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
+            });
         }
     }
 
     #[test]
     fn reports_the_first_divergent_stage() {
-        let mut case = corpus().cases[0].clone();
-        case.expected.normalized_text.required = "deliberately wrong".into();
         let analysis = analyze_pronunciation(&PhonemicizeRequest {
-            text: case.input_text.clone(),
-            variety: VarietyId(case.variety.clone()),
+            text: "hello".into(),
+            variety: VarietyId("en-US".into()),
             style: None,
         })
         .expect("analysis");
+        let lexical_candidates = analysis
+            .lexical_candidates
+            .iter()
+            .flat_map(|candidate| candidate.accepted.clone())
+            .collect();
+        let mut case = PronunciationConformanceCase {
+            id: "deliberate-normalization-divergence".into(),
+            input_text: "hello".into(),
+            variety: "en-US".into(),
+            careful_style: false,
+            expected: PronunciationExpectation {
+                normalized_text: AcceptedAlternatives {
+                    required: analysis.normalized_text.clone(),
+                    accepted_alternatives: Vec::new(),
+                },
+                lexical_candidates: AcceptedAlternatives {
+                    required: lexical_candidates,
+                    accepted_alternatives: Vec::new(),
+                },
+                broad_phonemes: AcceptedAlternatives {
+                    required: analysis.broad_phonemes(),
+                    accepted_alternatives: Vec::new(),
+                },
+                broad_phoneme_ids: AcceptedAlternatives {
+                    required: analysis.broad_phoneme_ids(),
+                    accepted_alternatives: Vec::new(),
+                },
+                realized_phones: AcceptedAlternatives {
+                    required: analysis.realized_phones(),
+                    accepted_alternatives: Vec::new(),
+                },
+                connected_speech: Some(AcceptedAlternatives {
+                    required: analysis.connected_speech(),
+                    accepted_alternatives: Vec::new(),
+                }),
+                required_trace_methods: Vec::new(),
+            },
+            checkpoints: BTreeMap::new(),
+        };
+        case.expected.normalized_text.required = "deliberately wrong".into();
         let failure = compare_conformance_case(&case, &analysis).expect_err("must diverge");
         assert_eq!(
             failure.first_divergent_stage,
@@ -506,5 +513,43 @@ mod tests {
         assert!(expectation.accepts(&"one".to_string()));
         assert!(expectation.accepts(&"another".to_string()));
         assert!(!expectation.accepts(&"neither".to_string()));
+    }
+
+    #[test]
+    fn analysis_serializes_one_linguistic_ir() {
+        let analysis = analyze_pronunciation(&PhonemicizeRequest {
+            text: "Hello, world?".into(),
+            variety: VarietyId("en-US".into()),
+            style: None,
+        })
+        .expect("analysis");
+        let json = serde_json::to_value(analysis).expect("analysis JSON");
+        assert!(json.get("plan").is_some());
+        for duplicate in [
+            "output",
+            "input_text",
+            "variety",
+            "broad_phonemes",
+            "broad_phoneme_ids",
+            "realized_phones",
+        ] {
+            assert!(
+                json.get(duplicate).is_none(),
+                "{duplicate} must remain a projection of plan"
+            );
+        }
+    }
+
+    #[test]
+    fn analysis_keeps_intended_and_connected_speech_projections_distinct() {
+        let analysis = analyze_pronunciation(&PhonemicizeRequest {
+            text: "umbrella up".into(),
+            variety: VarietyId("en-GB-RP".into()),
+            style: None,
+        })
+        .expect("analysis");
+
+        assert_eq!(analysis.broad_phonemes(), "əmˈbɹe.lə ˈʌp");
+        assert_eq!(analysis.connected_speech(), "əmˈbɹe.ləɹ | ˈʌp ↘ .");
     }
 }

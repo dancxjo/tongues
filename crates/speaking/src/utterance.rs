@@ -5,6 +5,7 @@ use crate::evidence::EvidenceProvenance;
 use crate::ids::{SpeakerId, UtteranceId, VarietyId};
 use crate::morphology::MorphemeToken;
 use crate::orthography::GraphemeToken;
+use crate::phonemicize::PhonemicizeOutput;
 use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::{ProsodyTrack, Syllable};
 use crate::segment::SpeechBoundaryToken;
@@ -46,6 +47,49 @@ pub struct UtterancePlan {
     pub speaker_reference: Option<SpeakerReference>,
     pub style: Option<StyleRef>,
     pub provenance: EvidenceProvenance,
+}
+
+impl From<&PhonemicizeOutput> for UtterancePlan {
+    fn from(output: &PhonemicizeOutput) -> Self {
+        output.clone().into()
+    }
+}
+
+impl From<PhonemicizeOutput> for UtterancePlan {
+    fn from(output: PhonemicizeOutput) -> Self {
+        let provenance = output.provenance.clone();
+        Self::from_phonemicized(output, UtteranceId("speaking.plan".into()), provenance)
+    }
+}
+
+impl UtterancePlan {
+    /// Build a plan from phonemicizer output with caller-owned plan identity
+    /// and provenance.
+    ///
+    /// This is the single field-mapping boundary between the pronunciation
+    /// pipeline and the canonical speaking plan.
+    pub fn from_phonemicized(
+        output: PhonemicizeOutput,
+        id: UtteranceId,
+        provenance: EvidenceProvenance,
+    ) -> Self {
+        Self {
+            id,
+            variety: output.variety,
+            speaker: None,
+            intended_text: Some(output.text),
+            intended_morphemes: Vec::new(),
+            intended_phonemes: output.phonemes,
+            target_phones: output.phones,
+            target_syllables: output.syllables,
+            boundaries: output.boundaries,
+            target_prosody: output.prosody,
+            target_acoustics: Vec::new(),
+            speaker_reference: None,
+            style: None,
+            provenance,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

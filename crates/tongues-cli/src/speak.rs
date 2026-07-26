@@ -8,11 +8,10 @@ use std::time::Instant;
 
 use crate::DeviceArg;
 use speaking::{
-    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
-    EvidenceProvenance, EvidenceSource, FeatureId, FeatureValue, PauseKind, PhonemicizeOutput,
-    PhonemicizeRequest, PronunciationWarning, PronunciationWarningKind, ProsodyTrack, SpeakerId,
-    SpeakerReference, SpeakerReferenceSource, Spec, SpeechBoundaryToken, StyleRef, StyleSource,
-    TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
+    phoneme_default_phone_display_symbol, phonemicizer_for_variety, EvidenceProvenance,
+    EvidenceSource, PhonemicizeOutput, PhonemicizeRequest, PronunciationWarning,
+    PronunciationWarningKind, ProsodyTrack, SpeakerId, SpeakerReference, SpeakerReferenceSource,
+    Spec, StyleRef, StyleSource, UtteranceId, UtterancePlan, VarietyId,
 };
 use speech::LinguisticProjector as _;
 use speech::SpeechSynthesisEngine as _;
@@ -1873,6 +1872,10 @@ fn run_speak_with_backend(
             );
         }
         println!("phones: {}", format_phones(&phonemicized));
+        println!(
+            "connected_speech: {}",
+            speaking::display_plan_connected_speech(&plan)
+        );
         println!("checkpoint_symbols: {backend_symbols}");
         if let Some(projected) = &checkpoint_input {
             println!(
@@ -2449,26 +2452,15 @@ fn component_config_path(checkpoint_path: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
-    UtterancePlan {
-        id: UtteranceId("tongues.speak.utterance".into()),
-        variety: output.variety.clone(),
-        speaker: None,
-        intended_text: Some(output.text.clone()),
-        intended_morphemes: Vec::new(),
-        intended_phonemes: output.phonemes.clone(),
-        target_phones: output.phones.clone(),
-        target_syllables: output.syllables.clone(),
-        boundaries: output.boundaries.clone(),
-        target_prosody: output.prosody.clone(),
-        target_acoustics: Vec::new(),
-        speaker_reference: None,
-        style: None,
-        provenance: EvidenceProvenance {
+    UtterancePlan::from_phonemicized(
+        output.clone(),
+        UtteranceId("tongues.speak.utterance".into()),
+        EvidenceProvenance {
             source: EvidenceSource::TtsPlan,
             method: "tongues speak phonemicized plan".into(),
             version: Some("0.1".into()),
         },
-    }
+    )
 }
 
 fn styletts2_options_from(max_tts_symbols: usize, no_tts_chunking: bool) -> StyleTts2PlanOptions {
@@ -2496,92 +2488,11 @@ fn format_warning(warning: &PronunciationWarning) -> String {
 }
 
 fn format_phonemes(output: &PhonemicizeOutput) -> String {
-    let symbols = output
-        .phonemes
-        .iter()
-        .filter_map(|token| match &token.phoneme {
-            Spec::Known(id) => Some((
-                phoneme_default_phone_display_symbol(id, &output.variety),
-                token_word_index(&token.features),
-            )),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    format_symbols_with_boundary_markers(symbols, &output.boundaries)
+    speaking::display_plan_phonemes(&UtterancePlan::from(output))
 }
 
 fn format_phones(output: &PhonemicizeOutput) -> String {
-    let symbols = output
-        .phones
-        .iter()
-        .filter_map(|token| match &token.phone {
-            Spec::Known(id) if !id.as_str().starts_with("boundary.") => Some((
-                phone_display_symbol(id).to_string(),
-                token_word_index(&token.features),
-            )),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    format_symbols_with_boundary_markers(symbols, &output.boundaries)
-}
-
-fn format_symbols_with_boundary_markers(
-    symbols: Vec<(String, Option<usize>)>,
-    boundaries: &[SpeechBoundaryToken],
-) -> String {
-    let mut formatted = Vec::with_capacity(symbols.len());
-    for (index, (mut symbol, word_index)) in symbols.iter().cloned().enumerate() {
-        let next_word_index = symbols
-            .get(index + 1)
-            .and_then(|(_, word_index)| *word_index);
-        if let Some(word_index) =
-            word_index.filter(|word_index| Some(*word_index) != next_word_index)
-        {
-            for marker in boundary_markers_after_word(boundaries, word_index) {
-                symbol.push_str(marker);
-            }
-        }
-        formatted.push(symbol);
-    }
-    formatted.join(" ")
-}
-
-fn boundary_markers_after_word(
-    boundaries: &[SpeechBoundaryToken],
-    word_index: usize,
-) -> impl Iterator<Item = &'static str> + '_ {
-    boundaries
-        .iter()
-        .filter(move |boundary| boundary.after_grapheme_index == word_index)
-        .filter_map(boundary_intonation_marker)
-}
-
-fn boundary_intonation_marker(boundary: &SpeechBoundaryToken) -> Option<&'static str> {
-    if let Some(terminal) = boundary.terminal {
-        return Some(match terminal {
-            TerminalPunctuation::Question => "↗",
-            TerminalPunctuation::Period | TerminalPunctuation::Exclamation => "↘",
-        });
-    }
-    if let Some(pause) = boundary.pause {
-        return Some(match pause {
-            PauseKind::Comma => "→",
-            PauseKind::AlternativeQuestionRise => "↗",
-        });
-    }
-    None
-}
-
-fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
-    let value = features
-        .values
-        .get(&FeatureId("orthography.word_index".into()))?;
-    match value {
-        Spec::Known(FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
-            Some(*value as usize)
-        }
-        _ => None,
-    }
+    speaking::display_plan_phones(&UtterancePlan::from(output))
 }
 
 fn format_phonemes_with_features(output: &PhonemicizeOutput) -> String {

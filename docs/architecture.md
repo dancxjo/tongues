@@ -124,6 +124,14 @@ text
   -> streaming waveform chunks and playback/WAV output
 ```
 
+`speaking::UtterancePlan` is the only backend-neutral linguistic IR carried
+between components. `tongues speaking --json` serializes that typed plan for
+inspection. The default `tongues speaking` output is a lossy connected-speech
+model target; head2phones, data, and debug views use pure projections owned by
+`speaking`. Broad phonemes come only from intended phonemes, realized phones
+come only from target phones, and checkpoint tokens remain a terminal
+projection. None of those text forms is an alternate IR contract.
+
 The native Burn component path and end-to-end VITS path are active inference
 implementations. Model-private vocabulary lowering occurs only at the final
 projector, leaving the shared phonological and phonetic representation intact.

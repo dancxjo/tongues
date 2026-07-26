@@ -840,27 +840,18 @@ pub fn utterance_plan_from_text(request: SpeechRequest) -> Result<UtterancePlan>
     Ok(utterance_plan_from_phonemicized(&phonemicized))
 }
 
+/// Convert phonemicizer output into a TTS plan while preserving the public
+/// compatibility entrypoint.
 pub fn utterance_plan_from_phonemicized(output: &PhonemicizeOutput) -> UtterancePlan {
-    UtterancePlan {
-        id: UtteranceId("tongues-tts.speech.utterance".into()),
-        variety: output.variety.clone(),
-        speaker: None,
-        intended_text: Some(output.text.clone()),
-        intended_morphemes: Vec::new(),
-        intended_phonemes: output.phonemes.clone(),
-        target_phones: output.phones.clone(),
-        target_syllables: output.syllables.clone(),
-        boundaries: output.boundaries.clone(),
-        target_prosody: output.prosody.clone(),
-        target_acoustics: Vec::new(),
-        speaker_reference: None,
-        style: None,
-        provenance: EvidenceProvenance {
+    UtterancePlan::from_phonemicized(
+        output.clone(),
+        UtteranceId("tongues-tts.speech.utterance".into()),
+        EvidenceProvenance {
             source: EvidenceSource::TtsPlan,
-            method: "tongues-tts phonemicized ONNX speech plan".into(),
+            method: "tongues-tts phonemicized speech plan".into(),
             version: Some("0.1".into()),
         },
-    }
+    )
 }
 
 #[doc(hidden)]
@@ -2529,9 +2520,26 @@ mod tests {
         assert!(
             plan.intended_phonemes
                 .iter()
-                .any(|token| token.provenance.source == EvidenceSource::Inference),
+                .any(|token| token.provenance.source == speaking::EvidenceSource::Inference),
             "the plan should preserve inference provenance"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn public_phonemicized_plan_conversion_keeps_tts_identity_and_evidence() -> Result<()> {
+        let variety = VarietyId("en-US".into());
+        let output = phonemicizer_for_variety(&variety)?.phonemicize(&PhonemicizeRequest {
+            text: "hello".into(),
+            variety,
+            style: None,
+        })?;
+        let plan = utterance_plan_from_phonemicized(&output);
+
+        assert_eq!(plan.id.0, "tongues-tts.speech.utterance");
+        assert_eq!(plan.provenance.source, EvidenceSource::TtsPlan);
+        assert_eq!(plan.intended_phonemes, output.phonemes);
+        assert_eq!(plan.target_phones, output.phones);
         Ok(())
     }
 
@@ -2557,7 +2565,7 @@ mod tests {
         assert!(
             plan.intended_phonemes
                 .iter()
-                .any(|token| token.provenance.source == EvidenceSource::Inference),
+                .any(|token| token.provenance.source == speaking::EvidenceSource::Inference),
             "Netherwick should be pronounced by the Wiktionary inference fallback"
         );
         Ok(())

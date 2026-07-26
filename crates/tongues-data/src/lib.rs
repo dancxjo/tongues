@@ -853,42 +853,13 @@ pub fn phonemicize_word(base_word: &str) -> Option<(String, String)> {
         return None;
     }
 
-    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
-    for syllable in phonemicized.syllables.iter() {
-        if let Some(first_phone) = syllable.phones.first() {
-            if let Some(word_idx) = token_word_index(&first_phone.features) {
-                if let Some(last_word) = words.last_mut() {
-                    if last_word.0 == word_idx {
-                        last_word.1.push(syllable.clone());
-                        continue;
-                    }
-                }
-                words.push((word_idx, vec![syllable.clone()]));
-            }
-        }
-    }
-
-    let mut broad_words = Vec::new();
-    let mut narrow_words = Vec::new();
-    for (_, word_syllables) in words {
-        let broad_ipa = syllables_to_phonemes_ipa(
-            &word_syllables,
-            &phonemicized.phonemes,
-            &phonemicized.variety,
-        );
-        let narrow_ipa = syllables_to_ipa_formatted(&word_syllables);
-        if !broad_ipa.is_empty() {
-            broad_words.push(broad_ipa);
-        }
-        if !narrow_ipa.is_empty() {
-            narrow_words.push(narrow_ipa);
-        }
-    }
-
-    if broad_words.is_empty() || narrow_words.is_empty() {
+    let plan = speaking::UtterancePlan::from(&phonemicized);
+    let broad = speaking::display_plan_phoneme_words(&plan);
+    let narrow = speaking::display_plan_phone_words(&plan);
+    if broad.is_empty() || narrow.is_empty() {
         None
     } else {
-        Some((broad_words.join(" "), narrow_words.join(" ")))
+        Some((broad, narrow))
     }
 }
 
@@ -935,127 +906,6 @@ pub fn phonemicize_lexemes(base_words: Vec<String>) -> Vec<Lexeme> {
 
     let guard = results.lock().unwrap();
     guard.clone()
-}
-
-// ── Speech Crate IPA Formatter Helpers ─────────────────────────────────────
-
-fn find_phoneme_for_phone(
-    phone: &speaking::PhoneToken,
-    phonemes: &[speaking::PhonemeToken],
-) -> Option<speaking::PhonemeId> {
-    for phoneme_token in phonemes {
-        for realized_phone in &phoneme_token.realized_as {
-            if realized_phone.phone == phone.phone
-                && realized_phone.features == phone.features
-                && realized_phone.span == phone.span
-            {
-                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
-                    return Some(id.clone());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
-    match &phone.phone {
-        speaking::Spec::Known(id) => id
-            .as_str()
-            .strip_prefix("ipa.phone.")
-            .unwrap_or(id.as_str()),
-        _ => "",
-    }
-}
-
-fn syllables_to_phonemes_ipa(
-    syllables: &[speaking::Syllable],
-    phonemes: &[speaking::PhonemeToken],
-    variety: &speaking::VarietyId,
-) -> String {
-    syllables
-        .iter()
-        .enumerate()
-        .map(|(index, syllable)| {
-            let mut text = String::new();
-            let mut has_stress_mark = false;
-            let stress_char = match syllable.stress {
-                speaking::Spec::Known(speaking::Stress::Primary) => {
-                    has_stress_mark = true;
-                    Some('ˈ')
-                }
-                speaking::Spec::Known(speaking::Stress::Secondary) => {
-                    has_stress_mark = true;
-                    Some('ˌ')
-                }
-                _ => None,
-            };
-
-            if index > 0 && !has_stress_mark {
-                text.push('.');
-            }
-            if let Some(c) = stress_char {
-                text.push(c);
-            }
-            for phone in &syllable.phones {
-                if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
-                    let symbol =
-                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
-                    text.push_str(&symbol);
-                } else {
-                    text.push_str(phone_ipa(phone));
-                }
-            }
-            text
-        })
-        .collect()
-}
-
-fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
-    syllables
-        .iter()
-        .enumerate()
-        .map(|(index, syllable)| {
-            let mut text = String::new();
-            let mut has_stress_mark = false;
-            let stress_char = match syllable.stress {
-                speaking::Spec::Known(speaking::Stress::Primary) => {
-                    has_stress_mark = true;
-                    Some('ˈ')
-                }
-                speaking::Spec::Known(speaking::Stress::Secondary) => {
-                    has_stress_mark = true;
-                    Some('ˌ')
-                }
-                _ => None,
-            };
-
-            if index > 0 && !has_stress_mark {
-                text.push('.');
-            }
-            if let Some(c) = stress_char {
-                text.push(c);
-            }
-            for phone in &syllable.phones {
-                text.push_str(phone_ipa(phone));
-            }
-            text
-        })
-        .collect()
-}
-
-fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
-    let value = features
-        .values
-        .get(&speaking::FeatureId("orthography.word_index".into()))?;
-    match value {
-        speaking::Spec::Known(speaking::FeatureValue::Number(value))
-            if value.is_finite() && *value >= 0.0 =>
-        {
-            Some(*value as usize)
-        }
-        _ => None,
-    }
 }
 
 // ── Vocabulary builder ─────────────────────────────────────────────────────
@@ -1244,6 +1094,13 @@ mod tests {
         let text = ";;; comment\nHELLO H EH1 L OW0\nWORLD(2) W ER1 L D\n12345 NOPE\n";
         let base_words = parse_cmudict(text);
         assert_eq!(base_words, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn lexeme_pronunciations_are_views_of_the_speaking_plan() {
+        let (broad, narrow) = phonemicize_word("atlas").expect("known pronunciation");
+        assert_eq!(broad, "ˈæt.ləs");
+        assert_eq!(narrow, "ˈæt.ləs");
     }
 
     #[test]

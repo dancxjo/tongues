@@ -1,4 +1,162 @@
 {
   "schema_version": 1,
-  "cases": []
+  "cases": [
+    {
+      "id": "en-us-question-with-comma",
+      "input_text": "Hello, world?",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "Hello, world?"
+        },
+        "lexical_candidates": {
+          "required": ["həloʊ", "hɛloʊ", "wɚld"]
+        },
+        "broad_phonemes": {
+          "required": "həˈloʊ ˈwɚld"
+        },
+        "broad_phoneme_ids": {
+          "required": "h ʌ l oʊ w ɝ l d"
+        },
+        "realized_phones": {
+          "required": "həˈloʊ ˈwɝɫd"
+        },
+        "connected_speech": {
+          "required": "həˈloʊ → , ˈwɚld ↗ ?"
+        },
+        "required_trace_methods": ["base cmu exact lookup"]
+      }
+    },
+    {
+      "id": "en-us-casual-flapping",
+      "input_text": "water",
+      "variety": "en-US",
+      "expected": {
+        "normalized_text": {
+          "required": "water"
+        },
+        "lexical_candidates": {
+          "required": ["wɔtɚ"]
+        },
+        "broad_phonemes": {
+          "required": "ˈwɔ.tɚ"
+        },
+        "broad_phoneme_ids": {
+          "required": "w ɔ t ɝ"
+        },
+        "realized_phones": {
+          "required": "ˈwɔ.ɾɚ"
+        },
+        "connected_speech": {
+          "required": "ˈwɔ.tɚ ↘ ."
+        },
+        "required_trace_methods": ["american_english_intervocalic_flapping"]
+      }
+    },
+    {
+      "id": "en-us-careful-blocks-flapping",
+      "input_text": "water",
+      "variety": "en-US",
+      "careful_style": true,
+      "expected": {
+        "normalized_text": {
+          "required": "water"
+        },
+        "lexical_candidates": {
+          "required": ["wɔtɚ"]
+        },
+        "broad_phonemes": {
+          "required": "ˈwɔ.tɚ"
+        },
+        "broad_phoneme_ids": {
+          "required": "w ɔ t ɝ"
+        },
+        "realized_phones": {
+          "required": "ˈwɔ.tɚ"
+        },
+        "connected_speech": {
+          "required": "ˈwɔ.tɚ ↘ ."
+        },
+        "required_trace_methods": ["american_english_unstressed_er_nucleus_reduction"]
+      }
+    },
+    {
+      "id": "rp-intrusive-r-positive",
+      "input_text": "umbrella up",
+      "variety": "en-GB-RP",
+      "expected": {
+        "normalized_text": {
+          "required": "umbrella up"
+        },
+        "lexical_candidates": {
+          "required": ["əmbɹelə", "ʌmbɹelə", "ʌp"]
+        },
+        "broad_phonemes": {
+          "required": "əmˈbɹe.lə ˈʌp"
+        },
+        "broad_phoneme_ids": {
+          "required": "ə m b ɹ e l ə ʌ p"
+        },
+        "realized_phones": {
+          "required": "əmˈbɹe.ləɹ ˈʌp"
+        },
+        "connected_speech": {
+          "required": "əmˈbɹe.ləɹ | ˈʌp ↘ ."
+        },
+        "required_trace_methods": ["received_pronunciation_light_l_before_vowel"]
+      }
+    },
+    {
+      "id": "rp-intrusive-r-consonant-control",
+      "input_text": "umbrella stand",
+      "variety": "en-GB-RP",
+      "expected": {
+        "normalized_text": {
+          "required": "umbrella stand"
+        },
+        "lexical_candidates": {
+          "required": ["əmbɹelə", "ʌmbɹelə", "stænd"]
+        },
+        "broad_phonemes": {
+          "required": "əmˈbɹe.lə ˈstænd"
+        },
+        "broad_phoneme_ids": {
+          "required": "ə m b ɹ e l ə s t æ n d"
+        },
+        "realized_phones": {
+          "required": "əmˈbɹe.lə ˈst˭ænd"
+        },
+        "connected_speech": {
+          "required": "əmˈbɹe.lə | ˈstænd ↘ ."
+        },
+        "required_trace_methods": ["received_pronunciation_unaspirated_t_after_s"]
+      }
+    },
+    {
+      "id": "spanish-alias-canonicalization",
+      "input_text": "pato",
+      "variety": "es",
+      "expected": {
+        "normalized_text": {
+          "required": "pato"
+        },
+        "lexical_candidates": {
+          "required": ["pato"]
+        },
+        "broad_phonemes": {
+          "required": "ˈpa.to"
+        },
+        "broad_phoneme_ids": {
+          "required": "p a t o"
+        },
+        "realized_phones": {
+          "required": "ˈpa.to"
+        },
+        "connected_speech": {
+          "required": "ˈpa.to ↘ ."
+        },
+        "required_trace_methods": ["es-ES-Castilian orthography profile pronunciation"]
+      }
+    }
+  ]
 }

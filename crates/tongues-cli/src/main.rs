@@ -476,7 +476,7 @@ enum Commands {
     Be(BeCommand),
 
     /// Demonstrate the speaking library across built-in language varieties
-    #[command(name = "speaking-demo", alias = "speaking")]
+    #[command(name = "speaking-demo")]
     SpeakingDemo {
         /// Demo mode
         #[arg(value_enum, default_value = "samples")]
@@ -525,6 +525,24 @@ enum Commands {
         careful_style: bool,
 
         /// Print the versioned structured analysis as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Plan text and inspect a connected-speech projection or the complete plan
+    Speaking {
+        /// The text to plan
+        text: String,
+
+        /// Linguistic variety used by the speaking planner
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+
+        /// Disable casual-style realization rules
+        #[arg(long)]
+        careful_style: bool,
+
+        /// Serialize the complete typed UtterancePlan as JSON
         #[arg(long)]
         json: bool,
     },
@@ -2048,6 +2066,12 @@ fn main() -> Result<()> {
             careful_style,
             json,
         } => cmd_pronunciation(&text, &variety, careful_style, json),
+        Commands::Speaking {
+            text,
+            variety,
+            careful_style,
+            json,
+        } => cmd_speaking(&text, &variety, careful_style, json),
         Commands::Models { command } => models::run(command),
     }
 }
@@ -8961,6 +8985,23 @@ fn cmd_speaking_demo(
                 .map_err(|err| {
                     anyhow::anyhow!("{} {} sample failed: {err:?}", variety.id.0, sample.name)
                 })?;
+            let plan = speaking::UtterancePlan::from(&output);
+            let phonemes = speaking::display_plan_phoneme_words(&plan);
+            let phones = speaking::display_plan_phone_words(&plan);
+            let connected_speech = speaking::display_plan_connected_speech(&plan);
+            let connected_phones = speaking::display_plan_connected_phones(&plan);
+            let boundaries = output
+                .boundaries
+                .iter()
+                .map(|boundary| {
+                    serde_json::json!({
+                        "kind": format!("{:?}", boundary.kind),
+                        "after_grapheme_index": boundary.after_grapheme_index,
+                        "terminal": boundary.terminal.map(|terminal| format!("{terminal:?}")),
+                        "pause": boundary.pause.map(|pause| format!("{pause:?}")),
+                    })
+                })
+                .collect::<Vec<_>>();
 
             case_reports.push(serde_json::json!({
                 "name": sample.name,
@@ -8968,10 +9009,13 @@ fn cmd_speaking_demo(
                 "input": sample.text,
                 "source_url": sample.source_url,
                 "source_path": sample.source_path.as_ref().map(|path| path.display().to_string()),
-                "phonemes": speaking_demo_phoneme_words(&output),
-                "phones": speaking_demo_phone_words(&output),
-                "utterance_phonemes": speaking_demo_phoneme_utterance(&output),
-                "utterance_phones": speaking_demo_phone_utterance(&output),
+                "phonemes": phonemes,
+                "phones": phones,
+                "utterance_phonemes": connected_speech,
+                "utterance_phones": connected_phones,
+                "connected_speech": connected_speech,
+                "boundaries": boundaries,
+                "plan": plan,
                 "counts": {
                     "graphemes": output.graphemes.len(),
                     "phonemes": output.phonemes.len(),
@@ -8982,14 +9026,6 @@ fn cmd_speaking_demo(
                     "syntax_tokens": output.syntax.tokens.len(),
                     "warnings": output.warnings.len(),
                 },
-                "boundaries": output.boundaries.iter().map(|boundary| {
-                    serde_json::json!({
-                        "kind": format!("{:?}", boundary.kind),
-                        "after_grapheme_index": boundary.after_grapheme_index,
-                        "terminal": boundary.terminal.map(|terminal| format!("{terminal:?}")),
-                        "pause": boundary.pause.map(|pause| format!("{pause:?}")),
-                    })
-                }).collect::<Vec<_>>(),
                 "prosody_labels": output.prosody.labels.iter().map(|label| {
                     serde_json::json!({
                         "kind": format!("{:?}", label.kind),
@@ -9468,109 +9504,6 @@ fn speaking_demo_builtin_utterance(variety: &str) -> Option<&'static str> {
     }
 }
 
-fn speaking_demo_phoneme_words(output: &speaking::PhonemicizeOutput) -> String {
-    speaking_demo_word_syllables(output)
-        .into_iter()
-        .map(|(_, syllables)| {
-            syllables_to_phonemes_ipa(&syllables, &output.phonemes, &output.variety)
-        })
-        .filter(|ipa| !ipa.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn speaking_demo_phone_words(output: &speaking::PhonemicizeOutput) -> String {
-    speaking_demo_word_syllables(output)
-        .into_iter()
-        .map(|(_, syllables)| syllables_to_ipa_formatted(&syllables))
-        .filter(|ipa| !ipa.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn speaking_demo_phoneme_utterance(output: &speaking::PhonemicizeOutput) -> String {
-    speaking_demo_utterance_parts(output, |syllables, output| {
-        syllables_to_phonemes_ipa(syllables, &output.phonemes, &output.variety)
-    })
-}
-
-fn speaking_demo_phone_utterance(output: &speaking::PhonemicizeOutput) -> String {
-    speaking_demo_utterance_parts(output, |syllables, _| syllables_to_ipa_formatted(syllables))
-}
-
-fn speaking_demo_utterance_parts(
-    output: &speaking::PhonemicizeOutput,
-    format_word: impl Fn(&[speaking::Syllable], &speaking::PhonemicizeOutput) -> String,
-) -> String {
-    let words = speaking_demo_word_syllables(output);
-    let last_index = words.len().saturating_sub(1);
-    let mut parts = Vec::new();
-    for (position, (word_index, syllables)) in words.into_iter().enumerate() {
-        let word = format_word(&syllables, output);
-        if word.is_empty() {
-            continue;
-        }
-        parts.push(word);
-        let boundary_symbols = speaking_demo_boundary_symbols_after_word(output, word_index);
-        if boundary_symbols.is_empty() {
-            if position != last_index {
-                parts.push("|".to_string());
-            }
-        } else {
-            parts.extend(boundary_symbols.into_iter().map(str::to_string));
-        }
-    }
-    parts.join(" ")
-}
-
-fn speaking_demo_boundary_symbols_after_word(
-    output: &speaking::PhonemicizeOutput,
-    word_index: usize,
-) -> Vec<&'static str> {
-    let Some(boundary) = output
-        .boundaries
-        .iter()
-        .filter(|boundary| boundary.terminal.is_some() || boundary.pause.is_some())
-        .find(|boundary| boundary.after_grapheme_index == word_index)
-    else {
-        return Vec::new();
-    };
-    if let Some(terminal) = boundary.terminal {
-        return match terminal {
-            speaking::TerminalPunctuation::Question => vec!["↗", "?"],
-            speaking::TerminalPunctuation::Period => vec!["↘", "."],
-            speaking::TerminalPunctuation::Exclamation => vec!["↘", "!"],
-        };
-    }
-    if let Some(pause) = boundary.pause {
-        return match pause {
-            speaking::PauseKind::Comma => vec!["→", ","],
-            speaking::PauseKind::AlternativeQuestionRise => vec!["↗", ","],
-        };
-    }
-    Vec::new()
-}
-
-fn speaking_demo_word_syllables(
-    output: &speaking::PhonemicizeOutput,
-) -> Vec<(usize, Vec<speaking::Syllable>)> {
-    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
-    for syllable in output.syllables.iter() {
-        if let Some(first_phone) = syllable.phones.first() {
-            if let Some(word_idx) = token_word_index(&first_phone.features) {
-                if let Some(last_word) = words.last_mut() {
-                    if last_word.0 == word_idx {
-                        last_word.1.push(syllable.clone());
-                        continue;
-                    }
-                }
-                words.push((word_idx, vec![syllable.clone()]));
-            }
-        }
-    }
-    words
-}
-
 fn print_speaking_demo_text(reports: &[serde_json::Value]) {
     println!("Speaking demo: {} varieties", reports.len());
     for report in reports {
@@ -9661,6 +9594,10 @@ fn print_speaking_demo_text(reports: &[serde_json::Value]) {
                 }
             }
             println!(
+                "  connected speech: {}",
+                case["connected_speech"].as_str().unwrap_or("")
+            );
+            println!(
                 "  counts: graphemes={} phonemes={} phones={} syllables={} boundaries={} prosody_labels={} syntax_tokens={} warnings={}",
                 counts["graphemes"].as_u64().unwrap_or(0),
                 counts["phonemes"].as_u64().unwrap_or(0),
@@ -9681,24 +9618,24 @@ fn canonical_pronunciation(
     careful_style: bool,
 ) -> Result<speaking::PronunciationAnalysis> {
     speaking::analyze_pronunciation(&speaking::PhonemicizeRequest {
-            text: text.to_string(),
-            variety: speaking::VarietyId(variety.to_string()),
-            style: careful_style.then_some(speaking::PhonemicizeStyle {
-                careful_style: true,
-            }),
-        })
-        .map_err(|error| anyhow::anyhow!("Failed to analyze pronunciation: {error}"))
+        text: text.to_string(),
+        variety: speaking::VarietyId(variety.to_string()),
+        style: careful_style.then_some(speaking::PhonemicizeStyle {
+            careful_style: true,
+        }),
+    })
+    .map_err(|error| anyhow::anyhow!("Failed to analyze pronunciation: {error}"))
 }
 
 fn cmd_phonemes(text: &str, variety: &str) -> Result<()> {
     let analysis = canonical_pronunciation(text, variety, false)?;
-    println!("/{}/", analysis.broad_phonemes);
+    println!("/{}/", analysis.broad_phonemes());
     Ok(())
 }
 
 fn cmd_phones(text: &str, variety: &str) -> Result<()> {
     let analysis = canonical_pronunciation(text, variety, false)?;
-    println!("[{}]", analysis.realized_phones);
+    println!("[{}]", analysis.realized_phones());
     Ok(())
 }
 
@@ -9709,8 +9646,9 @@ fn cmd_pronunciation(text: &str, variety: &str, careful_style: bool, json: bool)
         return Ok(());
     }
     println!("normalized text: {}", analysis.normalized_text);
-    println!("broad phonemes: /{}/", analysis.broad_phonemes);
-    println!("realized phones: [{}]", analysis.realized_phones);
+    println!("broad phonemes: /{}/", analysis.broad_phonemes());
+    println!("realized phones: [{}]", analysis.realized_phones());
+    println!("connected speech: {}", analysis.connected_speech());
     println!("trace:");
     for step in &analysis.trace {
         println!(
@@ -9721,109 +9659,17 @@ fn cmd_pronunciation(text: &str, variety: &str, careful_style: bool, json: bool)
     Ok(())
 }
 
-fn find_phoneme_for_phone(
-    phone: &speaking::PhoneToken,
-    phonemes: &[speaking::PhonemeToken],
-) -> Option<speaking::PhonemeId> {
-    for phoneme_token in phonemes {
-        for realized_phone in &phoneme_token.realized_as {
-            if realized_phone.phone == phone.phone
-                && realized_phone.features == phone.features
-                && realized_phone.span == phone.span
-            {
-                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
-                    return Some(id.clone());
-                }
-            }
-        }
+fn cmd_speaking(text: &str, variety: &str, careful_style: bool, json: bool) -> Result<()> {
+    let analysis = canonical_pronunciation(text, variety, careful_style)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&analysis.plan)?);
+    } else {
+        println!(
+            "{}",
+            speaking::display_plan_connected_speech(&analysis.plan)
+        );
     }
-    None
-}
-
-fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
-    match &phone.phone {
-        speaking::Spec::Known(id) => id
-            .as_str()
-            .strip_prefix("ipa.phone.")
-            .unwrap_or(id.as_str()),
-        _ => "",
-    }
-}
-
-fn syllables_to_phonemes_ipa(
-    syllables: &[speaking::Syllable],
-    phonemes: &[speaking::PhonemeToken],
-    variety: &speaking::VarietyId,
-) -> String {
-    syllables
-        .iter()
-        .enumerate()
-        .map(|(index, syllable)| {
-            let mut text = String::new();
-            let mut has_stress_mark = false;
-            let stress_char = match syllable.stress {
-                speaking::Spec::Known(speaking::Stress::Primary) => {
-                    has_stress_mark = true;
-                    Some('ˈ')
-                }
-                speaking::Spec::Known(speaking::Stress::Secondary) => {
-                    has_stress_mark = true;
-                    Some('ˌ')
-                }
-                _ => None,
-            };
-
-            if index > 0 && !has_stress_mark {
-                text.push('.');
-            }
-            if let Some(c) = stress_char {
-                text.push(c);
-            }
-            for phone in &syllable.phones {
-                if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
-                    let symbol =
-                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
-                    text.push_str(&symbol);
-                } else {
-                    text.push_str(phone_ipa(phone));
-                }
-            }
-            text
-        })
-        .collect()
-}
-
-fn syllables_to_ipa_formatted(syllables: &[speaking::Syllable]) -> String {
-    syllables
-        .iter()
-        .enumerate()
-        .map(|(index, syllable)| {
-            let mut text = String::new();
-            let mut has_stress_mark = false;
-            let stress_char = match syllable.stress {
-                speaking::Spec::Known(speaking::Stress::Primary) => {
-                    has_stress_mark = true;
-                    Some('ˈ')
-                }
-                speaking::Spec::Known(speaking::Stress::Secondary) => {
-                    has_stress_mark = true;
-                    Some('ˌ')
-                }
-                _ => None,
-            };
-
-            if index > 0 && !has_stress_mark {
-                text.push('.');
-            }
-            if let Some(c) = stress_char {
-                text.push(c);
-            }
-            for phone in &syllable.phones {
-                text.push_str(phone_ipa(phone));
-            }
-            text
-        })
-        .collect()
+    Ok(())
 }
 
 fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
@@ -10305,7 +10151,7 @@ fn phonemicized_first_word_phones(text: &str) -> Result<String> {
         }
     }
 
-    Ok(syllables_to_ipa_formatted(&first_word_syllables))
+    Ok(speaking::syllables_to_ipa(&first_word_syllables))
 }
 
 fn write_atomic_text(path: &Path, text: &str) -> Result<()> {
@@ -12978,6 +12824,47 @@ mod tests {
 
         assert!(error.to_string().contains("--cpu"));
         assert!(error.to_string().contains("--cuda-device"));
+    }
+
+    #[test]
+    fn speaking_projection_commands_remain_public_cli_contracts() {
+        let phonemes = Cli::try_parse_from([
+            "tongues",
+            "phonemes",
+            "--variety",
+            "en-GB-RP",
+            "umbrella up",
+        ])
+        .expect("phonemes command should parse");
+        assert!(matches!(phonemes.command, Some(Commands::Phonemes { .. })));
+
+        let phones = Cli::try_parse_from(["tongues", "phones", "--variety", "es", "pato"])
+            .expect("phones command should parse");
+        assert!(matches!(phones.command, Some(Commands::Phones { .. })));
+
+        let pronunciation = Cli::try_parse_from([
+            "tongues",
+            "pronunciation",
+            "--careful-style",
+            "--json",
+            "water",
+        ])
+        .expect("pronunciation command should parse");
+        assert!(matches!(
+            pronunciation.command,
+            Some(Commands::Pronunciation {
+                careful_style: true,
+                json: true,
+                ..
+            })
+        ));
+
+        let speaking = Cli::try_parse_from(["tongues", "speaking", "--json", "Hello, world?"])
+            .expect("speaking command should parse");
+        assert!(matches!(
+            speaking.command,
+            Some(Commands::Speaking { json: true, .. })
+        ));
     }
 
     #[test]

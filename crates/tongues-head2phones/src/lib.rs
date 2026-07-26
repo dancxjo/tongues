@@ -19,10 +19,7 @@ use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use speaking::{
-    phonemicizer_for_variety, PauseKind, PhonemicizeOutput, PhonemicizeRequest,
-    SpeechBoundaryToken, TerminalPunctuation, VarietyId,
-};
+use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::{OllamaVerifierConfig, Seq2SeqExample};
 use tongues_neural::{write_manifest, ModelArtifactManifest};
@@ -1904,157 +1901,9 @@ fn speech_symbols_for_text(text: &str, variety: &VarietyId) -> Option<String> {
             style: None,
         })
         .ok()?;
-    phones_for_phonemicized(&phonemicized)
-}
-
-fn phones_for_phonemicized(phonemicized: &PhonemicizeOutput) -> Option<String> {
-    let mut words: Vec<(usize, Vec<speaking::Syllable>)> = Vec::new();
-    for syllable in phonemicized.syllables.iter() {
-        let Some(first_phone) = syllable.phones.first() else {
-            continue;
-        };
-        let Some(word_idx) = token_word_index(&first_phone.features) else {
-            continue;
-        };
-        if let Some(last_word) = words.last_mut() {
-            if last_word.0 == word_idx {
-                last_word.1.push(syllable.clone());
-                continue;
-            }
-        }
-        words.push((word_idx, vec![syllable.clone()]));
-    }
-    let mut symbols = Vec::new();
-    let last_index = words.len().saturating_sub(1);
-    for (position, (word_index, syllables)) in words.into_iter().enumerate() {
-        let word =
-            syllables_to_phonemes_ipa(&syllables, &phonemicized.phonemes, &phonemicized.variety);
-        if word.is_empty() {
-            continue;
-        }
-        symbols.push(word);
-        let boundary_symbols = boundary_symbols_after_word(&phonemicized.boundaries, word_index);
-        if boundary_symbols.is_empty() {
-            if position != last_index {
-                symbols.push("|".to_string());
-            }
-        } else {
-            symbols.extend(boundary_symbols.into_iter().map(str::to_string));
-        }
-    }
-    (!symbols.is_empty()).then(|| symbols.join(" "))
-}
-
-fn boundary_symbols_after_word(
-    boundaries: &[SpeechBoundaryToken],
-    word_index: usize,
-) -> Vec<&'static str> {
-    let Some(boundary) = boundaries
-        .iter()
-        .filter(|boundary| boundary.terminal.is_some() || boundary.pause.is_some())
-        .find(|boundary| boundary.after_grapheme_index == word_index)
-    else {
-        return Vec::new();
-    };
-    if let Some(terminal) = boundary.terminal {
-        return match terminal {
-            TerminalPunctuation::Question => vec!["↗", "?"],
-            TerminalPunctuation::Period => vec!["↘", "."],
-            TerminalPunctuation::Exclamation => vec!["↘", "!"],
-        };
-    }
-    if let Some(pause) = boundary.pause {
-        return match pause {
-            PauseKind::Comma => vec!["→", ","],
-            PauseKind::AlternativeQuestionRise => vec!["↗", ","],
-        };
-    }
-    Vec::new()
-}
-
-fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
-    let value = features
-        .values
-        .get(&speaking::FeatureId("orthography.word_index".into()))?;
-    match value {
-        speaking::Spec::Known(speaking::FeatureValue::Number(value))
-            if value.is_finite() && *value >= 0.0 =>
-        {
-            Some(*value as usize)
-        }
-        _ => None,
-    }
-}
-
-fn phone_ipa(phone: &speaking::PhoneToken) -> &str {
-    match &phone.phone {
-        speaking::Spec::Known(id) => id
-            .as_str()
-            .strip_prefix("ipa.phone.")
-            .unwrap_or(id.as_str()),
-        _ => "",
-    }
-}
-
-fn find_phoneme_for_phone(
-    phone: &speaking::PhoneToken,
-    phonemes: &[speaking::PhonemeToken],
-) -> Option<speaking::PhonemeId> {
-    for phoneme_token in phonemes {
-        for realized_phone in &phoneme_token.realized_as {
-            if realized_phone.phone == phone.phone
-                && realized_phone.features == phone.features
-                && realized_phone.span == phone.span
-            {
-                if let speaking::Spec::Known(ref id) = phoneme_token.phoneme {
-                    return Some(id.clone());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn syllables_to_phonemes_ipa(
-    syllables: &[speaking::Syllable],
-    phonemes: &[speaking::PhonemeToken],
-    variety: &speaking::VarietyId,
-) -> String {
-    syllables
-        .iter()
-        .enumerate()
-        .map(|(index, syllable)| {
-            let mut text = String::new();
-            let mut has_stress_mark = false;
-            let stress_char = match syllable.stress {
-                speaking::Spec::Known(speaking::Stress::Primary) => {
-                    has_stress_mark = true;
-                    Some('ˈ')
-                }
-                speaking::Spec::Known(speaking::Stress::Secondary) => {
-                    has_stress_mark = true;
-                    Some('ˌ')
-                }
-                _ => None,
-            };
-            if index > 0 && !has_stress_mark {
-                text.push('.');
-            }
-            if let Some(c) = stress_char {
-                text.push(c);
-            }
-            for phone in &syllable.phones {
-                if let Some(phoneme_id) = find_phoneme_for_phone(phone, phonemes) {
-                    let symbol =
-                        speaking::phoneme_default_phone_display_symbol(&phoneme_id, variety);
-                    text.push_str(&symbol);
-                } else {
-                    text.push_str(phone_ipa(phone));
-                }
-            }
-            text
-        })
-        .collect()
+    let plan = speaking::UtterancePlan::from(&phonemicized);
+    let serialized = speaking::display_plan_connected_speech(&plan);
+    (!serialized.is_empty()).then_some(serialized)
 }
 
 fn synthetic_buffers(
