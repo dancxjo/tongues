@@ -26,6 +26,7 @@ use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub mod burn_acoustic;
+pub mod burn_align_tts;
 pub mod burn_delightful_tts;
 pub mod burn_fast_pitch;
 pub mod burn_fast_pitch_acoustic;
@@ -54,6 +55,7 @@ pub mod delightful_tts_config;
 pub mod device;
 pub mod fairseq_catalog;
 pub mod fairseq_vits;
+pub mod feature_conversion;
 pub mod freevc;
 pub mod freevc_config;
 pub mod glow_tts_config;
@@ -74,6 +76,9 @@ mod vits_projector;
 pub mod wavlm;
 pub mod xtts;
 
+pub use burn_align_tts::{
+    AlignTts, AlignTtsConfig, AlignTtsControls, AlignTtsError, AlignTtsOutput, BurnAlignTtsAcoustic,
+};
 pub use burn_delightful_tts::{
     DelightfulTts, DelightfulTtsControls, DelightfulTtsError, DelightfulTtsOutput,
 };
@@ -158,6 +163,9 @@ pub use fairseq_vits::{
     FairseqVitsTokenizer, FAIRSEQ_MMS_CHECKPOINT, FAIRSEQ_MMS_CONFIG, FAIRSEQ_MMS_LICENSE,
     FAIRSEQ_MMS_LICENSE_EVIDENCE, FAIRSEQ_MMS_SOURCE, FAIRSEQ_MMS_VOCAB,
     UROMAN_ENVIRONMENT_VARIABLE,
+};
+pub use feature_conversion::{
+    BurnStandardizingVocoder, FeatureStandardizationConfig, GLOW_MULTIBAND_STANDARDIZER_ID,
 };
 pub use freevc::{
     FreeVc, FreeVcSpeakerEncoder, FREEVC_BACKEND_ID, FREEVC_MODEL_ID,

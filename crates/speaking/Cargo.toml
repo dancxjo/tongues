@@ -14,6 +14,8 @@ serde = { version = "1", features = ["derive"] }
 dirs = "6"
 isolang = { workspace = true }
 langtag = { workspace = true }
+unicode-normalization = { workspace = true }
+unicode-segmentation = { workspace = true }
 whisper-cpp-plus = { workspace = true, optional = true }
 
 [features]

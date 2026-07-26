@@ -53,6 +53,8 @@ pub fn english_morphology(variety_id: &str) -> Morphology {
         ("-phobia", vec!["F", "OW1", "B", "IY0", "AH0"]),
         ("-rrhea", vec!["R", "IY1", "AH0"]),
         ("-ing", vec!["IH0", "NG"]),
+        ("-ed", vec!["D"]),
+        ("-s", vec!["Z"]),
     ];
 
     for &(form, ref cmu_symbols) in suffixes {
@@ -65,6 +67,30 @@ pub fn english_morphology(variety_id: &str) -> Morphology {
             gloss: None,
             features: FeatureBundle::default(),
             pronunciation,
+        };
+        morphemes.insert(id, morpheme);
+    }
+
+    // Orthographic clitics. Contextual allophony is applied later by the
+    // variety's phonology, but these remain linguistic morphemes here.
+    let clitics = &[
+        ("-'s", vec!["Z"]),
+        ("-'re", vec!["ER0"]),
+        ("-'ve", vec!["V"]),
+        ("-'ll", vec!["L"]),
+        ("-'d", vec!["D"]),
+        ("-'m", vec!["M"]),
+        ("-n't", vec!["N", "T"]),
+    ];
+    for &(form, ref cmu_symbols) in clitics {
+        let id = MorphemeId(form.to_string());
+        let morpheme = Morpheme {
+            id: id.clone(),
+            form: form.to_string(),
+            kind: MorphemeKind::Clitic,
+            gloss: None,
+            features: FeatureBundle::default(),
+            pronunciation: make_pronunciation(variety_id, cmu_symbols),
         };
         morphemes.insert(id, morpheme);
     }
@@ -173,11 +199,37 @@ pub fn decompose_word(variety: &LinguisticVariety, word: &str) -> Option<Vec<Mor
     let word_lower = word.to_lowercase();
     let morph_db = variety.morphology.as_ref()?;
 
-    // 1. Try Suffixes
-    for (morpheme_id, morpheme) in &morph_db.morphemes {
-        if morpheme.kind == MorphemeKind::Suffix {
+    // 1. Try suffixes and clitics in a stable, longest-first order. HashMap
+    // iteration order must not determine linguistic segmentation.
+    let mut right_affixes = morph_db
+        .morphemes
+        .iter()
+        .filter(|(_, morpheme)| {
+            matches!(morpheme.kind, MorphemeKind::Suffix | MorphemeKind::Clitic)
+        })
+        .collect::<Vec<_>>();
+    right_affixes.sort_by(|(left_id, left), (right_id, right)| {
+        right
+            .form
+            .chars()
+            .count()
+            .cmp(&left.form.chars().count())
+            .then_with(|| left_id.0.cmp(&right_id.0))
+    });
+    for (morpheme_id, morpheme) in right_affixes {
+        {
             let suffix_trimmed = morpheme.form.trim_start_matches('-');
-            if word_lower.ends_with(suffix_trimmed) && word_lower.len() > suffix_trimmed.len() {
+            let minimum_stem_chars = if morpheme.kind == MorphemeKind::Suffix
+                && matches!(suffix_trimmed, "s" | "ed")
+            {
+                2
+            } else {
+                1
+            };
+            if word_lower.ends_with(suffix_trimmed)
+                && word_lower.chars().count()
+                    >= suffix_trimmed.chars().count() + minimum_stem_chars
+            {
                 let stem = &word_lower[..word_lower.len() - suffix_trimmed.len()];
 
                 // Try different spelling mutation patterns for the stem:
@@ -216,9 +268,22 @@ pub fn decompose_word(variety: &LinguisticVariety, word: &str) -> Option<Vec<Mor
         }
     }
 
-    // 2. Try Prefixes
-    for (morpheme_id, morpheme) in &morph_db.morphemes {
-        if morpheme.kind == MorphemeKind::Prefix {
+    // 2. Try prefixes in the same deterministic longest-first order.
+    let mut prefixes = morph_db
+        .morphemes
+        .iter()
+        .filter(|(_, morpheme)| morpheme.kind == MorphemeKind::Prefix)
+        .collect::<Vec<_>>();
+    prefixes.sort_by(|(left_id, left), (right_id, right)| {
+        right
+            .form
+            .chars()
+            .count()
+            .cmp(&left.form.chars().count())
+            .then_with(|| left_id.0.cmp(&right_id.0))
+    });
+    for (morpheme_id, morpheme) in prefixes {
+        {
             let prefix_trimmed = morpheme.form.trim_end_matches('-');
             if word_lower.starts_with(prefix_trimmed) && word_lower.len() > prefix_trimmed.len() {
                 let stem = &word_lower[prefix_trimmed.len()..];

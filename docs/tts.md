@@ -604,6 +604,8 @@ count, audio duration, streaming mode, and backend timing stages.
 - published-config import and validation;
 - native SpeedySpeech text/acoustic inference;
 - native FastPitch duration, pitch, and mel inference with explicit controls;
+- native Align-TTS encoder, duration prediction/override, alignment expansion,
+  and mel decoding through the model-neutral acoustic contract;
 - native Glow-TTS text encoding, deterministic or stochastic duration
   prediction, monotonic expansion, seeded Gaussian latent sampling, and
   reverse flow;
@@ -646,6 +648,16 @@ scale, mel filter bank, and normalization identity must all match. The
 published MultiBand-MelGAN bundle requires its exact standardized feature
 statistics, so the current LJSpeech acoustic bundles are rejected rather than
 silently composed with it.
+
+Align-TTS imports use the same safe, deterministic Coqui package path as the
+other acoustic families. Runtime inference loads the encoder, duration
+predictor, decoder, and the training-only MDN/modulation tensors without
+executing Python or pickle. The acoustic adapter accepts the shared
+`length_scale` and explicit-duration controls, emits the shared frame-major mel
+contract, and therefore composes with any registered native vocoder whose
+spectrogram contract matches exactly. Inference ships independently of a
+trainer; the retained MDN and alignment outputs are the hooks for a future
+model-neutral staged trainer.
 
 Glow-TTS deliberately emits its neutral checkpoint mel contract. The
 historical Coqui LJSpeech release names MultiBand-MelGAN as its default

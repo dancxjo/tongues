@@ -465,7 +465,7 @@ pub struct Conv1dBn<B: Backend> {
 }
 
 impl<B: Backend> Conv1dBn<B> {
-    fn init(
+    pub(crate) fn init(
         channels_in: usize,
         channels_out: usize,
         kernel_size: usize,
@@ -492,7 +492,7 @@ impl<B: Backend> Conv1dBn<B> {
         }
     }
 
-    fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub(crate) fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         let output = relu(self.conv1d.forward(input).pad(
             [(self.pad_left, self.pad_right)],
             burn::tensor::ops::PadMode::Constant(0.0),

@@ -428,7 +428,7 @@ fn optional_variance_tensor<B: Backend>(
         .transpose()
 }
 
-fn tensor_to_artifact<B: Backend>(
+pub(crate) fn tensor_to_artifact<B: Backend>(
     mel: Tensor<B, 3>,
     contract: &SpectrogramContract,
 ) -> Result<AcousticArtifact> {

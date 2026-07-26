@@ -24,12 +24,12 @@ use zip::ZipArchive;
 use crate::speaker_encoder::CoquiResNetSpeakerEncoder;
 use crate::vits_config::ImportedVitsConfig;
 use crate::{
-    AudioFeatureConfig, BurnVitsSpeech, DVectorCatalog, DelightfulTtsConfig, FastPitchConfig,
-    FastSpeechConfig, FastSpeechVariant, GlowTts, GlowTtsInferenceConfig, HifiganBundleConfig,
-    LanguageCatalog, MelganBundleConfig, MelganVariant, PhonemeTokenizerConfig,
-    PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig, StochasticGlowTts,
-    TacotronArchitecture, TacotronGraphemeProjector, TacotronInferenceConfig, VitsInferenceConfig,
-    XttsV2Config, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+    AlignTtsConfig, AudioFeatureConfig, BurnVitsSpeech, DVectorCatalog, DelightfulTtsConfig,
+    FastPitchConfig, FastSpeechConfig, FastSpeechVariant, GlowTts, GlowTtsInferenceConfig,
+    HifiganBundleConfig, LanguageCatalog, MelganBundleConfig, MelganVariant,
+    PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig,
+    StochasticGlowTts, TacotronArchitecture, TacotronGraphemeProjector, TacotronInferenceConfig,
+    VitsInferenceConfig, XttsV2Config, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;
@@ -46,6 +46,7 @@ const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPackageArchitecture {
+    AlignTts,
     FastPitch,
     FastSpeech,
     FastSpeech2,
@@ -65,6 +66,7 @@ pub enum ModelPackageArchitecture {
 impl ModelPackageArchitecture {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::AlignTts => "align_tts",
             Self::FastPitch => "fast_pitch",
             Self::FastSpeech => "fast_speech",
             Self::FastSpeech2 => "fast_speech_2",
@@ -300,6 +302,12 @@ pub struct CoquiImportInspection {
 
 #[derive(Debug)]
 enum ParsedConfig {
+    AlignTts {
+        model: AlignTtsConfig,
+        audio: AudioFeatureConfig,
+        parameters: Value,
+        symbols: Vec<String>,
+    },
     FastPitch {
         model: FastPitchConfig,
         audio: AudioFeatureConfig,
@@ -361,6 +369,7 @@ enum ParsedConfig {
 impl ParsedConfig {
     fn architecture(&self) -> ModelPackageArchitecture {
         match self {
+            Self::AlignTts { .. } => ModelPackageArchitecture::AlignTts,
             Self::FastPitch { .. } => ModelPackageArchitecture::FastPitch,
             Self::Speedy { .. } => ModelPackageArchitecture::SpeedySpeech,
             Self::Tacotron { inference, .. } => match inference.architecture {
@@ -386,7 +395,8 @@ impl ParsedConfig {
 
     fn parameters(&self) -> &Value {
         match self {
-            Self::FastPitch { parameters, .. }
+            Self::AlignTts { parameters, .. }
+            | Self::FastPitch { parameters, .. }
             | Self::Speedy { parameters, .. }
             | Self::Tacotron { parameters, .. }
             | Self::FastSpeech { parameters, .. }
@@ -402,7 +412,8 @@ impl ParsedConfig {
 
     fn audio(&self) -> Option<PackageAudio> {
         let audio = match self {
-            Self::FastPitch { audio, .. }
+            Self::AlignTts { audio, .. }
+            | Self::FastPitch { audio, .. }
             | Self::Speedy { audio, .. }
             | Self::Tacotron { audio, .. }
             | Self::FastSpeech { audio, .. } => audio,
@@ -449,7 +460,8 @@ impl ParsedConfig {
 
     fn symbols(&self) -> Vec<String> {
         match self {
-            Self::FastPitch { symbols, .. }
+            Self::AlignTts { symbols, .. }
+            | Self::FastPitch { symbols, .. }
             | Self::Speedy { symbols, .. }
             | Self::Tacotron { symbols, .. }
             | Self::FastSpeech { symbols, .. }
@@ -959,6 +971,44 @@ fn parse_config(
         .context("Coqui config root must be an object")?;
     let architecture = detect_architecture(object)?;
     let parsed = match architecture {
+        ModelPackageArchitecture::AlignTts => {
+            reject_model_args(
+                object,
+                &[
+                    "d_vector_dim",
+                    "decoder_params",
+                    "decoder_type",
+                    "encoder_params",
+                    "encoder_type",
+                    "hidden_channels",
+                    "hidden_channels_dp",
+                    "length_scale",
+                    "num_chars",
+                    "num_speakers",
+                    "out_channels",
+                    "use_d_vector_file",
+                    "use_speaker_embedding",
+                ],
+            )?;
+            let model = AlignTtsConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
+            let audio = AudioFeatureConfig::from_json5_str(&source)?;
+            let tokenizer: PhonemeTokenizerConfig =
+                json5::from_str(&source).context("invalid Align-TTS tokenizer config")?;
+            let projector = PhonemeVocabularyProjector::from_config(tokenizer.clone())?;
+            ensure!(
+                projector.vocabulary().len() == model.num_chars,
+                "Align-TTS symbol count {} does not match num_chars {}",
+                projector.vocabulary().len(),
+                model.num_chars
+            );
+            let parameters = json!({ "model": model, "audio": audio, "tokenizer": tokenizer });
+            ParsedConfig::AlignTts {
+                model,
+                audio,
+                parameters,
+                symbols: projector.vocabulary().iter().map(char::to_string).collect(),
+            }
+        }
         ModelPackageArchitecture::FastPitch => {
             reject_model_args(
                 object,
@@ -1411,6 +1461,7 @@ fn detect_architecture(object: &Map<String, Value>) -> Result<ModelPackageArchit
         };
     }
     match object.get("model").and_then(Value::as_str) {
+        Some("align_tts") | Some("align-tts") => Ok(ModelPackageArchitecture::AlignTts),
         Some("fast_pitch") => Ok(ModelPackageArchitecture::FastPitch),
         Some("fastspeech") | Some("fast_speech") => Ok(ModelPackageArchitecture::FastSpeech),
         Some("fastspeech2") | Some("fast_speech2") => Ok(ModelPackageArchitecture::FastSpeech2),
@@ -1470,7 +1521,8 @@ fn ignored_training_fields(
     architecture: ModelPackageArchitecture,
 ) -> Vec<String> {
     let retained = match architecture {
-        ModelPackageArchitecture::FastPitch
+        ModelPackageArchitecture::AlignTts
+        | ModelPackageArchitecture::FastPitch
         | ModelPackageArchitecture::FastSpeech
         | ModelPackageArchitecture::FastSpeech2
         | ModelPackageArchitecture::SpeedySpeech
@@ -1588,6 +1640,7 @@ fn ignored_training_fields(
         .map(|key| key.to_string())
         .collect::<Vec<_>>();
     match architecture {
+        ModelPackageArchitecture::AlignTts => {}
         ModelPackageArchitecture::FastPitch => ignored.extend(
             [
                 "model_args.detach_duration_predictor",
@@ -1929,6 +1982,14 @@ fn validate_runtime_shapes(
     type Cpu = NdArray<f32>;
     let device = NdArrayDevice::Cpu;
     match parsed {
+        ParsedConfig::AlignTts { model, .. } => {
+            model
+                .clone()
+                .init::<Cpu>(&device)
+                .map_err(anyhow::Error::new)?
+                .load_checkpoint(checkpoint_path)
+                .map_err(anyhow::Error::new)?;
+        }
         ParsedConfig::FastPitch { model, .. } => {
             model
                 .clone()
@@ -2723,6 +2784,10 @@ mod tests {
             let root = json!({"model": model});
             detect_architecture(root.as_object().expect("object"))
         };
+        assert_eq!(
+            detect("align_tts").expect("Align-TTS"),
+            ModelPackageArchitecture::AlignTts
+        );
         assert_eq!(
             detect("fastspeech").expect("FastSpeech"),
             ModelPackageArchitecture::FastSpeech

@@ -927,6 +927,19 @@ impl<B: Backend> GlowDecoder<B> {
         mask: Tensor<B, 3>,
         conditioning: Option<Tensor<B, 3>>,
     ) -> Result<Tensor<B, 3>, GlowTtsError> {
+        self.reverse_with_trace(input, mask, conditioning, false)
+            .map(|(output, _)| output)
+    }
+
+    /// Runs the reverse flow and optionally retains the output of every
+    /// coupling/invertible-convolution/ActNorm block for conformance evidence.
+    pub fn reverse_with_trace(
+        &self,
+        input: Tensor<B, 3>,
+        mask: Tensor<B, 3>,
+        conditioning: Option<Tensor<B, 3>>,
+        capture_trace: bool,
+    ) -> Result<(Tensor<B, 3>, Vec<Tensor<B, 3>>), GlowTtsError> {
         let [batch, channels, frames] = input.dims();
         if channels * self.num_squeeze != self.channels {
             return Err(input_error(format!(
@@ -943,14 +956,22 @@ impl<B: Backend> GlowDecoder<B> {
         let conditioning =
             normalize_conditioning(conditioning, batch, self.conditioning_channels, frames)?;
         let (mut output, squeezed_mask) = squeeze(input, mask, self.num_squeeze)?;
+        let mut trace = if capture_trace {
+            Vec::with_capacity(self.blocks.len())
+        } else {
+            Vec::new()
+        };
         for block in self.blocks.iter().rev() {
             output = block
                 .coupling
                 .reverse(output, squeezed_mask.clone(), conditioning.clone());
             output = block.inv_conv.reverse(output, squeezed_mask.clone());
             output = block.act_norm.reverse(output, squeezed_mask.clone());
+            if capture_trace {
+                trace.push(output.clone());
+            }
         }
-        Ok(unsqueeze(output, squeezed_mask, self.num_squeeze))
+        Ok((unsqueeze(output, squeezed_mask, self.num_squeeze), trace))
     }
 }
 

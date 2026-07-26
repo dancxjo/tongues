@@ -27,6 +27,14 @@ boundary, and cumulative-waveform overlap semantics from Coqui TTS revision
 `TTS/tts/layers/xtts/tokenizer.py`. That file is an MPL-2.0 covered
 modification rather than MIT relicensing.
 
+`crates/tongues-tts/src/burn_align_tts.rs` adapts the Align-TTS inference graph,
+duration predictor, retained MDN checkpoint layout, and configuration contract
+from Coqui TTS revision `dbf1a08a0d4e47fdad6172e433eeb34bc6b13b4e`,
+principally `TTS/tts/models/align_tts.py`,
+`TTS/tts/configs/align_tts_config.py`, and
+`TTS/tts/layers/align_tts/mdn.py`. That file is an MPL-2.0 covered
+modification rather than MIT relicensing.
+
 `crates/tongues-tts/src/burn_tacotron.rs` and
 `crates/tongues-tts/src/tacotron_config.rs` adapt the Tacotron 2 inference graph
 and configuration contract from Coqui TTS revision

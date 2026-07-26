@@ -14,6 +14,7 @@ pub enum MorphemeKind {
     Root,
     Prefix,
     Suffix,
+    Clitic,
     Infix,
 }
 

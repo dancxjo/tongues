@@ -18,6 +18,8 @@ import soundfile as sf
 import torch
 
 from TTS.config import load_config
+from TTS.tts.layers.glow_tts.decoder import squeeze as glow_squeeze
+from TTS.tts.layers.glow_tts.decoder import unsqueeze as glow_unsqueeze
 from TTS.tts.models import setup_model
 from TTS.tts.utils.helpers import generate_path, sequence_mask
 from TTS.vocoder.models import setup_generator
@@ -39,6 +41,8 @@ EXPECTED_SHA256 = {
     "ljspeech/speedy-speech/model_file.pth": "9088f3352731e93e3ef2436f2fd4f8b116e3a7cfbd69f96140cd2da127f84ae1",
     "ljspeech/fast-pitch/config.json": "857510cdf1d33aa3b622d5f1178794cbc3842891917ebcac2d6660c3e91410d8",
     "ljspeech/fast-pitch/model_file.pth": "1779ef4ef9f9f3c016efee5925c0742393eb7c7183f6daae1928b88cbef294b8",
+    "ljspeech/glow-tts/config.json": "ce19df55e8b65bd384c40b11f9f4944040a9f7a6acfbb6a8135ec2f7682bfa5f",
+    "ljspeech/glow-tts/model_file.pth.tar": "132f8c4d4dcb0307f04f6243139da5eeb170e29b69bc22167680241d8e6f97c8",
     "ljspeech/hifigan-v2/config.json": "12450ab044715d37dad3f472627862aed507d8bacc9d347c90a8388841ff8615",
     "ljspeech/hifigan-v2/model_file.pth": "4047e93886faa1aba11948efa71f59dcb0ec9117e286660e59b91892ef98d129",
     "ljspeech/multiband-melgan/config.json": "d4c0301bf658fc1dafdd2559dd10b13bd5a083a47e041d7917cc4c287332cd24",
@@ -81,6 +85,11 @@ def parse_args() -> argparse.Namespace:
         "--fastpitch-only",
         action="store_true",
         help="Generate only FastPitch evidence (useful while developing the import)",
+    )
+    parser.add_argument(
+        "--glow-only",
+        action="store_true",
+        help="Generate only Glow-TTS stage and feature-conversion evidence",
     )
     parser.add_argument(
         "--melgan-only",
@@ -219,6 +228,198 @@ def fast_pitch_reference(artifacts: dict[str, Path]) -> dict:
 
 def probes(tensor: torch.Tensor, positions: list[tuple[int, int]]) -> list[list[float]]:
     return [[first, second, float(tensor[first, second])] for first, second in positions]
+
+
+def tensor_fixture(tensor: torch.Tensor, indexes: list[int]) -> dict:
+    flat = tensor.detach().cpu().contiguous().view(-1)
+    return {
+        "shape": list(tensor.shape),
+        "probes": [[index, float(flat[index])] for index in indexes],
+    }
+
+
+def glow_tts_reference(artifacts: dict[str, Path]) -> dict:
+    with contextlib.redirect_stdout(sys.stderr):
+        config = load_config(str(artifacts["ljspeech/glow-tts/config.json"]))
+        model = setup_model(config)
+        model.load_checkpoint(
+            config,
+            str(artifacts["ljspeech/glow-tts/model_file.pth.tar"]),
+            eval=True,
+        )
+
+    token_ids = model.tokenizer.text_to_ids(TEXT)
+    tokens = torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
+    lengths = torch.tensor([len(token_ids)], dtype=torch.long)
+    prior_mean, prior_log_scale, log_durations, token_mask = model.encoder(
+        tokens, lengths, g=None
+    )
+    durations = torch.clamp_min(
+        torch.ceil(
+            (torch.exp(log_durations) - 1)
+            * token_mask
+            * model.length_scale
+        ),
+        1,
+    )
+    frame_lengths = torch.clamp_min(torch.sum(durations, [1, 2]), 1).long()
+    frame_mask = torch.unsqueeze(
+        sequence_mask(frame_lengths, None), 1
+    ).to(token_mask.dtype)
+    alignment_mask = torch.unsqueeze(token_mask, -1) * torch.unsqueeze(
+        frame_mask, 2
+    )
+    alignment = generate_path(
+        durations.squeeze(1), alignment_mask.squeeze(1)
+    ).unsqueeze(1)
+    expanded_mean, expanded_log_scale, _ = model.compute_outputs(
+        alignment, prior_mean, prior_log_scale, token_mask
+    )
+
+    # Use a runtime-independent sample at the exact upstream latent boundary.
+    # Each runtime separately verifies that its seeded sampler is repeatable.
+    # This pattern keeps flow parity independent of PyTorch/Burn RNG details.
+    latent_values = torch.linspace(
+        -1.0,
+        1.0,
+        expanded_mean.numel(),
+        dtype=expanded_mean.dtype,
+        device=expanded_mean.device,
+    ).reshape_as(expanded_mean)
+    latent = (
+        expanded_mean
+        + torch.exp(expanded_log_scale) * latent_values * 0.33
+    ) * frame_mask
+
+    reverse = latent
+    reverse_mask = frame_mask
+    if model.decoder.num_squeeze > 1:
+        reverse, reverse_mask = glow_squeeze(
+            reverse, reverse_mask, model.decoder.num_squeeze
+        )
+    reverse_blocks = []
+    reversed_flows = list(reversed(model.decoder.flows))
+    for flow_index, flow in enumerate(reversed_flows):
+        reverse, _ = flow(reverse, reverse_mask, g=None, reverse=True)
+        if (flow_index + 1) % 3 == 0:
+            flat_len = reverse.numel()
+            reverse_blocks.append(
+                {
+                    "block_from_output": (flow_index + 1) // 3,
+                    **tensor_fixture(
+                        reverse,
+                        [
+                            0,
+                            flat_len // 7,
+                            flat_len // 3,
+                            flat_len // 2,
+                            flat_len - 1,
+                        ],
+                    ),
+                }
+            )
+    if model.decoder.num_squeeze > 1:
+        reverse, reverse_mask = glow_unsqueeze(
+            reverse, reverse_mask, model.decoder.num_squeeze
+        )
+    mel = reverse.transpose(1, 2)
+
+    stats = np.load(
+        artifacts["ljspeech/multiband-melgan/scale_stats.npy"],
+        allow_pickle=True,
+    ).item()
+    mean = np.asarray(stats["mel_mean"], dtype=np.float32)
+    scale = np.asarray(stats["mel_std"], dtype=np.float32)
+    if mean.shape != (80,) or scale.shape != (80,):
+        raise SystemExit(
+            "published MultiBand-MelGAN statistics must contain 80-bin mean and scale"
+        )
+    standardized = (
+        (mel[0].detach().cpu().numpy() - mean) / scale
+    ).astype(np.float32)
+
+    token_count = len(token_ids)
+    frame_count = mel.shape[1]
+    encoded_len = prior_mean.numel()
+    latent_len = latent.numel()
+    mel_len = mel.numel()
+    standardized_len = standardized.size
+    return {
+        "text": TEXT,
+        "checkpoint_symbols": model.tokenizer.ids_to_text(token_ids),
+        "token_ids": token_ids,
+        "durations": [float(value) for value in durations[0, 0]],
+        "stages": {
+            "encoder_mean": tensor_fixture(
+                prior_mean,
+                [
+                    0,
+                    token_count // 2,
+                    token_count - 1,
+                    encoded_len // 2,
+                    encoded_len - 1,
+                ],
+            ),
+            "encoder_log_scale": tensor_fixture(
+                prior_log_scale,
+                [
+                    0,
+                    token_count // 2,
+                    token_count - 1,
+                    encoded_len // 2,
+                    encoded_len - 1,
+                ],
+            ),
+            "log_durations": tensor_fixture(
+                log_durations,
+                [0, 1, token_count // 2, token_count - 2, token_count - 1],
+            ),
+            "alignment": tensor_fixture(
+                alignment,
+                [
+                    0,
+                    frame_count // 2,
+                    frame_count - 1,
+                    alignment.numel() // 2,
+                    alignment.numel() - 1,
+                ],
+            ),
+            "sampled_latent": tensor_fixture(
+                latent,
+                [
+                    0,
+                    frame_count // 2,
+                    frame_count - 1,
+                    latent_len // 2,
+                    latent_len - 1,
+                ],
+            ),
+            "reverse_flow": reverse_blocks,
+            "mel": tensor_fixture(
+                mel,
+                [0, 79, 80, mel_len // 2, mel_len - 80, mel_len - 1],
+            ),
+            "standardized_mel": tensor_fixture(
+                torch.from_numpy(standardized),
+                [
+                    0,
+                    79,
+                    80,
+                    standardized_len // 2,
+                    standardized_len - 80,
+                    standardized_len - 1,
+                ],
+            ),
+        },
+        "feature_conversion": {
+            "name": "coqui-ljspeech-multiband-melgan-standardize-v1",
+            "source_sha256": EXPECTED_SHA256[
+                "ljspeech/multiband-melgan/scale_stats.npy"
+            ],
+            "mean": mean.tolist(),
+            "scale": scale.tolist(),
+        },
+    }
 
 
 def speedy_speech_reference(artifacts: dict[str, Path]) -> dict:
@@ -779,6 +980,7 @@ def main() -> None:
     if sum(
         [
             args.fastpitch_only,
+            args.glow_only,
             args.melgan_only,
             args.multiband_melgan_only,
             args.yourtts_only,
@@ -827,6 +1029,37 @@ def main() -> None:
                 key: EXPECTED_SHA256[key] for key in sorted(required)
             },
             "fast_pitch": fast_pitch_reference(artifacts),
+        }
+        serialized = json.dumps(
+            evidence, indent=2, sort_keys=True, allow_nan=False
+        ) + "\n"
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(serialized, encoding="utf-8")
+        else:
+            sys.stdout.write(serialized)
+        return
+
+    if args.glow_only:
+        required = {
+            "ljspeech/glow-tts/config.json",
+            "ljspeech/glow-tts/model_file.pth.tar",
+            "ljspeech/multiband-melgan/config.json",
+            "ljspeech/multiband-melgan/model_file.pth",
+            "ljspeech/multiband-melgan/scale_stats.npy",
+        }
+        artifacts = require_artifacts(args.model_root, required)
+        evidence = {
+            "schema": "tongues-glow-tts-conformance-v1",
+            "reference_runtime": {
+                "name": "Coqui TTS",
+                "revision": COQUI_TTS_REVISION,
+                "torch": torch.__version__,
+            },
+            "artifacts_sha256": {
+                key: EXPECTED_SHA256[key] for key in sorted(required)
+            },
+            "glow_tts": glow_tts_reference(artifacts),
         }
         serialized = json.dumps(
             evidence, indent=2, sort_keys=True, allow_nan=False
@@ -906,6 +1139,7 @@ def main() -> None:
         },
         "artifacts_sha256": EXPECTED_SHA256,
         "fast_pitch": fast_pitch_reference(artifacts),
+        "glow_tts": glow_tts_reference(artifacts),
         "melgan": melgan_reference(artifacts),
         "multiband_melgan": multiband_melgan_reference(artifacts),
         "speedy_speech_hifigan": speedy_speech_reference(artifacts),
