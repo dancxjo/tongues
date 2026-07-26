@@ -8,6 +8,7 @@ use burn::tensor::backend::Backend;
 use burn::tensor::{Int, Tensor, TensorData};
 use speaking::SpeakerReferenceSource;
 
+use crate::profiling::finish_backend_stage;
 use crate::{
     AcousticArtifact, AcousticModel, AcousticOutputContract, ConditioningKind, EmbeddingContract,
     GlowTts, GlowTtsInferenceConfig, GlowTtsOutput, InferenceRuntime, LinguisticProjector,
@@ -15,7 +16,6 @@ use crate::{
     SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisRequest, StochasticGlowTts,
     SynthesisDimension, SynthesisProfiler, SynthesisStage,
 };
-use crate::profiling::finish_backend_stage;
 
 pub const COQUI_D_VECTOR_SPACE: &str = "coqui-speaker-encoder-d-vector-v1";
 
@@ -222,7 +222,7 @@ impl<B: Backend> BurnGlowTtsAcoustic<B> {
         finish_backend_stage::<B>(
             &mut profiler,
             &self.device,
-            SynthesisStage::AcousticModel,
+            SynthesisStage::AcousticDecoder,
             started,
             [
                 SynthesisDimension::new("tokens", token_count),

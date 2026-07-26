@@ -1,12 +1,16 @@
 //! Tensor-preserving native Glow-TTS-family acoustic inference plus vocoder.
 
+use std::time::Instant;
+
 use anyhow::{ensure, Context, Result};
 use burn::tensor::backend::Backend;
 
+use crate::profiling::{finish_host_stage, reborrow_profiler};
 use crate::{
     AcousticModel, AcousticOutputContract, AudioChunk, AudioSink, BurnGlowTtsAcoustic,
     BurnTensorVocoder, BurnVocoder, SpeechModelCapabilities, SpeechSynthesisEngine,
-    SpeechSynthesisRequest, WaveformContract,
+    SpeechSynthesisRequest, SynthesisDimension, SynthesisProfiler, SynthesisStage,
+    WaveformContract,
 };
 
 /// Composes Glow-TTS or SC-GlowTTS with any contract-compatible Burn vocoder.
@@ -39,6 +43,63 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnGlowTtsPipeline<B, V> {
     pub fn vocoder(&self) -> &V {
         &self.vocoder
     }
+
+    fn synthesize_internal(
+        &mut self,
+        request: &SpeechSynthesisRequest,
+        sink: &mut dyn AudioSink,
+        profiler: Option<&mut dyn SynthesisProfiler>,
+    ) -> Result<()> {
+        let mut profiler = profiler;
+        self.acoustic
+            .input_contract()
+            .ensure_supports(&request.plan)?;
+        let mel = match reborrow_profiler(&mut profiler) {
+            Some(profiler) => self
+                .acoustic
+                .synthesize_tensor_profiled(request, profiler)?,
+            None => self.acoustic.synthesize_tensor(request)?,
+        };
+        let waveform = self
+            .vocoder
+            .synthesize_tensor(mel, reborrow_profiler(&mut profiler))?;
+        let sample_count = waveform.dims()[2];
+        let started = Instant::now();
+        let samples = waveform
+            .into_data()
+            .to_vec::<f32>()
+            .context("Glow-TTS vocoder output is not f32")?;
+        finish_host_stage(
+            &mut profiler,
+            SynthesisStage::DeviceToHost,
+            started,
+            [SynthesisDimension::new("samples", sample_count)],
+        );
+        ensure!(
+            samples.len() == sample_count,
+            "Glow-TTS vocoder returned {} samples, expected {sample_count}",
+            samples.len()
+        );
+        ensure!(
+            samples.iter().all(|sample| sample.is_finite()),
+            "Glow-TTS vocoder waveform contains non-finite samples"
+        );
+        let started = Instant::now();
+        sink.emit(AudioChunk {
+            chunk_index: 0,
+            is_final: true,
+            pause_after_ms: 0,
+            sample_rate_hz: self.output_contract.sample_rate_hz,
+            pcm_mono_f32: samples,
+        })?;
+        finish_host_stage(
+            &mut profiler,
+            SynthesisStage::AudioSink,
+            started,
+            [SynthesisDimension::new("samples", sample_count)],
+        );
+        Ok(())
+    }
 }
 
 impl<B: Backend, V: BurnTensorVocoder<B>> SpeechSynthesisEngine for BurnGlowTtsPipeline<B, V> {
@@ -55,31 +116,15 @@ impl<B: Backend, V: BurnTensorVocoder<B>> SpeechSynthesisEngine for BurnGlowTtsP
         request: &SpeechSynthesisRequest,
         sink: &mut dyn AudioSink,
     ) -> Result<()> {
-        self.acoustic
-            .input_contract()
-            .ensure_supports(&request.plan)?;
-        let mel = self.acoustic.synthesize_tensor(request)?;
-        let waveform = self.vocoder.synthesize_tensor(mel, None)?;
-        let sample_count = waveform.dims()[2];
-        let samples = waveform
-            .into_data()
-            .to_vec::<f32>()
-            .context("Glow-TTS vocoder output is not f32")?;
-        ensure!(
-            samples.len() == sample_count,
-            "Glow-TTS vocoder returned {} samples, expected {sample_count}",
-            samples.len()
-        );
-        ensure!(
-            samples.iter().all(|sample| sample.is_finite()),
-            "Glow-TTS vocoder waveform contains non-finite samples"
-        );
-        sink.emit(AudioChunk {
-            chunk_index: 0,
-            is_final: true,
-            pause_after_ms: 0,
-            sample_rate_hz: self.output_contract.sample_rate_hz,
-            pcm_mono_f32: samples,
-        })
+        self.synthesize_internal(request, sink, None)
+    }
+
+    fn synthesize_plan_streaming_profiled(
+        &mut self,
+        request: &SpeechSynthesisRequest,
+        sink: &mut dyn AudioSink,
+        profiler: &mut dyn SynthesisProfiler,
+    ) -> Result<()> {
+        self.synthesize_internal(request, sink, Some(profiler))
     }
 }

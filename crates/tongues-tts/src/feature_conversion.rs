@@ -3,14 +3,18 @@
 //! A converter is part of an explicit acoustic/vocoder composition. It never
 //! changes analysis geometry, layout, sample rate, or logarithmic scale.
 
+use std::time::Instant;
+
 use anyhow::{ensure, Context, Result};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Tensor, TensorData};
 use serde::Deserialize;
 
+use crate::profiling::{finish_backend_stage, reborrow_profiler};
 use crate::{
     BurnTensorVocoder, InferenceRuntime, NeuralVocoder, Spectrogram, SpectrogramContract,
-    SpectrogramNormalization, SynthesisProfiler, Waveform, WaveformContract,
+    SpectrogramNormalization, SynthesisDimension, SynthesisProfiler, SynthesisStage, Waveform,
+    WaveformContract,
 };
 
 pub const GLOW_MULTIBAND_STANDARDIZER_ID: &str = "coqui-ljspeech-multiband-melgan-standardize-v1";
@@ -197,8 +201,22 @@ impl<B: Backend, V: BurnTensorVocoder<B>> BurnTensorVocoder<B> for BurnStandardi
         spectrogram: Tensor<B, 3>,
         profiler: Option<&mut dyn SynthesisProfiler>,
     ) -> Result<Tensor<B, 3>> {
+        let mut profiler = profiler;
+        let frames = spectrogram.dims()[1];
+        let started = Instant::now();
+        let converted = self.standardize_tensor(spectrogram)?;
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::FeatureConversion,
+            started,
+            [
+                SynthesisDimension::new("mel_frames", frames),
+                SynthesisDimension::new("mel_bins", self.config.mean.len()),
+            ],
+        )?;
         self.inner
-            .synthesize_tensor(self.standardize_tensor(spectrogram)?, profiler)
+            .synthesize_tensor(converted, reborrow_profiler(&mut profiler))
     }
 }
 

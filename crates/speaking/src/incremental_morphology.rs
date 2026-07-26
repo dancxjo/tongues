@@ -689,10 +689,19 @@ impl IncrementalMorphemeAnalyzer {
     }
 
     fn segment_graphemes(&self) -> Vec<GraphemeInternal> {
-        let raw = self
-            .text
-            .grapheme_indices(true)
-            .collect::<Vec<(usize, &str)>>();
+        // A variety run is also a hard linguistic boundary. Segment each run
+        // independently so a combining mark tagged as a new variety cannot
+        // silently extend a grapheme owned by the preceding variety.
+        let mut raw = Vec::new();
+        for run in &self.runs {
+            let run_byte_start = byte_at_char(&self.text, run.span.start_char);
+            let run_byte_end = byte_at_char(&self.text, run.span.end_char);
+            raw.extend(
+                self.text[run_byte_start..run_byte_end]
+                    .grapheme_indices(true)
+                    .map(|(relative_start, grapheme)| (run_byte_start + relative_start, grapheme)),
+            );
+        }
         raw.iter()
             .enumerate()
             .map(|(index, (byte_start, grapheme))| {
@@ -1334,6 +1343,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["talk", "ative", "ness"]
         );
+        for occurrence in split.1 {
+            assert_eq!(
+                occurrence.surface,
+                slice_chars(analyzer.text(), occurrence.span)
+            );
+            assert_eq!(
+                occurrence.word_span,
+                TextSpan {
+                    start_char: 0,
+                    end_char: "talkativeness".chars().count(),
+                }
+            );
+        }
 
         let replayed = replay_morpheme_journal(analyzer.journal()).expect("journal replay");
         assert!(replayed.withdrawn.iter().any(|item| item.id == superseded));
@@ -1384,6 +1406,33 @@ mod tests {
                 .map(|occurrence| occurrence.surface.as_str())
                 .collect::<Vec<_>>(),
             fixture.expected_surfaces
+        );
+        let json = serde_json::to_string(analyzer.journal()).expect("journal serializes");
+        let reparsed: MorphemeDeltaJournal = serde_json::from_str(&json).expect("journal reparses");
+        assert_eq!(reparsed, *analyzer.journal());
+    }
+
+    #[test]
+    fn incomplete_end_of_stream_is_typed_and_unknown_varieties_fall_back() {
+        let mut incomplete = analyzer();
+        incomplete
+            .push_bytes(&["é".as_bytes()[0]])
+            .expect("partial scalar is buffered");
+        assert!(matches!(
+            incomplete.finish(),
+            Err(IncrementalMorphemeError::IncompleteUtf8 { pending_bytes: 1 })
+        ));
+
+        let mut unknown = IncrementalMorphemeAnalyzer::new(
+            UtteranceId("unknown".into()),
+            VarietyId("qaa-Unknown".into()),
+        );
+        let update = unknown.push_str("xyzzy ").expect("fallback");
+        assert_eq!(update.occurrences.len(), 1);
+        assert_eq!(update.occurrences[0].morpheme, Spec::Unknown);
+        assert_eq!(
+            update.occurrences[0].provenance.method,
+            "language-neutral-whole-word-fallback"
         );
     }
 
@@ -1511,11 +1560,19 @@ mod tests {
         let first = analyzer.push_str("replay").expect("prefix plus root");
         assert!(first.occurrences.len() >= 2);
         let revised = analyzer.push_str("x").expect("unknown extension");
-        assert!(
-            revised
-                .deltas
-                .iter()
-                .any(|delta| matches!(delta, MorphemeAnalysisDelta::Merge { .. }))
-        );
+        let merge = revised
+            .deltas
+            .iter()
+            .find_map(|delta| match delta {
+                MorphemeAnalysisDelta::Merge {
+                    withdrawn,
+                    replacement,
+                } => Some((withdrawn, replacement)),
+                _ => None,
+            })
+            .expect("merge delta");
+        assert!(merge.0.len() >= 2);
+        assert_eq!(merge.1.surface, slice_chars(analyzer.text(), merge.1.span));
+        assert_eq!(merge.1.morpheme, Spec::Unknown);
     }
 }
