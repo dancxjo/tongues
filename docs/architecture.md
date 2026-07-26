@@ -12,7 +12,7 @@ text
   -> TTS model and waveform
 
 audio
-  -> compact acoustic features
+  -> tongues-audio native PCM/DSP and compact acoustic features
   -> interpretation/common-phone models
   -> text, phones, phonemes, boundaries, syntax, and emotion labels
 ```
@@ -65,12 +65,19 @@ speech-runtime components rather than one monolithic model:
   lightweight after-utterance transcript head;
 - `common-phone`: compact acoustic frames to phones, phonemes, and feature axes;
 - `emotions`: pooled-log-mel audio emotion classification;
+- `tongues-audio`: model-neutral WAV/PCM, channel/resample, STFT/ISTFT, and
+  mel/log-mel feature extraction shared by training and inference;
 - `tongues-tts`: native Burn and ONNX-compatible waveform synthesis;
 - `speaking`: shared linguistic varieties, lexicons, phonemicization,
   realization, and speech-runtime types;
 - `styletts2`: StyleTTS2 planning, ONNX inference, and style controls.
 
 Each family can own its data preparation, task tags, training config, artifact metadata, and inference command while sharing common workspace infrastructure.
+
+The shared feature tensor carries its full serializable preprocessing
+configuration. Imported Coqui field names are translated only by the
+`tongues-tts` compatibility adapter. See
+[Native audio and feature extraction](audio.md).
 
 ## Language and Variety Boundary
 

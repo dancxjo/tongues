@@ -14,5 +14,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tar = "0.4"
 tongues-core = { path = "../tongues-core" }
+tongues-audio = { path = "../tongues-audio" }
 tongues-neural = { path = "../tongues-neural" }
 ureq = { workspace = true }

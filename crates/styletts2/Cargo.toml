@@ -12,11 +12,11 @@ styletts2-onnx-onednn = ["styletts2-onnx", "ort/onednn"]
 styletts2-onnx-xnnpack = ["styletts2-onnx", "ort/xnnpack"]
 
 [dependencies]
-hound = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 speaking = { path = "../speaking" }
 thiserror = "1"
+tongues-audio = { path = "../tongues-audio" }
 tongues-tts = { path = "../tongues-tts", default-features = false }
 
 [dependencies.ort]

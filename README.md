@@ -88,6 +88,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Interpretation](docs/interpretation.md)
 - [Common Phone](docs/common-phone.md)
 - [Emotions](docs/emotions.md)
+- [Native audio and feature extraction](docs/audio.md)
 - [Text to speech](docs/tts.md)
 - [Speech synthesis smoke measurements](docs/speech-smoke.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
@@ -100,6 +101,7 @@ For detailed training, data preparation, and model-family documentation, see:
 
 ```text
 crates/tongues-core              shared vocabulary and special token IDs
+crates/tongues-audio             native PCM, DSP, STFT/ISTFT, and mel features
 crates/tongues-data              lexicon parsing, IPA normalization, splits, collation
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction

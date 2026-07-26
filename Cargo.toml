@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/tongues-core",
+    "crates/tongues-audio",
     "crates/tongues-data",
     "crates/tongues-neural",
     "crates/tongues-g2p2g",
@@ -29,6 +30,7 @@ anyhow = "1"
 thiserror = "1"
 dirs = "6"
 hound = "3"
+rustfft = "6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"

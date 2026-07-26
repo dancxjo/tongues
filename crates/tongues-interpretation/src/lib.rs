@@ -1520,45 +1520,13 @@ fn read_audio_mono_16k(path: &Path) -> Result<Vec<f32>> {
 }
 
 fn read_wav_mono_16k(path: &Path) -> Result<Vec<f32>> {
-    let mut reader =
-        hound::WavReader::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let spec = reader.spec();
+    let audio =
+        tongues_audio::read_wav(path).with_context(|| format!("opening {}", path.display()))?;
     anyhow::ensure!(
-        spec.sample_rate == DEFAULT_SAMPLE_RATE_HZ,
+        audio.sample_rate_hz == DEFAULT_SAMPLE_RATE_HZ,
         "expected 16 kHz WAV"
     );
-    let channels = spec.channels.max(1) as usize;
-    let mut samples = Vec::new();
-    match spec.sample_format {
-        hound::SampleFormat::Float => {
-            let mut acc = 0.0f32;
-            let mut channel = 0usize;
-            for sample in reader.samples::<f32>() {
-                acc += sample?;
-                channel += 1;
-                if channel == channels {
-                    samples.push(acc / channels as f32);
-                    acc = 0.0;
-                    channel = 0;
-                }
-            }
-        }
-        hound::SampleFormat::Int => {
-            let max = ((1_i64 << (spec.bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
-            let mut acc = 0.0f32;
-            let mut channel = 0usize;
-            for sample in reader.samples::<i32>() {
-                acc += sample? as f32 / max;
-                channel += 1;
-                if channel == channels {
-                    samples.push(acc / channels as f32);
-                    acc = 0.0;
-                    channel = 0;
-                }
-            }
-        }
-    }
-    Ok(samples)
+    audio.to_mono().map_err(anyhow::Error::from)
 }
 
 fn read_audio_mono_16k_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
@@ -1932,9 +1900,38 @@ fn frame_spectral_features(
         return Vec::new();
     }
     let n_fft = window.next_power_of_two();
-    let mut rows = Vec::new();
-    for start in (0..=samples.len() - window).step_by(hop) {
-        let mut power = vec![0.0f32; n_fft / 2 + 1];
+    let stft_config = tongues_audio::StftConfig {
+        fft_size: n_fft,
+        window_size: window,
+        hop_size: hop,
+        center: false,
+        pad_mode: tongues_audio::PadMode::Constant,
+        window: tongues_audio::Window::Hann,
+    };
+    let Ok(spectrum) = tongues_audio::stft(samples, &stft_config) else {
+        return Vec::new();
+    };
+    let mel_config = tongues_audio::MelConfig {
+        bins: config.mel_bins,
+        min_frequency_hz: 0.0,
+        max_frequency_hz: Some(config.sample_rate_hz as f32 / 2.0),
+        scale: tongues_audio::MelScale::Slaney,
+        normalization: tongues_audio::MelNormalization::Slaney,
+    };
+    let Ok(mel_weights) = tongues_audio::mel_filter_bank(config.sample_rate_hz, n_fft, &mel_config)
+    else {
+        return Vec::new();
+    };
+    let spectral_bins = spectrum.bins_per_frame();
+    let mut rows = Vec::with_capacity(spectrum.frames);
+    for frame_index in 0..spectrum.frames {
+        let start = frame_index * hop;
+        let complex =
+            &spectrum.bins[frame_index * spectral_bins..(frame_index + 1) * spectral_bins];
+        let power = complex
+            .iter()
+            .map(|bin| bin.re * bin.re + bin.im * bin.im)
+            .collect::<Vec<_>>();
         let frame = &samples[start..start + window];
         let rms_energy = (frame.iter().map(|sample| sample * sample).sum::<f32>()
             / window.max(1) as f32)
@@ -1949,18 +1946,6 @@ fn frame_spectral_features(
             .filter(|pair| (pair[0] >= 0.0) != (pair[1] >= 0.0))
             .count();
         let zcr = crossings as f32 / window.max(1) as f32;
-        for k in 0..=n_fft / 2 {
-            let mut re = 0.0;
-            let mut im = 0.0;
-            for n in 0..window {
-                let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / window as f32).cos();
-                let angle = -2.0 * std::f32::consts::PI * k as f32 * n as f32 / n_fft as f32;
-                let x = samples[start + n] * w;
-                re += x * angle.cos();
-                im += x * angle.sin();
-            }
-            power[k] = re * re + im * im;
-        }
         let power_sum = power.iter().sum::<f32>().max(1e-8);
         let spectral_centroid = power
             .iter()
@@ -1973,8 +1958,20 @@ fn frame_spectral_features(
             / power_sum
             / (config.sample_rate_hz as f32 * 0.5);
         let (f0, voiced_prob) = estimate_pitch(frame, config.sample_rate_hz);
+        let log_mel = mel_weights
+            .chunks_exact(spectral_bins)
+            .map(|weights| {
+                weights
+                    .iter()
+                    .zip(&power)
+                    .map(|(weight, value)| weight * value)
+                    .sum::<f32>()
+                    .max(1e-8)
+                    .ln()
+            })
+            .collect();
         rows.push(FrameSpectralFeatures {
-            log_mel: mel_project(&power, config.mel_bins),
+            log_mel,
             power,
             rms_energy,
             vad: if peak_energy > 0.01 || rms_energy > 0.001 {
@@ -2032,18 +2029,6 @@ pub fn audio_feature_bins(config: &InterpretationConfig) -> usize {
     } else {
         config.mel_bins
     }
-}
-
-fn mel_project(power: &[f32], bins: usize) -> Vec<f32> {
-    if bins == 0 {
-        return Vec::new();
-    }
-    let mut out = vec![0.0; bins];
-    for (i, value) in power.iter().enumerate() {
-        let bin = i * bins / power.len().max(1);
-        out[bin.min(bins - 1)] += *value;
-    }
-    out.into_iter().map(|v| (v.max(1e-8)).ln()).collect()
 }
 
 fn write_mel_file(path: &Path, features: &[Vec<f32>], mel_bins: usize) -> Result<()> {

@@ -86,6 +86,61 @@ versions it cannot safely interpret.
 Package compatibility proves structure and safe loading. Cross-runtime
 numerical and audio conformance remains the separate #4 responsibility.
 
+## Licensed model catalog and offline cache
+
+Tongues has a schema-v1 backend-neutral model catalog for the native
+SpeedySpeech, HiFi-GAN, VITS, StyleTTS2, and ONNX voice backends. Entries record
+architecture, package version, languages and varieties, speakers, sample rate,
+capabilities, source format, provenance, license evidence, artifact sizes, and
+SHA-256 checksums. Source formats are strings rather than runtime enums, so a
+private catalog can describe Coqui, Fairseq, ONNX, or organization-specific
+artifacts without changing synthesis APIs.
+
+```sh
+# Catalog metadata and installation state
+cargo run --bin tongues -- models list
+cargo run --bin tongues -- models search vits
+cargo run --bin tongues -- models inspect vits-vctk
+
+# Verified install, offline reuse, and removal
+cargo run --bin tongues -- models install vits-vctk
+cargo run --bin tongues -- models install vits-vctk --offline
+cargo run --bin tongues -- models remove vits-vctk
+
+# Install an already converted private/local package
+cargo run --bin tongues -- models install \
+  --package /path/to/tongues-package --id private-voice
+```
+
+`models fetch` remains a compatibility alias for registered runtime bundles,
+but cataloged speech models now use the same verified installer. Downloads are
+resumable in `*.part` files, checked for the exact size and SHA-256 before an
+atomic cache rename, then installed atomically. Archive extraction is limited
+to registered normalized members. Installed records checksum every runtime
+file, and the CLI and server refuse corrupt or mismatched artifacts.
+
+Paths and offline behavior are explicit:
+
+| Setting | Meaning |
+|---|---|
+| `TONGUES_MODEL_HOME` | Model installation root; falls back to `MORTAR_SEA_HOME`, then the platform data directory |
+| `TONGUES_MODEL_CACHE` | Verified download cache; defaults to `<model-home>/cache/model-downloads` |
+| `TONGUES_OFFLINE=1` | Prohibit network access and use only verified installed/cached artifacts |
+| `TONGUES_MODEL_CATALOGS` | Platform-separated list of private/local schema-v1 catalog JSON files |
+
+Commands also accept repeatable `--catalog /path/catalog.json`. Private
+catalogs may add ids but cannot replace official ids or install over another
+entry's paths. Installation requires both a license expression and a stable
+license-evidence location; an artifact without that evidence or a pinned hash
+is rejected rather than presented as redistributable.
+
+The server exposes the same metadata and verification state at
+`GET /api/models/catalog`. Resident speech backends pass catalog verification
+before model construction, so file presence alone is never treated as an
+installable or loadable model. Previously installed pinned artifacts continue
+to work offline after their archive members are compared with the verified
+source archive.
+
 ## Usage
 
 Write native component synthesis to a WAV file:

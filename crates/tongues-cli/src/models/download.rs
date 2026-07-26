@@ -219,6 +219,10 @@ fn fetch_bundle(bundle: &ModelBundle, force: bool) -> Result<()> {
     if bundle.kind == ModelKind::Llm {
         write_selected_model(bundle.id)?;
     }
+    if let Some(entry) = licensed_catalog_entry(bundle.id)? {
+        licensed_model_store()?.install(&entry, force)?;
+        return Ok(());
+    }
     for asset in bundle_required_assets(bundle)? {
         fetch_asset(asset, force)?;
     }
@@ -226,6 +230,10 @@ fn fetch_bundle(bundle: &ModelBundle, force: bool) -> Result<()> {
 }
 
 fn ensure_bundle_available(bundle: &ModelBundle) -> Result<()> {
+    if let Some(entry) = licensed_catalog_entry(bundle.id)? {
+        licensed_model_store()?.install(&entry, false)?;
+        return Ok(());
+    }
     let home = resolve_mortar_home()?;
     let assets = bundle_required_assets(bundle)?;
     let missing = assets
@@ -243,6 +251,17 @@ fn ensure_bundle_available(bundle: &ModelBundle) -> Result<()> {
         ensure_asset_available(asset)?;
     }
     Ok(())
+}
+
+fn licensed_catalog_entry(model: &str) -> Result<Option<tongues_tts::ModelCatalogEntry>> {
+    let catalog = tongues_tts::ModelCatalog::embedded()?;
+    Ok(catalog.find(model).cloned())
+}
+
+fn licensed_model_store() -> Result<tongues_tts::ModelStore> {
+    let root = resolve_mortar_home()?;
+    let cache = tongues_tts::default_model_cache(&root)?;
+    Ok(tongues_tts::ModelStore::new(root, cache).with_offline(tongues_tts::environment_offline()))
 }
 
 fn ensure_asset_available(asset: &ModelAsset) -> Result<()> {

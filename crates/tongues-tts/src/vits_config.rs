@@ -447,6 +447,7 @@ pub(crate) fn test_imported_vits_config() -> ImportedVitsConfig {
             spec_gain: 20.0,
             signal_norm: true,
             min_level_db: -100.0,
+            ref_level_db: Some(20.0),
             symmetric_norm: true,
             max_norm: 4.0,
             clip_norm: true,

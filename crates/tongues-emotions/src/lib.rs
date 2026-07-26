@@ -668,54 +668,17 @@ fn pooled_log_mel_features(samples: &[f32], config: &EmotionPrepareConfig) -> Ve
 }
 
 fn read_wav_mono_resampled(path: &Path, target_rate: u32) -> Result<Vec<f32>> {
-    let mut reader =
-        hound::WavReader::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let spec = reader.spec();
-    anyhow::ensure!(spec.channels > 0, "{} has zero channels", path.display());
-    let channels = usize::from(spec.channels);
-    let mut raw = Vec::new();
-    match spec.sample_format {
-        hound::SampleFormat::Float => {
-            for sample in reader.samples::<f32>() {
-                raw.push(sample?);
-            }
-        }
-        hound::SampleFormat::Int => {
-            let denom = ((1i64 << (spec.bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
-            for sample in reader.samples::<i32>() {
-                raw.push(sample? as f32 / denom);
-            }
-        }
+    let audio =
+        tongues_audio::read_wav(path).with_context(|| format!("opening {}", path.display()))?;
+    let mono = audio.to_mono().map_err(anyhow::Error::from)?;
+    Ok(tongues_audio::AudioBuffer {
+        samples: mono,
+        sample_rate_hz: audio.sample_rate_hz,
+        channels: 1,
     }
-    let mono = if channels == 1 {
-        raw
-    } else {
-        raw.chunks_exact(channels)
-            .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-            .collect()
-    };
-    if spec.sample_rate == target_rate {
-        return Ok(mono);
-    }
-    Ok(resample_linear(&mono, spec.sample_rate, target_rate))
-}
-
-fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
-    if samples.is_empty() || source_rate == target_rate {
-        return samples.to_vec();
-    }
-    let out_len = ((samples.len() as f64 * f64::from(target_rate)) / f64::from(source_rate))
-        .round()
-        .max(1.0) as usize;
-    (0..out_len)
-        .map(|index| {
-            let pos = index as f64 * f64::from(source_rate) / f64::from(target_rate);
-            let left = pos.floor() as usize;
-            let right = (left + 1).min(samples.len() - 1);
-            let frac = (pos - left as f64) as f32;
-            samples[left] * (1.0 - frac) + samples[right] * frac
-        })
-        .collect()
+    .resample_linear(target_rate)
+    .map_err(anyhow::Error::from)?
+    .samples)
 }
 
 fn write_jsonl_split(

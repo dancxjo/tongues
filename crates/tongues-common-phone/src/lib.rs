@@ -2442,48 +2442,22 @@ fn normalize_phone_token(token: &str) -> Option<String> {
 }
 
 fn read_wav_mono(path: &Path) -> Result<(Vec<f32>, u32)> {
-    let mut reader =
-        hound::WavReader::open(path).with_context(|| format!("opening WAV {}", path.display()))?;
-    let spec = reader.spec();
-    let channels = spec.channels.max(1) as usize;
-    let mut interleaved = Vec::new();
-    match spec.sample_format {
-        hound::SampleFormat::Float => {
-            for sample in reader.samples::<f32>() {
-                interleaved.push(sample?);
-            }
-        }
-        hound::SampleFormat::Int => {
-            let max = ((1i64 << (spec.bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
-            for sample in reader.samples::<i32>() {
-                interleaved.push(sample? as f32 / max);
-            }
-        }
-    }
-    let mut mono = Vec::with_capacity(interleaved.len() / channels);
-    for frame in interleaved.chunks(channels) {
-        mono.push(frame.iter().sum::<f32>() / frame.len() as f32);
-    }
-    Ok((mono, spec.sample_rate))
+    let audio =
+        tongues_audio::read_wav(path).with_context(|| format!("opening WAV {}", path.display()))?;
+    let sample_rate_hz = audio.sample_rate_hz;
+    let mono = audio.to_mono().map_err(anyhow::Error::from)?;
+    Ok((mono, sample_rate_hz))
 }
 
 fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
-    if source_rate == target_rate || samples.is_empty() {
-        return samples.to_vec();
+    tongues_audio::AudioBuffer {
+        samples: samples.to_vec(),
+        sample_rate_hz: source_rate,
+        channels: 1,
     }
-    let target_len = ((samples.len() as f64) * target_rate as f64 / source_rate as f64)
-        .round()
-        .max(1.0) as usize;
-    let scale = source_rate as f64 / target_rate as f64;
-    (0..target_len)
-        .map(|i| {
-            let src = i as f64 * scale;
-            let left = src.floor() as usize;
-            let right = (left + 1).min(samples.len() - 1);
-            let frac = (src - left as f64) as f32;
-            samples[left] * (1.0 - frac) + samples[right] * frac
-        })
-        .collect()
+    .resample_linear(target_rate)
+    .expect("validated common-phone sample rates")
+    .samples
 }
 
 fn normalize_amplitude(samples: &[f32]) -> Vec<f32> {
@@ -2494,7 +2468,7 @@ fn normalize_amplitude(samples: &[f32]) -> Vec<f32> {
     if peak <= 1e-6 || peak <= 0.95 {
         samples.to_vec()
     } else {
-        samples.iter().map(|value| value / peak * 0.95).collect()
+        tongues_audio::peak_normalize(samples, 0.95).expect("valid common-phone peak target")
     }
 }
 

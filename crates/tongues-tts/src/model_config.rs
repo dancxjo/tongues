@@ -31,6 +31,8 @@ pub struct AudioFeatureConfig {
     pub signal_norm: bool,
     #[serde(default = "default_min_level_db")]
     pub min_level_db: f32,
+    #[serde(default = "default_ref_level_db")]
+    pub ref_level_db: Option<f32>,
     #[serde(default = "default_true")]
     pub symmetric_norm: bool,
     #[serde(default = "default_max_norm")]
@@ -77,8 +79,12 @@ impl AudioFeatureConfig {
                 "mean/variance spectrogram normalization requires loading stats from `{stats_path}`"
             )
         } else {
+            let reference_db = self
+                .ref_level_db
+                .context("range spectrogram normalization requires ref_level_db")?;
             SpectrogramNormalization::Range {
                 min_db: self.min_level_db,
+                reference_db,
                 max_norm: self.max_norm,
                 symmetric: self.symmetric_norm,
                 clipped: self.clip_norm,
@@ -123,6 +129,82 @@ impl AudioFeatureConfig {
         };
         contract.validate()?;
         Ok(contract)
+    }
+
+    /// Translate Coqui's field names into the model-neutral native DSP
+    /// contract. External naming and defaults stop at this adapter boundary.
+    pub fn native_spectrogram_config(&self) -> Result<tongues_audio::SpectrogramConfig> {
+        self.mel_contract()?;
+        let pad_mode = match self.stft_pad_mode.as_str() {
+            "reflect" => tongues_audio::PadMode::Reflect,
+            "constant" => tongues_audio::PadMode::Constant,
+            other => bail!("unsupported native STFT pad mode `{other}`"),
+        };
+        let scale = if !self.do_amp_to_db_mel {
+            tongues_audio::SpectralScale::Linear
+        } else {
+            match self.log_func.as_str() {
+                "np.log" | "log" => tongues_audio::SpectralScale::NaturalLog {
+                    gain: self.spec_gain,
+                    floor: tongues_audio::DEFAULT_SPECTRAL_FLOOR,
+                },
+                "np.log10" | "log10" => tongues_audio::SpectralScale::Log10 {
+                    gain: self.spec_gain,
+                    floor: tongues_audio::DEFAULT_SPECTRAL_FLOOR,
+                },
+                other => bail!("unsupported audio feature log function `{other}`"),
+            }
+        };
+        let normalization = if self.signal_norm {
+            tongues_audio::SpectrogramNormalization::Range {
+                min_db: self.min_level_db,
+                reference_db: self
+                    .ref_level_db
+                    .context("range spectrogram normalization requires ref_level_db")?,
+                max_norm: self.max_norm,
+                symmetric: self.symmetric_norm,
+                clipped: self.clip_norm,
+            }
+        } else {
+            tongues_audio::SpectrogramNormalization::None
+        };
+        let config = tongues_audio::SpectrogramConfig {
+            sample_rate_hz: self.sample_rate,
+            stft: tongues_audio::StftConfig {
+                fft_size: self.fft_size,
+                window_size: self.win_length,
+                hop_size: self.hop_length,
+                center: true,
+                pad_mode,
+                window: tongues_audio::Window::Hann,
+            },
+            output: tongues_audio::SpectrogramOutput::Mel(tongues_audio::MelConfig {
+                bins: self.num_mels,
+                min_frequency_hz: self.mel_fmin,
+                max_frequency_hz: self.mel_fmax,
+                scale: tongues_audio::MelScale::Slaney,
+                normalization: tongues_audio::MelNormalization::Slaney,
+            }),
+            domain: tongues_audio::SpectralDomain::Amplitude,
+            scale,
+            normalization,
+            preemphasis: (self.preemphasis != 0.0).then_some(self.preemphasis),
+        };
+        config
+            .validate()
+            .map_err(anyhow::Error::from)
+            .context("invalid native audio feature contract")?;
+        Ok(config)
+    }
+
+    pub fn extract_native_spectrogram(
+        &self,
+        mono_samples: &[f32],
+    ) -> Result<tongues_audio::Spectrogram> {
+        let config = self.native_spectrogram_config()?;
+        tongues_audio::spectrogram(mono_samples, &config)
+            .map_err(anyhow::Error::from)
+            .context("native audio feature extraction failed")
     }
 }
 
@@ -295,6 +377,10 @@ fn default_min_level_db() -> f32 {
     -100.0
 }
 
+fn default_ref_level_db() -> Option<f32> {
+    Some(20.0)
+}
+
 fn default_max_norm() -> f32 {
     4.0
 }
@@ -351,6 +437,27 @@ mod tests {
         assert_eq!(contract.scale, SpectrogramScale::NaturalLog { gain: 1.0 });
         assert_eq!(contract.normalization, SpectrogramNormalization::None);
         assert_eq!(contract.mel_filter_bank, Some(MelFilterBank::Slaney));
+    }
+
+    #[test]
+    fn coqui_adapter_extracts_native_features_with_exact_metadata() {
+        let config = HifiganBundleConfig::from_json5_str(HIFIGAN_CONFIG).expect("config");
+        let samples = (0..2_048)
+            .map(|index| (std::f32::consts::TAU * index as f32 / 37.0).sin() * 0.25)
+            .collect::<Vec<_>>();
+        let features = config
+            .audio
+            .extract_native_spectrogram(&samples)
+            .expect("native features");
+
+        assert!(features.frames > 0);
+        assert_eq!(features.config.sample_rate_hz, 22_050);
+        assert_eq!(features.config.output_bins(), 80);
+        assert!(features.values.iter().all(|value| value.is_finite()));
+        assert_eq!(
+            features.config,
+            config.audio.native_spectrogram_config().unwrap()
+        );
     }
 
     #[test]

@@ -366,11 +366,12 @@ const moduleGuides = {
 
 const commandPages = [
     {
-        title: 'StyleTTS2 Speak',
-        path: '/styletts2',
+        title: 'Speech Studio',
+        path: '/speech',
+        aliases: ['/styletts2'],
         command: 'tongues speak',
         group: 'Speech',
-        summary: 'Generate speech with StyleTTS2 voice, style, and emotion controls.',
+        summary: 'Generate speech with any registered backend, voice model, speaker embedding, and model-specific controls.',
         implemented: true,
     },
     {
@@ -862,7 +863,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.addEventListener('popstate', renderRoute);
     initJobs();
     await initPronunciationDemo();
-    await initStyleTts2();
+    await initSpeechStudio();
 });
 
 function renderNavigation() {
@@ -916,10 +917,11 @@ function renderRoute() {
     const path = normalizePath(window.location.pathname);
     const jobsRoute = path === '/jobs';
     const page = commandPages.find((candidate) => path === candidate.path)
+        || commandPages.find((candidate) => (candidate.aliases || []).includes(path))
         || commandPages.find((candidate) => path.startsWith(candidate.path + '/'));
     const pronunciationRoute = page?.page === 'pronunciation-demo';
 
-    byId('styletts2-page').classList.toggle('hidden', jobsRoute || !page?.implemented || pronunciationRoute);
+    byId('speech-page').classList.toggle('hidden', jobsRoute || !page?.implemented || pronunciationRoute);
     byId('pronunciation-demo-page').classList.toggle('hidden', !pronunciationRoute);
     byId('dashboard-page').classList.toggle('hidden', jobsRoute || Boolean(page));
     byId('skeleton-page').classList.toggle('hidden', jobsRoute || !page || page.implemented);
@@ -1665,7 +1667,7 @@ async function initPronunciationDemo() {
     });
 }
 
-async function initStyleTts2() {
+async function initSpeechStudio() {
     const emotionSelect = byId('emotion');
     const strengthInput = byId('emotion_strength');
     const strengthVal = byId('strength-val');
@@ -1685,11 +1687,18 @@ async function initStyleTts2() {
     const runtimeState = byId('speech-runtime-state');
     const runtimeDetail = byId('speech-runtime-detail');
     const reloadRuntimeButton = byId('reload-speech-runtime');
+    const backendSelect = byId('backend');
+    const modelSelect = byId('speech_model');
+    const modelDetail = byId('speech-model-detail');
+    const speakerSelect = byId('speaker');
+    const speakerDetail = byId('speaker-detail');
+    const speakerControl = byId('speaker-control');
 
     if (!form) return;
 
     const emotions = new Map();
     const samples = new Map();
+    let speechModels = [];
 
     const renderRuntime = (runtime) => {
         const state = runtime.state || (runtime.busy ? 'busy' : 'idle');
@@ -1748,6 +1757,8 @@ async function initStyleTts2() {
         ['style_alpha', 'alpha-val', 2],
         ['style_beta', 'beta-val', 2],
         ['embedding_scale', 'embedding-scale-val', 2],
+        ['noise_scale', 'noise-scale-val', 2],
+        ['duration_noise_scale', 'duration-noise-scale-val', 2],
     ];
 
     const setStrength = (value) => {
@@ -1788,9 +1799,10 @@ async function initStyleTts2() {
     };
 
     const syncBlendMode = () => {
+        const styleTts2 = backendSelect.value === 'styletts2';
         const raw = blendMode.value === 'raw';
-        document.querySelectorAll('.blend-strength').forEach((node) => node.classList.toggle('hidden', raw));
-        document.querySelectorAll('.blend-raw').forEach((node) => node.classList.toggle('hidden', !raw));
+        document.querySelectorAll('.blend-strength').forEach((node) => node.classList.toggle('hidden', !styleTts2 || raw));
+        document.querySelectorAll('.blend-raw').forEach((node) => node.classList.toggle('hidden', !styleTts2 || !raw));
     };
 
     numericControls.forEach(([inputId, outputId, precision]) => {
@@ -1829,6 +1841,11 @@ async function initStyleTts2() {
     voiceSelect.addEventListener('change', () => updatePreview(voiceSelect, voicePreview));
     styleSelect.addEventListener('change', () => updatePreview(styleSelect, stylePreview));
     blendMode.addEventListener('change', syncBlendMode);
+    byId('quality').addEventListener('change', (event) => {
+        const diffusionSteps = byId('diffusion_steps');
+        diffusionSteps.value = event.target.value === 'fast' ? '2' : '5';
+        diffusionSteps.dispatchEvent(new Event('input'));
+    });
     quietInput.addEventListener('change', () => {
         if (quietInput.checked) verboseInput.checked = false;
     });
@@ -1890,31 +1907,20 @@ async function initStyleTts2() {
         updatePreview(styleSelect, stylePreview);
     };
 
-    const loadSpeakers = async () => {
-        const backend = byId('backend').value || 'styletts2';
-        const speakerSelect = byId('speaker');
-        const speakerDetail = byId('speaker-detail');
-        speakerSelect.innerHTML = '<option value="">No named speaker</option>';
-        speakerSelect.disabled = true;
-        speakerDetail.textContent = 'This backend does not require a named speaker.';
+    const selectedModel = () => speechModels.find((model) => (
+        model.backend === backendSelect.value && model.model === modelSelect.value
+    ));
 
-        const res = await fetch('/api/speech/models');
-        if (!res.ok) throw new Error(await res.text());
-        const models = await res.json();
-        const model = models.find((candidate) => candidate.backend === backend);
-        if (!model) {
-            speakerDetail.textContent = `Backend ${backend} is not registered.`;
-            return;
-        }
-        if (model.error) {
-            speakerDetail.textContent = model.error;
-            return;
-        }
-        const speakerCapability = model.speakers || {};
-        const values = speakerCapability.values || {};
+    const renderSpeakerEmbeddings = (model) => {
+        speakerSelect.innerHTML = '<option value="">No speaker embedding</option>';
+        speakerSelect.disabled = true;
+        speakerControl.classList.add('hidden');
+        speakerDetail.textContent = 'This model does not expose speaker embeddings.';
+
+        const values = model?.speakers?.values || {};
         if (values.support !== 'listed') return;
         const speakers = values.values || [];
-
+        speakerControl.classList.remove('hidden');
         speakers.forEach((speaker) => {
             const option = document.createElement('option');
             option.value = speaker.id;
@@ -1923,11 +1929,64 @@ async function initStyleTts2() {
                 : `${speaker.label} · embedding ${speaker.numeric_id}`;
             speakerSelect.appendChild(option);
         });
-        speakerSelect.disabled = false;
+        speakerSelect.disabled = speakers.length === 0;
         if (speakers.some((speaker) => speaker.id === 'p225')) {
             speakerSelect.value = 'p225';
         }
-        speakerDetail.textContent = `${speakers.length} speakers from ${model.model}`;
+        speakerDetail.textContent = `${speakers.length} learned embeddings from ${model.display_name || model.model}`;
+    };
+
+    const renderModelControls = () => {
+        const backend = backendSelect.value || 'styletts2';
+        const model = selectedModel();
+        document.querySelectorAll('[data-speech-backends]').forEach((node) => {
+            const backends = node.dataset.speechBackends.split(/\s+/);
+            node.classList.toggle('hidden', !backends.includes(backend));
+        });
+        byId('speed-control').classList.toggle('hidden', !model?.speed);
+        byId('seed-control').classList.toggle('hidden', !model?.seed);
+        renderSpeakerEmbeddings(model);
+        syncBlendMode();
+
+        if (!model) {
+            modelDetail.textContent = `No models are registered for ${backend}.`;
+            btn.disabled = true;
+            return;
+        }
+        btn.disabled = !model.installed;
+        const rate = model.output?.sample_rate_hz;
+        const description = [model.model, rate ? `${rate} Hz` : null].filter(Boolean).join(' · ');
+        modelDetail.textContent = model.installed
+            ? `${description} · installed`
+            : `${description} · ${model.error || 'model files are not installed'}`;
+    };
+
+    const renderModels = () => {
+        const backend = backendSelect.value || 'styletts2';
+        const models = speechModels.filter((model) => model.backend === backend);
+        const previous = modelSelect.value;
+        modelSelect.innerHTML = '';
+        models.forEach((model) => {
+            const option = document.createElement('option');
+            option.value = model.model;
+            option.textContent = `${model.display_name || model.model}${model.installed ? '' : ' · not installed'}`;
+            modelSelect.appendChild(option);
+        });
+        const preferred = models.find((model) => model.model === previous)
+            || models.find((model) => model.selected && model.installed)
+            || models.find((model) => model.installed)
+            || models.find((model) => model.selected)
+            || models[0];
+        if (preferred) modelSelect.value = preferred.model;
+        modelSelect.disabled = models.length < 2;
+        renderModelControls();
+    };
+
+    const loadModels = async () => {
+        const res = await fetch('/api/speech/models');
+        if (!res.ok) throw new Error(await res.text());
+        speechModels = await res.json();
+        renderModels();
     };
 
     const loadVarieties = async () => {
@@ -1955,9 +2014,10 @@ async function initStyleTts2() {
         loadSamples().catch((err) => {
             console.error('Failed to load StyleTTS2 samples', err);
         }),
-        loadSpeakers().catch((err) => {
-            console.error('Failed to load speech speakers', err);
-            byId('speaker-detail').textContent = 'Failed to load named speakers';
+        loadModels().catch((err) => {
+            console.error('Failed to load speech models', err);
+            modelDetail.textContent = 'Failed to load speech model inventory';
+            speakerDetail.textContent = 'Failed to load speaker embeddings';
         }),
         loadVarieties().catch((err) => {
             console.error('Failed to load linguistic varieties', err);
@@ -1971,15 +2031,13 @@ async function initStyleTts2() {
         }),
     ]);
 
-    byId('backend').addEventListener('change', () => {
-        loadSpeakers().catch((err) => {
-            console.error('Failed to load speech speakers', err);
-            byId('speaker-detail').textContent = 'Failed to load named speakers';
-        });
+    backendSelect.addEventListener('change', () => {
+        renderModels();
         loadRuntime().catch((err) => {
             console.error('Failed to refresh speech runtime', err);
         });
     });
+    modelSelect.addEventListener('change', renderModelControls);
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -2000,25 +2058,18 @@ async function initStyleTts2() {
         }, 750);
 
         try {
+            const backend = backendSelect.value || 'styletts2';
+            const model = selectedModel();
             const payload = {
                 text,
                 cpu: byId('cpu').checked,
                 quiet: quietInput.checked,
                 verbose: verboseInput.checked,
                 variety: byId('variety').value || null,
-                backend: byId('backend').value || 'styletts2',
-                speaker: byId('speaker').value || null,
-                voice_sample: voiceSelect.value || null,
-                style_sample: styleSelect.value || null,
-                emotion: emotion || null,
-                emotion_vector: selectedEmotion ? selectedEmotion.vector : null,
-                emotion_strength: emotion ? strength : null,
-                quality: byId('quality').value,
-                diffusion_steps: Number(byId('diffusion_steps').value),
-                embedding_scale: Number(byId('embedding_scale').value),
-                style_seed: Number(byId('style_seed').value || 0),
+                backend,
+                model: modelSelect.value || null,
+                speaker: speakerControl.classList.contains('hidden') ? null : (speakerSelect.value || null),
                 speed: Number(byId('speed').value),
-                sample_rate_hz: Number(byId('sample_rate_hz').value),
                 max_tts_symbols: Number(byId('max_tts_symbols').value),
                 no_tts_chunking: byId('no_tts_chunking').checked,
                 debug_pronunciation: byId('debug_pronunciation').checked,
@@ -2026,12 +2077,32 @@ async function initStyleTts2() {
                 fail_on_guessed_pronunciation: byId('fail_on_guessed_pronunciation').checked,
             };
 
-            if (blendMode.value === 'raw') {
-                payload.style_alpha = Number(byId('style_alpha').value);
-                payload.style_beta = Number(byId('style_beta').value);
-            } else {
-                payload.speaker_reference_strength = Number(byId('speaker_reference_strength').value);
-                payload.style_reference_strength = Number(byId('style_reference_strength').value);
+            if (model?.seed) {
+                payload.seed = Number(byId('synthesis_seed').value || 0);
+            }
+            if (backend === 'mock') {
+                payload.sample_rate_hz = Number(byId('sample_rate_hz').value);
+            }
+            if (backend === 'onnx' || backend === 'vits') {
+                payload.noise_scale = Number(byId('noise_scale').value);
+                payload.duration_noise_scale = Number(byId('duration_noise_scale').value);
+            }
+            if (backend === 'styletts2') {
+                payload.voice_sample = voiceSelect.value || null;
+                payload.style_sample = styleSelect.value || null;
+                payload.emotion = emotion || null;
+                payload.emotion_vector = selectedEmotion ? selectedEmotion.vector : null;
+                payload.emotion_strength = emotion ? strength : null;
+                payload.quality = byId('quality').value;
+                payload.diffusion_steps = Number(byId('diffusion_steps').value);
+                payload.embedding_scale = Number(byId('embedding_scale').value);
+                if (blendMode.value === 'raw') {
+                    payload.style_alpha = Number(byId('style_alpha').value);
+                    payload.style_beta = Number(byId('style_beta').value);
+                } else {
+                    payload.speaker_reference_strength = Number(byId('speaker_reference_strength').value);
+                    payload.style_reference_strength = Number(byId('style_reference_strength').value);
+                }
             }
 
             const response = await fetch('/api/speak', {
@@ -2058,7 +2129,7 @@ async function initStyleTts2() {
         } finally {
             window.clearInterval(runtimePoll);
             btn.classList.remove('loading');
-            btn.disabled = false;
+            renderModelControls();
             loadRuntime().catch((err) => {
                 console.error('Failed to refresh speech runtime', err);
             });

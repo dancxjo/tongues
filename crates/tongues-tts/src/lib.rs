@@ -38,6 +38,7 @@ pub mod burn_vocoder;
 mod checkpoint;
 pub mod components;
 pub mod device;
+pub mod model_catalog;
 pub mod model_config;
 pub mod model_package;
 pub mod orchestration;
@@ -80,6 +81,13 @@ pub use components::{
 pub use device::{
     resolve_speech_device, ResolvedSpeechDevice, SpeechDeviceRequest, SpeechDeviceSelection,
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
+};
+pub use model_catalog::{
+    default_model_cache, default_model_home, environment_offline,
+    private_catalog_paths_from_environment, CatalogArchiveMember, CatalogArtifact, CatalogLicense,
+    CatalogProvenance, CatalogSpeakers, InstalledModelFile, InstalledModelRecord, ModelCatalog,
+    ModelCatalogEntry, ModelInstallProgress, ModelStore, VerifiedModel, EMBEDDED_MODEL_CATALOG,
+    INSTALLED_MODEL_SCHEMA_VERSION, MODEL_CATALOG_SCHEMA_VERSION,
 };
 pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
 pub use model_package::{

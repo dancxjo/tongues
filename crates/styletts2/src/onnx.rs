@@ -965,43 +965,40 @@ fn reference_audio_path(uri: &str) -> Result<PathBuf, StyleTts2Error> {
 
 fn ensure_reference_wav_readable(uri: &str) -> Result<(), StyleTts2Error> {
     let path = reference_audio_path(uri)?;
-    let reader = hound::WavReader::open(&path).map_err(|error| {
+    tongues_audio::read_wav(&path).map_err(|error| {
         backend_error(format!(
             "failed to open StyleTTS2 reference WAV {}: {error}",
             path.display()
         ))
     })?;
-    if reader.spec().channels == 0 {
-        return Err(invalid_output(format!(
-            "StyleTTS2 reference WAV {} has zero channels",
-            path.display()
-        )));
-    }
     Ok(())
 }
 
 fn read_reference_wav_mono_24khz(path: &Path) -> Result<Vec<f32>, StyleTts2Error> {
-    let mut reader = hound::WavReader::open(path).map_err(|error| {
+    let audio = tongues_audio::read_wav(path).map_err(|error| {
         backend_error(format!(
             "failed to open StyleTTS2 reference WAV {}: {error}",
             path.display()
         ))
     })?;
-    let spec = reader.spec();
-    if spec.channels == 0 {
-        return Err(invalid_output(format!(
-            "StyleTTS2 reference WAV {} has zero channels",
-            path.display()
-        )));
+    let mono = audio
+        .to_mono()
+        .map_err(|error| invalid_output(format!("invalid reference WAV: {error}")))?;
+    let mono = tongues_audio::trim_silence(
+        &mono,
+        30.0,
+        (audio.sample_rate_hz / 40).max(1) as usize,
+        (audio.sample_rate_hz / 100).max(1) as usize,
+    )
+    .map_err(|error| invalid_output(format!("failed to trim reference WAV: {error}")))?;
+    let mono = tongues_audio::AudioBuffer {
+        samples: mono,
+        sample_rate_hz: audio.sample_rate_hz,
+        channels: 1,
     }
-    let channels = spec.channels as usize;
-    let interleaved = read_wav_samples(&mut reader, spec.bits_per_sample, spec.sample_format)?;
-    let mut mono = Vec::with_capacity(interleaved.len() / channels);
-    for frame in interleaved.chunks(channels) {
-        mono.push(frame.iter().sum::<f32>() / frame.len() as f32);
-    }
-    let mono = trim_silence(mono);
-    let mono = resample_linear(&mono, spec.sample_rate, SAMPLE_RATE_HZ);
+    .resample_linear(SAMPLE_RATE_HZ)
+    .map_err(|error| invalid_output(format!("failed to resample reference WAV: {error}")))?
+    .samples;
     if mono.len() < MIN_REFERENCE_SAMPLES {
         return Err(invalid_output(format!(
             "StyleTTS2 reference WAV {} is too short after trimming; use at least 1 second",
@@ -1009,90 +1006,6 @@ fn read_reference_wav_mono_24khz(path: &Path) -> Result<Vec<f32>, StyleTts2Error
         )));
     }
     Ok(mono.into_iter().take(MAX_REFERENCE_SAMPLES).collect())
-}
-
-fn read_wav_samples<R: std::io::Read>(
-    reader: &mut hound::WavReader<R>,
-    bits_per_sample: u16,
-    sample_format: hound::SampleFormat,
-) -> Result<Vec<f32>, StyleTts2Error> {
-    match sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .map(|sample| {
-                sample
-                    .map_err(|error| {
-                        backend_error(format!("failed to read float WAV sample: {error}"))
-                    })
-                    .and_then(|value| {
-                        value.is_finite().then_some(value).ok_or_else(|| {
-                            invalid_output("reference WAV contains non-finite samples")
-                        })
-                    })
-            })
-            .collect(),
-        hound::SampleFormat::Int if bits_per_sample <= 16 => {
-            let scale = ((1_i32 << (bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
-            reader
-                .samples::<i16>()
-                .map(|sample| {
-                    sample.map(|value| value as f32 / scale).map_err(|error| {
-                        backend_error(format!("failed to read integer WAV sample: {error}"))
-                    })
-                })
-                .collect()
-        }
-        hound::SampleFormat::Int => {
-            let scale = ((1_i64 << (bits_per_sample.saturating_sub(1))) - 1).max(1) as f32;
-            reader
-                .samples::<i32>()
-                .map(|sample| {
-                    sample.map(|value| value as f32 / scale).map_err(|error| {
-                        backend_error(format!("failed to read integer WAV sample: {error}"))
-                    })
-                })
-                .collect()
-        }
-    }
-}
-
-fn trim_silence(samples: Vec<f32>) -> Vec<f32> {
-    let max = samples
-        .iter()
-        .map(|sample| sample.abs())
-        .fold(0.0, f32::max);
-    if max <= f32::EPSILON {
-        return samples;
-    }
-    let threshold = max * 10_f32.powf(-30.0 / 20.0);
-    let start = samples
-        .iter()
-        .position(|sample| sample.abs() >= threshold)
-        .unwrap_or(0);
-    let end = samples
-        .iter()
-        .rposition(|sample| sample.abs() >= threshold)
-        .map(|index| index + 1)
-        .unwrap_or(samples.len());
-    samples[start..end].to_vec()
-}
-
-fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
-    if source_rate == target_rate || samples.is_empty() {
-        return samples.to_vec();
-    }
-    let output_len =
-        ((samples.len() as u128 * target_rate as u128) / source_rate as u128).max(1) as usize;
-    let step = source_rate as f64 / target_rate as f64;
-    let mut output = Vec::with_capacity(output_len);
-    for index in 0..output_len {
-        let source = index as f64 * step;
-        let left = source.floor() as usize;
-        let right = (left + 1).min(samples.len() - 1);
-        let fraction = (source - left as f64) as f32;
-        output.push(samples[left] * (1.0 - fraction) + samples[right] * fraction);
-    }
-    output
 }
 
 fn ensure_file(path: &Path, label: &str) -> Result<(), StyleTts2Error> {

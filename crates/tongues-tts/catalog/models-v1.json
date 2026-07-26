@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "id": "tongues-official",
+  "entries": [
+    {
+      "id": "speedy-speech-ljspeech",
+      "display_name": "SpeedySpeech LJSpeech",
+      "aliases": ["speedy-speech", "speedyspeech", "coqui-speedy-speech"],
+      "architecture": "coqui-speedy-speech",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["acoustic-model", "phonemes", "speed", "seed"],
+      "license": {
+        "expression": "Apache-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--speedy-speech.zip",
+          "sha256": "ae772bc84c6b4d8fe97234f4d2a1282b925bf325659f319f03610edc4eb8023a",
+          "size_bytes": 53437190,
+          "install_path": "models/speech/coqui/en/ljspeech/speedy-speech/tts_models--en--ljspeech--speedy-speech.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--en--ljspeech--speedy-speech/model_file.pth",
+              "install_path": "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth"
+            },
+            {
+              "archive_path": "tts_models--en--ljspeech--speedy-speech/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/speedy-speech/config.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hifigan-v2-ljspeech",
+      "display_name": "HiFi-GAN v2 LJSpeech",
+      "aliases": ["hifigan", "hifigan-v2", "coqui-hifigan"],
+      "architecture": "coqui-hifigan",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 0, "names": [], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["neural-vocoder", "mel-spectrogram-input"],
+      "license": {
+        "expression": "Apache-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--hifigan_v2.zip",
+          "sha256": "4378dc0afb12ae3f50c1614cb143c4084d066b28fde35b58f45fc6b56b1c75f3",
+          "size_bytes": 3802006,
+          "install_path": "models/speech/coqui/en/ljspeech/hifigan-v2/vocoder_models--en--ljspeech--hifigan_v2.zip",
+          "members": [
+            {
+              "archive_path": "vocoder_models--en--ljspeech--hifigan_v2/model_file.pth",
+              "install_path": "models/speech/coqui/en/ljspeech/hifigan-v2/model_file.pth"
+            },
+            {
+              "archive_path": "vocoder_models--en--ljspeech--hifigan_v2/config.json",
+              "install_path": "models/speech/coqui/en/ljspeech/hifigan-v2/config.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vits-vctk",
+      "display_name": "VITS VCTK",
+      "aliases": ["vctk-vits", "coqui-vits-vctk"],
+      "architecture": "coqui-vits",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-GB"],
+      "speakers": {
+        "count": 109,
+        "names": [],
+        "names_file": "models/speech/coqui/en/vctk/vits/speaker_ids.json"
+      },
+      "sample_rate_hz": 22050,
+      "capabilities": ["end-to-end-speech", "phonemes", "speakers", "streaming", "speed", "seed"],
+      "license": {
+        "expression": "Apache-2.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--vctk--vits.zip",
+          "sha256": "ad753e5200614907627495b6177a08d755df1dbbde30eb6e31264caa2a3f3eaa",
+          "size_bytes": 147691678,
+          "install_path": "models/speech/coqui/en/vctk/vits/tts_models--en--vctk--vits.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--en--vctk--vits/model_file.pth",
+              "install_path": "models/speech/coqui/en/vctk/vits/model_file.pth"
+            },
+            {
+              "archive_path": "tts_models--en--vctk--vits/config.json",
+              "install_path": "models/speech/coqui/en/vctk/vits/config.json"
+            },
+            {
+              "archive_path": "tts_models--en--vctk--vits/speaker_ids.json",
+              "install_path": "models/speech/coqui/en/vctk/vits/speaker_ids.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "styletts2-en-us",
+      "display_name": "StyleTTS2 en-US ONNX",
+      "aliases": ["styletts2", "styletts2-en", "style-tts-2"],
+      "architecture": "styletts2-onnx",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 0, "names": [], "names_file": null},
+      "sample_rate_hz": 24000,
+      "capabilities": ["end-to-end-speech", "reference-audio", "styles", "streaming", "seed"],
+      "license": {
+        "expression": "MIT",
+        "evidence": "https://huggingface.co/hexgrad/styletts2/blob/main/README.md"
+      },
+      "provenance": {
+        "format": "onnx",
+        "source": "https://huggingface.co/hexgrad/styletts2"
+      },
+      "artifacts": [
+        {
+          "url": "https://huggingface.co/hexgrad/styletts2/resolve/main/14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc.onnx",
+          "sha256": "14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc",
+          "size_bytes": 101551154,
+          "install_path": "models/styletts2/en-us/14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/hexgrad/styletts2/resolve/main/4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d.onnx",
+          "sha256": "4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d",
+          "size_bytes": 238293095,
+          "install_path": "models/styletts2/en-us/4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/hexgrad/styletts2/resolve/main/91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6.onnx",
+          "sha256": "91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6",
+          "size_bytes": 23104961,
+          "install_path": "models/styletts2/en-us/91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/hexgrad/styletts2/resolve/main/99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457.onnx",
+          "sha256": "99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457",
+          "size_bytes": 306827739,
+          "install_path": "models/styletts2/en-us/99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/yl4579/StyleTTS2-LibriTTS/resolve/main/reference_audio.zip",
+          "sha256": "d25b4950ec39cec5a00f5061491ad0b3606edc6618a54adc59663bfd6e6ab55e",
+          "size_bytes": 2917622,
+          "install_path": "models/styletts2/en-us/reference_audio.zip",
+          "license": {
+            "expression": "CC-BY-4.0",
+            "evidence": "https://huggingface.co/yl4579/StyleTTS2-LibriTTS/blob/main/README.md"
+          },
+          "members": [
+            {
+              "archive_path": "reference_audio/1221-135767-0014.wav",
+              "install_path": "models/styletts2/en-us/reference_audio/1221-135767-0014.wav"
+            },
+            {
+              "archive_path": "reference_audio/amused.wav",
+              "install_path": "models/styletts2/en-us/reference_audio/amused.wav"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "voice-ljspeech-high",
+      "display_name": "LJSpeech High Voice",
+      "aliases": ["ljspeech", "voice", "voice-ljspeech"],
+      "architecture": "piper-onnx",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": ["LJSpeech"], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed"],
+      "license": {
+        "expression": "CC0-1.0",
+        "evidence": "https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/ljspeech/high/MODEL_CARD"
+      },
+      "provenance": {
+        "format": "onnx",
+        "source": "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/ljspeech/high"
+      },
+      "artifacts": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx",
+          "sha256": "5d4f08ba6a2a48c44592eed3ce56bf85e9de3dd4e20df90541ae68a8310c029a",
+          "size_bytes": 114199011,
+          "install_path": "models/voices/en_US-ljspeech-high.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json",
+          "sha256": "7e1f4634af596d83cca997fb7a931ba80b70f8a316a2655ee69c55365e0ace14",
+          "size_bytes": 4970,
+          "install_path": "models/voices/en_US-ljspeech-high.onnx.json",
+          "members": []
+        }
+      ]
+    },
+    {
+      "id": "voice-ryan-medium",
+      "display_name": "Ryan Medium Voice",
+      "aliases": ["ryan", "voice-ryan"],
+      "architecture": "piper-onnx",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": ["Ryan"], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed"],
+      "license": {
+        "expression": "CC-BY-4.0",
+        "evidence": "https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/ryan/medium/MODEL_CARD"
+      },
+      "provenance": {
+        "format": "onnx",
+        "source": "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/ryan/medium"
+      },
+      "artifacts": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx",
+          "sha256": "abf4c274862564ed647ba0d2c47f8ee7c9b717d27bdad9219100eb310db4047a",
+          "size_bytes": 63201294,
+          "install_path": "models/voices/en_US-ryan-medium.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
+          "sha256": "44034c056cb15681b2ad494307c7f3f2e4499d1253c700c711fa0a4607ffe78d",
+          "size_bytes": 4883,
+          "install_path": "models/voices/en_US-ryan-medium.onnx.json",
+          "members": []
+        }
+      ]
+    },
+    {
+      "id": "voice-amy-medium",
+      "display_name": "Amy Medium Voice",
+      "aliases": ["amy", "voice-amy"],
+      "architecture": "piper-onnx",
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": ["Amy"], "names_file": null},
+      "sample_rate_hz": 22050,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed"],
+      "license": {
+        "expression": "CC-BY-4.0",
+        "evidence": "https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/amy/medium/MODEL_CARD"
+      },
+      "provenance": {
+        "format": "onnx",
+        "source": "https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/amy/medium"
+      },
+      "artifacts": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
+          "sha256": "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18",
+          "size_bytes": 63201294,
+          "install_path": "models/voices/en_US-amy-medium.onnx",
+          "members": []
+        },
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+          "sha256": "95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77",
+          "size_bytes": 4882,
+          "install_path": "models/voices/en_US-amy-medium.onnx.json",
+          "members": []
+        }
+      ]
+    }
+  ]
+}

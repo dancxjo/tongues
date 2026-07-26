@@ -325,6 +325,7 @@ pub enum SpectrogramNormalization {
     None,
     Range {
         min_db: f32,
+        reference_db: f32,
         max_norm: f32,
         symmetric: bool,
         clipped: bool,
@@ -460,11 +461,18 @@ fn validate_normalization(normalization: &SpectrogramNormalization, bins: usize)
     match normalization {
         SpectrogramNormalization::None => Ok(()),
         SpectrogramNormalization::Range {
-            min_db, max_norm, ..
+            min_db,
+            reference_db,
+            max_norm,
+            ..
         } => {
             ensure!(
                 min_db.is_finite() && *min_db < 0.0,
                 "spectrogram min_db must be finite and negative"
+            );
+            ensure!(
+                reference_db.is_finite(),
+                "spectrogram reference_db must be finite"
             );
             ensure!(
                 max_norm.is_finite() && *max_norm > 0.0,
@@ -899,6 +907,7 @@ mod tests {
             scale: SpectrogramScale::Log10 { gain: 20.0 },
             normalization: SpectrogramNormalization::Range {
                 min_db: -100.0,
+                reference_db: 20.0,
                 max_norm: 4.0,
                 symmetric: true,
                 clipped: true,

@@ -18,8 +18,16 @@ use crate::models::selection::{
 pub enum ModelsCommand {
     #[command(about = "Choose the active LLM model")]
     Menu,
-    #[command(about = "List known model bundles")]
-    List,
+    #[command(about = "List licensed catalog models")]
+    List(ModelsListCommand),
+    #[command(about = "Search licensed catalog metadata")]
+    Search(ModelsSearchCommand),
+    #[command(about = "Install a verified catalog model or local Tongues package")]
+    Install(ModelsInstallCommand),
+    #[command(about = "Inspect and verify a catalog model or local package")]
+    Inspect(ModelsInspectCommand),
+    #[command(about = "Remove an installed catalog model")]
+    Remove(ModelsRemoveCommand),
     #[command(about = "Print model paths and current selection")]
     Path(ModelsPathCommand),
     #[command(about = "Show selected model and file presence")]
@@ -56,6 +64,69 @@ pub struct ModelsFetchCommand {
 #[derive(Debug, Args)]
 pub struct ModelsPathCommand {
     model: Option<String>,
+}
+
+#[derive(Debug, Args, Default)]
+pub struct ModelsListCommand {
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsSearchCommand {
+    query: String,
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsInstallCommand {
+    /// Catalog model id or alias
+    model: Option<String>,
+    /// Install an already converted local Tongues package directory
+    #[arg(long, conflicts_with = "model", requires = "id")]
+    package: Option<PathBuf>,
+    /// Stable id for --package
+    #[arg(long)]
+    id: Option<String>,
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+    /// Never contact the network; use verified cache/installations only
+    #[arg(long)]
+    offline: bool,
+    /// Replace an existing installation
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsInspectCommand {
+    /// Catalog id/alias or local Tongues package path
+    target: String,
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ModelsRemoveCommand {
+    /// Catalog model id or alias
+    model: String,
+    /// Additional private/local catalog JSON files
+    #[arg(long = "catalog")]
+    catalogs: Vec<PathBuf>,
+    /// Also remove the verified download cache
+    #[arg(long)]
+    purge_cache: bool,
 }
 
 #[derive(Debug, Args)]
@@ -104,7 +175,11 @@ pub struct ModelsInspectPackageCommand {
 pub fn run(command: Option<ModelsCommand>) -> Result<()> {
     match command.unwrap_or(ModelsCommand::Menu) {
         ModelsCommand::Menu => model_menu(),
-        ModelsCommand::List => list_models(),
+        ModelsCommand::List(command) => list_models(command),
+        ModelsCommand::Search(command) => search_models(command),
+        ModelsCommand::Install(command) => install_model(command),
+        ModelsCommand::Inspect(command) => inspect_model(command),
+        ModelsCommand::Remove(command) => remove_model(command),
         ModelsCommand::Path(command) => print_paths(command.model.as_deref()),
         ModelsCommand::Status => print_status(),
         ModelsCommand::Use(command) => select_model(&command.model),
@@ -227,6 +302,165 @@ fn inspect_package(command: ModelsInspectPackageCommand) -> Result<()> {
     Ok(())
 }
 
+fn load_catalog(extra: Vec<PathBuf>) -> Result<tongues_tts::ModelCatalog> {
+    let mut paths = tongues_tts::private_catalog_paths_from_environment();
+    paths.extend(extra);
+    tongues_tts::ModelCatalog::with_private_catalogs(&paths)
+}
+
+fn model_store(offline: bool) -> Result<tongues_tts::ModelStore> {
+    let store = tongues_tts::ModelStore::from_environment()?;
+    let offline = offline || store.offline();
+    Ok(store.with_offline(offline))
+}
+
+fn report_install_progress(event: tongues_tts::ModelInstallProgress) {
+    match event {
+        tongues_tts::ModelInstallProgress::CheckingCache { path } => {
+            eprintln!("install: checking cache {}", path.display());
+        }
+        tongues_tts::ModelInstallProgress::Downloading {
+            url,
+            downloaded,
+            total,
+            part_path,
+        } => {
+            eprintln!(
+                "install: {downloaded}/{total} bytes from {url} -> {}",
+                part_path.display()
+            );
+        }
+        tongues_tts::ModelInstallProgress::Verifying { path } => {
+            eprintln!("install: verifying {}", path.display());
+        }
+        tongues_tts::ModelInstallProgress::Installing { path } => {
+            eprintln!("install: writing {}", path.display());
+        }
+        tongues_tts::ModelInstallProgress::Complete { id, version } => {
+            eprintln!("install: complete {id} package-version={version}");
+        }
+    }
+}
+
+fn install_model(command: ModelsInstallCommand) -> Result<()> {
+    let store = model_store(command.offline)?;
+    if let Some(package) = command.package {
+        let id = command.id.context("--id is required with --package")?;
+        let verified = store.install_local_package(&id, package, command.force)?;
+        println!(
+            "installed {} v{} at {}",
+            verified.id,
+            verified.package_version,
+            verified
+                .package_path
+                .as_deref()
+                .context("local package installation has no package path")?
+                .display()
+        );
+        return Ok(());
+    }
+
+    let model = command
+        .model
+        .context("provide a catalog model id or use --package PATH --id ID")?;
+    let catalog = load_catalog(command.catalogs)?;
+    let entry = catalog
+        .find(&model)
+        .with_context(|| format!("unknown catalog model `{model}`"))?;
+    let verified = store.install_with_progress(entry, command.force, report_install_progress)?;
+    println!(
+        "installed {} v{} ({} verified files)",
+        verified.id,
+        verified.package_version,
+        verified.files.len()
+    );
+    Ok(())
+}
+
+fn inspect_model(command: ModelsInspectCommand) -> Result<()> {
+    let path = PathBuf::from(&command.target);
+    if path.exists() {
+        let package = tongues_tts::open_model_package(path)?;
+        println!("{}", serde_json::to_string_pretty(&package.manifest)?);
+        return Ok(());
+    }
+    let catalog = load_catalog(command.catalogs)?;
+    let store = model_store(true)?;
+    let entry = catalog
+        .find(&command.target)
+        .cloned()
+        .or_else(|| {
+            store
+                .installed_records()
+                .ok()?
+                .into_iter()
+                .find(|record| record.entry.id == command.target)
+                .map(|record| record.entry)
+        })
+        .with_context(|| format!("unknown catalog or installed model `{}`", command.target))?;
+    let (installed, verification_error) = match store.verify(&entry) {
+        Ok(_) => (true, None),
+        Err(error) => (false, Some(format!("{error:#}"))),
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "entry": entry,
+            "installed": installed,
+            "verification_error": verification_error,
+            "model_home": store.root(),
+            "cache": store.cache(),
+            "offline": store.offline(),
+        }))?
+    );
+    Ok(())
+}
+
+fn remove_model(command: ModelsRemoveCommand) -> Result<()> {
+    let catalog = load_catalog(command.catalogs)?;
+    let store = model_store(true)?;
+    let entry = catalog
+        .find(&command.model)
+        .cloned()
+        .or_else(|| {
+            store
+                .installed_records()
+                .ok()?
+                .into_iter()
+                .find(|record| record.entry.id == command.model)
+                .map(|record| record.entry)
+        })
+        .with_context(|| format!("unknown catalog or installed model `{}`", command.model))?;
+    store.remove(&entry, command.purge_cache)?;
+    println!(
+        "removed {} v{}{}",
+        entry.id,
+        entry.package_version,
+        if command.purge_cache {
+            " and cached artifacts"
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
+fn search_models(command: ModelsSearchCommand) -> Result<()> {
+    let catalog = load_catalog(command.catalogs)?;
+    let matches = catalog.search(&command.query);
+    if command.json {
+        println!("{}", serde_json::to_string_pretty(&matches)?);
+    } else {
+        for entry in matches {
+            println!(
+                "{:<28} {:<24} {} [{}]",
+                entry.id, entry.architecture, entry.display_name, entry.license.expression
+            );
+        }
+    }
+    Ok(())
+}
+
 fn model_menu() -> Result<()> {
     let category = Select::new(
         "Model category",
@@ -322,30 +556,39 @@ impl std::fmt::Display for ModelChoice {
     }
 }
 
-fn list_models() -> Result<()> {
-    let selected = selected_bundle()?;
-    let selected_voice = selected_bundle_for_kind(ModelKind::VoiceModel)?;
-    println!("{}", "Models".bold());
-    for bundle in MODEL_BUNDLES {
-        let marker = if (bundle.kind == ModelKind::Llm && bundle.id == selected.id)
-            || (bundle.kind == ModelKind::VoiceModel && bundle.id == selected_voice.id)
-        {
-            "*"
+fn list_models(command: ModelsListCommand) -> Result<()> {
+    let catalog = load_catalog(command.catalogs)?;
+    let store = model_store(true)?;
+    let recorded = store
+        .installed_records()?
+        .into_iter()
+        .map(|record| (record.entry.id, record.entry.package_version))
+        .collect::<std::collections::BTreeSet<_>>();
+    if command.json {
+        println!("{}", serde_json::to_string_pretty(&catalog)?);
+        return Ok(());
+    }
+    println!(
+        "{} (home: {}, cache: {}, offline: {})",
+        "Licensed model catalog".bold(),
+        store.root().display(),
+        store.cache().display(),
+        store.offline()
+    );
+    for entry in &catalog.entries {
+        let state = if recorded.contains(&(entry.id.clone(), entry.package_version)) {
+            "recorded".green().to_string()
         } else {
-            " "
-        };
-        let state = if bundle_present(bundle)? {
-            "present".green().to_string()
-        } else {
-            "missing".red().to_string()
+            "available".cyan().to_string()
         };
         println!(
-            "{} {:<4} {} {:<32} {}",
-            marker,
-            model_kind_label(bundle.kind),
-            bundle.id.bold(),
-            bundle.display_name,
-            state
+            "{:<28} {:<24} v{:<3} {:<10} {} [{}]",
+            entry.id.bold(),
+            entry.architecture,
+            entry.package_version,
+            state,
+            entry.display_name,
+            entry.license.expression
         );
     }
     Ok(())

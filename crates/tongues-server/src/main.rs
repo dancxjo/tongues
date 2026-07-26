@@ -46,10 +46,33 @@ const DEFAULT_STYLETTS2_VOICE_REFERENCE: &str = "1221-135767-0014.wav";
 const DEFAULT_STYLETTS2_STYLE_REFERENCE: &str = "amused.wav";
 const ONNX_VOICE_RELATIVE_DIR: &str = "models/voices";
 const DEFAULT_ONNX_VOICE_MODEL: &str = "voice-ljspeech-high";
+const ONNX_VOICE_MODELS: &[OnnxVoiceModel] = &[
+    OnnxVoiceModel {
+        id: "voice-ljspeech-high",
+        display_name: "LJSpeech High",
+        filename: "en_US-ljspeech-high.onnx",
+    },
+    OnnxVoiceModel {
+        id: "voice-ryan-medium",
+        display_name: "Ryan Medium",
+        filename: "en_US-ryan-medium.onnx",
+    },
+    OnnxVoiceModel {
+        id: "voice-amy-medium",
+        display_name: "Amy Medium",
+        filename: "en_US-amy-medium.onnx",
+    },
+];
 const SPEECH_PHASE_IDLE: u8 = 0;
 const SPEECH_PHASE_LOADING: u8 = 1;
 const SPEECH_PHASE_SYNTHESIZING: u8 = 2;
 const SPEECH_PHASE_RELOADING: u8 = 3;
+
+struct OnnxVoiceModel {
+    id: &'static str,
+    display_name: &'static str,
+    filename: &'static str,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -207,6 +230,7 @@ fn build_app(state: AppState) -> Router {
         .route("/api/pronunciation-demo/infer", post(pronunciation_infer))
         .route("/api/linguistic/varieties", get(get_linguistic_varieties))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
+        .route("/api/models/catalog", get(get_model_catalog))
         .route("/api/speech/models", get(get_speech_models))
         .route("/api/speech/speakers", get(get_speech_speakers))
         .route("/api/speech/runtime", get(get_speech_runtime))
@@ -219,6 +243,8 @@ fn build_app(state: AppState) -> Router {
         .route("/", get(serve_app_index))
         .route("/styletts2", get(serve_app_index))
         .route("/styletts2/", get(serve_app_index))
+        .route("/speech", get(serve_app_index))
+        .route("/speech/", get(serve_app_index))
         .route("/jobs", get(serve_app_index))
         .route("/jobs/", get(serve_app_index))
         .route("/pronunciation-demo", get(serve_app_index))
@@ -369,6 +395,8 @@ struct SpeechSpeakersResponse {
 struct SpeechModelDiscovery {
     #[serde(flatten)]
     capabilities: tongues_tts::BackendCapabilities,
+    display_name: String,
+    selected: bool,
     installed: bool,
     error: Option<String>,
 }
@@ -2089,7 +2117,10 @@ fn resident_engine_key(
         tongues_tts::ResolvedSpeechDevice::Cuda { index } => format!("cuda-{index}"),
     };
     Ok(match backend {
-        "onnx" => format!("onnx-{}-{device_key}", selected_onnx_voice_model()?),
+        "onnx" => format!(
+            "onnx-{}-{device_key}",
+            speech_model_id(&resolve_mortar_home(), backend, payload.model.as_deref(),)?
+        ),
         "styletts2" => "styletts2-en-us".into(),
         "mock" => format!("mock-{}", payload.sample_rate_hz.unwrap_or(24_000)),
         _ => format!("{backend}-{device_key}"),
@@ -2102,6 +2133,7 @@ fn load_resident_speech_backend(
     payload: &SpeakRequest,
 ) -> anyhow::Result<ResidentSpeechBackend> {
     let home = resolve_mortar_home();
+    verify_catalog_backend(&home, backend, payload.model.as_deref())?;
     let provider = RESIDENT_BACKEND_PROVIDERS
         .iter()
         .find(|provider| provider.id == backend)
@@ -2109,6 +2141,7 @@ fn load_resident_speech_backend(
     let capabilities = speech_backend_capabilities(
         &home,
         backend,
+        payload.model.as_deref(),
         device,
         payload.sample_rate_hz.unwrap_or(24_000),
     )?;
@@ -2199,10 +2232,10 @@ fn load_vits_provider(
 fn load_onnx_provider(
     home: &FsPath,
     device: tongues_tts::ResolvedSpeechDevice,
-    _payload: &SpeakRequest,
+    payload: &SpeakRequest,
     capabilities: tongues_tts::BackendCapabilities,
 ) -> anyhow::Result<ResidentSpeechBackend> {
-    let model_id = selected_onnx_voice_model_at(home)?;
+    let model_id = speech_model_id(home, "onnx", payload.model.as_deref())?;
     let model_path = onnx_voice_model_path(home, &model_id)?;
     let config =
         tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(&model_path))?;
@@ -2242,10 +2275,6 @@ fn load_mock_provider(
     }))
 }
 
-fn selected_onnx_voice_model() -> anyhow::Result<String> {
-    selected_onnx_voice_model_at(&resolve_mortar_home())
-}
-
 fn selected_onnx_voice_model_at(home: &FsPath) -> anyhow::Result<String> {
     let selection_path = home.join("model-selection.json");
     let selected = match std::fs::read_to_string(&selection_path) {
@@ -2267,20 +2296,56 @@ fn selected_onnx_voice_model_at(home: &FsPath) -> anyhow::Result<String> {
 }
 
 fn onnx_voice_model_path(home: &FsPath, model_id: &str) -> anyhow::Result<PathBuf> {
-    let filename = match model_id {
-        "voice-ljspeech-high" => "en_US-ljspeech-high.onnx",
-        "voice-ryan-medium" => "en_US-ryan-medium.onnx",
-        "voice-amy-medium" => "en_US-amy-medium.onnx",
-        _ => anyhow::bail!(
-            "selected ONNX voice model `{model_id}` is not supported by tongues-server"
-        ),
+    let model = ONNX_VOICE_MODELS
+        .iter()
+        .find(|model| model.id == model_id)
+        .with_context(|| {
+            format!("selected ONNX voice model `{model_id}` is not supported by tongues-server")
+        })?;
+    Ok(home.join(ONNX_VOICE_RELATIVE_DIR).join(model.filename))
+}
+
+fn speech_model_id(
+    home: &FsPath,
+    backend: &str,
+    requested_model: Option<&str>,
+) -> anyhow::Result<String> {
+    let requested_model = requested_model.filter(|model| !model.trim().is_empty());
+    let fixed_model = match backend {
+        "burn" => Some("speedyspeech-ljspeech+hifigan-v2"),
+        "vits" => Some("vits-vctk"),
+        "styletts2" => Some("styletts2-en-us"),
+        "mock" => Some("deterministic-mock"),
+        "onnx" => None,
+        _ => anyhow::bail!("unknown speech backend `{backend}`"),
     };
-    Ok(home.join(ONNX_VOICE_RELATIVE_DIR).join(filename))
+    if let Some(expected) = fixed_model {
+        if requested_model.is_some_and(|model| model != expected) {
+            anyhow::bail!(
+                "model `{}` is not available for backend `{backend}`",
+                requested_model.unwrap()
+            );
+        }
+        return Ok(expected.into());
+    }
+
+    let model = requested_model
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| selected_onnx_voice_model_at(home))?;
+    if !ONNX_VOICE_MODELS
+        .iter()
+        .any(|candidate| candidate.id == model)
+    {
+        anyhow::bail!("model `{model}` is not available for backend `onnx`");
+    }
+    Ok(model)
 }
 
 fn speech_backend_capabilities(
     home: &FsPath,
     backend: &str,
+    model: Option<&str>,
     device: tongues_tts::ResolvedSpeechDevice,
     mock_sample_rate_hz: u32,
 ) -> anyhow::Result<tongues_tts::BackendCapabilities> {
@@ -2359,7 +2424,7 @@ fn speech_backend_capabilities(
             }
         }
         "onnx" => {
-            let model = selected_onnx_voice_model_at(home)?;
+            let model = speech_model_id(home, backend, model)?;
             let model_path = onnx_voice_model_path(home, &model)?;
             let config = tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(
                 &model_path,
@@ -2511,6 +2576,7 @@ struct SpeakRequest {
     verbose: Option<bool>,
     variety: Option<String>,
     backend: Option<String>,
+    model: Option<String>,
     speaker: Option<String>,
     speaker_id: Option<u32>,
     emotion: Option<String>,
@@ -2559,6 +2625,7 @@ async fn speak(
     let capabilities = match speech_backend_capabilities(
         &resolve_mortar_home(),
         payload.backend.as_deref().unwrap_or("burn"),
+        payload.model.as_deref(),
         speech_device,
         payload.sample_rate_hz.unwrap_or(24_000),
     ) {
@@ -2755,42 +2822,147 @@ async fn get_styletts2_samples(State(state): State<AppState>) -> impl IntoRespon
 
 async fn get_speech_models(State(state): State<AppState>) -> impl IntoResponse {
     let home = resolve_mortar_home();
-    let models = RESIDENT_BACKEND_PROVIDERS
-        .iter()
-        .map(|provider| {
-            let backend = provider.id;
-            let capabilities =
-                speech_backend_capabilities(&home, backend, state.speech_device, 24_000)
-                    .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
-                        backend: backend.into(),
-                        model: "unavailable".into(),
-                        family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
-                        varieties: tongues_tts::CapabilityValue::Unsupported,
-                        speakers: tongues_tts::SpeakerCapabilities::unsupported(),
-                        styles: tongues_tts::StyleCapabilities::unsupported(),
-                        reference_audio: Default::default(),
-                        speed: false,
-                        seed: false,
-                        devices: Vec::new(),
-                        output: tongues_tts::OutputAudioContract {
-                            sample_rate_hz: 0,
-                            channels: 1,
-                            streaming: false,
-                        },
-                        provenance: Vec::new(),
-                    });
-            let error = speech_backend_installation_error(&home, backend);
-            SpeechModelDiscovery {
-                capabilities,
-                installed: error.is_none(),
-                error,
+    let selected_onnx =
+        selected_onnx_voice_model_at(&home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
+    let mut models = Vec::new();
+    for provider in RESIDENT_BACKEND_PROVIDERS {
+        if provider.id == "onnx" {
+            for model in ONNX_VOICE_MODELS {
+                models.push(discover_speech_model(
+                    &home,
+                    provider.id,
+                    model.id,
+                    model.display_name,
+                    model.id == selected_onnx,
+                    state.speech_device,
+                ));
             }
-        })
-        .collect::<Vec<_>>();
+            continue;
+        }
+        let model =
+            speech_model_id(&home, provider.id, None).unwrap_or_else(|_| "unavailable".into());
+        models.push(discover_speech_model(
+            &home,
+            provider.id,
+            &model,
+            speech_model_display_name(provider.id, &model),
+            true,
+            state.speech_device,
+        ));
+    }
     Json(models)
 }
 
-fn speech_backend_installation_error(home: &FsPath, backend: &str) -> Option<String> {
+async fn get_model_catalog() -> impl IntoResponse {
+    let response = tokio::task::spawn_blocking(model_catalog_response)
+        .await
+        .unwrap_or_else(|error| {
+            json!({
+                "schema_version": tongues_tts::MODEL_CATALOG_SCHEMA_VERSION,
+                "entries": [],
+                "error": format!("catalog verification task failed: {error}"),
+            })
+        });
+    Json(response)
+}
+
+fn model_catalog_response() -> serde_json::Value {
+    let paths = tongues_tts::private_catalog_paths_from_environment();
+    let catalog = match tongues_tts::ModelCatalog::with_private_catalogs(&paths) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return json!({
+                "schema_version": tongues_tts::MODEL_CATALOG_SCHEMA_VERSION,
+                "entries": [],
+                "error": format!("{error:#}"),
+            });
+        }
+    };
+    let home = resolve_mortar_home();
+    let cache = tongues_tts::default_model_cache(&home)
+        .unwrap_or_else(|_| home.join("cache/model-downloads"));
+    let store = tongues_tts::ModelStore::new(&home, &cache).with_offline(true);
+    let entries = catalog
+        .entries
+        .iter()
+        .map(|entry| match store.verify(entry) {
+            Ok(verified) => json!({
+                "entry": entry,
+                "installed": true,
+                "verified_files": verified.files.len(),
+                "error": null,
+            }),
+            Err(error) => json!({
+                "entry": entry,
+                "installed": false,
+                "verified_files": 0,
+                "error": format!("{error:#}"),
+            }),
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": catalog.schema_version,
+        "catalog": catalog.id,
+        "model_home": store.root(),
+        "cache": store.cache(),
+        "offline": store.offline(),
+        "entries": entries,
+        "error": null,
+    })
+}
+
+fn discover_speech_model(
+    home: &FsPath,
+    backend: &str,
+    model: &str,
+    display_name: &str,
+    selected: bool,
+    device: tongues_tts::ResolvedSpeechDevice,
+) -> SpeechModelDiscovery {
+    let capabilities = speech_backend_capabilities(home, backend, Some(model), device, 24_000)
+        .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
+            backend: backend.into(),
+            model: model.into(),
+            family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
+            varieties: tongues_tts::CapabilityValue::Unsupported,
+            speakers: tongues_tts::SpeakerCapabilities::unsupported(),
+            styles: tongues_tts::StyleCapabilities::unsupported(),
+            reference_audio: Default::default(),
+            speed: false,
+            seed: false,
+            devices: Vec::new(),
+            output: tongues_tts::OutputAudioContract {
+                sample_rate_hz: 0,
+                channels: 1,
+                streaming: false,
+            },
+            provenance: Vec::new(),
+        });
+    let error = speech_backend_installation_error(home, backend, Some(model));
+    SpeechModelDiscovery {
+        capabilities,
+        display_name: display_name.into(),
+        selected,
+        installed: error.is_none(),
+        error,
+    }
+}
+
+fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
+    match backend {
+        "burn" => "SpeedySpeech + HiFi-GAN",
+        "vits" => "VITS VCTK",
+        "styletts2" => "StyleTTS2 en-US",
+        "mock" => "Deterministic Mock",
+        _ => model,
+    }
+}
+
+fn speech_backend_installation_error(
+    home: &FsPath,
+    backend: &str,
+    model: Option<&str>,
+) -> Option<String> {
     let required = match backend {
         "burn" => vec![
             home.join(SPEEDY_RELATIVE_DIR).join("config.json"),
@@ -2804,7 +2976,7 @@ fn speech_backend_installation_error(home: &FsPath, backend: &str) -> Option<Str
             home.join(VITS_RELATIVE_DIR).join("speaker_ids.json"),
         ],
         "onnx" => {
-            let model = match selected_onnx_voice_model_at(home) {
+            let model = match speech_model_id(home, backend, model) {
                 Ok(model) => model,
                 Err(error) => return Some(error.to_string()),
             };
@@ -2846,7 +3018,7 @@ fn speech_backend_installation_error(home: &FsPath, backend: &str) -> Option<Str
         .err()
         .map(|error| error.to_string()),
         "onnx" => {
-            let model = selected_onnx_voice_model_at(home).ok()?;
+            let model = speech_model_id(home, backend, model).ok()?;
             let model_path = onnx_voice_model_path(home, &model).ok()?;
             tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(&model_path))
                 .err()
@@ -2854,6 +3026,38 @@ fn speech_backend_installation_error(home: &FsPath, backend: &str) -> Option<Str
         }
         _ => None,
     }
+}
+
+fn verify_catalog_backend(home: &FsPath, backend: &str, model: Option<&str>) -> anyhow::Result<()> {
+    let ids = match backend {
+        "burn" => vec![
+            "speedy-speech-ljspeech".to_string(),
+            "hifigan-v2-ljspeech".to_string(),
+        ],
+        "vits" => vec!["vits-vctk".to_string()],
+        "styletts2" => vec!["styletts2-en-us".to_string()],
+        "onnx" => vec![
+            model
+                .filter(|model| !model.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or(speech_model_id(home, backend, None)?),
+        ],
+        "mock" => return Ok(()),
+        _ => anyhow::bail!("unknown speech backend `{backend}`"),
+    };
+    let paths = tongues_tts::private_catalog_paths_from_environment();
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(&paths)?;
+    let cache = tongues_tts::default_model_cache(home)?;
+    let store = tongues_tts::ModelStore::new(home, cache).with_offline(true);
+    for id in ids {
+        let entry = catalog
+            .find(&id)
+            .with_context(|| format!("speech model `{id}` is not in the licensed catalog"))?;
+        store
+            .verify(entry)
+            .with_context(|| format!("speech model `{id}` failed verification"))?;
+    }
+    Ok(())
 }
 
 async fn get_speech_speakers(Query(query): Query<SpeechSpeakersQuery>) -> impl IntoResponse {
@@ -3031,6 +3235,12 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
                     .join(", ")
             ));
         }
+        speech_model_id(
+            &resolve_mortar_home(),
+            if backend.is_empty() { "burn" } else { backend },
+            payload.model.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
     }
     if payload
         .speaker
@@ -3645,6 +3855,7 @@ mod tests {
                 speech_backend_capabilities(
                     &mortar_home,
                     backend,
+                    None,
                     tongues_tts::ResolvedSpeechDevice::Cpu,
                     24_000,
                 )
@@ -3673,6 +3884,8 @@ mod tests {
         assert_eq!(discovered[3].output.sample_rate_hz, 22_050);
         let json = serde_json::to_value(SpeechModelDiscovery {
             capabilities: discovered[1].clone(),
+            display_name: "VITS VCTK".into(),
+            selected: true,
             installed: true,
             error: None,
         })
@@ -3750,6 +3963,7 @@ mod tests {
         let capabilities = speech_backend_capabilities(
             &mortar_home,
             "vits",
+            None,
             tongues_tts::ResolvedSpeechDevice::Cpu,
             24_000,
         )
@@ -3850,6 +4064,39 @@ mod tests {
             .unwrap(),
             "vits-cuda-3"
         );
+
+        let ljspeech: SpeakRequest = serde_json::from_value(json!({
+            "text": "LJSpeech resident speech.",
+            "backend": "onnx",
+            "model": "voice-ljspeech-high"
+        }))
+        .expect("LJSpeech request");
+        let ryan: SpeakRequest = serde_json::from_value(json!({
+            "text": "Ryan resident speech.",
+            "backend": "onnx",
+            "model": "voice-ryan-medium"
+        }))
+        .expect("Ryan request");
+        assert_eq!(
+            resident_engine_key("onnx", tongues_tts::ResolvedSpeechDevice::Cpu, &ljspeech,)
+                .unwrap(),
+            "onnx-voice-ljspeech-high-cpu"
+        );
+        assert_eq!(
+            resident_engine_key("onnx", tongues_tts::ResolvedSpeechDevice::Cpu, &ryan).unwrap(),
+            "onnx-voice-ryan-medium-cpu"
+        );
+    }
+
+    #[test]
+    fn speech_model_selection_rejects_cross_backend_and_unknown_models() {
+        let home = FsPath::new(".");
+        assert_eq!(
+            speech_model_id(home, "onnx", Some("voice-amy-medium")).unwrap(),
+            "voice-amy-medium"
+        );
+        assert!(speech_model_id(home, "onnx", Some("voice-unknown")).is_err());
+        assert!(speech_model_id(home, "vits", Some("voice-amy-medium")).is_err());
     }
 
     #[test]
