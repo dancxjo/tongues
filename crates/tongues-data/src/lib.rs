@@ -3,6 +3,8 @@
 //! Handles CMUdict parsing, parallelized IPA phonemicization, splitting,
 //! vocabulary construction, seq2seq batch collation, and shared dataset audits.
 
+pub mod speech_corpus;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};

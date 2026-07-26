@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "id": "cmudict-0.7b",
+      "source": "crates.io:arpabet_cmudict",
+      "version": "2.0.0 / CMUdict 0.7b",
+      "license": "CMUdict BSD-style; wrapper BSD-4-Clause",
+      "license_path": "assets/LICENSE-CMUDICT",
+      "source_sha256": "6b31d1b7ed7f01c6a4afa31e3339f0d3aa50b8f7f7d1c167d963b7e34ab7055d",
+      "package_sha256": "493246593f4f5b249ea42ff224e2e60655a305762959e45c788cca684b7b446f",
+      "generated_path": "Cargo OUT_DIR/codegen.rs (PHF map)",
+      "generated_sha256": "58022ca49b0ed485c42f27f583035f64577bd49b1f52fb7b4aceabb6a08bf48d",
+      "update_command": "cargo update -p arpabet_cmudict --precise 2.0.0"
+    },
+    {
+      "id": "lexique383-seed",
+      "source": "https://www.lexique.org/",
+      "version": "project seed v1",
+      "license": "CC-BY-SA-4.0",
+      "license_path": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "source_sha256": "1b23ddd5d7e006d7f544fbd215b2c437db64ca0a8414b586e236bb5e106fdb35",
+      "package_sha256": "1b23ddd5d7e006d7f544fbd215b2c437db64ca0a8414b586e236bb5e106fdb35",
+      "generated_path": "embedded directly from src/data/lexicons/Lexique383.tsv",
+      "generated_sha256": "1b23ddd5d7e006d7f544fbd215b2c437db64ca0a8414b586e236bb5e106fdb35",
+      "update_command": "replace the reviewed seed, update this manifest, then run just prepare-assets"
+    }
+  ]
+}

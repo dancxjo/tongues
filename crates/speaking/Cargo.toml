@@ -9,6 +9,7 @@ warnings = "allow"
 
 [dependencies]
 anyhow = { workspace = true }
+arpabet_cmudict = "=2.0.0"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
 isolang = { workspace = true }
