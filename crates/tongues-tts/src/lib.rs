@@ -29,6 +29,7 @@ pub mod burn_acoustic;
 pub mod burn_acoustic_training;
 pub mod burn_align_tts;
 pub mod burn_align_tts_pipeline;
+pub mod benchmark;
 pub mod burn_delightful_tts;
 pub mod burn_fast_pitch;
 pub mod burn_fast_pitch_acoustic;
@@ -214,7 +215,7 @@ pub use model_package::{
 };
 pub use orchestration::{
     variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
-    CapabilityValue, EnergyCapabilities, InputAudioMetadata, LanguageCapabilities,
+    CapabilityTier, CapabilityValue, EnergyCapabilities, InputAudioMetadata, LanguageCapabilities,
     LanguageSelection, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,
     OutputAudioContract, PitchCapabilities, PlanEngineBackend, ReferenceAudioCapabilities,
     ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection, StyleCapabilities,
@@ -230,6 +231,10 @@ pub use pipeline_registry::{
     registered_speech_pipeline_components, RegisteredSpeechComposition,
     SpeechPipelineCompatibility, SpeechPipelineComponent, SpeechPipelineSelection,
     SpeechPipelineStage, SpeechPortContract, TEXT_INPUT_COMPONENT_ID, WAV_OUTPUT_COMPONENT_ID,
+};
+pub use benchmark::{
+    canonical_benchmark_corpus, BenchmarkExecutionContext, BenchmarkFixture,
+    BenchmarkFixtureCategory, PortableBenchmarkMeasurements,
 };
 pub use profiling::{
     ModelLoadProfileEvent, ModelLoadStage, SynthesisDimension, SynthesisProfileEvent,
