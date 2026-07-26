@@ -17,6 +17,9 @@
         runtimePollController: null,
         runtimePollGeneration: 0,
         verificationGeneration: 0,
+        catalogDiscovery: null,
+        catalogView: 'ready',
+        catalogRequestGeneration: 0,
     };
     const VERIFICATION_CONCURRENCY = 1;
 
@@ -85,6 +88,44 @@
     const pendingVerificationIds = (discovery) => (
         [...new Set((discovery?.verification_ids || []).filter(Boolean))]
     );
+    const mergeUnique = (current, incoming, key) => {
+        const merged = [...(current || [])];
+        const seen = new Set(merged.map(key));
+        for (const item of incoming || []) {
+            const itemKey = key(item);
+            if (seen.has(itemKey)) continue;
+            seen.add(itemKey);
+            merged.push(item);
+        }
+        return merged;
+    };
+    const mergeDiscovery = (current, incoming) => {
+        if (!current || !incoming?.page || incoming.page.cursor === 0) return incoming;
+        return {
+            ...current,
+            ...incoming,
+            paths: mergeUnique(current.paths, incoming.paths, pathKey),
+            components: mergeUnique(current.components, incoming.components, (item) => item.id),
+            compositions: mergeUnique(
+                current.compositions,
+                incoming.compositions,
+                (item) => item.id,
+            ),
+            compatibility: mergeUnique(
+                current.compatibility,
+                incoming.compatibility,
+                (item) => `${item.from_component_id}\0${item.to_component_id}`,
+            ),
+            presets: mergeUnique(current.presets, incoming.presets, (item) => item.id),
+            verification_ids: pendingVerificationIds({
+                verification_ids: [
+                    ...(current.verification_ids || []),
+                    ...(incoming.verification_ids || []),
+                ],
+            }),
+            error: incoming.error || current.error,
+        };
+    };
     const preservesVerificationProgress = (current, updated) => {
         if (!current) return true;
         const currentPending = new Set(pendingVerificationIds(current));
@@ -339,13 +380,49 @@
                     <ol id="duplex-timeline" class="duplex-timeline hidden"></ol>
                 </section>
 
-                <details class="engine-inventory">
-                    <summary>Engines and Models <span id="component-count"></span></summary>
-                    <p>All native, catalog, compatibility, and test components are listed even when
-                    they cannot independently produce audio.</p>
-                    <button id="verify-all-models" type="button" class="secondary-button">Verify all changed models</button>
+                <section class="engine-inventory" aria-labelledby="model-catalog-heading">
+                    <div class="speech-section-heading">
+                        <div>
+                            <h2 id="model-catalog-heading">Model catalog <span id="component-count"></span></h2>
+                            <p class="catalog-description">Start with complete speech pipelines.
+                            Installable models and low-level components remain available when you
+                            need to change or repair a pipeline.</p>
+                        </div>
+                        <button id="verify-all-models" type="button" class="secondary-button">Verify all changed models</button>
+                    </div>
+                    <div class="catalog-view-tabs" role="tablist" aria-label="Catalog view">
+                        <button type="button" role="tab" data-catalog-view="ready" aria-selected="true">Usable now</button>
+                        <button type="button" role="tab" data-catalog-view="downloadable" aria-selected="false">Downloadable</button>
+                        <button type="button" role="tab" data-catalog-view="components" aria-selected="false">Developer components</button>
+                    </div>
+                    <div class="catalog-filters" aria-label="Catalog filters">
+                        <div class="form-group">
+                            <label for="catalog-search">Search</label>
+                            <input id="catalog-search" type="search" placeholder="Model, language, script, or architecture">
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-family">Family</label>
+                            <select id="catalog-family">
+                                <option value="">All families</option>
+                                <option value="mms">MMS</option>
+                                <option value="styletts2">StyleTTS2</option>
+                                <option value="other">Other native families</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-license">License</label>
+                            <select id="catalog-license">
+                                <option value="">All licenses</option>
+                                <option value="CC-BY-NC-4.0">CC-BY-NC-4.0</option>
+                                <option value="MIT">MIT</option>
+                                <option value="NOASSERTION">Metadata unavailable</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p id="catalog-status" class="catalog-status" role="status" aria-live="polite"></p>
                     <div id="component-inventory" class="component-inventory"></div>
-                </details>
+                    <button id="catalog-load-more" type="button" class="secondary-button hidden">Load more models</button>
+                </section>
             </main>`;
     }
 
@@ -480,15 +557,14 @@
         select.replaceChildren();
         select.appendChild(new Option('Custom pipeline', 'custom'));
         for (const preset of state.discovery.presets || []) {
-            if (preset.developer) continue;
             const composition = state.discovery.compositions.find(
                 (candidate) => candidate.id === preset.composition_id,
             );
+            if (preset.developer || !composition?.runnable) continue;
             const option = new Option(
-                `${preset.display_name}${composition?.runnable ? '' : ' — unavailable'}`,
+                preset.display_name,
                 preset.id,
             );
-            option.disabled = !composition;
             select.appendChild(option);
         }
         const matchingPreset = (state.discovery.presets || []).find((preset) => (
@@ -683,9 +759,17 @@
                 <div><dt>Devices</dt><dd>${escapeHtml((path.controls.find((item) => item.field === 'device')?.options || []).map((item) => item.label).join(', '))}</dd></div>
                 <div><dt>Language</dt><dd>${escapeHtml(languages.join(', ') || 'Not declared')}</dd></div>
                 <div><dt>Script</dt><dd>${escapeHtml(scripts.join(', ') || 'Source default')}</dd></div>
-                <div><dt>Preprocessing</dt><dd>${escapeHtml(preprocessing.join(', ') || 'None declared')}</dd></div>
+                <div><dt>Preprocessing</dt><dd>${escapeHtml(preprocessing.join(', ') || 'No additional preprocessing required')}</dd></div>
                 <div><dt>Speakers</dt><dd>${listedValues(path.speakers?.values).length || catalog.reduce((sum, entry) => sum + (entry.speakers?.count || 0), 0)}</dd></div>
-                <div><dt>License</dt><dd>${escapeHtml(licenses.join(', ') || 'Not asserted')}</dd></div>
+                <div><dt>License</dt><dd>${escapeHtml(
+                    licenses.length
+                        ? licenses.map((license) => (
+                            license === 'NOASSERTION'
+                                ? 'Metadata unavailable; check upstream before redistribution'
+                                : license
+                        )).join(', ')
+                        : 'No catalog license metadata'
+                )}</dd></div>
                 <div><dt>Readiness</dt><dd>${escapeHtml(path.runnable ? 'Ready' : path.statuses.join(', '))}</dd></div>
                 <div><dt>Resident</dt><dd>${escapeHtml(path.load_state)}</dd></div>
                 <div><dt>Provenance</dt><dd>${escapeHtml(provenance.join(' | ') || path.provenance.join(', ') || 'Not declared')}</dd></div>
@@ -748,92 +832,235 @@
         byId('submit-btn').disabled = !path.complete || !path.runnable;
     }
 
+    function catalogFamily(item) {
+        const catalog = item.catalog || [];
+        if (item.backend === 'fairseq'
+            || catalog.some((entry) => entry.provenance?.format === 'fairseq-mms-vits')) {
+            return { id: 'mms', label: 'MMS' };
+        }
+        if (item.backend === 'styletts2'
+            || catalog.some((entry) => /styletts/i.test(entry.architecture || ''))) {
+            return { id: 'styletts2', label: 'StyleTTS2' };
+        }
+        const family = item.family ?? item.capabilities?.family;
+        if (typeof family === 'string' && family) {
+            return {
+                id: 'other',
+                label: family.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+            };
+        }
+        return {
+            id: 'other',
+            label: (item.backend || item.kind || 'Other').replaceAll('_', ' '),
+        };
+    }
+
+    function catalogText(item) {
+        const catalog = item.catalog || [];
+        return [
+            item.id,
+            item.model,
+            item.display_name,
+            item.backend,
+            item.kind,
+            item.architecture,
+            ...catalog.flatMap((entry) => [
+                entry.id,
+                entry.display_name,
+                entry.architecture,
+                entry.script,
+                ...(entry.languages || []),
+            ]),
+        ].filter(Boolean).join(' ').toLocaleLowerCase();
+    }
+
+    function catalogLicense(item) {
+        return [...new Set((item.catalog || []).map((entry) => entry.license?.expression).filter(Boolean))];
+    }
+
+    function matchesCatalogFilters(item) {
+        const search = byId('catalog-search')?.value.trim().toLocaleLowerCase() || '';
+        const family = byId('catalog-family')?.value || '';
+        const license = byId('catalog-license')?.value || '';
+        return (!search || catalogText(item).includes(search))
+            && (!family || catalogFamily(item).id === family)
+            && (!license || catalogLicense(item).includes(license));
+    }
+
+    function statusBadges(statuses) {
+        const badges = document.createElement('span');
+        badges.className = 'status-badges';
+        for (const status of statuses || []) {
+            const badge = document.createElement('span');
+            badge.className = 'status-badge';
+            badge.textContent = status;
+            badges.appendChild(badge);
+        }
+        return badges;
+    }
+
+    function catalogPipelineCard(composition, discovery) {
+        const path = (discovery.paths || []).find((candidate) => (
+            candidate.backend === composition.backend && candidate.model === composition.model
+        )) || {};
+        const card = document.createElement('article');
+        card.className = 'catalog-pipeline-card';
+        const heading = document.createElement('div');
+        heading.className = 'catalog-card-heading';
+        const title = document.createElement('strong');
+        title.textContent = composition.display_name;
+        heading.append(title, statusBadges(composition.statuses));
+        const facts = document.createElement('p');
+        const catalog = path.catalog || [];
+        facts.textContent = [
+            composition.backend,
+            catalog.flatMap((entry) => entry.languages || []).join(', '),
+            catalog.map((entry) => entry.license?.expression)
+                .filter((license) => license && license !== 'NOASSERTION').join(', '),
+        ].filter(Boolean).join(' · ');
+        const actions = document.createElement('div');
+        actions.className = 'model-actions';
+        if (composition.runnable) {
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'secondary-button';
+            use.textContent = 'Use pipeline';
+            use.addEventListener('click', () => {
+                state.discovery = mergeDiscovery(state.discovery, discovery);
+                state.pathKey = composition.id;
+                state.presetId = '';
+                renderPathSelector();
+                renderSelectedPath();
+                byId('synth-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+            actions.appendChild(use);
+        } else if (path.install_command) {
+            const install = document.createElement('button');
+            install.type = 'button';
+            install.className = 'secondary-button';
+            install.textContent = 'Copy install command';
+            install.addEventListener('click', async () => {
+                await navigator.clipboard.writeText(path.install_command);
+                install.textContent = 'Install command copied';
+            });
+            actions.appendChild(install);
+        }
+        card.append(heading, facts, actions);
+        return card;
+    }
+
+    function catalogComponentCard(component) {
+        const details = document.createElement('details');
+        details.className = 'component-card';
+        const summary = document.createElement('summary');
+        const name = document.createElement('strong');
+        name.textContent = component.display_name;
+        summary.append(name, statusBadges(component.statuses));
+        const body = document.createElement('div');
+        body.className = 'component-detail';
+        const explanation = document.createElement('p');
+        explanation.textContent = component.explanation;
+        const catalog = component.catalog || [];
+        const preprocessing = [...new Set(catalog.flatMap((entry) => entry.preprocessing || []))];
+        const licenses = [...new Set(catalog.map((entry) => entry.license?.expression).filter(Boolean))];
+        const facts = document.createElement('p');
+        facts.textContent = [
+            `Architecture: ${component.architecture}`,
+            `State: ${component.readiness}`,
+            `Load: ${component.load_state}`,
+            component.control_fields?.length ? `Controls: ${component.control_fields.join(', ')}` : null,
+            catalog.length ? `Language: ${[...new Set(catalog.flatMap((entry) => entry.languages || []))].join(', ')}` : null,
+            catalog.some((entry) => entry.script)
+                ? `Script: ${[...new Set(catalog.map((entry) => entry.script).filter(Boolean))].join(', ')}`
+                : null,
+            `Preprocessing: ${preprocessing.join(', ') || 'No additional preprocessing required'}`,
+            licenses.length
+                ? `License: ${licenses.map((license) => (
+                    license === 'NOASSERTION' ? 'Metadata unavailable; check upstream before redistribution' : license
+                )).join(', ')}`
+                : null,
+            component.compatible_paths.length ? `Paths: ${component.compatible_paths.join(', ')}` : null,
+        ].filter(Boolean).join(' · ');
+        body.append(explanation, facts);
+        if (component.install_command) {
+            const code = document.createElement('code');
+            code.textContent = component.install_command;
+            body.appendChild(code);
+        }
+        details.append(summary, body);
+        return details;
+    }
+
     function renderInventory() {
+        const discovery = state.catalogDiscovery || state.discovery;
         const target = byId('component-inventory');
+        const view = state.catalogView;
+        const items = view === 'components'
+            ? (discovery.components || []).filter(matchesCatalogFilters)
+            : (discovery.compositions || []).filter((composition) => {
+                const path = (discovery.paths || []).find((candidate) => (
+                    candidate.backend === composition.backend
+                    && candidate.model === composition.model
+                ));
+                return composition.backend !== 'mock' && matchesCatalogFilters({
+                    ...composition,
+                    catalog: path?.catalog || [],
+                })
+                    && (view === 'ready'
+                        ? composition.runnable
+                        : !composition.runnable && Boolean(path?.catalog?.length));
+            });
         const groups = new Map();
-        for (const component of state.discovery.components || []) {
-            const values = groups.get(component.kind) || [];
-            values.push(component);
-            groups.set(component.kind, values);
+        for (const item of items) {
+            const family = view === 'components'
+                ? {
+                    id: `${catalogFamily(item).id}:${item.kind}`,
+                    label: `${catalogFamily(item).label} · ${item.kind.replaceAll('_', ' ')}`,
+                }
+                : catalogFamily(item);
+            const group = groups.get(family.id) || { label: family.label, items: [] };
+            group.items.push(item);
+            groups.set(family.id, group);
         }
         target.replaceChildren();
-        for (const [kind, components] of groups) {
-            const section = document.createElement('section');
-            section.className = 'component-kind';
-            const heading = document.createElement('h3');
-            heading.textContent = kind.replaceAll('_', ' ');
-            section.appendChild(heading);
-            for (const component of components) {
-                const details = document.createElement('details');
-                details.className = 'component-card';
-                const summary = document.createElement('summary');
-                const name = document.createElement('strong');
-                name.textContent = component.display_name;
-                const badges = document.createElement('span');
-                badges.className = 'status-badges';
-                for (const status of component.statuses || []) {
-                    const badge = document.createElement('span');
-                    badge.className = 'status-badge';
-                    badge.textContent = status;
-                    badges.appendChild(badge);
-                }
-                summary.append(name, badges);
-                const body = document.createElement('div');
-                body.className = 'component-detail';
-                const explanation = document.createElement('p');
-                explanation.textContent = component.explanation;
-                const facts = document.createElement('p');
-                const catalog = component.catalog || [];
-                facts.textContent = [
-                    `Architecture: ${component.architecture}`,
-                    `State: ${component.readiness}`,
-                    `Load: ${component.load_state}`,
-                    component.control_fields?.length
-                        ? `Controls: ${component.control_fields.join(', ')}`
-                        : null,
-                    catalog.length ? `Language: ${[...new Set(catalog.flatMap((entry) => entry.languages || []))].join(', ')}` : null,
-                    catalog.some((entry) => entry.script)
-                        ? `Script: ${[...new Set(catalog.map((entry) => entry.script).filter(Boolean))].join(', ')}`
-                        : null,
-                    catalog.some((entry) => (entry.preprocessing || []).length)
-                        ? `Preprocessing: ${[...new Set(catalog.flatMap((entry) => entry.preprocessing || []))].join(', ')}`
-                        : null,
-                    catalog.length ? `License: ${[...new Set(catalog.map((entry) => entry.license.expression))].join(', ')}` : null,
-                    component.compatible_paths.length ? `Paths: ${component.compatible_paths.join(', ')}` : null,
-                ].filter(Boolean).join(' · ');
-                body.append(explanation, facts);
-                if (component.install_command) {
-                    const code = document.createElement('code');
-                    code.textContent = component.install_command;
-                    body.appendChild(code);
-                }
-                if (
-                    catalog.length
-                    && component.verification_status !== 'verified'
-                    && component.verification_status !== 'unavailable'
-                ) {
-                    const verify = document.createElement('button');
-                    verify.type = 'button';
-                    verify.className = 'secondary-button';
-                    verify.textContent = 'Verify model';
-                    verify.addEventListener('click', async () => {
-                        verify.disabled = true;
-                        try {
-                            await verifyModelIds(catalog.map((entry) => entry.id));
-                        } catch (error) {
-                            showError(`Model verification failed: ${error.message}`);
-                        } finally {
-                            verify.disabled = false;
-                        }
-                    });
-                    body.appendChild(verify);
-                }
-                details.append(summary, body);
-                section.appendChild(details);
-            }
-            target.appendChild(section);
+        let groupIndex = 0;
+        for (const group of groups.values()) {
+            const family = document.createElement('details');
+            family.className = 'catalog-family';
+            family.open = view === 'ready' && groupIndex === 0;
+            const summary = document.createElement('summary');
+            summary.textContent = `${group.label} (${group.items.length})`;
+            const cards = document.createElement('div');
+            cards.className = 'catalog-family-items';
+            cards.replaceChildren(...group.items.map((item) => (
+                view === 'components'
+                    ? catalogComponentCard(item)
+                    : catalogPipelineCard(item, discovery)
+            )));
+            family.append(summary, cards);
+            target.appendChild(family);
+            groupIndex += 1;
         }
-        byId('component-count').textContent = `(${state.discovery.components.length})`;
+        if (!items.length) {
+            const empty = document.createElement('p');
+            empty.className = 'catalog-empty';
+            empty.textContent = view === 'ready'
+                ? 'No ready pipelines match these filters.'
+                : 'No catalog entries match these filters.';
+            target.appendChild(empty);
+        }
+        const total = discovery.page?.total;
+        const loaded = view === 'components'
+            ? (discovery.components || []).length
+            : (discovery.compositions || []).length;
+        byId('component-count').textContent = `(${items.length} shown)`;
+        byId('catalog-status').textContent = total == null
+            ? `${items.length} matching entries`
+            : `${items.length} matching entries on this page · ${total.toLocaleString()} catalog models`;
+        const loadMore = byId('catalog-load-more');
+        loadMore.classList.toggle('hidden', discovery.page?.next_cursor == null);
+        loadMore.disabled = false;
+        loadMore.textContent = `Load more models${Number.isFinite(total) ? ` (${loaded} loaded)` : ''}`;
         const verifyAll = byId('verify-all-models');
         const pending = pendingVerificationIds(state.discovery);
         verifyAll.disabled = pending.length === 0;
@@ -1089,17 +1316,20 @@
             : [];
     }
 
-    function acceptDiscovery(discovery, allowVerificationReset = false) {
+    function acceptDiscovery(discovery, allowVerificationReset = false, append = false) {
+        const candidate = append ? mergeDiscovery(state.discovery, discovery) : discovery;
         if (
             !allowVerificationReset
-            && !preservesVerificationProgress(state.discovery, discovery)
+            && !preservesVerificationProgress(state.discovery, candidate)
         ) return false;
         const previous = state.pathKey;
-        state.discovery = discovery;
-        if (
+        state.discovery = candidate;
+        const previousMissing = (
             !(state.discovery.compositions || []).some((composition) => composition.id === previous)
             && !(state.discovery.paths || []).some((path) => pathKey(path) === previous)
-        ) {
+        );
+        const previousMayArrive = Boolean(previous && state.discovery.page?.next_cursor != null);
+        if (previousMissing && !previousMayArrive) {
             const initial = selectInitialComposition(state.discovery)
                 || selectInitialPath(state.discovery);
             state.pathKey = initial?.pipeline ? initial.id : (initial ? pathKey(initial) : '');
@@ -1130,10 +1360,6 @@
                         { method: 'POST', cache: 'no-store' },
                     );
                     if (!response.ok) throw new Error(await response.text());
-                    const updated = await response.json();
-                    if (activeGeneration === state.verificationGeneration) {
-                        acceptDiscovery(updated);
-                    }
                 } catch (error) {
                     failures.push(`${modelId}: ${error.message}`);
                 }
@@ -1145,9 +1371,11 @@
         ));
         if (activeGeneration === state.verificationGeneration && ids.length) {
             try {
-                const response = await fetch('/api/speech/models', { cache: 'no-store' });
-                if (!response.ok) throw new Error(await response.text());
-                acceptDiscovery(await response.json());
+                const updated = await fetchDiscoveryPage();
+                if (activeGeneration === state.verificationGeneration) {
+                    acceptDiscovery(updated, true);
+                    await refreshCatalog();
+                }
             } catch (error) {
                 failures.push(`final refresh: ${error.message}`);
             }
@@ -1165,19 +1393,64 @@
         }
     }
 
-    async function refreshDiscovery(waitForVerification = true) {
-        const generation = state.verificationGeneration + 1;
-        state.verificationGeneration = generation;
-        const response = await fetch('/api/speech/models', { cache: 'no-store' });
+    async function fetchDiscoveryPage(cursor = 0, limit = null, filters = {}) {
+        const query = new URLSearchParams();
+        if (cursor) query.set('cursor', String(cursor));
+        if (limit) query.set('limit', String(limit));
+        for (const [name, value] of Object.entries(filters)) {
+            if (value) query.set(name, value);
+        }
+        const response = await fetch(
+            `/api/speech/models${query.size ? `?${query}` : ''}`,
+            { cache: 'no-store' },
+        );
         if (!response.ok) throw new Error(await response.text());
         const discovery = await response.json();
         if (discovery.error && !(discovery.paths || []).length) {
             throw new Error(discovery.error);
         }
-        acceptDiscovery(discovery, true);
-        const verification = verifyDiscovery(generation, discovery);
-        if (waitForVerification) await verification;
-        else verification.catch((error) => showError(`Speech verification failed: ${error.message}`));
+        return discovery;
+    }
+
+    function catalogFilters() {
+        return {
+            search: byId('catalog-search')?.value.trim() || '',
+            family: byId('catalog-family')?.value || '',
+            license: byId('catalog-license')?.value || '',
+        };
+    }
+
+    async function refreshCatalog({ append = false } = {}) {
+        const generation = state.catalogRequestGeneration + 1;
+        state.catalogRequestGeneration = generation;
+        const cursor = append ? state.catalogDiscovery?.page?.next_cursor : 0;
+        if (append && cursor == null) return;
+        byId('catalog-status').textContent = append
+            ? 'Loading more catalog models…'
+            : 'Searching the model catalog…';
+        const page = await fetchDiscoveryPage(cursor, 32, catalogFilters());
+        if (generation !== state.catalogRequestGeneration) return;
+        state.catalogDiscovery = append
+            ? mergeDiscovery(state.catalogDiscovery, page)
+            : page;
+        renderInventory();
+    }
+
+    async function refreshDiscovery(waitForVerification = true) {
+        const generation = state.verificationGeneration + 1;
+        state.verificationGeneration = generation;
+        const firstPage = await fetchDiscoveryPage();
+        acceptDiscovery(firstPage, true);
+        state.catalogDiscovery = firstPage;
+        renderInventory();
+        const completion = verifyDiscovery(generation, firstPage);
+        if (waitForVerification) await completion;
+        else completion.catch((error) => showError(`Speech discovery failed: ${error.message}`));
+    }
+
+    function hideDuplexResult() {
+        byId('duplex-summary').classList.add('hidden');
+        byId('duplex-timeline').classList.add('hidden');
     }
 
     async function init() {
@@ -1194,6 +1467,45 @@
             byId('speech-runtime-state').dataset.state = 'failed';
             byId('speech-runtime-state').textContent = 'failed';
         }
+
+        let catalogSearchTimer = null;
+        document.querySelectorAll('[data-catalog-view]').forEach((button) => {
+            button.addEventListener('click', () => {
+                state.catalogView = button.dataset.catalogView;
+                document.querySelectorAll('[data-catalog-view]').forEach((candidate) => {
+                    candidate.setAttribute(
+                        'aria-selected',
+                        String(candidate === button),
+                    );
+                });
+                renderInventory();
+            });
+        });
+        byId('catalog-search').addEventListener('input', () => {
+            window.clearTimeout(catalogSearchTimer);
+            catalogSearchTimer = window.setTimeout(() => {
+                refreshCatalog().catch((error) => {
+                    byId('catalog-status').textContent = `Catalog search failed: ${error.message}`;
+                });
+            }, 250);
+        });
+        for (const id of ['catalog-family', 'catalog-license']) {
+            byId(id).addEventListener('change', () => {
+                refreshCatalog().catch((error) => {
+                    byId('catalog-status').textContent = `Catalog filter failed: ${error.message}`;
+                });
+            });
+        }
+        byId('catalog-load-more').addEventListener('click', async (event) => {
+            event.currentTarget.disabled = true;
+            try {
+                await refreshCatalog({ append: true });
+            } catch (error) {
+                byId('catalog-status').textContent = `Catalog loading failed: ${error.message}`;
+            } finally {
+                event.currentTarget.disabled = false;
+            }
+        });
 
         byId('speech-preset').addEventListener('change', (event) => {
             const preset = state.discovery.presets.find(
@@ -1279,6 +1591,7 @@
         byId('run-duplex-preview').addEventListener('click', async (event) => {
             const button = event.currentTarget;
             clearError(byId('duplex-error'));
+            byId('speech-submit-status').textContent = '';
             button.disabled = true;
             try {
                 const path = selectedPath();
@@ -1300,6 +1613,7 @@
         byId('replay-duplex-journal').addEventListener('click', async (event) => {
             const button = event.currentTarget;
             clearError(byId('duplex-error'));
+            byId('speech-submit-status').textContent = '';
             button.disabled = true;
             try {
                 const projection = await loadDuplexProjection(buildDuplexRequest({
@@ -1367,6 +1681,7 @@
             submit.classList.add('loading');
             byId('speech-submit-status').textContent = 'Synthesis in progress.';
             byId('result-container').classList.add('hidden');
+            hideDuplexResult();
             startRuntimePolling();
             try {
                 const response = await fetch('/api/speak', {
@@ -1420,6 +1735,7 @@
         init,
         parseNumberArray,
         pathKey,
+        mergeDiscovery,
         pendingVerificationIds,
         preservesVerificationProgress,
         selectInitialPath,

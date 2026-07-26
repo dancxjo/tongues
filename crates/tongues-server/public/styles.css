@@ -511,30 +511,103 @@ a {
 }
 
 .expert-warning,
-.engine-inventory > p {
+.catalog-description,
+.catalog-status {
     color: var(--text-muted);
     line-height: 1.45;
 }
 
-.engine-inventory > summary {
+.catalog-description {
+    margin: 0;
+}
+
+.catalog-view-tabs {
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    gap: 0.35rem;
+    margin-top: 1rem;
+    overflow-x: auto;
+}
+
+.catalog-view-tabs button {
+    background: transparent;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    color: var(--text-muted);
     cursor: pointer;
-    font-size: 1rem;
     font-weight: 800;
+    padding: 0.7rem 0.85rem;
+    white-space: nowrap;
+}
+
+.catalog-view-tabs button[aria-selected="true"] {
+    border-bottom-color: var(--primary);
+    color: var(--primary-hover);
+}
+
+.catalog-filters {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(240px, 2fr) repeat(2, minmax(150px, 1fr));
+    margin-top: 1rem;
+}
+
+.catalog-filters .form-group {
+    margin: 0;
+}
+
+.catalog-filters input,
+.catalog-filters select {
+    width: 100%;
 }
 
 .component-inventory {
     display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
 }
 
-.component-kind {
-    min-width: 0;
+.catalog-family {
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
 }
 
-.component-kind h3 {
-    font-size: 0.78rem;
-    text-transform: uppercase;
+.catalog-family > summary {
+    cursor: pointer;
+    font-weight: 800;
+    padding: 0.85rem;
+    text-transform: capitalize;
+}
+
+.catalog-family-items {
+    border-top: 1px solid var(--panel-border);
+    display: grid;
+    gap: 0.6rem;
+    padding: 0.75rem;
+}
+
+.catalog-pipeline-card {
+    background: var(--panel-soft);
+    border-radius: 8px;
+    padding: 0.75rem;
+}
+
+.catalog-card-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+}
+
+.catalog-pipeline-card p,
+.catalog-empty {
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+#catalog-load-more {
+    margin-top: 0.85rem;
 }
 
 .component-card {
@@ -603,7 +676,8 @@ label {
 textarea,
 select,
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+input[type="search"] {
     background: #ffffff;
     border: 1px solid var(--panel-border);
     border-radius: 8px;
@@ -1382,6 +1456,10 @@ audio::-webkit-media-controls-panel {
 
     .component-inventory,
     .metadata-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .catalog-filters {
         grid-template-columns: 1fr;
     }
 
