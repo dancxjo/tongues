@@ -2048,6 +2048,8 @@ struct ResidentSynthesisOutput {
     profile: Vec<tongues_tts::SynthesisTiming>,
     input_audio: Vec<tongues_tts::InputAudioMetadata>,
     device: tongues_tts::ResolvedSpeechDevice,
+    pronunciation_warnings: Vec<speaking::PronunciationWarning>,
+    pronunciation_plan: Option<speaking::PhonemicizeOutput>,
 }
 
 impl ResidentSpeechService {
@@ -2086,6 +2088,38 @@ impl ResidentSpeechService {
         phase: &AtomicU8,
         device: tongues_tts::ResolvedSpeechDevice,
     ) -> anyhow::Result<ResidentSynthesisOutput> {
+        // Run the shared pronunciation pipeline first to obtain warnings.  This
+        // uses the exact same code path that each engine backend calls internally,
+        // so no separate server-side pronunciation algorithm is introduced.
+        let variety = payload.variety.as_deref().unwrap_or("en-US");
+        let phonemicized = tongues_tts::phonemicize_speech_text(tongues_tts::SpeechRequest {
+            text: payload.text.clone(),
+            variety: variety.to_string(),
+        })?;
+
+        // Enforce strict mode before loading or running the acoustic model.
+        if payload.fail_on_guessed_pronunciation.unwrap_or(false) {
+            let guessed: Vec<&str> = phonemicized
+                .warnings
+                .iter()
+                .filter(|w| is_guessed_pronunciation_warning(w))
+                .map(|w| w.token.as_str())
+                .collect();
+            if !guessed.is_empty() {
+                anyhow::bail!(
+                    "guessed_pronunciation: {}",
+                    guessed.join(", ")
+                );
+            }
+        }
+
+        let pronunciation_warnings = phonemicized.warnings.clone();
+        let pronunciation_plan = if payload.debug_pronunciation.unwrap_or(false) {
+            Some(phonemicized)
+        } else {
+            None
+        };
+
         let backend_name = payload.backend.as_deref().unwrap_or("burn");
         let engine_key = resident_engine_key(backend_name, device, payload)?;
         let mut loaded_now = false;
@@ -2152,8 +2186,19 @@ impl ResidentSpeechService {
             profile,
             input_audio,
             device,
+            pronunciation_warnings,
+            pronunciation_plan,
         })
     }
+}
+
+fn is_guessed_pronunciation_warning(warning: &speaking::PronunciationWarning) -> bool {
+    matches!(
+        warning.kind,
+        speaking::PronunciationWarningKind::GuessedWord
+            | speaking::PronunciationWarningKind::MixedAlphaNumeric
+            | speaking::PronunciationWarningKind::UnknownPronunciation
+    )
 }
 
 fn unified_synthesis_request(
@@ -3641,10 +3686,8 @@ struct SpeakRequest {
     sample_rate_hz: Option<u32>,
     max_tts_symbols: Option<usize>,
     no_tts_chunking: Option<bool>,
-    #[allow(dead_code)]
     debug_pronunciation: Option<bool>,
     timings: Option<bool>,
-    #[allow(dead_code)]
     fail_on_guessed_pronunciation: Option<bool>,
 }
 
@@ -3798,6 +3841,8 @@ async fn speak(
                 "resident_model_reused": !output.loaded_now,
                 "diagnostics": {
                     "stages": output.profile,
+                    "pronunciation_warnings": output.pronunciation_warnings,
+                    "pronunciation_plan": output.pronunciation_plan,
                 },
                 "input_audio": output.input_audio,
             });
@@ -3839,11 +3884,22 @@ async fn speak(
                 .body(axum::body::Body::from(output.wav))
                 .unwrap()
         }
-        Ok(Err(error)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Resident synthesis failed: {error:#}"),
-        )
-            .into_response(),
+        Ok(Err(error)) => {
+            let message = format!("{error:#}");
+            if message.starts_with("guessed_pronunciation:") {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("Synthesis rejected: {message}"),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Resident synthesis failed: {message}"),
+                )
+                    .into_response()
+            }
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Resident synthesis task failed: {error}"),
@@ -6554,20 +6610,6 @@ fn validate_declared_speech_controls(
             "the selected synthesis path does not declare support for `{field}`"
         ));
     }
-    if payload.debug_pronunciation.is_some_and(|value| value) {
-        return Err(
-            "the resident synthesis response does not yet expose pronunciation diagnostics".into(),
-        );
-    }
-    if payload
-        .fail_on_guessed_pronunciation
-        .is_some_and(|value| value)
-    {
-        return Err(
-            "the resident synthesis path does not yet declare fail-on-guessed-pronunciation support"
-                .into(),
-        );
-    }
     if payload.quiet.is_some_and(|value| value) || payload.verbose.is_some_and(|value| value) {
         return Err(
             "quiet and verbose are CLI presentation controls, not synthesis controls".into(),
@@ -7985,6 +8027,68 @@ mod tests {
                 provider: "wiktionary",
                 language: "fra".into(),
             }
+        );
+    }
+
+    #[test]
+    fn is_guessed_pronunciation_warning_identifies_guessed_kinds() {
+        use speaking::{PronunciationWarning, PronunciationWarningKind};
+
+        let guessed_kinds = [
+            PronunciationWarningKind::GuessedWord,
+            PronunciationWarningKind::MixedAlphaNumeric,
+            PronunciationWarningKind::UnknownPronunciation,
+        ];
+        let non_guessed_kinds = [
+            PronunciationWarningKind::AcronymExpanded,
+            PronunciationWarningKind::WeakFormApplied,
+        ];
+
+        for kind in guessed_kinds {
+            let warning = PronunciationWarning {
+                token: "test".into(),
+                kind,
+                message: "test message".into(),
+            };
+            assert!(
+                is_guessed_pronunciation_warning(&warning),
+                "{kind:?} should be identified as a guessed pronunciation"
+            );
+        }
+        for kind in non_guessed_kinds {
+            let warning = PronunciationWarning {
+                token: "test".into(),
+                kind,
+                message: "test message".into(),
+            };
+            assert!(
+                !is_guessed_pronunciation_warning(&warning),
+                "{kind:?} should not be identified as a guessed pronunciation"
+            );
+        }
+    }
+
+    #[test]
+    fn pronunciation_warnings_serialize_with_stable_kind_names() {
+        use speaking::{PronunciationWarning, PronunciationWarningKind};
+
+        let warnings = vec![PronunciationWarning {
+            token: "xyz123".into(),
+            kind: PronunciationWarningKind::GuessedWord,
+            message: "guessed pronunciation for xyz123".into(),
+        }];
+        let diagnostics = serde_json::json!({
+            "stages": [],
+            "pronunciation_warnings": &warnings,
+            "pronunciation_plan": serde_json::Value::Null,
+        });
+        let serialized_warnings = &diagnostics["pronunciation_warnings"];
+        assert_eq!(serialized_warnings.as_array().unwrap().len(), 1);
+        assert_eq!(serialized_warnings[0]["token"], "xyz123");
+        assert_eq!(serialized_warnings[0]["kind"], "guessed_word");
+        assert_eq!(
+            serialized_warnings[0]["message"],
+            "guessed pronunciation for xyz123"
         );
     }
 }
