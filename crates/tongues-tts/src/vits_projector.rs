@@ -11,8 +11,10 @@ use crate::{
 /// Terminal projection from Tongues' linguistic IR into the vocabulary
 /// embedded in a VITS checkpoint.
 #[derive(Debug, Clone)]
-pub(crate) struct VitsLinguisticProjector {
+pub struct VitsLinguisticProjector {
     add_blank: bool,
+    use_phonemes: bool,
+    text_cleaner: Option<String>,
     vocabulary: Vec<String>,
     symbol_to_id: BTreeMap<String, i64>,
     blank_id: i64,
@@ -20,7 +22,7 @@ pub(crate) struct VitsLinguisticProjector {
 }
 
 impl VitsLinguisticProjector {
-    pub(crate) fn from_json5_str(source: &str) -> Result<Self> {
+    pub fn from_json5_str(source: &str) -> Result<Self> {
         Self::from_config(ImportedVitsConfig::from_json5_str(source)?)
     }
 
@@ -38,25 +40,41 @@ impl VitsLinguisticProjector {
             .get("<BLNK>")
             .copied()
             .context("VITS blank token is absent from the vocabulary")?;
-        let variety = config
-            .phoneme_language
-            .clone()
-            .unwrap_or_else(|| "*".to_string());
-        let contract = ModelInputContract {
-            kind: LinguisticInputKind::Phonemes,
-            vocabulary_fingerprint: format!("vits-compat-v1:{vocabulary:?}"),
-            supported_varieties: vec![variety],
-            consumes: BTreeSet::from([
+        let variety = if config.use_phonemes {
+            config
+                .phoneme_language
+                .clone()
+                .unwrap_or_else(|| "*".to_string())
+        } else {
+            "*".to_string()
+        };
+        let kind = if config.use_phonemes {
+            LinguisticInputKind::Phonemes
+        } else {
+            LinguisticInputKind::Graphemes
+        };
+        let consumes = if config.use_phonemes {
+            BTreeSet::from([
                 LinguisticIntent::Phonemes,
                 LinguisticIntent::Phones,
                 LinguisticIntent::Boundaries,
                 LinguisticIntent::ProsodicBreaks,
-            ]),
+            ])
+        } else {
+            BTreeSet::from([LinguisticIntent::Text])
+        };
+        let contract = ModelInputContract {
+            kind,
+            vocabulary_fingerprint: format!("vits-compat-v1:{vocabulary:?}"),
+            supported_varieties: vec![variety],
+            consumes,
         };
         contract.validate()?;
 
         Ok(Self {
             add_blank: config.add_blank,
+            use_phonemes: config.use_phonemes,
+            text_cleaner: config.text_cleaner,
             vocabulary,
             symbol_to_id,
             blank_id,
@@ -78,7 +96,24 @@ impl VitsLinguisticProjector {
 
     fn project_symbols(&self, plan: &UtterancePlan) -> Result<String> {
         self.contract.ensure_supports(plan)?;
-        project_plan_symbols(plan, |output, ipa| self.push_phone(output, ipa), "VITS")
+        if self.use_phonemes {
+            project_plan_symbols(plan, |output, ipa| self.push_phone(output, ipa), "VITS")
+        } else {
+            let text = plan
+                .intended_text
+                .as_deref()
+                .context("grapheme VITS requires intended text in the utterance plan")?;
+            Ok(self.clean_graphemes(text))
+        }
+    }
+
+    fn clean_graphemes(&self, text: &str) -> String {
+        let mut text = text.to_lowercase();
+        if self.text_cleaner.as_deref() == Some("multilingual_cleaners") {
+            text = text.replace([';', ':'], ",").replace('-', " ");
+            text.retain(|character| !matches!(character, '<' | '>' | '(' | ')' | '[' | ']' | '"'));
+        }
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     fn push_phone(&self, output: &mut String, ipa: &str) {

@@ -78,6 +78,8 @@ pub(crate) struct ImportedVitsConfig {
     pub(crate) model: String,
     pub(crate) use_phonemes: bool,
     pub(crate) phoneme_language: Option<String>,
+    #[serde(default)]
+    pub(crate) text_cleaner: Option<String>,
     pub(crate) add_blank: bool,
     pub(crate) enable_eos_bos_chars: bool,
     pub(crate) characters: ImportedVitsCharactersConfig,
@@ -136,10 +138,16 @@ impl ImportedVitsConfig {
             "expected VITS model, found `{}`",
             self.model
         );
-        ensure!(
-            self.use_phonemes,
-            "this VITS model configuration requires phoneme input"
-        );
+        if !self.use_phonemes {
+            ensure!(
+                matches!(
+                    self.text_cleaner.as_deref(),
+                    None | Some("basic_cleaners") | Some("multilingual_cleaners")
+                ),
+                "unsupported grapheme VITS text cleaner `{}`",
+                self.text_cleaner.as_deref().unwrap_or_default()
+            );
+        }
         ensure!(
             !self.enable_eos_bos_chars,
             "this VITS vocabulary layout does not use BOS/EOS tokens"
@@ -382,6 +390,7 @@ pub(crate) fn test_imported_vits_config() -> ImportedVitsConfig {
         model: "vits".into(),
         use_phonemes: true,
         phoneme_language: Some("en".into()),
+        text_cleaner: None,
         add_blank: true,
         enable_eos_bos_chars: false,
         characters: ImportedVitsCharactersConfig {

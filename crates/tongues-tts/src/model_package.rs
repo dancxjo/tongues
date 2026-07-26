@@ -23,11 +23,12 @@ use zip::ZipArchive;
 
 use crate::vits_config::ImportedVitsConfig;
 use crate::{
-    AudioFeatureConfig, BurnVitsSpeech, DelightfulTtsConfig, FastPitchConfig, FastSpeechConfig,
-    FastSpeechVariant, GlowTts, GlowTtsInferenceConfig, HifiganBundleConfig, MelganBundleConfig,
+    AudioFeatureConfig, BurnVitsSpeech, CoquiResNetSpeakerEncoder, DVectorCatalog,
+    DelightfulTtsConfig, FastPitchConfig, FastSpeechConfig, FastSpeechVariant, GlowTts,
+    GlowTtsInferenceConfig, HifiganBundleConfig, LanguageCatalog, MelganBundleConfig,
     MelganVariant, PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog,
     SpeedySpeechConfig, StochasticGlowTts, TacotronArchitecture, TacotronGraphemeProjector,
-    TacotronInferenceConfig, VitsInferenceConfig,
+    TacotronInferenceConfig, VitsInferenceConfig, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;
@@ -445,9 +446,14 @@ pub struct SpeakerEncoderPackageConfig {
     pub model_name: String,
     pub input_dim: usize,
     pub projection_dim: usize,
-    pub lstm_dim: usize,
-    pub num_lstm_layers: usize,
+    pub lstm_dim: Option<usize>,
+    pub num_lstm_layers: Option<usize>,
     pub use_lstm_with_projection: bool,
+    pub use_torch_spec: bool,
+    pub log_input: bool,
+    pub encoder_type: String,
+    pub layers: Vec<usize>,
+    pub num_filters: Vec<usize>,
     pub sample_rate_hz: u32,
     pub fft_size: Option<usize>,
     pub window_size: Option<usize>,
@@ -455,6 +461,17 @@ pub struct SpeakerEncoderPackageConfig {
 }
 
 impl SpeakerEncoderPackageConfig {
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("failed to read speaker encoder config {}", path.display()))?;
+        let root: Value = json5::from_str(&source).with_context(|| {
+            format!("failed to parse speaker encoder config {}", path.display())
+        })?;
+        Self::from_root(&root)
+            .with_context(|| format!("invalid speaker encoder config {}", path.display()))
+    }
+
     fn from_root(root: &Value) -> Result<Self> {
         let params = root
             .get("model_params")
@@ -474,6 +491,11 @@ impl SpeakerEncoderPackageConfig {
                 "num_lstm_layers",
                 "num_layers",
                 "use_lstm_with_projection",
+                "use_torch_spec",
+                "log_input",
+                "encoder_type",
+                "layers",
+                "num_filters",
             ],
             "model_params",
         )?;
@@ -482,12 +504,31 @@ impl SpeakerEncoderPackageConfig {
             model_name: optional_string(params, &["model_name"]).unwrap_or_else(|| "lstm".into()),
             input_dim: required_usize_alias(params, &["input_dim", "num_mels"])?,
             projection_dim: required_usize_alias(params, &["proj_dim", "projection_dim"])?,
-            lstm_dim: required_usize_alias(params, &["lstm_dim", "hidden_dim"])?,
-            num_lstm_layers: required_usize_alias(params, &["num_lstm_layers", "num_layers"])?,
+            lstm_dim: optional_u64(params, &["lstm_dim", "hidden_dim"])
+                .map(usize::try_from)
+                .transpose()
+                .context("speaker encoder LSTM dimension does not fit usize")?,
+            num_lstm_layers: optional_u64(params, &["num_lstm_layers", "num_layers"])
+                .map(usize::try_from)
+                .transpose()
+                .context("speaker encoder LSTM layer count does not fit usize")?,
             use_lstm_with_projection: params
                 .get("use_lstm_with_projection")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
+            use_torch_spec: params
+                .get("use_torch_spec")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            log_input: params
+                .get("log_input")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            encoder_type: optional_string(params, &["encoder_type"])
+                .unwrap_or_else(|| "ASP".into()),
+            layers: optional_usize_array(params, "layers")?.unwrap_or_else(|| vec![3, 4, 6, 3]),
+            num_filters: optional_usize_array(params, "num_filters")?
+                .unwrap_or_else(|| vec![32, 64, 128, 256]),
             sample_rate_hz: audio
                 .and_then(|value| optional_u64(value, &["sample_rate"]))
                 .unwrap_or(16_000)
@@ -510,17 +551,37 @@ impl SpeakerEncoderPackageConfig {
                 .context("speaker encoder hop size does not fit usize")?,
         };
         ensure!(
-            matches!(config.model_name.as_str(), "lstm" | "speaker_encoder"),
+            matches!(
+                config.model_name.to_ascii_lowercase().as_str(),
+                "lstm" | "speaker_encoder" | "resnet"
+            ),
             "unsupported speaker encoder model_name `{}`",
             config.model_name
         );
         ensure!(
-            config.input_dim > 0
-                && config.projection_dim > 0
-                && config.lstm_dim > 0
-                && config.num_lstm_layers > 0,
+            config.input_dim > 0 && config.projection_dim > 0,
             "speaker encoder dimensions must be positive"
         );
+        if config.model_name.eq_ignore_ascii_case("resnet") {
+            ensure!(
+                config.encoder_type.eq_ignore_ascii_case("asp"),
+                "unsupported ResNet speaker encoder pooling `{}`; expected ASP",
+                config.encoder_type
+            );
+            ensure!(
+                config.layers.len() == 4
+                    && config.num_filters.len() == 4
+                    && config.layers.iter().all(|value| *value > 0)
+                    && config.num_filters.iter().all(|value| *value > 0),
+                "ResNet speaker encoder requires four positive layer and filter counts"
+            );
+        } else {
+            ensure!(
+                config.lstm_dim.is_some_and(|value| value > 0)
+                    && config.num_lstm_layers.is_some_and(|value| value > 0),
+                "LSTM speaker encoder requires positive `lstm_dim` and `num_lstm_layers`"
+            );
+        }
         Ok(config)
     }
 }
@@ -549,7 +610,7 @@ pub fn inspect_coqui_import_with_progress(
     let reader = checkpoint_reader(options)?;
     let tensors = tensor_metadata(&reader)?;
     let speakers = load_speakers(options, &parsed)?;
-    let languages = load_languages(options, &root)?;
+    let languages = load_languages(options, &root, &parsed)?;
     progress(ModelImportProgress::ValidatingShapes {
         architecture: parsed.architecture(),
     });
@@ -1580,6 +1641,28 @@ fn load_speakers(
         );
         return Ok(Vec::new());
     };
+    if let ParsedConfig::Vits { inference, .. } = parsed {
+        if inference.network.use_d_vector_file {
+            let catalog = DVectorCatalog::from_file(
+                path,
+                inference.network.d_vector_dim,
+                COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+            )?;
+            return catalog
+                .speaker_names()
+                .into_iter()
+                .enumerate()
+                .map(|(id, name)| {
+                    Ok(PackageSpeaker {
+                        id: id
+                            .try_into()
+                            .context("d-vector speaker ID does not fit u32")?,
+                        name: name.into(),
+                    })
+                })
+                .collect();
+        }
+    }
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read speaker map {}", path.display()))?;
     let map: BTreeMap<String, u32> = serde_json::from_str(&source)
@@ -1595,16 +1678,34 @@ fn load_speakers(
     Ok(speakers)
 }
 
-fn load_languages(options: &CoquiImportOptions, root: &Value) -> Result<Vec<PackageLanguage>> {
+fn load_languages(
+    options: &CoquiImportOptions,
+    root: &Value,
+    parsed: &ParsedConfig,
+) -> Result<Vec<PackageLanguage>> {
+    let expected = match parsed {
+        ParsedConfig::Vits { inference, .. } if inference.network.use_language_embedding => {
+            Some(inference.network.num_languages)
+        }
+        _ => None,
+    };
     let mut languages = if let Some(path) = options.language_map_path.as_deref() {
         let source = fs::read_to_string(path)
             .with_context(|| format!("failed to read language map {}", path.display()))?;
         let map: BTreeMap<String, u32> = serde_json::from_str(&source)
             .with_context(|| format!("invalid language map {}", path.display()))?;
+        if let Some(expected) = expected {
+            LanguageCatalog::new(map.clone(), expected)?;
+        }
         map.into_iter()
             .map(|(tag, id)| PackageLanguage { id: Some(id), tag })
             .collect::<Vec<_>>()
     } else {
+        ensure!(
+            expected.is_none(),
+            "language_ids.json is required for this {}-language model",
+            expected.unwrap_or_default()
+        );
         root.get("phoneme_language")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
@@ -1792,13 +1893,32 @@ fn validate_runtime_shapes(
                 model.load_burn_multiband_generator::<Cpu>(checkpoint_path, &device)?;
             }
         },
-        ParsedConfig::Vits { .. } => {
+        ParsedConfig::Vits { inference, .. } => {
             let speakers = options
                 .speaker_map_path
                 .as_deref()
                 .context("VITS shape validation requires speaker_ids.json")?;
-            BurnVitsSpeech::<Cpu>::load(&options.config_path, checkpoint_path, speakers, device)
+            if inference.network.use_language_embedding {
+                let languages = options.language_map_path.as_deref().context(
+                    "language-conditioned VITS shape validation requires language_ids.json",
+                )?;
+                BurnVitsSpeech::<Cpu>::load_with_languages(
+                    &options.config_path,
+                    checkpoint_path,
+                    speakers,
+                    languages,
+                    device,
+                )
+                .context("language-conditioned VITS checkpoint shape validation failed")?;
+            } else {
+                BurnVitsSpeech::<Cpu>::load(
+                    &options.config_path,
+                    checkpoint_path,
+                    speakers,
+                    device,
+                )
                 .context("VITS checkpoint shape validation failed")?;
+            }
         }
         ParsedConfig::GlowTts { inference, .. } => {
             if inference.network.use_sdp {
@@ -1811,6 +1931,10 @@ fn validate_runtime_shapes(
         }
         ParsedConfig::SpeakerEncoder { model, .. } => {
             validate_speaker_encoder_shapes(model, tensors)?;
+            if model.model_name.eq_ignore_ascii_case("resnet") {
+                CoquiResNetSpeakerEncoder::<Cpu>::load(model, checkpoint_path, &device)
+                    .context("ResNet speaker encoder checkpoint shape validation failed")?;
+            }
         }
     }
     Ok(())
@@ -1820,6 +1944,36 @@ fn validate_speaker_encoder_shapes(
     config: &SpeakerEncoderPackageConfig,
     tensors: &[TensorMetadata],
 ) -> Result<()> {
+    if config.model_name.eq_ignore_ascii_case("resnet") {
+        let projection = tensors
+            .iter()
+            .find(|tensor| tensor.name.ends_with("fc.weight"))
+            .context("ResNet speaker encoder checkpoint has no `fc.weight` projection")?;
+        let final_frequency = config.input_dim.div_ceil(8);
+        let pooled = config.num_filters[3] * final_frequency * 2;
+        ensure!(
+            projection.shape == [config.projection_dim, pooled]
+                || projection.shape == [pooled, config.projection_dim],
+            "ResNet speaker encoder projection weight has shape {:?}; expected [{}, {}] (PyTorch) or its runtime transpose",
+            projection.shape,
+            config.projection_dim,
+            pooled
+        );
+        for required in ["conv1.weight", "attention.0.weight", "attention.3.weight"] {
+            ensure!(
+                tensors.iter().any(|tensor| tensor.name.ends_with(required)),
+                "ResNet speaker encoder checkpoint is missing `{required}`"
+            );
+        }
+        return Ok(());
+    }
+
+    let lstm_dim = config
+        .lstm_dim
+        .context("LSTM speaker encoder is missing `lstm_dim`")?;
+    let num_lstm_layers = config
+        .num_lstm_layers
+        .context("LSTM speaker encoder is missing `num_lstm_layers`")?;
     let by_name = tensors
         .iter()
         .map(|tensor| (tensor.name.as_str(), tensor))
@@ -1834,23 +1988,22 @@ fn validate_speaker_encoder_shapes(
         .map(|(_, tensor)| *tensor)
         .context("speaker encoder checkpoint has no projection weight")?;
     ensure!(
-        projection.shape
-            == [config.projection_dim, config.lstm_dim]
-            || projection.shape == [config.lstm_dim, config.projection_dim],
+        projection.shape == [config.projection_dim, lstm_dim]
+            || projection.shape == [lstm_dim, config.projection_dim],
         "speaker encoder projection weight has shape {:?}; expected [{}, {}] (PyTorch) or its runtime transpose",
         projection.shape,
         config.projection_dim,
-        config.lstm_dim
+        lstm_dim
     );
     let lstm_weights = tensors
         .iter()
         .filter(|tensor| tensor.name.contains("lstm") && tensor.name.contains("weight"))
         .count();
     ensure!(
-        lstm_weights >= config.num_lstm_layers * 2,
+        lstm_weights >= num_lstm_layers * 2,
         "speaker encoder checkpoint has {lstm_weights} LSTM weights; expected at least {} for {} layers",
-        config.num_lstm_layers * 2,
-        config.num_lstm_layers
+        num_lstm_layers * 2,
+        num_lstm_layers
     );
     Ok(())
 }
@@ -2277,6 +2430,26 @@ fn optional_u64(object: &Map<String, Value>, aliases: &[&str]) -> Option<u64> {
         .find_map(|key| object.get(*key).and_then(Value::as_u64))
 }
 
+fn optional_usize_array(object: &Map<String, Value>, key: &str) -> Result<Option<Vec<usize>>> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .with_context(|| format!("config field `{key}` must be an array"))?
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let value = value
+                .as_u64()
+                .with_context(|| format!("config field `{key}[{index}]` must be numeric"))?;
+            usize::try_from(value)
+                .with_context(|| format!("config field `{key}[{index}]` does not fit usize"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(values))
+}
+
 fn required_usize_alias(object: &Map<String, Value>, aliases: &[&str]) -> Result<usize> {
     optional_u64(object, aliases)
         .with_context(|| format!("missing numeric config field `{}`", aliases.join("` or `")))?
@@ -2415,9 +2588,14 @@ mod tests {
             model_name: "lstm".into(),
             input_dim: 80,
             projection_dim: 256,
-            lstm_dim: 768,
-            num_lstm_layers: 2,
+            lstm_dim: Some(768),
+            num_lstm_layers: Some(2),
             use_lstm_with_projection: true,
+            use_torch_spec: false,
+            log_input: false,
+            encoder_type: "ASP".into(),
+            layers: vec![3, 4, 6, 3],
+            num_filters: vec![32, 64, 128, 256],
             sample_rate_hz: 16_000,
             fft_size: Some(512),
             window_size: Some(400),

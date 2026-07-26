@@ -125,7 +125,7 @@ impl TacotronInferenceConfig {
             other => {
                 return Err(invalid(format!(
                     "expected `tacotron` or `tacotron2`, got `{other}`"
-                )))
+                )));
             }
         };
 
@@ -210,7 +210,7 @@ impl TacotronInferenceConfig {
                 value => {
                     return Err(unsupported(format!(
                         "attention_norm={value:?}; expected softmax or sigmoid"
-                    )))
+                    )));
                 }
             };
         let config = Self {

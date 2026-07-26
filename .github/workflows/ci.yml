@@ -40,7 +40,10 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --no-fail-fast
       - name: Check server UI JavaScript
-        run: node --check crates/tongues-server/public/app.js
+        run: |
+          node --check crates/tongues-server/public/app.js
+          node --check crates/tongues-server/public/speech-studio.js
+          node --test crates/tongues-server/public/speech-studio.test.cjs
 
   feature-powerset:
     name: Package feature powerset

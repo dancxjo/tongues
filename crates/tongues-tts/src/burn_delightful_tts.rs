@@ -413,11 +413,13 @@ impl<B: Backend> DelightfulConformerBlock<B> {
             (Some(_), None) => {
                 return Err(input_error(
                     "DelightfulTTS checkpoint requires speaker conditioning",
-                ))
+                ));
             }
-            (None, Some(_)) => return Err(input_error(
-                "speaker conditioning was supplied to a single-speaker DelightfulTTS checkpoint",
-            )),
+            (None, Some(_)) => {
+                return Err(input_error(
+                    "speaker conditioning was supplied to a single-speaker DelightfulTTS checkpoint",
+                ));
+            }
         }
         input = input.clone() + self.ff.forward(input);
         input = input.clone() + self.conformer_conv_1.forward(input);
@@ -586,7 +588,7 @@ impl<B: Backend> DelightfulVarianceAdaptor<B> {
                 return Err(input_error(format!(
                     "explicit {label} has shape {:?}; expected [{batch}, 1, {tokens}]",
                     values.dims()
-                )))
+                )));
             }
             None => predicted,
         };
@@ -976,7 +978,7 @@ impl<B: Backend> DelightfulTts<B> {
                 return Err(input_error(format!(
                     "explicit durations have shape {:?}; expected [{batch}, {tokens}]",
                     durations.dims()
-                )))
+                )));
             }
             None => {
                 let log_durations = self.duration_predictor.forward(duration_source, token_mask);

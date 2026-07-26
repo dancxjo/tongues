@@ -1,11 +1,190 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, ensure, Context, Result};
+use serde::{Deserialize, Serialize};
 use speaking::UtterancePlan;
 
 use crate::{
     AudioChunk, AudioSink, SpeechModelCapabilities, SpeechSynthesisEngine, SpeechSynthesisRequest,
 };
+
+/// The role a native speech component can play in a synthesis graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeSpeechComponentKind {
+    EndToEnd,
+    Acoustic,
+    Vocoder,
+    Voice,
+    Test,
+}
+
+/// How far an implementation is wired into Tongues' shared speech runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeSpeechComponentReadiness {
+    Runtime,
+    ImportOnly,
+    Experimental,
+}
+
+/// Stable, artifact-independent inventory for native speech machinery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSpeechComponent {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub architecture: &'static str,
+    pub kind: NativeSpeechComponentKind,
+    pub readiness: NativeSpeechComponentReadiness,
+    pub explanation: &'static str,
+}
+
+/// Every speech architecture implemented or imported by `tongues-tts`.
+///
+/// Artifact, license, compatibility, and load state are supplied by the model
+/// catalog and synthesis registry at discovery time.
+pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
+    NativeSpeechComponent {
+        id: "speedy-speech",
+        display_name: "SpeedySpeech",
+        architecture: "speedy-speech",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native acoustic inference; requires a compatible neural vocoder.",
+    },
+    NativeSpeechComponent {
+        id: "fastpitch",
+        display_name: "FastPitch",
+        architecture: "fastpitch",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native pitch-conditioned acoustic inference; requires a compatible neural vocoder.",
+    },
+    NativeSpeechComponent {
+        id: "glow-tts",
+        display_name: "Glow-TTS",
+        architecture: "glow-tts",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::Experimental,
+        explanation: "Native acoustic inference and import support; no complete synthesis path is registered.",
+    },
+    NativeSpeechComponent {
+        id: "sc-glowtts",
+        display_name: "SC-GlowTTS",
+        architecture: "sc-glowtts",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Stochastic-duration Glow-TTS import support; no catalog artifact or complete synthesis path is registered.",
+    },
+    NativeSpeechComponent {
+        id: "tacotron2",
+        display_name: "Tacotron 2",
+        architecture: "tacotron2",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native acoustic inference and checkpoint import support; no catalog artifact or complete synthesis path is registered.",
+    },
+    NativeSpeechComponent {
+        id: "tacotron2-ddc",
+        display_name: "Tacotron 2 DDC",
+        architecture: "tacotron2-ddc",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Double-decoder-consistency import variant; no complete synthesis path is registered.",
+    },
+    NativeSpeechComponent {
+        id: "capacitron",
+        display_name: "Capacitron Tacotron 2",
+        architecture: "capacitron",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Capacitron conditioning is represented by the importer, but no runnable catalog artifact is registered.",
+    },
+    NativeSpeechComponent {
+        id: "capacitron-ddc",
+        display_name: "Capacitron DDC",
+        architecture: "capacitron-ddc",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Capacitron plus double-decoder-consistency import variant; no runnable catalog artifact is registered.",
+    },
+    NativeSpeechComponent {
+        id: "fastspeech",
+        display_name: "FastSpeech",
+        architecture: "fastspeech",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native variance-model inference exists, but no verified artifact and vocoder path are registered.",
+    },
+    NativeSpeechComponent {
+        id: "fastspeech2",
+        display_name: "FastSpeech 2",
+        architecture: "fastspeech2",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native pitch and energy conditioned inference exists, but no verified artifact and vocoder path are registered.",
+    },
+    NativeSpeechComponent {
+        id: "delightfultts",
+        display_name: "DelightfulTTS",
+        architecture: "delightfultts",
+        kind: NativeSpeechComponentKind::Acoustic,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native conformer and variance inference exists, but no verified artifact and vocoder path are registered.",
+    },
+    NativeSpeechComponent {
+        id: "vits",
+        display_name: "VITS",
+        architecture: "vits",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native end-to-end waveform synthesis with learned speaker and language embeddings when declared by the checkpoint.",
+    },
+    NativeSpeechComponent {
+        id: "speaker-encoder",
+        display_name: "Coqui ResNet Speaker Encoder",
+        architecture: "speaker-encoder",
+        kind: NativeSpeechComponentKind::Voice,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native reference-audio d-vector inference, enrollment, caching, and verification.",
+    },
+    NativeSpeechComponent {
+        id: "yourtts",
+        display_name: "YourTTS",
+        architecture: "vits",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native multilingual voice cloning with grapheme VITS, language embeddings, d-vectors, and the Coqui ResNet speaker encoder.",
+    },
+    NativeSpeechComponent {
+        id: "hifigan",
+        display_name: "HiFi-GAN",
+        architecture: "hifigan",
+        kind: NativeSpeechComponentKind::Vocoder,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native neural vocoder used by registered composable synthesis paths.",
+    },
+    NativeSpeechComponent {
+        id: "melgan",
+        display_name: "MelGAN",
+        architecture: "melgan",
+        kind: NativeSpeechComponentKind::Vocoder,
+        readiness: NativeSpeechComponentReadiness::ImportOnly,
+        explanation: "Native vocoder inference exists, but no verified catalog artifact is registered.",
+    },
+    NativeSpeechComponent {
+        id: "multiband-melgan",
+        display_name: "MultiBand-MelGAN",
+        architecture: "multiband-melgan",
+        kind: NativeSpeechComponentKind::Vocoder,
+        readiness: NativeSpeechComponentReadiness::Experimental,
+        explanation: "Native PQMF vocoder inference exists; its artifact is not registered in a compatible complete synthesis path.",
+    },
+];
+
+pub fn native_speech_components() -> &'static [NativeSpeechComponent] {
+    NATIVE_SPEECH_COMPONENTS
+}
 
 /// Runtime used for neural inference.
 ///

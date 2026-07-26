@@ -49,6 +49,13 @@ The plain MelGAN conformance checkpoint is Descript's `linda_johnson.pt` from
 `descriptinc/melgan-neurips`, whose repository declares MIT. Its revision and
 artifact checksum are pinned independently from the Coqui artifacts.
 
+The published multilingual YourTTS entry is different from the unresolved
+artifacts above: Coqui's model registry identifies its weights as
+CC BY-NC-ND 4.0. The official catalog records `CC-BY-NC-ND-4.0`, so installing
+or running the model does not grant commercial use or permission to distribute
+modified weights. This model license is independent from both Tongues' MIT
+code and Coqui's MPL-2.0 source implementation.
+
 Piper source is MIT, with its notice preserved in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). Piper-distributed voice
 weights keep their individual cataloged license and evidence; Piper's MIT

@@ -756,7 +756,7 @@ impl<B: Backend> ResidualCouplingFlow<B> {
             (0, Some(_)) => {
                 return Err(input_error(
                     "conditioning was supplied to an unconditioned flow",
-                ))
+                ));
             }
             (expected, Some(value)) => {
                 let [cond_batch, cond_channels, cond_frames] = value.dims();

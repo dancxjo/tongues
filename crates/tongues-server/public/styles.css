@@ -314,6 +314,197 @@ a {
     color: var(--accent);
 }
 
+.speech-studio {
+    display: grid;
+    gap: 1.25rem;
+}
+
+.speech-runtime-panel,
+.model-card,
+.result-panel,
+.engine-inventory {
+    background: #fbfcfd;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.speech-section-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+}
+
+.speech-section-heading h2 {
+    font-size: 1.1rem;
+    margin: 0;
+}
+
+.speech-section-heading > div {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.metadata-grid {
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 1rem;
+}
+
+.metadata-grid > div {
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 0.7rem;
+}
+
+.metadata-grid dt {
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.metadata-grid dd {
+    line-height: 1.35;
+    margin: 0.25rem 0 0;
+    overflow-wrap: anywhere;
+}
+
+.inline-error {
+    background: var(--accent-soft);
+    border: 1px solid #f1b7b1;
+    border-radius: 8px;
+    color: #8d2e25;
+    line-height: 1.45;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.fixed-value {
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    font-weight: 700;
+    padding: 1rem;
+}
+
+.eyebrow {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 800;
+    margin: 0;
+    text-transform: uppercase;
+}
+
+.status-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.status-badge {
+    background: #e7f5f2;
+    border-radius: 999px;
+    color: var(--primary-hover);
+    font-size: 0.68rem;
+    font-weight: 800;
+    padding: 0.22rem 0.48rem;
+    text-transform: uppercase;
+}
+
+.model-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.model-card .secondary-button {
+    margin-top: 0.85rem;
+}
+
+.expert-warning,
+.engine-inventory > p {
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.engine-inventory > summary {
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.component-inventory {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.component-kind {
+    min-width: 0;
+}
+
+.component-kind h3 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+}
+
+.component-card {
+    background: #ffffff;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    padding: 0.65rem;
+}
+
+.component-card summary {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+}
+
+.component-detail {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.45;
+    padding-top: 0.6rem;
+}
+
+.component-detail code {
+    background: var(--panel-soft);
+    display: block;
+    overflow-wrap: anywhere;
+    padding: 0.55rem;
+}
+
+.result-panel audio {
+    margin-top: 1rem;
+    width: 100%;
+}
+
+.result-panel .secondary-button {
+    text-decoration: none;
+}
+
+.sr-status {
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    width: 1px;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
 .cli-equivalent code {
     color: var(--primary);
 }
@@ -978,6 +1169,10 @@ audio::-webkit-media-controls-panel {
         margin-top: 1rem;
         max-width: none;
     }
+
+    .metadata-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 720px) {
@@ -992,5 +1187,20 @@ audio::-webkit-media-controls-panel {
 
     .controls-grid {
         grid-template-columns: 1fr;
+    }
+
+    .component-inventory,
+    .metadata-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .speech-section-heading,
+    .component-card summary {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .speech-section-heading .secondary-button {
+        width: 100%;
     }
 }

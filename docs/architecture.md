@@ -117,6 +117,7 @@ text
   -> checkpoint-specific linguistic projector
   -> SpeedySpeech or FastPitch -> HiFi-GAN
      or end-to-end VITS
+     or YourTTS (language row + d-vector/reference encoder)
      or ONNX/StyleTTS2 compatibility backend
   -> streaming waveform chunks and playback/WAV output
 ```
@@ -130,6 +131,20 @@ Named speakers are model data rather than linguistic varieties. VITS loads the
 checkpoint's `speaker_ids.json` through `SpeakerCatalog`; the server exposes
 that catalog through `/api/speech/speakers`, and the UI uses the returned names
 and embedding IDs.
+
+Learned model languages follow the same ownership boundary. Multilingual VITS
+loads `language_ids.json` through `LanguageCatalog` and conditions its text and
+duration networks with the selected row. These opaque checkpoint identities
+remain separate from the shared `VarietyId`; callers select the mapping
+explicitly instead of deriving a model row from a language-tag prefix.
+
+YourTTS composes that language-conditioned VITS graph with a typed speaker
+embedding boundary. Named enrollment vectors and reference-audio vectors share
+one explicit 512-dimensional embedding-space contract. Reference audio is
+processed by the native Coqui ResNet/attentive-statistics encoder; VITS then
+passes the normalized vector to duration prediction, the flow, and the
+waveform decoder. Named speaker selection, precomputed embeddings, and
+reference audio have explicit precedence errors rather than silent fallback.
 
 ## Build and Runtime Verification
 

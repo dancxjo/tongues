@@ -18,7 +18,7 @@ use burn::module::Module;
 use burn::nn::{Embedding, EmbeddingConfig};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
-use speaking::UtterancePlan;
+use speaking::{SpeakerReferenceSource, UtterancePlan};
 
 use crate::burn_vits_flow::expand_prior_statistics_with_frames;
 use crate::profiling::{
@@ -27,12 +27,14 @@ use crate::profiling::{
 use crate::vits_config::ImportedVitsConfig;
 use crate::vits_projector::VitsLinguisticProjector;
 use crate::{
-    ceil_durations, AudioChunk, AudioSink, ModelLoadProfileEvent, ModelLoadStage,
-    ResidualCouplingFlow, ResidualCouplingFlowConfig, SpeakerCatalog, SpeechModelCapabilities,
-    SpeechModelFamily, SpeechSynthesisEngine, SpeechSynthesisRequest, StochasticDurationConfig,
-    StochasticDurationPredictor, SynthesisDimension, SynthesisProfiler, SynthesisStage,
-    VitsInferenceConfig, VitsTextPriorConfig, VitsTextPriorEncoder, VitsWaveformDecoder,
-    VitsWaveformDecoderConfig, Waveform, WaveformContract,
+    ceil_durations, normalize_embedding, AudioChunk, AudioSink, ConditioningEmbedding,
+    DVectorCatalog, LanguageCatalog, ModelLoadProfileEvent, ModelLoadStage,
+    NativeSpeakerEmbeddingService, ResidualCouplingFlow, ResidualCouplingFlowConfig,
+    SpeakerCatalog, SpeakerEmbeddingCachePolicy, SpeakerEncoderPackageConfig,
+    SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisEngine, SpeechSynthesisRequest,
+    StochasticDurationConfig, StochasticDurationPredictor, SynthesisDimension, SynthesisProfiler,
+    SynthesisStage, VitsInferenceConfig, VitsTextPriorConfig, VitsTextPriorEncoder,
+    VitsWaveformDecoder, VitsWaveformDecoderConfig, Waveform, WaveformContract,
 };
 use crate::{LinguisticProjector, ModelInputContract};
 
@@ -41,6 +43,10 @@ const STREAM_LATENT_FRAMES: usize = 64;
 
 fn speaker_embedding_tensor(path: &str, _container: &str) -> bool {
     path.starts_with("emb_g.")
+}
+
+fn language_embedding_tensor(path: &str, _container: &str) -> bool {
+    path.starts_with("emb_l.")
 }
 
 #[derive(Module, Debug)]
@@ -97,12 +103,70 @@ impl<B: Backend> SpeakerEmbedding<B> {
     }
 }
 
+#[derive(Module, Debug)]
+struct LanguageEmbedding<B: Backend> {
+    emb_l: Embedding<B>,
+}
+
+impl<B: Backend> LanguageEmbedding<B> {
+    fn init(num_languages: usize, dimensions: usize, device: &B::Device) -> Self {
+        Self {
+            emb_l: EmbeddingConfig::new(num_languages, dimensions).init(device),
+        }
+    }
+
+    fn load_checkpoint(mut self, checkpoint_path: &Path) -> Result<Self> {
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path,
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(language_embedding_tensor),
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+                ..Default::default()
+            },
+        )
+        .context("failed to load language embedding checkpoint")?;
+        let unused = result
+            .unused
+            .iter()
+            .filter(|path| path.starts_with("emb_l."))
+            .collect::<Vec<_>>();
+        ensure!(
+            result.missing.is_empty() && result.errors.is_empty() && unused.is_empty(),
+            "language embedding subtree does not exactly match the Burn module: {} missing, {} load errors, unused [{}]",
+            result.missing.len(),
+            result.errors.len(),
+            unused
+                .into_iter()
+                .map(|path| path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(self)
+    }
+
+    fn forward(&self, language_id: u32, device: &B::Device) -> Tensor<B, 3> {
+        let id = Tensor::<B, 2, Int>::from_data(
+            TensorData::new(vec![language_id as i64], [1, 1]),
+            device,
+        );
+        self.emb_l.forward(id).swap_dims(1, 2)
+    }
+}
+
 /// Native end-to-end VITS engine using Tongues plans and named speakers.
 pub struct BurnVitsSpeech<B: Backend> {
     config: VitsInferenceConfig,
     projector: VitsLinguisticProjector,
-    speakers: SpeakerCatalog,
-    speaker_embedding: SpeakerEmbedding<B>,
+    speakers: Option<SpeakerCatalog>,
+    d_vectors: Option<DVectorCatalog>,
+    languages: Option<LanguageCatalog>,
+    speaker_embedding: Option<SpeakerEmbedding<B>>,
+    reference_encoder: Option<NativeSpeakerEmbeddingService<B>>,
+    language_embedding: Option<LanguageEmbedding<B>>,
     text_prior: VitsTextPriorEncoder<B>,
     duration_predictor: StochasticDurationPredictor<B>,
     flow: ResidualCouplingFlow<B>,
@@ -118,7 +182,33 @@ impl<B: Backend> BurnVitsSpeech<B> {
         speaker_map_path: impl AsRef<Path>,
         device: B::Device,
     ) -> Result<Self> {
-        Self::load_internal(config_path, checkpoint_path, speaker_map_path, device, None)
+        Self::load_internal(
+            config_path,
+            checkpoint_path,
+            speaker_map_path,
+            None,
+            device,
+            None,
+            None,
+        )
+    }
+
+    pub fn load_with_languages(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        speaker_map_path: impl AsRef<Path>,
+        language_map_path: impl AsRef<Path>,
+        device: B::Device,
+    ) -> Result<Self> {
+        Self::load_internal(
+            config_path,
+            checkpoint_path,
+            speaker_map_path,
+            Some(language_map_path.as_ref()),
+            device,
+            None,
+            None,
+        )
     }
 
     pub fn load_profiled(
@@ -132,8 +222,57 @@ impl<B: Backend> BurnVitsSpeech<B> {
             config_path,
             checkpoint_path,
             speaker_map_path,
+            None,
             device,
             Some(profiler),
+            None,
+        )
+    }
+
+    pub fn load_profiled_with_languages(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        speaker_map_path: impl AsRef<Path>,
+        language_map_path: impl AsRef<Path>,
+        device: B::Device,
+        profiler: &mut dyn FnMut(ModelLoadProfileEvent),
+    ) -> Result<Self> {
+        Self::load_internal(
+            config_path,
+            checkpoint_path,
+            speaker_map_path,
+            Some(language_map_path.as_ref()),
+            device,
+            Some(profiler),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_your_tts(
+        config_path: impl AsRef<Path>,
+        checkpoint_path: impl AsRef<Path>,
+        d_vector_path: impl AsRef<Path>,
+        language_map_path: impl AsRef<Path>,
+        speaker_encoder_config_path: impl AsRef<Path>,
+        speaker_encoder_checkpoint_path: impl AsRef<Path>,
+        device: B::Device,
+        cache_policy: SpeakerEmbeddingCachePolicy,
+    ) -> Result<Self> {
+        let speaker_encoder_config =
+            SpeakerEncoderPackageConfig::from_file(speaker_encoder_config_path)?;
+        Self::load_internal(
+            config_path,
+            checkpoint_path,
+            d_vector_path,
+            Some(language_map_path.as_ref()),
+            device,
+            None,
+            Some((
+                speaker_encoder_config,
+                speaker_encoder_checkpoint_path.as_ref(),
+                cache_policy,
+            )),
         )
     }
 
@@ -141,8 +280,14 @@ impl<B: Backend> BurnVitsSpeech<B> {
         config_path: impl AsRef<Path>,
         checkpoint_path: impl AsRef<Path>,
         speaker_map_path: impl AsRef<Path>,
+        language_map_path: Option<&Path>,
         device: B::Device,
         profiler: Option<&mut dyn FnMut(ModelLoadProfileEvent)>,
+        reference_encoder: Option<(
+            SpeakerEncoderPackageConfig,
+            &Path,
+            SpeakerEmbeddingCachePolicy,
+        )>,
     ) -> Result<Self> {
         let mut profiler = profiler;
         let started = Instant::now();
@@ -158,28 +303,53 @@ impl<B: Backend> BurnVitsSpeech<B> {
             "this VITS engine requires stochastic durations"
         );
         ensure!(
-            network.use_speaker_embedding,
-            "this VITS engine requires learned speaker embeddings"
-        );
-        ensure!(
-            !network.use_d_vector_file,
-            "external d-vector conditioning is not supported by this VITS engine"
-        );
-        ensure!(
-            !network.use_language_embedding,
-            "language-conditioned VITS requires an explicit language input"
+            network.use_speaker_embedding ^ network.use_d_vector_file,
+            "this VITS engine requires exactly one speaker-conditioning mode"
         );
 
         let projector = VitsLinguisticProjector::from_config(imported)?;
-        let speakers = SpeakerCatalog::from_file(speaker_map_path, network.num_speakers)?;
-        let speaker_channels = network.speaker_embedding_channels;
+        let speakers = network
+            .use_speaker_embedding
+            .then(|| SpeakerCatalog::from_file(&speaker_map_path, network.num_speakers))
+            .transpose()?;
+        let d_vectors = network
+            .use_d_vector_file
+            .then(|| {
+                DVectorCatalog::from_file(
+                    &speaker_map_path,
+                    network.d_vector_dim,
+                    crate::COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+                )
+            })
+            .transpose()?;
+        let languages = if network.use_language_embedding {
+            let language_map_path = language_map_path
+                .context("language_ids.json is required for language-conditioned VITS")?;
+            Some(LanguageCatalog::from_file(
+                language_map_path,
+                network.num_languages,
+            )?)
+        } else {
+            ensure!(
+                language_map_path.is_none(),
+                "a language map was supplied to a VITS checkpoint without learned language embeddings"
+            );
+            None
+        };
+        let speaker_channels = if network.use_speaker_embedding {
+            network.speaker_embedding_channels
+        } else {
+            network.d_vector_dim
+        };
         let text_config = VitsTextPriorConfig::from_model_config(&config)?;
-        let mut duration_config = StochasticDurationConfig::new(network.hidden_channels, 192, 3);
+        let mut duration_config =
+            StochasticDurationConfig::new(text_config.encoder_channels(), 192, 3);
         duration_config.conditioning_channels = if network.condition_dp_on_speaker {
             speaker_channels
         } else {
             0
         };
+        duration_config.language_conditioning_channels = text_config.language_embedding_channels;
         let flow_config = ResidualCouplingFlowConfig {
             channels: network.hidden_channels,
             hidden_channels: network.hidden_channels,
@@ -199,8 +369,36 @@ impl<B: Backend> BurnVitsSpeech<B> {
         );
 
         let started = Instant::now();
-        let speaker_embedding =
-            SpeakerEmbedding::init(network.num_speakers as usize, speaker_channels, &device);
+        let speaker_embedding = network.use_speaker_embedding.then(|| {
+            SpeakerEmbedding::init(network.num_speakers as usize, speaker_channels, &device)
+        });
+        let reference_encoder = reference_encoder
+            .map(|(config, checkpoint, cache_policy)| {
+                ensure!(
+                    network.use_d_vector_file,
+                    "a reference encoder can only be attached to d-vector VITS"
+                );
+                ensure!(
+                    config.projection_dim == network.d_vector_dim,
+                    "speaker encoder emits {} dimensions but VITS expects {}",
+                    config.projection_dim,
+                    network.d_vector_dim
+                );
+                NativeSpeakerEmbeddingService::load(
+                    config,
+                    checkpoint,
+                    device.clone(),
+                    cache_policy,
+                )
+            })
+            .transpose()?;
+        let language_embedding = network.use_language_embedding.then(|| {
+            LanguageEmbedding::init(
+                network.num_languages as usize,
+                network.embedded_language_dim,
+                &device,
+            )
+        });
         let text_prior = text_config.init(&device)?;
         let duration_predictor = duration_config.init(&device)?;
         let flow = flow_config.init(&device)?;
@@ -213,7 +411,12 @@ impl<B: Backend> BurnVitsSpeech<B> {
         );
 
         let started = Instant::now();
-        let speaker_embedding = speaker_embedding.load_checkpoint(checkpoint_path)?;
+        let speaker_embedding = speaker_embedding
+            .map(|embedding| embedding.load_checkpoint(checkpoint_path))
+            .transpose()?;
+        let language_embedding = language_embedding
+            .map(|embedding| embedding.load_checkpoint(checkpoint_path))
+            .transpose()?;
         let text_prior = text_prior.load_checkpoint(checkpoint_path)?;
         let duration_predictor = duration_predictor.load_checkpoint(checkpoint_path)?;
         let flow = flow.load_checkpoint(checkpoint_path)?;
@@ -229,7 +432,11 @@ impl<B: Backend> BurnVitsSpeech<B> {
             config,
             projector,
             speakers,
+            d_vectors,
+            languages,
             speaker_embedding,
+            reference_encoder,
+            language_embedding,
             text_prior,
             duration_predictor,
             flow,
@@ -244,7 +451,21 @@ impl<B: Backend> BurnVitsSpeech<B> {
     }
 
     pub fn speaker_catalog(&self) -> &SpeakerCatalog {
-        &self.speakers
+        self.speakers
+            .as_ref()
+            .expect("this VITS engine uses d-vectors instead of learned speakers")
+    }
+
+    pub fn learned_speaker_catalog(&self) -> Option<&SpeakerCatalog> {
+        self.speakers.as_ref()
+    }
+
+    pub fn d_vector_catalog(&self) -> Option<&DVectorCatalog> {
+        self.d_vectors.as_ref()
+    }
+
+    pub fn language_catalog(&self) -> Option<&LanguageCatalog> {
+        self.languages.as_ref()
     }
 
     pub fn projected_input(&self, plan: &UtterancePlan) -> Result<crate::PhonemeTokenIds> {
@@ -269,21 +490,98 @@ impl<B: Backend> BurnVitsSpeech<B> {
         Ok(waveform)
     }
 
+    fn speaker_conditioning(&mut self, request: &SpeechSynthesisRequest) -> Result<Tensor<B, 3>> {
+        if let (Some(speakers), Some(embedding)) = (&self.speakers, &self.speaker_embedding) {
+            ensure!(
+                request.plan.speaker_reference.is_none(),
+                "learned-speaker VITS does not accept a speaker reference"
+            );
+            let speaker_id =
+                speakers.resolve(request.plan.speaker.as_ref(), request.options.speaker_id)?;
+            return Ok(embedding.forward(speaker_id, &self.device));
+        }
+
+        ensure!(
+            request.options.speaker_id.is_none(),
+            "d-vector VITS consumes a named enrollment or speaker reference, not a numeric speaker ID"
+        );
+        ensure!(
+            !(request.plan.speaker.is_some() && request.plan.speaker_reference.is_some()),
+            "choose either a named d-vector enrollment or a speaker reference, not both"
+        );
+        let expected = self
+            .d_vectors
+            .as_ref()
+            .context("d-vector VITS is missing its declared embedding catalog")?
+            .contract()
+            .clone();
+        let embedding = if let Some(speaker) = &request.plan.speaker {
+            self.d_vectors
+                .as_ref()
+                .expect("checked above")
+                .resolve(&speaker.0)?
+        } else {
+            let reference = request
+                .plan
+                .speaker_reference
+                .as_ref()
+                .context("d-vector VITS requires a named enrollment or speaker reference")?;
+            match &reference.source {
+                SpeakerReferenceSource::Embedding { space, values } => {
+                    ensure!(
+                        space == &expected.space,
+                        "speaker embedding space `{space}` does not match `{}`",
+                        expected.space
+                    );
+                    let mut values = values.clone();
+                    normalize_embedding(&mut values)?;
+                    ConditioningEmbedding {
+                        contract: expected.clone(),
+                        values,
+                    }
+                }
+                SpeakerReferenceSource::ReferenceAudio { uri } => self
+                    .reference_encoder
+                    .as_mut()
+                    .context(
+                        "reference audio requires the model's native speaker encoder checkpoint",
+                    )?
+                    .encode_uri(uri)?,
+            }
+        };
+        embedding.validate()?;
+        ensure!(
+            embedding.contract == expected,
+            "speaker embedding contract does not match this VITS checkpoint"
+        );
+        Ok(Tensor::from_data(
+            TensorData::new(embedding.values, [1, expected.dimensions, 1]),
+            &self.device,
+        ))
+    }
+
     fn prepare_latent(
-        &self,
+        &mut self,
         request: &SpeechSynthesisRequest,
         profiler: Option<&mut dyn SynthesisProfiler>,
     ) -> Result<(Tensor<B, 3>, Tensor<B, 3>)> {
         let mut profiler = profiler;
         self.projector.contract().ensure_supports(&request.plan)?;
-        ensure!(
-            request.plan.speaker_reference.is_none(),
-            "this VITS model does not accept reference audio"
-        );
         let started = Instant::now();
-        let speaker_id = self
-            .speakers
-            .resolve(request.plan.speaker.as_ref(), request.options.speaker_id)?;
+        let language_id = match &self.languages {
+            Some(languages) => Some(languages.resolve(
+                request.options.model_language.as_deref(),
+                request.options.language_id,
+            )?),
+            None => {
+                ensure!(
+                    request.options.model_language.is_none()
+                        && request.options.language_id.is_none(),
+                    "this VITS checkpoint does not use learned language embeddings"
+                );
+                None
+            }
+        };
         let projected = self.projector.project(&request.plan)?;
         let token_count = projected.ids.len();
         finish_host_stage(
@@ -302,7 +600,13 @@ impl<B: Backend> BurnVitsSpeech<B> {
             TensorData::new(vec![token_count as i64], [1]),
             &self.device,
         );
-        let conditioning = self.speaker_embedding.forward(speaker_id, &self.device);
+        let conditioning = self.speaker_conditioning(request)?;
+        let language_conditioning = language_id.map(|language_id| {
+            self.language_embedding
+                .as_ref()
+                .expect("language catalog and embedding are constructed together")
+                .forward(language_id, &self.device)
+        });
         finish_backend_stage::<B>(
             &mut profiler,
             &self.device,
@@ -310,12 +614,16 @@ impl<B: Backend> BurnVitsSpeech<B> {
             started,
             [
                 SynthesisDimension::new("tokens", token_count),
-                SynthesisDimension::new("speaker_id", speaker_id as usize),
+                SynthesisDimension::new("speaker_channels", conditioning.dims()[1]),
             ],
         )?;
 
         let started = Instant::now();
-        let prior = self.text_prior.forward(token_ids, lengths)?;
+        let prior = self.text_prior.forward_conditioned(
+            token_ids,
+            lengths,
+            language_conditioning.clone(),
+        )?;
         finish_backend_stage::<B>(
             &mut profiler,
             &self.device,
@@ -342,17 +650,19 @@ impl<B: Backend> BurnVitsSpeech<B> {
             .then(|| conditioning.clone());
         let started = Instant::now();
         let log_durations = match request.options.seed {
-            Some(seed) => self.duration_predictor.reverse_seeded(
+            Some(seed) => self.duration_predictor.reverse_seeded_conditioned(
                 prior.encoded,
                 prior.mask.clone(),
                 duration_conditioning,
+                language_conditioning,
                 f64::from(duration_noise),
                 seed,
             )?,
-            None => self.duration_predictor.reverse(
+            None => self.duration_predictor.reverse_conditioned(
                 prior.encoded,
                 prior.mask.clone(),
                 duration_conditioning,
+                language_conditioning,
                 f64::from(duration_noise),
             )?,
         };
@@ -438,7 +748,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
     }
 
     fn synthesize_streaming(
-        &self,
+        &mut self,
         request: &SpeechSynthesisRequest,
         sink: &mut dyn AudioSink,
         profiler: Option<&mut dyn SynthesisProfiler>,
@@ -521,8 +831,8 @@ impl<B: Backend> SpeechSynthesisEngine for BurnVitsSpeech<B> {
         SpeechModelCapabilities {
             family: SpeechModelFamily::EndToEndSpeech,
             supports_named_speakers: true,
-            supports_languages: false,
-            supports_reference_audio: false,
+            supports_languages: self.languages.is_some(),
+            supports_reference_audio: self.reference_encoder.is_some(),
             supports_voice_conversion: false,
             integrated_vocoder: true,
         }
@@ -605,6 +915,69 @@ mod tests {
                 "seeded VITS inference must be repeatable for {name}"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts"]
+    fn published_your_tts_checkpoints_load_when_available() {
+        let required =
+            |name: &str| std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required"));
+        let engine = BurnVitsSpeech::<TestBackend>::load_your_tts(
+            required("TONGUES_TEST_YOURTTS_CONFIG"),
+            required("TONGUES_TEST_YOURTTS_CHECKPOINT"),
+            required("TONGUES_TEST_YOURTTS_SPEAKERS"),
+            required("TONGUES_TEST_YOURTTS_LANGUAGES"),
+            required("TONGUES_TEST_COQUI_SPEAKER_CONFIG"),
+            required("TONGUES_TEST_COQUI_SPEAKER_MODEL"),
+            NdArrayDevice::Cpu,
+            SpeakerEmbeddingCachePolicy::Disabled,
+        )
+        .expect("published YourTTS graph");
+        assert_eq!(
+            engine.d_vector_catalog().unwrap().contract().dimensions,
+            512
+        );
+        assert!(engine.capabilities().supports_languages);
+        assert!(engine.capabilities().supports_reference_audio);
+    }
+
+    #[test]
+    #[ignore = "requires the pinned published YourTTS and speaker-encoder artifacts"]
+    fn published_your_tts_named_enrollment_synthesizes_when_available() {
+        let required =
+            |name: &str| std::env::var_os(name).unwrap_or_else(|| panic!("{name} is required"));
+        let mut engine = BurnVitsSpeech::<TestBackend>::load_your_tts(
+            required("TONGUES_TEST_YOURTTS_CONFIG"),
+            required("TONGUES_TEST_YOURTTS_CHECKPOINT"),
+            required("TONGUES_TEST_YOURTTS_SPEAKERS"),
+            required("TONGUES_TEST_YOURTTS_LANGUAGES"),
+            required("TONGUES_TEST_COQUI_SPEAKER_CONFIG"),
+            required("TONGUES_TEST_COQUI_SPEAKER_MODEL"),
+            NdArrayDevice::Cpu,
+            SpeakerEmbeddingCachePolicy::Disabled,
+        )
+        .expect("published YourTTS graph");
+        let mut plan = utterance_plan_from_text(SpeechRequest {
+            text: "Hello.".into(),
+            variety: "en-US".into(),
+        })
+        .unwrap();
+        plan.speaker = Some(SpeakerId("male-en-2".into()));
+        let waveform = engine
+            .synthesize(&SpeechSynthesisRequest {
+                plan,
+                options: SynthesisOptions {
+                    model_language: Some("en".into()),
+                    noise_scale: Some(0.0),
+                    noise_w: Some(0.0),
+                    seed: Some(7),
+                    ..SynthesisOptions::default()
+                },
+            })
+            .expect("YourTTS synthesis");
+        assert_eq!(waveform.contract.sample_rate_hz, 16_000);
+        assert!(!waveform.samples.is_empty());
+        assert!(waveform.samples.iter().all(|sample| sample.is_finite()));
     }
 
     fn json_numbers(value: &serde_json::Value) -> Vec<f32> {
@@ -691,6 +1064,8 @@ mod tests {
             assert_eq!(
                 engine
                     .speakers
+                    .as_ref()
+                    .expect("learned speaker catalog")
                     .resolve(Some(&SpeakerId(speaker_name.into())), None)
                     .expect("resolve reference speaker"),
                 speaker_id
@@ -703,7 +1078,11 @@ mod tests {
                 TensorData::new(vec![token_count as i64], [1]),
                 &device,
             );
-            let conditioning = engine.speaker_embedding.forward(speaker_id, &device);
+            let conditioning = engine
+                .speaker_embedding
+                .as_ref()
+                .expect("learned speaker embedding")
+                .forward(speaker_id, &device);
             assert_stage_probes(
                 "speaker_embedding",
                 conditioning.clone(),

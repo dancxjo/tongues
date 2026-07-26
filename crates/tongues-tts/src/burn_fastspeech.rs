@@ -223,7 +223,7 @@ impl FastSpeechConfig {
             other => {
                 return Err(config_error(format!(
                     "expected FastSpeech model, got {other:?}"
-                )))
+                )));
             }
         };
         if let Some(base_model) = root.get("base_model").and_then(Value::as_str) {

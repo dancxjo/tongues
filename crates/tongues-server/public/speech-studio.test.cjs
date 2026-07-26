@@ -1,0 +1,115 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const studio = require('./speech-studio.js');
+
+function fixturePath(overrides = {}) {
+    return {
+        backend: 'fastpitch',
+        model: 'fastpitch-ljspeech+hifigan-v2',
+        display_name: 'FastPitch → HiFi-GAN',
+        complete: true,
+        runnable: true,
+        selected: true,
+        varieties: {
+            support: 'listed',
+            values: [
+                { id: 'en-US-GA', label: 'General American English' },
+                { id: 'en-GB-RP', label: 'Received Pronunciation' },
+            ],
+        },
+        speakers: { required: false, values: { support: 'unsupported' } },
+        controls: [
+            {
+                field: 'speed', label: 'Speed', kind: 'number', group: 'advanced', default: 1,
+            },
+            {
+                field: 'pitch', label: 'Pitch', kind: 'number_array', group: 'expert',
+            },
+            {
+                field: 'timings', label: 'Timing', kind: 'boolean', group: 'advanced', default: false,
+            },
+        ],
+        ...overrides,
+    };
+}
+
+test('selects a complete runnable path and keeps unavailable inventory visible', () => {
+    const unavailable = fixturePath({
+        backend: 'vits',
+        model: 'vits-vctk',
+        selected: false,
+        runnable: false,
+        unavailable_reason: 'speaker artifact missing',
+    });
+    const discovery = { paths: [unavailable, fixturePath()] };
+    assert.equal(studio.selectInitialPath(discovery).backend, 'fastpitch');
+    assert.equal(studio.availablePaths(discovery).length, 2);
+});
+
+test('filters varieties from the selected path capability', () => {
+    assert.deepEqual(
+        studio.varietiesForPath(fixturePath()).map((item) => item.id),
+        ['en-US-GA', 'en-GB-RP'],
+    );
+    assert.deepEqual(
+        studio.varietiesForPath(fixturePath({ varieties: { support: 'unsupported' } })),
+        [],
+    );
+});
+
+test('builds payloads only from declared controls', () => {
+    const values = new Map([
+        ['speed', '1.15'],
+        ['pitch', '0.1, -0.2'],
+        ['timings', true],
+        ['noise_scale', '0.9'],
+    ]);
+    assert.deepEqual(studio.buildPayload(fixturePath(), values, {
+        text: 'Capability driven.',
+        variety: 'en-US-GA',
+    }), {
+        text: 'Capability driven.',
+        backend: 'fastpitch',
+        model: 'fastpitch-ljspeech+hifigan-v2',
+        variety: 'en-US-GA',
+        speed: 1.15,
+        pitch: [0.1, -0.2],
+        timings: true,
+    });
+});
+
+test('requires named speakers and rejects unavailable paths before submission', () => {
+    const vits = fixturePath({
+        backend: 'vits',
+        model: 'vits-vctk',
+        speakers: {
+            required: true,
+            values: {
+                support: 'listed',
+                values: [{ id: 'p225', label: 'p225', numeric_id: 0 }],
+            },
+        },
+    });
+    assert.throws(
+        () => studio.buildPayload(vits, new Map(), { text: 'Hello.', variety: 'en-GB-RP' }),
+        /requires a speaker/,
+    );
+    assert.equal(
+        studio.buildPayload(vits, new Map(), {
+            text: 'Hello.', variety: 'en-GB-RP', speaker: 'p225',
+        }).speaker,
+        'p225',
+    );
+    assert.throws(
+        () => studio.buildPayload({ ...vits, runnable: false }, new Map(), { text: 'Hello.' }),
+        /complete, ready synthesis path/,
+    );
+});
+
+test('validates expert numeric arrays inline before network submission', () => {
+    assert.deepEqual(studio.parseNumberArray('1, 2.5, -3'), [1, 2.5, -3]);
+    assert.deepEqual(studio.parseNumberArray('4, 7, 3', true), [4, 7, 3]);
+    assert.throws(() => studio.parseNumberArray('4, 0', true), /positive whole numbers/);
+    assert.throws(() => studio.parseNumberArray('1, nope'), /finite numbers/);
+});

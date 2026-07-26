@@ -151,7 +151,7 @@ autoregressive CPU graph is not a useful throughput measurement.
 
 Tongues has a schema-v1 backend-neutral model catalog for the native
 SpeedySpeech, FastPitch, Glow-TTS, HiFi-GAN, MultiBand-MelGAN, VITS,
-StyleTTS2, and ONNX voice backends.
+YourTTS, StyleTTS2, and ONNX voice backends.
 Entries record architecture, package version, languages and varieties,
 speakers, sample rate, capabilities, compatibility contracts, source format,
 provenance, license evidence, artifact sizes, and SHA-256 checksums.
@@ -171,6 +171,13 @@ cargo run --bin tongues -- models inspect vits-vctk
 cargo run --bin tongues -- models install vits-vctk
 cargo run --bin tongues -- models install vits-vctk --offline
 cargo run --bin tongues -- models remove vits-vctk
+
+# Non-commercial multilingual voice cloning
+cargo run --bin tongues -- models inspect yourtts-multilingual
+cargo run --bin tongues -- models install yourtts-multilingual
+cargo run --bin tongues -- speak --backend yourtts \
+  --model-language fr-fr --voice-wav reference.wav \
+  "Bonjour tout le monde"
 
 # Install an already converted private/local package
 cargo run --bin tongues -- models install \
@@ -210,6 +217,21 @@ before model construction, so file presence alone is never treated as an
 installable or loadable model. Previously installed pinned artifacts continue
 to work offline after their archive members are compared with the verified
 source archive.
+
+## Native YourTTS conditioning
+
+The YourTTS path uses the checkpoint's grapheme vocabulary and requires an
+explicit model language (`en`, `fr-fr`, or `pt-br`). The selected row is
+concatenated into the text encoder and independently projected into the
+stochastic duration predictor; it is never guessed from `--variety`.
+
+Speaker conditioning accepts either one named enrollment from `speakers.json`
+or `--voice-wav`, never both. Reference WAVs are downmixed, resampled, split
+into the upstream ten evaluation crops, and encoded by the native ResNet
+attentive-statistics speaker encoder. Only derived 512-value embeddings may be
+retained in the bounded runtime cache; reference PCM is not cached.
+Precomputed embeddings must declare the exact
+`coqui-resnet-speaker-encoder-0cf3265a-v1` space.
 
 ## Usage
 
@@ -259,13 +281,29 @@ List the VITS speakers:
 just speak --backend vits --list-speakers
 ```
 
+Model-declared learned languages are separate from `--variety`. The variety
+selects Tongues' pronunciation and linguistic plan; `--model-language` (or the
+low-level `--language-id`) selects an exact checkpoint embedding row. There is
+no prefix-based inference between the two namespaces. Inspect the selected
+VITS model with:
+
+```sh
+just speak --backend vits --list-model-languages
+```
+
+The cataloged VCTK checkpoint reports no learned model languages because it is
+an English model. Imported multilingual VITS packages load
+`language_ids.json` through `LanguageCatalog`; multi-language models require an
+explicit named or numeric selection, while a one-language embedding may
+default to row zero.
+
 The local server exposes every registered model through
 `GET /api/speech/models`. Each entry includes backend/model identity, model
-family, varieties, named and numeric speakers, style and reference-audio
-support, speed/seed/device support, normalized output format, installation
-state, and provenance. The synthesis UI renders the VITS speaker selector from
-this contract, including the checkpoint embedding ID; it does not carry a
-separate hard-coded speaker list. The older
+family, varieties, learned model languages, named and numeric speakers, style
+and reference-audio support, speed/seed/device support, normalized output
+format, installation state, and provenance. The synthesis UI renders the VITS
+speaker selector from this contract, including the checkpoint embedding ID; it
+does not carry a separate hard-coded speaker list. The older
 `GET /api/speech/speakers?backend=vits` endpoint remains as a compatibility
 view. Linguistic varieties are independently enumerated from the shared
 variety data registry at `GET /api/linguistic/varieties`.
@@ -369,9 +407,10 @@ fail at the boundary.
 `tongues-tts::UnifiedSynthesisRequest` is the public orchestration boundary for
 native component pipelines, end-to-end models, imported ONNX voices,
 reference-conditioned models, and future voice-conversion backends. It carries
-text, pronunciation variety, named or numeric speaker selection, speaker/style
-and source reference audio, named or embedded style, speed, stochastic seed,
-device, and chunking/streaming intent.
+text, pronunciation variety, optional named or numeric checkpoint-language
+selection, named or numeric speaker selection, speaker/style and source
+reference audio, named or embedded style, speed, stochastic seed, device, and
+chunking/streaming intent.
 
 Every imported implementation exposes `BackendCapabilities` and implements
 `SynthesizerBackend`. Capability validation happens before inference and
@@ -406,6 +445,8 @@ count, audio duration, streaming mode, and backend timing stages.
   synthesis;
 - native VITS text encoding, stochastic duration prediction, flow, and waveform
   decoding;
+- model-declared VITS language catalogs plus learned language conditioning in
+  both the text encoder and stochastic duration predictor;
 - named-speaker lookup for the VCTK model;
 - streaming audio chunks for end-to-end synthesis;
 - synchronized, structured profiling at native model boundaries;

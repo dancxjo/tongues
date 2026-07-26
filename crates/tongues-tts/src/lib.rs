@@ -49,15 +49,18 @@ pub mod burn_vits_text;
 pub mod burn_vocoder;
 mod checkpoint;
 pub mod components;
+pub mod d_vectors;
 pub mod delightful_tts_config;
 pub mod device;
 pub mod glow_tts_config;
+pub mod languages;
 pub mod model_catalog;
 pub mod model_config;
 pub mod model_package;
 pub mod orchestration;
 pub mod phoneme_projector;
 pub mod profiling;
+pub mod speaker_encoder;
 pub mod speakers;
 pub mod tacotron_config;
 pub mod vits_config;
@@ -118,13 +121,17 @@ pub use burn_vocoder::{
     BurnVocoder,
 };
 pub use components::{
-    AcousticArtifact, AcousticModel, AcousticOutputContract, CodecContract, CodecDecoder,
-    CodecDecoderAdapter, CodecTokenSequence, ConditioningEmbedding, ConditioningKind,
-    EmbeddingContract, IdentityAudioDecoder, InferenceRuntime, LinguisticInputKind,
-    LinguisticIntent, LinguisticProjector, MelFilterBank, ModelInputContract, NeuralVocoder,
-    ReferenceEncoder, Spectrogram, SpectrogramContract, SpectrogramDomain, SpectrogramKind,
-    SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode, SpectrogramScale,
-    SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
+    native_speech_components, AcousticArtifact, AcousticModel, AcousticOutputContract,
+    CodecContract, CodecDecoder, CodecDecoderAdapter, CodecTokenSequence, ConditioningEmbedding,
+    ConditioningKind, EmbeddingContract, IdentityAudioDecoder, InferenceRuntime,
+    LinguisticInputKind, LinguisticIntent, LinguisticProjector, MelFilterBank, ModelInputContract,
+    NativeSpeechComponent, NativeSpeechComponentKind, NativeSpeechComponentReadiness,
+    NeuralVocoder, ReferenceEncoder, Spectrogram, SpectrogramContract, SpectrogramDomain,
+    SpectrogramKind, SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode,
+    SpectrogramScale, SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
+};
+pub use d_vectors::{
+    l2_normalize as normalize_embedding, DVectorCatalog, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
 };
 pub use delightful_tts_config::{
     DelightfulAudioConfig, DelightfulConformerConfig, DelightfulProsodyConfig,
@@ -136,6 +143,7 @@ pub use device::{
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
 pub use glow_tts_config::{GlowTtsEncoderConfig, GlowTtsInferenceConfig, GlowTtsNetworkConfig};
+pub use languages::LanguageCatalog;
 pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,
     private_catalog_paths_from_environment, CatalogArchiveMember, CatalogArtifact, CatalogLicense,
@@ -159,11 +167,12 @@ pub use model_package::{
 };
 pub use orchestration::{
     variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
-    CapabilityValue, EnergyCapabilities, NamedCapability, NormalizedAudioChunk,
-    NormalizedAudioSink, OutputAudioContract, PitchCapabilities, PlanEngineBackend,
-    ReferenceAudioCapabilities, ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection,
-    StyleCapabilities, StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming,
-    SynthesizerBackend, SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
+    CapabilityValue, EnergyCapabilities, LanguageCapabilities, LanguageSelection, NamedCapability,
+    NormalizedAudioChunk, NormalizedAudioSink, OutputAudioContract, PitchCapabilities,
+    PlanEngineBackend, ReferenceAudioCapabilities, ReferenceAudioRequest, SpeakerCapabilities,
+    SpeakerSelection, StyleCapabilities, StyleSelection, SynthesisContractError, SynthesisMetadata,
+    SynthesisTiming, SynthesizerBackend, SynthesizerRegistry, UnifiedSynthesisOutput,
+    UnifiedSynthesisRequest,
 };
 pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
@@ -172,6 +181,10 @@ pub use profiling::{
     ModelLoadProfileEvent, ModelLoadStage, SynthesisDimension, SynthesisProfileEvent,
     SynthesisProfiler, SynthesisStage,
 };
+pub use speaker_encoder::{
+    angular_prototypical_loss, average_embeddings, cosine_similarity, CoquiResNetSpeakerEncoder,
+    NativeSpeakerEmbeddingService, SpeakerEmbeddingCachePolicy,
+};
 pub use speakers::SpeakerCatalog;
 pub use tacotron_config::{
     CapacitronInferenceConfig, TacotronArchitecture, TacotronAttentionNormalization,
@@ -179,6 +192,7 @@ pub use tacotron_config::{
     DEFAULT_TACOTRON_MAX_DECODER_STEPS,
 };
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
+pub use vits_projector::VitsLinguisticProjector;
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";
@@ -294,6 +308,13 @@ pub struct SynthesisOptions {
     ///
     /// Named speaker identity belongs in `UtterancePlan::speaker`.
     pub speaker_id: Option<u32>,
+    /// Stable checkpoint-local model language name.
+    ///
+    /// This is deliberately independent of `UtterancePlan::variety`, which
+    /// controls linguistic planning and pronunciation.
+    pub model_language: Option<String>,
+    /// Low-level checkpoint-local language ID override.
+    pub language_id: Option<u32>,
     pub split_sentences: bool,
     pub length_scale: Option<f32>,
     pub noise_scale: Option<f32>,
@@ -320,6 +341,8 @@ impl Default for SynthesisOptions {
     fn default() -> Self {
         Self {
             speaker_id: None,
+            model_language: None,
+            language_id: None,
             split_sentences: true,
             length_scale: None,
             noise_scale: None,

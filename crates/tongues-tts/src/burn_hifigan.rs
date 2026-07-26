@@ -139,7 +139,46 @@ impl ResBlock1Config {
             })
             .collect();
 
-        Ok(ResBlock1 { convs1, convs2 })
+        Ok(ResBlock1 {
+            convs1,
+            convs2,
+            convs: Vec::new(),
+            resblock_type: "1".into(),
+        })
+    }
+
+    fn init_type2<B: Backend>(&self, device: &B::Device) -> Result<ResBlock1<B>, HifiganError> {
+        if self.channels == 0
+            || self.kernel_size == 0
+            || self.kernel_size.is_multiple_of(2)
+            || self.dilations.len() < 2
+            || self.dilations[..2].contains(&0)
+        {
+            return Err(config_error(
+                "ResBlock2 requires positive channels, an odd kernel, and two positive dilations",
+            ));
+        }
+        let convs = self.dilations[..2]
+            .iter()
+            .map(|&dilation| {
+                WeightNormConv1d::new(
+                    self.channels,
+                    self.channels,
+                    self.kernel_size,
+                    1,
+                    dilation,
+                    same_padding(self.kernel_size, dilation),
+                    true,
+                    device,
+                )
+            })
+            .collect();
+        Ok(ResBlock1 {
+            convs1: Vec::new(),
+            convs2: Vec::new(),
+            convs,
+            resblock_type: "2".into(),
+        })
     }
 }
 
@@ -315,10 +354,19 @@ fn weight_norm_dim_zero<B: Backend>(weight: Tensor<B, 3>) -> Tensor<B, 3> {
 pub struct ResBlock1<B: Backend> {
     pub convs1: Vec<WeightNormConv1d<B>>,
     pub convs2: Vec<WeightNormConv1d<B>>,
+    pub convs: Vec<WeightNormConv1d<B>>,
+    pub resblock_type: String,
 }
 
 impl<B: Backend> ResBlock1<B> {
     pub fn forward(&self, mut input: Tensor<B, 3>) -> Tensor<B, 3> {
+        if self.resblock_type == "2" {
+            for conv in &self.convs {
+                let residual = input.clone();
+                input = conv.forward(leaky_relu(input, LRELU_SLOPE)) + residual;
+            }
+            return input;
+        }
         for (conv1, conv2) in self.convs1.iter().zip(&self.convs2) {
             let residual = input.clone();
             let hidden = conv1.forward(leaky_relu(input, LRELU_SLOPE));
@@ -331,10 +379,9 @@ impl<B: Backend> ResBlock1<B> {
 
 /// Configurable HiFi-GAN generator parameters.
 ///
-/// This native module currently accepts `resblock_type = "1"`. That is
-/// the architecture required by the published LJSpeech HiFi-GAN v2 model and
-/// keeps the checkpoint path `resblocks.N.convs{1,2}.N.*` exact, without an
-/// enum-variant segment that would require `PytorchStore` key remapping.
+/// Both upstream checkpoint layouts remain exact:
+/// `resblocks.N.convs{1,2}.N.*` for type 1 and
+/// `resblocks.N.convs.N.*` for type 2.
 #[derive(Config, Debug, PartialEq)]
 pub struct HifiganGeneratorConfig {
     pub in_channels: usize,
@@ -394,9 +441,9 @@ impl HifiganGeneratorConfig {
         if self.out_channels == 0 {
             return Err(config_error("out_channels must be positive"));
         }
-        if self.resblock_type != "1" {
+        if !matches!(self.resblock_type.as_str(), "1" | "2") {
             return Err(config_error(format!(
-                "resblock_type `{}` is unsupported; this module preserves the exact ResBlock1 checkpoint layout and requires `1`",
+                "resblock_type `{}` is unsupported; expected `1` or `2`",
                 self.resblock_type
             )));
         }
@@ -417,12 +464,22 @@ impl HifiganGeneratorConfig {
             .iter()
             .zip(&self.resblock_dilation_sizes)
         {
-            ResBlock1Config {
+            let config = ResBlock1Config {
                 channels: 1,
                 kernel_size,
                 dilations: dilations.clone(),
+            };
+            if self.resblock_type == "1" {
+                config.validate()?;
+            } else if config.kernel_size == 0
+                || config.kernel_size.is_multiple_of(2)
+                || config.dilations.len() < 2
+                || config.dilations[..2].contains(&0)
+            {
+                return Err(config_error(
+                    "ResBlock2 requires an odd kernel and at least two positive dilations",
+                ));
             }
-            .validate()?;
         }
 
         if self.upsample_factors.is_empty() {
@@ -529,14 +586,16 @@ impl HifiganGeneratorConfig {
                 .iter()
                 .zip(&self.resblock_dilation_sizes)
             {
-                resblocks.push(
-                    ResBlock1Config {
-                        channels: channels_out,
-                        kernel_size: resblock_kernel,
-                        dilations: dilations.clone(),
-                    }
-                    .init(device)?,
-                );
+                let config = ResBlock1Config {
+                    channels: channels_out,
+                    kernel_size: resblock_kernel,
+                    dilations: dilations.clone(),
+                };
+                resblocks.push(if self.resblock_type == "1" {
+                    config.init(device)?
+                } else {
+                    config.init_type2(device)?
+                });
             }
         }
 
@@ -833,8 +892,11 @@ mod tests {
 
         let mut config = tiny_config();
         config.resblock_type = "2".to_owned();
-        let error = config.validate().expect_err("ResBlock2 is not represented");
-        assert!(error.to_string().contains("resblock_type"));
+        config.validate().expect("ResBlock2 topology");
+        let model = config
+            .init::<TestBackend>(&NdArrayDevice::Cpu)
+            .expect("ResBlock2 model");
+        assert_eq!(model.resblocks[0].convs.len(), 2);
     }
 
     #[test]

@@ -15,6 +15,7 @@ use speaking::{
     TerminalPunctuation, UtteranceId, UtterancePlan, VarietyId,
 };
 use speech::LinguisticProjector as _;
+use speech::SpeechSynthesisEngine as _;
 use styletts2::{
     prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
     validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
@@ -65,6 +66,15 @@ pub struct SpeakCommand {
     pub speaker_id: Option<u32>,
     #[arg(long, help = "List speakers declared by the selected voice model")]
     pub list_speakers: bool,
+    #[arg(
+        long,
+        help = "Stable learned language name declared by a multilingual model"
+    )]
+    pub model_language: Option<String>,
+    #[arg(long, help = "Numeric learned language ID for low-level model testing")]
+    pub language_id: Option<u32>,
+    #[arg(long, help = "List learned languages declared by the selected model")]
+    pub list_model_languages: bool,
     #[arg(long, help = "Reference WAV for speaker timbre")]
     pub voice_wav: Option<PathBuf>,
     #[arg(long, help = "Reference WAV for style and prosody")]
@@ -189,6 +199,9 @@ impl Default for SpeakCommand {
             speaker: None,
             speaker_id: None,
             list_speakers: false,
+            model_language: None,
+            language_id: None,
+            list_model_languages: false,
             voice_wav: None,
             style_wav: None,
             quality: SpeakQuality::Balanced,
@@ -248,6 +261,7 @@ pub enum SpeakBackend {
     Burn,
     Fastpitch,
     Vits,
+    Yourtts,
     Mock,
     Styletts2,
     Onnx,
@@ -313,6 +327,8 @@ fn onnx_synthesis_options(options: &SpeechSynthesisOptions) -> Result<speech::Sy
     }
     Ok(speech::SynthesisOptions {
         speaker_id: options.speaker_id,
+        model_language: options.model_language.clone(),
+        language_id: options.language_id,
         split_sentences: true,
         length_scale: Some((1.0 / options.speed) as f32),
         noise_scale: options.noise_scale,
@@ -341,6 +357,8 @@ pub struct SpeechSynthesisOptions {
     pub sample_rate_hz: u32,
     pub speaker: Option<String>,
     pub speaker_id: Option<u32>,
+    pub model_language: Option<String>,
+    pub language_id: Option<u32>,
     pub voice_wav: Option<PathBuf>,
     pub style_wav: Option<PathBuf>,
     pub diffusion_steps: usize,
@@ -372,6 +390,8 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
             sample_rate_hz: command.sample_rate_hz,
             speaker: command.speaker.clone(),
             speaker_id: command.speaker_id,
+            model_language: command.model_language.clone(),
+            language_id: command.language_id,
             voice_wav: command.voice_wav.clone(),
             style_wav: command.style_wav.clone(),
             diffusion_steps: command.resolved_diffusion_steps(),
@@ -412,6 +432,11 @@ fn unified_cli_request(
     speech::UnifiedSynthesisRequest {
         text: text.to_string(),
         variety: command.variety.clone(),
+        model_language: options
+            .model_language
+            .clone()
+            .map(speech::LanguageSelection::Named)
+            .or_else(|| options.language_id.map(speech::LanguageSelection::Numeric)),
         speaker: options
             .speaker
             .clone()
@@ -535,6 +560,7 @@ impl BackendInstance {
             model: model.into(),
             family,
             varieties: varieties.clone(),
+            languages: speech::LanguageCapabilities::unsupported(),
             speakers: speech::SpeakerCapabilities::unsupported(),
             styles: speech::StyleCapabilities::unsupported(),
             reference_audio: Default::default(),
@@ -575,12 +601,22 @@ impl BackendInstance {
                 capabilities.provenance = vec!["Published Coqui release artifacts".into()];
                 capabilities
             }
-            Self::VitsCpu(engine) => {
-                vits_cli_capabilities(engine.speaker_catalog(), devices, varieties)
-            }
-            Self::VitsCuda(engine) => {
-                vits_cli_capabilities(engine.speaker_catalog(), devices, varieties)
-            }
+            Self::VitsCpu(engine) => vits_cli_capabilities(
+                engine.learned_speaker_catalog(),
+                engine.d_vector_catalog(),
+                engine.language_catalog(),
+                devices,
+                varieties,
+                engine.sample_rate_hz(),
+            ),
+            Self::VitsCuda(engine) => vits_cli_capabilities(
+                engine.learned_speaker_catalog(),
+                engine.d_vector_catalog(),
+                engine.language_catalog(),
+                devices,
+                varieties,
+                engine.sample_rate_hz(),
+            ),
             Self::Mock(_) => {
                 let mut capabilities = base(
                     "mock",
@@ -599,6 +635,7 @@ impl BackendInstance {
                 model: "styletts2-en-us".into(),
                 family: speech::SpeechModelFamily::CrossLingualVoiceClone,
                 varieties,
+                languages: speech::LanguageCapabilities::unsupported(),
                 speakers: speech::SpeakerCapabilities::unsupported(),
                 styles: speech::StyleCapabilities {
                     names: speech::CapabilityValue::Any,
@@ -634,6 +671,7 @@ impl BackendInstance {
                     model: "onnx-compatibility-voice".into(),
                     family: speech::SpeechModelFamily::EndToEndSpeech,
                     varieties,
+                    languages: speech::LanguageCapabilities::unsupported(),
                     speakers: speech::SpeakerCapabilities {
                         values: if values.is_empty() {
                             speech::CapabilityValue::Unsupported
@@ -882,17 +920,16 @@ impl BackendInstance {
 }
 
 fn vits_cli_capabilities(
-    catalog: &speech::SpeakerCatalog,
+    learned_speakers: Option<&speech::SpeakerCatalog>,
+    d_vectors: Option<&speech::DVectorCatalog>,
+    languages: Option<&speech::LanguageCatalog>,
     devices: Vec<speech::SpeechDeviceRequest>,
     varieties: speech::CapabilityValue,
+    sample_rate_hz: u32,
 ) -> speech::BackendCapabilities {
-    speech::BackendCapabilities {
-        backend: "vits".into(),
-        model: "vits-vctk".into(),
-        family: speech::SpeechModelFamily::EndToEndSpeech,
-        varieties,
-        speakers: speech::SpeakerCapabilities {
-            values: speech::CapabilityValue::Listed(
+    let (speaker_values, numeric_ids) = if let Some(catalog) = learned_speakers {
+        (
+            speech::CapabilityValue::Listed(
                 catalog
                     .entries()
                     .into_iter()
@@ -901,11 +938,65 @@ fn vits_cli_capabilities(
                     })
                     .collect(),
             ),
+            true,
+        )
+    } else {
+        (
+            speech::CapabilityValue::Listed(
+                d_vectors
+                    .into_iter()
+                    .flat_map(|catalog| catalog.speaker_names())
+                    .map(|name| speech::NamedCapability::new(name, name))
+                    .collect(),
+            ),
+            false,
+        )
+    };
+    let is_yourtts = d_vectors.is_some();
+    speech::BackendCapabilities {
+        backend: "vits".into(),
+        model: if is_yourtts {
+            "yourtts-multilingual"
+        } else {
+            "vits-vctk"
+        }
+        .into(),
+        family: if is_yourtts {
+            speech::SpeechModelFamily::CrossLingualVoiceClone
+        } else {
+            speech::SpeechModelFamily::EndToEndSpeech
+        },
+        varieties: if is_yourtts {
+            speech::CapabilityValue::Any
+        } else {
+            varieties
+        },
+        languages: languages.map_or_else(speech::LanguageCapabilities::unsupported, |catalog| {
+            speech::LanguageCapabilities {
+                values: speech::CapabilityValue::Listed(
+                    catalog
+                        .entries()
+                        .into_iter()
+                        .map(|(name, id)| {
+                            speech::NamedCapability::new(name, name).with_numeric_id(id)
+                        })
+                        .collect(),
+                ),
+                required: catalog.num_languages() > 1,
+                numeric_ids: true,
+            }
+        }),
+        speakers: speech::SpeakerCapabilities {
+            values: speaker_values,
             required: true,
-            numeric_ids: true,
+            numeric_ids,
         },
         styles: speech::StyleCapabilities::unsupported(),
-        reference_audio: Default::default(),
+        reference_audio: speech::ReferenceAudioCapabilities {
+            speaker: is_yourtts,
+            style: false,
+            source: false,
+        },
         speed: true,
         pitch: speech::PitchCapabilities::default(),
         energy: speech::EnergyCapabilities::default(),
@@ -913,7 +1004,7 @@ fn vits_cli_capabilities(
         seed: true,
         devices,
         output: speech::OutputAudioContract {
-            sample_rate_hz: 22_050,
+            sample_rate_hz,
             channels: 1,
             streaming: true,
         },
@@ -936,6 +1027,8 @@ fn synthesize_burn_engine(
         plan: plan.clone(),
         options: speech::SynthesisOptions {
             speaker_id: options.speaker_id,
+            model_language: options.model_language.clone(),
+            language_id: options.language_id,
             split_sentences: true,
             length_scale: Some((1.0 / options.speed) as f32),
             noise_scale: options.noise_scale,
@@ -1133,6 +1226,52 @@ fn load_backend(
             model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
             backend
         }
+        SpeakBackend::Yourtts => {
+            let started = Instant::now();
+            let checkpoint =
+                crate::models::ensure_model_available(crate::models::YOURTTS_MODEL_ID)?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let model_dir = checkpoint
+                .parent()
+                .context("YourTTS checkpoint path has no parent directory")?;
+            let config = model_dir.join("config.json");
+            let speakers = model_dir.join("speakers.json");
+            let languages = model_dir.join("language_ids.json");
+            let speaker_encoder_config = model_dir.join("config_se.json");
+            let speaker_encoder_checkpoint = model_dir.join("model_se.pth.tar");
+            let started = Instant::now();
+            let cache_policy = speech::SpeakerEmbeddingCachePolicy::Memory { max_entries: 16 };
+            let backend = match device_arg {
+                DeviceArg::Cpu => BackendInstance::VitsCpu(Box::new(
+                    speech::BurnVitsSpeech::load_your_tts(
+                        config,
+                        checkpoint,
+                        speakers,
+                        languages,
+                        speaker_encoder_config,
+                        speaker_encoder_checkpoint,
+                        NdArrayDevice::Cpu,
+                        cache_policy,
+                    )
+                    .context("failed to load native YourTTS on CPU")?,
+                )),
+                DeviceArg::Cuda { index } => BackendInstance::VitsCuda(Box::new(
+                    speech::BurnVitsSpeech::load_your_tts(
+                        config,
+                        checkpoint,
+                        speakers,
+                        languages,
+                        speaker_encoder_config,
+                        speaker_encoder_checkpoint,
+                        CudaDevice::new(index),
+                        cache_policy,
+                    )
+                    .context("failed to load native YourTTS on CUDA")?,
+                )),
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
+        }
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
         }
@@ -1204,8 +1343,16 @@ pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
         (1..=32).contains(&command.benchmark_runs),
         "--benchmark-runs must be between 1 and 32"
     );
+    anyhow::ensure!(
+        command.model_language.is_none() || command.language_id.is_none(),
+        "use either --model-language or --language-id, not both"
+    );
     if command.list_speakers {
         print_available_speakers(&command)?;
+        return Ok(());
+    }
+    if command.list_model_languages {
+        print_available_model_languages(&command)?;
         return Ok(());
     }
 
@@ -1223,6 +1370,7 @@ fn run_speak_with_backend(
     let target_sample_rate = match command.backend {
         SpeakBackend::Burn | SpeakBackend::Fastpitch => 22_050,
         SpeakBackend::Vits => 22_050,
+        SpeakBackend::Yourtts => 16_000,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => 22_050,
@@ -1407,9 +1555,18 @@ fn run_speak_with_backend(
         let backend_symbols = match (&checkpoint_input, command.backend) {
             (
                 Some(projected),
-                SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits,
+                SpeakBackend::Burn
+                | SpeakBackend::Fastpitch
+                | SpeakBackend::Vits
+                | SpeakBackend::Yourtts,
             ) => projected.projected_symbols.clone(),
-            (None, SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits) => {
+            (
+                None,
+                SpeakBackend::Burn
+                | SpeakBackend::Fastpitch
+                | SpeakBackend::Vits
+                | SpeakBackend::Yourtts,
+            ) => {
                 anyhow::bail!("native Burn backend did not expose its checkpoint projection")
             }
             (_, SpeakBackend::Mock | SpeakBackend::Styletts2) => {
@@ -1460,7 +1617,7 @@ fn run_speak_with_backend(
                     .join(" ")
             );
         }
-        if matches!(command.backend, SpeakBackend::Vits) {
+        if matches!(command.backend, SpeakBackend::Vits | SpeakBackend::Yourtts) {
             println!(
                 "inference_seed: {}",
                 options
@@ -1529,7 +1686,10 @@ fn run_speak_with_backend(
 
         println!("chunks:");
         match command.backend {
-            SpeakBackend::Burn | SpeakBackend::Fastpitch | SpeakBackend::Vits => {
+            SpeakBackend::Burn
+            | SpeakBackend::Fastpitch
+            | SpeakBackend::Vits
+            | SpeakBackend::Yourtts => {
                 println!("  1: {backend_symbols}");
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
@@ -1788,6 +1948,7 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
         SpeakBackend::Burn => "Burn components",
         SpeakBackend::Fastpitch => "FastPitch + HiFi-GAN",
         SpeakBackend::Vits => "VITS",
+        SpeakBackend::Yourtts => "YourTTS",
         SpeakBackend::Onnx => "ONNX compatibility voice",
         SpeakBackend::Styletts2 => "StyleTTS2",
         SpeakBackend::Mock => "mock",
@@ -1876,6 +2037,23 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
         }
         return Ok(());
     }
+    if matches!(command.backend, SpeakBackend::Yourtts) {
+        let checkpoint = crate::models::ensure_model_available(crate::models::YOURTTS_MODEL_ID)?;
+        let model_dir = checkpoint
+            .parent()
+            .context("YourTTS checkpoint path has no parent directory")?;
+        let config = speech::VitsInferenceConfig::from_file(model_dir.join("config.json"))?;
+        let catalog = speech::DVectorCatalog::from_file(
+            model_dir.join("speakers.json"),
+            config.network.d_vector_dim,
+            speech::COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+        )?;
+        println!("speakers:");
+        for speaker in catalog.speaker_names() {
+            println!("  {speaker}");
+        }
+        return Ok(());
+    }
     anyhow::ensure!(
         matches!(command.backend, SpeakBackend::Onnx),
         "--list-speakers is currently available for --backend onnx"
@@ -1901,6 +2079,35 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     {
         anyhow::bail!("ONNX speech backend requires compiling with feature `onnx-tts`")
     }
+}
+
+fn print_available_model_languages(command: &SpeakCommand) -> Result<()> {
+    anyhow::ensure!(
+        matches!(command.backend, SpeakBackend::Vits | SpeakBackend::Yourtts),
+        "--list-model-languages is currently available for --backend vits or yourtts"
+    );
+    let checkpoint = crate::models::ensure_model_available(
+        if matches!(command.backend, SpeakBackend::Yourtts) {
+            crate::models::YOURTTS_MODEL_ID
+        } else {
+            crate::models::DEFAULT_END_TO_END_SPEECH_MODEL_ID
+        },
+    )?;
+    let config = speech::VitsInferenceConfig::from_file(component_config_path(&checkpoint)?)?;
+    if !config.network.use_language_embedding {
+        println!("model languages: <none> (checkpoint has no learned language embeddings)");
+        return Ok(());
+    }
+    let language_path = checkpoint
+        .parent()
+        .context("VITS checkpoint path has no parent directory")?
+        .join("language_ids.json");
+    let catalog = speech::LanguageCatalog::from_file(language_path, config.network.num_languages)?;
+    println!("model languages:");
+    for (name, id) in catalog.entries() {
+        println!("  {name} ({id})");
+    }
+    Ok(())
 }
 
 fn component_config_path(checkpoint_path: &Path) -> Result<PathBuf> {

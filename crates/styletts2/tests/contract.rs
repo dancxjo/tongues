@@ -5,10 +5,10 @@ use speaking::{
     TextSpan, TimeSpan, UtteranceId, UtterancePlan, VarietyId,
 };
 use styletts2::{
-    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
-    validate_styletts2_plan, BackendSynthesisPlan, MockStyleTts2Backend, StyleTts2Backend,
-    StyleTts2Config, StyleTts2PlanOptions, StyleTts2SymbolSource, StyleTts2SymbolToken,
-    StyleTts2SynthesisRequest, SymbolLoweringError, SymbolSet, SynthesisChunk,
+    BackendSynthesisPlan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2Config,
+    StyleTts2PlanOptions, StyleTts2SymbolSource, StyleTts2SymbolToken, StyleTts2SynthesisRequest,
+    SymbolLoweringError, SymbolSet, SynthesisChunk, prepare_styletts2_plan,
+    styletts2_en_us_symbol_set, styletts2_text_for_symbols, validate_styletts2_plan,
 };
 
 #[test]
@@ -376,10 +376,12 @@ fn mock_backend_returns_deterministic_finite_pcm() {
     let second_output = second.synthesize(&request).expect("mock should synthesize");
 
     assert!(!first_output.pcm_mono_f32.is_empty());
-    assert!(first_output
-        .pcm_mono_f32
-        .iter()
-        .all(|sample| sample.is_finite()));
+    assert!(
+        first_output
+            .pcm_mono_f32
+            .iter()
+            .all(|sample| sample.is_finite())
+    );
     assert_eq!(first_output.pcm_mono_f32, second_output.pcm_mono_f32);
 }
 
@@ -778,10 +780,12 @@ fn prepared_plan_chunks_long_input_on_word_boundaries() {
     .expect("prepare plan");
 
     assert!(backend_plan.chunks.len() > 1);
-    assert!(backend_plan
-        .chunks
-        .iter()
-        .all(|chunk| chunk.symbols.len() <= 3));
+    assert!(
+        backend_plan
+            .chunks
+            .iter()
+            .all(|chunk| chunk.symbols.len() <= 3)
+    );
 }
 
 #[test]

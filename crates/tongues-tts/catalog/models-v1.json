@@ -249,6 +249,65 @@
       ]
     },
     {
+      "id": "yourtts-multilingual",
+      "display_name": "YourTTS Multilingual Voice Cloning",
+      "aliases": ["yourtts", "your-tts", "coqui-yourtts"],
+      "architecture": "vits",
+      "compatible_with": ["coqui-yourtts", "coqui-tts-v0.6.1", "coqui-resnet-speaker-encoder"],
+      "package_version": 1,
+      "languages": ["en", "fr-fr", "pt-br"],
+      "varieties": ["en", "fr-FR", "pt-BR"],
+      "speakers": {
+        "count": 4,
+        "names": [],
+        "names_file": "models/speech/coqui/multilingual/yourtts/speakers.json"
+      },
+      "sample_rate_hz": 16000,
+      "capabilities": ["end-to-end-speech", "graphemes", "languages", "speakers", "reference-audio", "voice-cloning", "streaming", "speed", "seed"],
+      "license": {
+        "expression": "CC-BY-NC-ND-4.0",
+        "evidence": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
+      },
+      "provenance": {
+        "format": "coqui-pytorch-zip",
+        "source": "https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"
+      },
+      "artifacts": [
+        {
+          "url": "https://coqui.gateway.scarf.sh/v0.6.0_models/tts_models--multilingual--multi-dataset--your_tts.zip",
+          "sha256": "b355a135b0252e619e5fb10ea4a28ba879e4bdb68c6e374815b9abbd7a14ad68",
+          "size_bytes": 394100490,
+          "install_path": "models/speech/coqui/multilingual/yourtts/tts_models--multilingual--multi-dataset--your_tts.zip",
+          "members": [
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/model_file.pth.tar",
+              "install_path": "models/speech/coqui/multilingual/yourtts/model_file.pth.tar"
+            },
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/config.json",
+              "install_path": "models/speech/coqui/multilingual/yourtts/config.json"
+            },
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/speakers.json",
+              "install_path": "models/speech/coqui/multilingual/yourtts/speakers.json"
+            },
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/language_ids.json",
+              "install_path": "models/speech/coqui/multilingual/yourtts/language_ids.json"
+            },
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/model_se.pth.tar",
+              "install_path": "models/speech/coqui/multilingual/yourtts/model_se.pth.tar"
+            },
+            {
+              "archive_path": "tts_models--multilingual--multi-dataset--your_tts/config_se.json",
+              "install_path": "models/speech/coqui/multilingual/yourtts/config_se.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "styletts2-en-us",
       "display_name": "StyleTTS2 en-US ONNX",
       "aliases": ["styletts2", "styletts2-en", "style-tts-2"],

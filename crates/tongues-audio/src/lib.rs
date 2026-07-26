@@ -319,6 +319,7 @@ pub enum PadMode {
 #[serde(rename_all = "kebab-case")]
 pub enum Window {
     Hann,
+    Hamming,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +534,12 @@ fn padded_window(config: &StftConfig) -> Vec<f32> {
             for index in 0..config.window_size {
                 output[offset + index] =
                     0.5 - 0.5 * (2.0 * PI * index as f32 / config.window_size as f32).cos();
+            }
+        }
+        Window::Hamming => {
+            for index in 0..config.window_size {
+                output[offset + index] =
+                    0.54 - 0.46 * (2.0 * PI * index as f32 / config.window_size as f32).cos();
             }
         }
     }

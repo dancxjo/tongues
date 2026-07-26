@@ -67,7 +67,10 @@ fn input_error(message: impl Into<String>) -> VitsTextPriorError {
 pub struct VitsTextPriorConfig {
     pub vocabulary_size: usize,
     pub prior_channels: usize,
+    /// Token-embedding width before optional language concatenation.
     pub hidden_channels: usize,
+    /// Checkpoint-local learned language-embedding width.
+    pub language_embedding_channels: usize,
     pub ffn_channels: usize,
     pub num_heads: usize,
     pub num_layers: usize,
@@ -81,16 +84,16 @@ impl VitsTextPriorConfig {
         config
             .validate()
             .map_err(|error| topology_error(error.to_string()))?;
-        if config.network.use_language_embedding {
-            return Err(topology_error(
-                "language-conditioned text encoders require an explicit language input",
-            ));
-        }
 
         let config = Self {
             vocabulary_size: config.network.num_chars,
             prior_channels: config.network.hidden_channels,
             hidden_channels: config.network.hidden_channels,
+            language_embedding_channels: if config.network.use_language_embedding {
+                config.network.embedded_language_dim
+            } else {
+                0
+            },
             ffn_channels: config.network.hidden_channels_ffn_text_encoder,
             num_heads: config.network.num_heads_text_encoder,
             num_layers: config.network.num_layers_text_encoder,
@@ -116,9 +119,9 @@ impl VitsTextPriorConfig {
                 "prior, hidden, FFN, head, and layer dimensions must be positive",
             ));
         }
-        if !self.hidden_channels.is_multiple_of(self.num_heads) {
+        if !self.encoder_channels().is_multiple_of(self.num_heads) {
             return Err(topology_error(
-                "hidden_channels must divide evenly across attention heads",
+                "text and language channels must divide evenly across attention heads",
             ));
         }
         if self.ffn_kernel_size == 0 {
@@ -131,6 +134,10 @@ impl VitsTextPriorConfig {
             return Err(topology_error("relative_attention_window must be positive"));
         }
         Ok(())
+    }
+
+    pub fn encoder_channels(&self) -> usize {
+        self.hidden_channels + self.language_embedding_channels
     }
 
     pub fn init<B: Backend>(
@@ -146,8 +153,9 @@ impl VitsTextPriorConfig {
                 std: embedding_std,
             })
             .init(device);
-        let encoder = RelativePositionTransformer::init(self, device);
-        let proj = Conv1dConfig::new(self.hidden_channels, self.prior_channels * 2, 1)
+        let encoder_channels = self.encoder_channels();
+        let encoder = RelativePositionTransformer::init(self, encoder_channels, device);
+        let proj = Conv1dConfig::new(encoder_channels, self.prior_channels * 2, 1)
             .with_padding(PaddingConfig1d::Valid)
             .init(device);
 
@@ -156,6 +164,8 @@ impl VitsTextPriorConfig {
             encoder,
             proj,
             hidden_channels: self.hidden_channels,
+            encoder_channels,
+            language_embedding_channels: self.language_embedding_channels,
             prior_channels: self.prior_channels,
             vocabulary_size: self.vocabulary_size,
         })
@@ -186,6 +196,8 @@ pub struct VitsTextPriorEncoder<B: Backend> {
     pub encoder: RelativePositionTransformer<B>,
     pub proj: Conv1d<B>,
     hidden_channels: usize,
+    encoder_channels: usize,
+    language_embedding_channels: usize,
     prior_channels: usize,
     vocabulary_size: usize,
 }
@@ -243,6 +255,17 @@ impl<B: Backend> VitsTextPriorEncoder<B> {
         token_ids: Tensor<B, 2, Int>,
         lengths: Tensor<B, 1, Int>,
     ) -> Result<VitsTextPriorOutput<B>, VitsTextPriorError> {
+        self.forward_conditioned(token_ids, lengths, None)
+    }
+
+    /// Encodes model-local token IDs with an optional checkpoint-local
+    /// language embedding shaped `[batch, language_channels, 1]`.
+    pub fn forward_conditioned(
+        &self,
+        token_ids: Tensor<B, 2, Int>,
+        lengths: Tensor<B, 1, Int>,
+        language_embedding: Option<Tensor<B, 3>>,
+    ) -> Result<VitsTextPriorOutput<B>, VitsTextPriorError> {
         let [batch, tokens] = token_ids.dims();
         let [length_batch] = lengths.dims();
         if batch == 0 {
@@ -258,7 +281,30 @@ impl<B: Backend> VitsTextPriorEncoder<B> {
         }
 
         let mask = sequence_mask(lengths, tokens);
-        let embedded = self.emb.forward(token_ids) * (self.hidden_channels as f64).sqrt();
+        let mut embedded = self.emb.forward(token_ids) * (self.hidden_channels as f64).sqrt();
+        match (self.language_embedding_channels, language_embedding) {
+            (0, None) => {}
+            (0, Some(_)) => {
+                return Err(input_error(
+                    "language conditioning was supplied to a monolingual text encoder",
+                ));
+            }
+            (_, None) => {
+                return Err(input_error(
+                    "language conditioning is required by this text encoder",
+                ));
+            }
+            (language_channels, Some(language)) => {
+                if language.dims() != [batch, language_channels, 1] {
+                    return Err(input_error(format!(
+                        "language embedding shape {:?}; expected [{batch}, {language_channels}, 1]",
+                        language.dims()
+                    )));
+                }
+                let language = language.swap_dims(1, 2).repeat_dim(1, tokens);
+                embedded = Tensor::cat(vec![embedded, language], 2);
+            }
+        }
         let encoded = self
             .encoder
             .forward(embedded.swap_dims(1, 2) * mask.clone(), mask.clone());
@@ -282,6 +328,14 @@ impl<B: Backend> VitsTextPriorEncoder<B> {
 
     pub fn hidden_channels(&self) -> usize {
         self.hidden_channels
+    }
+
+    pub fn encoder_channels(&self) -> usize {
+        self.encoder_channels
+    }
+
+    pub fn language_embedding_channels(&self) -> usize {
+        self.language_embedding_channels
     }
 
     pub fn prior_channels(&self) -> usize {
@@ -317,7 +371,7 @@ pub struct RelativePositionTransformer<B: Backend> {
 }
 
 impl<B: Backend> RelativePositionTransformer<B> {
-    fn init(config: &VitsTextPriorConfig, device: &B::Device) -> Self {
+    fn init(config: &VitsTextPriorConfig, encoder_channels: usize, device: &B::Device) -> Self {
         let mut attn_layers = Vec::with_capacity(config.num_layers);
         let mut norm_layers_1 = Vec::with_capacity(config.num_layers);
         let mut ffn_layers = Vec::with_capacity(config.num_layers);
@@ -325,21 +379,21 @@ impl<B: Backend> RelativePositionTransformer<B> {
 
         for _ in 0..config.num_layers {
             attn_layers.push(RelativePositionMultiHeadAttention::init(
-                config.hidden_channels,
+                encoder_channels,
                 config.num_heads,
                 config.relative_attention_window,
                 config.dropout,
                 device,
             ));
-            norm_layers_1.push(ChannelLayerNorm::init(config.hidden_channels, device));
+            norm_layers_1.push(ChannelLayerNorm::init(encoder_channels, device));
             ffn_layers.push(FeedForwardNetwork::init(
-                config.hidden_channels,
+                encoder_channels,
                 config.ffn_channels,
                 config.ffn_kernel_size,
                 config.dropout,
                 device,
             ));
-            norm_layers_2.push(ChannelLayerNorm::init(config.hidden_channels, device));
+            norm_layers_2.push(ChannelLayerNorm::init(encoder_channels, device));
         }
 
         Self {
@@ -618,6 +672,7 @@ mod tests {
             vocabulary_size: 12,
             prior_channels: 4,
             hidden_channels: 4,
+            language_embedding_channels: 0,
             ffn_channels: 8,
             num_heads: 2,
             num_layers: 2,
@@ -666,6 +721,29 @@ mod tests {
             masked_mean.to_data().to_vec::<f32>().expect("masked mean"),
             vec![0.0; 8]
         );
+    }
+
+    #[test]
+    fn learned_language_embedding_is_concatenated_before_the_transformer() {
+        let device = NdArrayDevice::Cpu;
+        let mut config = tiny_config();
+        config.language_embedding_channels = 2;
+        let encoder = config.init::<TestBackend>(&device).expect("encoder");
+        let tokens = Tensor::<TestBackend, 2, Int>::from_ints([[1, 2, 3], [3, 2, 1]], &device);
+        let lengths = Tensor::<TestBackend, 1, Int>::from_ints([3, 2], &device);
+        let languages =
+            Tensor::<TestBackend, 3>::from_floats([[[1.0], [0.0]], [[0.0], [1.0]]], &device);
+
+        let output = encoder
+            .forward_conditioned(tokens.clone(), lengths.clone(), Some(languages))
+            .expect("language-conditioned prior");
+
+        assert_eq!(encoder.hidden_channels(), 4);
+        assert_eq!(encoder.encoder_channels(), 6);
+        assert_eq!(encoder.language_embedding_channels(), 2);
+        assert_eq!(output.encoded.dims(), [2, 6, 3]);
+        assert_eq!(output.mean.dims(), [2, 4, 3]);
+        assert!(encoder.forward(tokens, lengths).is_err());
     }
 
     #[test]

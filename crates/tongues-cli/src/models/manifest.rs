@@ -59,6 +59,7 @@ pub const GLOW_TTS_ACOUSTIC_MODEL_ID: &str = "glow-tts-ljspeech";
 pub const DEFAULT_NEURAL_VOCODER_ID: &str = "hifigan-v2-ljspeech";
 pub const MULTIBAND_MELGAN_VOCODER_ID: &str = "multiband-melgan-ljspeech";
 pub const DEFAULT_END_TO_END_SPEECH_MODEL_ID: &str = "vits-vctk";
+pub const YOURTTS_MODEL_ID: &str = "yourtts-multilingual";
 
 pub const MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
@@ -393,6 +394,20 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
         notes: Some("Published Coqui VCTK VITS release with 109 learned speaker embeddings."),
     },
+    ModelAsset {
+        id: "coqui-yourtts-multilingual-release",
+        filename: "tts_models--multilingual--multi-dataset--your_tts.zip",
+        relative_path:
+            "models/speech/coqui/multilingual/yourtts/tts_models--multilingual--multi-dataset--your_tts.zip",
+        url: "https://coqui.gateway.scarf.sh/v0.6.0_models/tts_models--multilingual--multi-dataset--your_tts.zip",
+        sha256: Some("b355a135b0252e619e5fb10ea4a28ba879e4bdb68c6e374815b9abbd7a14ad68"),
+        size_bytes: Some(394_100_490),
+        license: Some("CC-BY-NC-ND-4.0"),
+        source: Some("https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"),
+        notes: Some(
+            "Published Coqui YourTTS multilingual voice-cloning release; non-commercial and no-derivatives.",
+        ),
+    },
 ];
 
 pub const MODEL_ARCHIVES: &[ModelArchive] = &[
@@ -485,6 +500,36 @@ pub const MODEL_ARCHIVES: &[ModelArchive] = &[
             ArchiveMember {
                 member_path: "tts_models--en--vctk--vits/speaker_ids.json",
                 relative_path: "models/speech/coqui/en/vctk/vits/speaker_ids.json",
+            },
+        ],
+    },
+    ModelArchive {
+        asset_id: "coqui-yourtts-multilingual-release",
+        primary_member_path: "models/speech/coqui/multilingual/yourtts/model_file.pth.tar",
+        members: &[
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/model_file.pth.tar",
+                relative_path: "models/speech/coqui/multilingual/yourtts/model_file.pth.tar",
+            },
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/config.json",
+                relative_path: "models/speech/coqui/multilingual/yourtts/config.json",
+            },
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/speakers.json",
+                relative_path: "models/speech/coqui/multilingual/yourtts/speakers.json",
+            },
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/language_ids.json",
+                relative_path: "models/speech/coqui/multilingual/yourtts/language_ids.json",
+            },
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/model_se.pth.tar",
+                relative_path: "models/speech/coqui/multilingual/yourtts/model_se.pth.tar",
+            },
+            ArchiveMember {
+                member_path: "tts_models--multilingual--multi-dataset--your_tts/config_se.json",
+                relative_path: "models/speech/coqui/multilingual/yourtts/config_se.json",
             },
         ],
     },
@@ -671,6 +716,14 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         primary_asset_id: "coqui-vits-vctk-release",
         required_asset_ids: &["coqui-vits-vctk-release"],
         aliases: &["vctk-vits", "coqui-vctk", "coqui-vits-vctk"],
+    },
+    ModelBundle {
+        id: YOURTTS_MODEL_ID,
+        display_name: "YourTTS Multilingual",
+        kind: ModelKind::EndToEndSpeech,
+        primary_asset_id: "coqui-yourtts-multilingual-release",
+        required_asset_ids: &["coqui-yourtts-multilingual-release"],
+        aliases: &["yourtts", "your-tts", "coqui-yourtts"],
     },
 ];
 

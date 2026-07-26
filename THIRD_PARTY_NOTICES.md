@@ -16,7 +16,7 @@ Project: [coqui-ai/TTS](https://github.com/coqui-ai/TTS)
 
 Tongues imports published Coqui checkpoint configurations and weights for
 SpeedySpeech, FastPitch, Tacotron2-DDC, Glow-TTS, HiFi-GAN v2,
-MultiBand-MelGAN, and VITS, and targets the corresponding tensor names, shapes,
+MultiBand-MelGAN, VITS, and YourTTS, and targets the corresponding tensor names, shapes,
 token contracts, defaults, and inference behavior. Coqui reference executions
 also produced numerical conformance fixtures.
 
@@ -36,6 +36,13 @@ the Glow-TTS inference graph from Coqui TTS revision
 `TTS/tts/models/glow_tts.py` and `TTS/tts/layers/glow_tts/`. Those files are
 MPL-2.0 covered modifications rather than MIT relicensing.
 
+`crates/tongues-tts/src/speaker_encoder.rs` adapts the ResNet speaker encoder,
+attentive-statistics pooling, evaluation-crop behavior, and angular
+prototypical training semantics from Coqui TTS revision
+`0cf3265a4686d7e856bd472cdaf1572d61cab2b8`, principally
+`TTS/speaker_encoder/models/resnet.py` and the speaker-encoder loss modules.
+That file is an MPL-2.0 covered modification rather than MIT relicensing.
+
 The Coqui TTS `v0.6.1` source tag is licensed under
 [MPL-2.0](https://github.com/coqui-ai/TTS/blob/v0.6.1/LICENSE.txt), not
 Apache-2.0. If a Tongues source file is found to contain or adapt Coqui source
@@ -51,7 +58,9 @@ license file. Tongues therefore records those artifacts as `NOASSERTION`; it
 does not infer Apache-2.0 from the source repository license. The
 LJSpeech Tacotron2-DDC registry entry separately declares `Apache 2.0`, and the
 MultiBand-MelGAN registry entry declares `MPL`; imports must retain the
-applicable artifact-specific evidence.
+applicable artifact-specific evidence. The multilingual YourTTS registry entry
+declares `CC BY-NC-ND 4.0`; Tongues records that separate non-commercial,
+no-derivatives model license in its catalog.
 
 Repository history includes commit `8e3a9c6`, titled
 `Import/adapt/reverse engineer some components from coqui`. That title does not

@@ -65,6 +65,7 @@ pub struct StochasticDurationConfig {
     pub kernel_size: usize,
     pub num_flows: usize,
     pub conditioning_channels: usize,
+    pub language_conditioning_channels: usize,
     pub num_bins: usize,
     pub tail_bound: f64,
 }
@@ -77,6 +78,7 @@ impl StochasticDurationConfig {
             kernel_size,
             num_flows: 4,
             conditioning_channels: 0,
+            language_conditioning_channels: 0,
             num_bins: 10,
             tail_bound: 5.0,
         }
@@ -136,6 +138,13 @@ impl StochasticDurationConfig {
             .collect();
         let cond = (self.conditioning_channels > 0)
             .then(|| pointwise_conv(self.conditioning_channels, self.hidden_channels, device));
+        let cond_lang = (self.language_conditioning_channels > 0).then(|| {
+            pointwise_conv(
+                self.language_conditioning_channels,
+                self.hidden_channels,
+                device,
+            )
+        });
 
         Ok(StochasticDurationPredictor {
             pre,
@@ -144,9 +153,11 @@ impl StochasticDurationConfig {
             affine,
             spline_flows,
             cond,
+            cond_lang,
             input_channels: self.input_channels,
             hidden_channels: self.hidden_channels,
             conditioning_channels: self.conditioning_channels,
+            language_conditioning_channels: self.language_conditioning_channels,
         })
     }
 
@@ -431,9 +442,11 @@ pub struct StochasticDurationPredictor<B: Backend> {
     affine: ElementwiseAffine<B>,
     spline_flows: Vec<ConvFlow<B>>,
     cond: Option<Conv1d<B>>,
+    cond_lang: Option<Conv1d<B>>,
     input_channels: usize,
     hidden_channels: usize,
     conditioning_channels: usize,
+    language_conditioning_channels: usize,
 }
 
 impl<B: Backend> StochasticDurationPredictor<B> {
@@ -515,6 +528,20 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         noise: Tensor<B, 3>,
         noise_scale: f64,
     ) -> Result<Tensor<B, 3>, StochasticDurationError> {
+        self.reverse_with_noise_conditioned(input, mask, conditioning, None, noise, noise_scale)
+    }
+
+    /// Reverse inference with independent speaker and model-language
+    /// conditioning, matching the two projections in Coqui VITS.
+    pub fn reverse_with_noise_conditioned(
+        &self,
+        input: Tensor<B, 3>,
+        mask: Tensor<B, 3>,
+        conditioning: Option<Tensor<B, 3>>,
+        language_conditioning: Option<Tensor<B, 3>>,
+        noise: Tensor<B, 3>,
+        noise_scale: f64,
+    ) -> Result<Tensor<B, 3>, StochasticDurationError> {
         if !noise_scale.is_finite() || noise_scale < 0.0 {
             return Err(input_error("noise_scale must be finite and non-negative"));
         }
@@ -543,6 +570,10 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         if let Some(speaker) = speaker {
             hidden = hidden + speaker;
         }
+        let language = self.resolve_language_conditioning(language_conditioning, batch, frames)?;
+        if let Some(language) = language {
+            hidden = hidden + language;
+        }
         hidden = self.convs.forward(hidden, mask.clone(), None);
         hidden = self.proj.forward(hidden) * mask.clone();
 
@@ -568,11 +599,30 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         noise_scale: f64,
         seed: u64,
     ) -> Result<Tensor<B, 3>, StochasticDurationError> {
+        self.reverse_seeded_conditioned(input, mask, conditioning, None, noise_scale, seed)
+    }
+
+    pub fn reverse_seeded_conditioned(
+        &self,
+        input: Tensor<B, 3>,
+        mask: Tensor<B, 3>,
+        conditioning: Option<Tensor<B, 3>>,
+        language_conditioning: Option<Tensor<B, 3>>,
+        noise_scale: f64,
+        seed: u64,
+    ) -> Result<Tensor<B, 3>, StochasticDurationError> {
         let [batch, _, frames] = input.dims();
         let device = input.device();
         B::seed(&device, seed);
         let noise = Tensor::random([batch, 2, frames], Distribution::Normal(0.0, 1.0), &device);
-        self.reverse_with_noise(input, mask, conditioning, noise, noise_scale)
+        self.reverse_with_noise_conditioned(
+            input,
+            mask,
+            conditioning,
+            language_conditioning,
+            noise,
+            noise_scale,
+        )
     }
 
     /// Reverse inference with backend-generated Gaussian noise.
@@ -583,10 +633,28 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         conditioning: Option<Tensor<B, 3>>,
         noise_scale: f64,
     ) -> Result<Tensor<B, 3>, StochasticDurationError> {
+        self.reverse_conditioned(input, mask, conditioning, None, noise_scale)
+    }
+
+    pub fn reverse_conditioned(
+        &self,
+        input: Tensor<B, 3>,
+        mask: Tensor<B, 3>,
+        conditioning: Option<Tensor<B, 3>>,
+        language_conditioning: Option<Tensor<B, 3>>,
+        noise_scale: f64,
+    ) -> Result<Tensor<B, 3>, StochasticDurationError> {
         let [batch, _, frames] = input.dims();
         let device = input.device();
         let noise = Tensor::random([batch, 2, frames], Distribution::Normal(0.0, 1.0), &device);
-        self.reverse_with_noise(input, mask, conditioning, noise, noise_scale)
+        self.reverse_with_noise_conditioned(
+            input,
+            mask,
+            conditioning,
+            language_conditioning,
+            noise,
+            noise_scale,
+        )
     }
 
     fn resolve_conditioning(
@@ -627,6 +695,44 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         }
     }
 
+    fn resolve_language_conditioning(
+        &self,
+        conditioning: Option<Tensor<B, 3>>,
+        batch: usize,
+        frames: usize,
+    ) -> Result<Option<Tensor<B, 3>>, StochasticDurationError> {
+        match (&self.cond_lang, conditioning) {
+            (None, None) => Ok(None),
+            (None, Some(_)) => Err(input_error(
+                "language conditioning was supplied to a monolingual predictor",
+            )),
+            (Some(_), None) => Err(input_error(
+                "language conditioning is required by this predictor",
+            )),
+            (Some(projection), Some(conditioning)) => {
+                let [cond_batch, cond_channels, cond_frames] = conditioning.dims();
+                if cond_batch != batch || cond_channels != self.language_conditioning_channels {
+                    return Err(input_error(format!(
+                        "language conditioning shape {:?}; expected [{batch}, {}, 1 or {frames}]",
+                        conditioning.dims(),
+                        self.language_conditioning_channels
+                    )));
+                }
+                if cond_frames != 1 && cond_frames != frames {
+                    return Err(input_error(format!(
+                        "language conditioning has {cond_frames} frames; expected 1 or {frames}"
+                    )));
+                }
+                let projected = projection.forward(conditioning);
+                Ok(Some(if cond_frames == 1 {
+                    projected.repeat_dim(2, frames)
+                } else {
+                    projected
+                }))
+            }
+        }
+    }
+
     pub fn hidden_channels(&self) -> usize {
         self.hidden_channels
     }
@@ -640,6 +746,7 @@ fn duration_inference_tensor(path: &str, _container: &str) -> bool {
         "affine.",
         "spline_flows.",
         "cond.",
+        "cond_lang.",
     ]
     .iter()
     .any(|prefix| path.starts_with(prefix))
@@ -909,6 +1016,7 @@ mod tests {
             kernel_size: 3,
             num_flows: 2,
             conditioning_channels: 0,
+            language_conditioning_channels: 0,
             num_bins: 4,
             tail_bound: 5.0,
         };
@@ -939,6 +1047,7 @@ mod tests {
             kernel_size: 3,
             num_flows: 2,
             conditioning_channels: 3,
+            language_conditioning_channels: 0,
             num_bins: 4,
             tail_bound: 5.0,
         };
@@ -977,6 +1086,35 @@ mod tests {
     }
 
     #[test]
+    fn language_conditioning_is_projected_independently_from_speaker_conditioning() {
+        let device = NdArrayDevice::Cpu;
+        let config = StochasticDurationConfig {
+            input_channels: 6,
+            hidden_channels: 4,
+            kernel_size: 3,
+            num_flows: 2,
+            conditioning_channels: 3,
+            language_conditioning_channels: 2,
+            num_bins: 4,
+            tail_bound: 5.0,
+        };
+        TestBackend::seed(&device, 41);
+        let predictor = config.init::<TestBackend>(&device).expect("predictor");
+        let input = Tensor::ones([1, 6, 3], &device);
+        let mask = Tensor::ones([1, 1, 3], &device);
+        let speaker = Tensor::ones([1, 3, 1], &device);
+        let language = Tensor::from_floats([[[0.25], [-0.5]]], &device);
+        let noise = Tensor::zeros([1, 2, 3], &device);
+
+        let output = predictor
+            .reverse_with_noise_conditioned(input, mask, Some(speaker), Some(language), noise, 0.0)
+            .expect("speaker and language-conditioned duration inference");
+
+        assert_eq!(output.dims(), [1, 1, 3]);
+        assert!(values(output).iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
     fn published_checkpoint_loads_and_runs_when_provided() {
         let checkpoint = std::env::var_os("TONGUES_TEST_VITS_CHECKPOINT")
             .or_else(|| std::env::var_os("TONGUES_TEST_COQUI_VITS_CHECKPOINT"));
@@ -990,6 +1128,7 @@ mod tests {
             kernel_size: 3,
             num_flows: 4,
             conditioning_channels: 256,
+            language_conditioning_channels: 0,
             num_bins: 10,
             tail_bound: 5.0,
         };

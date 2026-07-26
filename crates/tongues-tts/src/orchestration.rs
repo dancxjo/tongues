@@ -109,6 +109,23 @@ pub struct SpeakerCapabilities {
     pub numeric_ids: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageCapabilities {
+    pub values: CapabilityValue,
+    pub required: bool,
+    pub numeric_ids: bool,
+}
+
+impl LanguageCapabilities {
+    pub fn unsupported() -> Self {
+        Self {
+            values: CapabilityValue::Unsupported,
+            required: false,
+            numeric_ids: false,
+        }
+    }
+}
+
 impl SpeakerCapabilities {
     pub fn unsupported() -> Self {
         Self {
@@ -182,6 +199,9 @@ pub struct BackendCapabilities {
     pub model: String,
     pub family: SpeechModelFamily,
     pub varieties: CapabilityValue,
+    /// Checkpoint-local learned language identities, independent of varieties.
+    #[serde(default = "LanguageCapabilities::unsupported")]
+    pub languages: LanguageCapabilities,
     pub speakers: SpeakerCapabilities,
     pub styles: StyleCapabilities,
     pub reference_audio: ReferenceAudioCapabilities,
@@ -383,6 +403,44 @@ impl BackendCapabilities {
             None => {}
         }
 
+        match request.model_language.as_ref() {
+            None if self.languages.required => {
+                return Err(SynthesisContractError::MissingRequiredFeature {
+                    backend: self.backend.clone(),
+                    feature: "model_language",
+                });
+            }
+            Some(LanguageSelection::Named(name)) => {
+                if !self.languages.values.contains(name) {
+                    return Err(unsupported_value(
+                        &self.backend,
+                        "model_language",
+                        name,
+                        self.languages.values.available(),
+                    ));
+                }
+            }
+            Some(LanguageSelection::Numeric(id)) if !self.languages.numeric_ids => {
+                return Err(unsupported_value(
+                    &self.backend,
+                    "language_id",
+                    &id.to_string(),
+                    self.languages.values.available(),
+                ));
+            }
+            Some(LanguageSelection::Numeric(id)) => {
+                if !self.languages.values.contains_numeric(*id) {
+                    return Err(unsupported_value(
+                        &self.backend,
+                        "language_id",
+                        &id.to_string(),
+                        self.languages.values.available_numeric(),
+                    ));
+                }
+            }
+            None => {}
+        }
+
         if let Some(style) = request.style.as_ref() {
             if !self.styles.is_supported() {
                 return Err(unsupported_feature(&self.backend, "style"));
@@ -544,6 +602,13 @@ pub enum SpeakerSelection {
     Numeric(u32),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum LanguageSelection {
+    Named(String),
+    Numeric(u32),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StyleSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -583,6 +648,8 @@ pub struct ReferenceAudioRequest {
 pub struct UnifiedSynthesisRequest {
     pub text: String,
     pub variety: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_language: Option<LanguageSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<SpeakerSelection>,
     #[serde(default)]
@@ -640,6 +707,7 @@ impl UnifiedSynthesisRequest {
         Self {
             text: text.into(),
             variety: variety.into(),
+            model_language: None,
             speaker: None,
             reference_audio: ReferenceAudioRequest::default(),
             style: None,
@@ -882,10 +950,17 @@ impl<E: SpeechSynthesisEngine + Send> SynthesizerBackend for PlanEngineBackend<E
             Some(SpeakerSelection::Numeric(id)) => Some(*id),
             None => None,
         };
+        let (model_language, language_id) = match request.model_language.as_ref() {
+            Some(LanguageSelection::Named(name)) => (Some(name.clone()), None),
+            Some(LanguageSelection::Numeric(id)) => (None, Some(*id)),
+            None => (None, None),
+        };
         let synthesis_request = SpeechSynthesisRequest {
             plan,
             options: SynthesisOptions {
                 speaker_id,
+                model_language,
+                language_id,
                 split_sentences: true,
                 length_scale: Some(1.0 / request.speed),
                 noise_scale: request.noise_scale,
@@ -1045,6 +1120,7 @@ mod tests {
             model: "fixture-v1".into(),
             family: SpeechModelFamily::EndToEndSpeech,
             varieties: CapabilityValue::Listed(vec![NamedCapability::new("en-US", "English")]),
+            languages: LanguageCapabilities::unsupported(),
             speakers: SpeakerCapabilities {
                 values: CapabilityValue::Listed(vec![
                     NamedCapability::new("p225", "p225").with_numeric_id(0)
@@ -1181,6 +1257,44 @@ mod tests {
                 available: vec!["0".into()],
             })
         );
+    }
+
+    #[test]
+    fn model_languages_are_discoverable_and_validated_separately_from_varieties() {
+        let mut capabilities = fixture_capabilities();
+        capabilities.languages = LanguageCapabilities {
+            values: CapabilityValue::Listed(vec![
+                NamedCapability::new("en", "English").with_numeric_id(0),
+                NamedCapability::new("fr-fr", "French").with_numeric_id(1),
+            ]),
+            required: true,
+            numeric_ids: true,
+        };
+        let mut request = UnifiedSynthesisRequest::new("hello", "en-US");
+        request.speaker = Some(SpeakerSelection::Named("p225".into()));
+
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(SynthesisContractError::MissingRequiredFeature {
+                feature: "model_language",
+                ..
+            })
+        ));
+
+        request.model_language = Some(LanguageSelection::Named("fr-fr".into()));
+        capabilities
+            .validate(&request)
+            .expect("named model language");
+
+        request.model_language = Some(LanguageSelection::Named("fr-FR".into()));
+        let error = capabilities.validate(&request).unwrap_err().to_string();
+        assert!(error.contains("available"));
+        assert!(error.contains("fr-fr"));
+
+        request.model_language = Some(LanguageSelection::Numeric(0));
+        capabilities
+            .validate(&request)
+            .expect("numeric model language");
     }
 
     #[test]
