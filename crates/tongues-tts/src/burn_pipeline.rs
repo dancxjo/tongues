@@ -13,22 +13,19 @@ use burn::tensor::backend::Backend;
 use crate::profiling::{finish_host_stage, reborrow_profiler};
 use crate::{
     AcousticModel, AcousticOutputContract, AudioChunk, AudioSink, BurnHifiganVocoder,
-    BurnSpeedySpeechAcoustic, NeuralVocoder, SpeechModelCapabilities, SpeechSynthesisEngine,
+    BurnSpeedySpeechAcoustic, BurnTensorVocoder, SpeechModelCapabilities, SpeechSynthesisEngine,
     SpeechSynthesisRequest, SynthesisDimension, SynthesisProfiler, SynthesisStage,
     WaveformContract,
 };
 
-pub struct BurnSpeedySpeechPipeline<B: Backend> {
+pub struct BurnSpeedySpeechPipeline<B: Backend, V = BurnHifiganVocoder<B>> {
     acoustic: BurnSpeedySpeechAcoustic<B>,
-    vocoder: BurnHifiganVocoder<B>,
+    vocoder: V,
     output_contract: WaveformContract,
 }
 
-impl<B: Backend> BurnSpeedySpeechPipeline<B> {
-    pub fn new(
-        acoustic: BurnSpeedySpeechAcoustic<B>,
-        vocoder: BurnHifiganVocoder<B>,
-    ) -> Result<Self> {
+impl<B: Backend, V: BurnTensorVocoder<B>> BurnSpeedySpeechPipeline<B, V> {
+    pub fn new(acoustic: BurnSpeedySpeechAcoustic<B>, vocoder: V) -> Result<Self> {
         let acoustic_contract = acoustic.output_contract();
         let AcousticOutputContract::Spectrogram(spectrogram_contract) = acoustic_contract else {
             anyhow::bail!("SpeedySpeech must emit a spectrogram");
@@ -47,7 +44,7 @@ impl<B: Backend> BurnSpeedySpeechPipeline<B> {
         &self.acoustic
     }
 
-    pub fn vocoder(&self) -> &BurnHifiganVocoder<B> {
+    pub fn vocoder(&self) -> &V {
         &self.vocoder
     }
 
@@ -73,7 +70,7 @@ impl<B: Backend> BurnSpeedySpeechPipeline<B> {
         let samples = waveform
             .into_data()
             .to_vec::<f32>()
-            .context("Burn HiFi-GAN output is not f32")?;
+            .context("Burn vocoder output is not f32")?;
         finish_host_stage(
             &mut profiler,
             SynthesisStage::DeviceToHost,
@@ -82,12 +79,12 @@ impl<B: Backend> BurnSpeedySpeechPipeline<B> {
         );
         ensure!(
             samples.len() == sample_count,
-            "HiFi-GAN returned {} samples, expected {sample_count}",
+            "Burn vocoder returned {} samples, expected {sample_count}",
             samples.len()
         );
         ensure!(
             samples.iter().all(|sample| sample.is_finite()),
-            "HiFi-GAN waveform contains non-finite samples"
+            "Burn vocoder waveform contains non-finite samples"
         );
 
         let started = Instant::now();
@@ -108,7 +105,7 @@ impl<B: Backend> BurnSpeedySpeechPipeline<B> {
     }
 }
 
-impl<B: Backend> SpeechSynthesisEngine for BurnSpeedySpeechPipeline<B> {
+impl<B: Backend, V: BurnTensorVocoder<B>> SpeechSynthesisEngine for BurnSpeedySpeechPipeline<B, V> {
     fn capabilities(&self) -> SpeechModelCapabilities {
         self.acoustic.capabilities()
     }

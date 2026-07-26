@@ -14,6 +14,11 @@
 //!
 //! Input is already-projected model token IDs. Text cleaning, phonemization,
 //! IPA handling, and vocabulary projection belong outside this module.
+//!
+//! Source provenance: `audit-required`. This module targets published Coqui
+//! checkpoint structure and behavior; no claim of independent implementation
+//! or source adaptation should be made until the ledger in
+//! `docs/provenance.md` records a file-by-file comparison.
 
 use std::fmt;
 use std::path::Path;

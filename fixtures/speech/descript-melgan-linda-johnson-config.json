@@ -1,0 +1,37 @@
+{
+  "audio": {
+    "fft_size": 1024,
+    "win_length": 1024,
+    "hop_length": 256,
+    "sample_rate": 22050,
+    "preemphasis": 0.0,
+    "log_func": "np.log10",
+    "num_mels": 80,
+    "mel_fmin": 0.0,
+    "mel_fmax": null,
+    "spec_gain": 1.0,
+    "signal_norm": false,
+    "min_level_db": -100.0,
+    "ref_level_db": 0.0,
+    "symmetric_norm": true,
+    "max_norm": 4.0,
+    "clip_norm": true,
+    "stats_path": null,
+    "do_amp_to_db_mel": true,
+    "stft_pad_mode": "reflect",
+    "centered": false,
+    "stft_manual_padding": 384
+  },
+  "generator_model": "melgan_generator",
+  "generator_model_params": {
+    "in_channels": 80,
+    "out_channels": 1,
+    "proj_kernel": 7,
+    "base_channels": 512,
+    "upsample_factors": [8, 8, 2, 2],
+    "res_kernel": 3,
+    "num_res_blocks": 3,
+    "inference_padding": 0
+  },
+  "use_pqmf": false
+}

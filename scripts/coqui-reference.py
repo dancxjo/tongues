@@ -23,13 +23,18 @@ from TTS.vocoder.models import setup_generator
 
 TEXT = "Morning light rested on the cedar trees while the kettle began to sing."
 COQUI_TTS_REVISION = "0cf3265a4686d7e856bd472cdaf1572d61cab2b8"
+DESCRIPT_MELGAN_REVISION = "6488045bfba1975602288de07a58570c7b4d66ea"
 EXPECTED_SHA256 = {
+    "ljspeech/melgan/linda_johnson.pt": "d9f8a9934a162128a276b49122733a315eb434261e9c06162e11e0c5fa7a59e1",
     "ljspeech/speedy-speech/config.json": "40c571c8561ab20bb92f5c3b86a6dbe78812c8a0453aea0166d111132ea4ca02",
     "ljspeech/speedy-speech/model_file.pth": "9088f3352731e93e3ef2436f2fd4f8b116e3a7cfbd69f96140cd2da127f84ae1",
     "ljspeech/fast-pitch/config.json": "857510cdf1d33aa3b622d5f1178794cbc3842891917ebcac2d6660c3e91410d8",
     "ljspeech/fast-pitch/model_file.pth": "1779ef4ef9f9f3c016efee5925c0742393eb7c7183f6daae1928b88cbef294b8",
     "ljspeech/hifigan-v2/config.json": "12450ab044715d37dad3f472627862aed507d8bacc9d347c90a8388841ff8615",
     "ljspeech/hifigan-v2/model_file.pth": "4047e93886faa1aba11948efa71f59dcb0ec9117e286660e59b91892ef98d129",
+    "ljspeech/multiband-melgan/config.json": "d4c0301bf658fc1dafdd2559dd10b13bd5a083a47e041d7917cc4c287332cd24",
+    "ljspeech/multiband-melgan/model_file.pth": "56f16cee42bef70a2d75b08f9b9ea952c9ee0ccf76dd88a91d51e3ca4c11b449",
+    "ljspeech/multiband-melgan/scale_stats.npy": "8c4a45b935563157509ddbff09f59e4ffea35e1d07f3bbf87ec21484cb275c4a",
     "vctk/vits/config.json": "b0ec9a22153002cb5fdadb270f6c1363460c720560c13a356d018f24a7f6cca6",
     "vctk/vits/model_file.pth": "cbec6b420abcc677fe4a357994ee68f8f3b6fa84502e7accad42b11a79f6ad0d",
     "vctk/vits/speaker_ids.json": "da4a2ecf091625a5e061e8e87c5e6032cc26f40ea7fa1981085a830a924d2887",
@@ -49,6 +54,16 @@ def parse_args() -> argparse.Namespace:
         "--fastpitch-only",
         action="store_true",
         help="Generate only FastPitch evidence (useful while developing the import)",
+    )
+    parser.add_argument(
+        "--melgan-only",
+        action="store_true",
+        help="Generate only Descript MelGAN evidence",
+    )
+    parser.add_argument(
+        "--multiband-melgan-only",
+        action="store_true",
+        help="Generate only MultiBand-MelGAN evidence",
     )
     return parser.parse_args()
 
@@ -258,6 +273,102 @@ def speedy_speech_reference(artifacts: dict[str, Path]) -> dict:
     }
 
 
+def multiband_melgan_reference(artifacts: dict[str, Path]) -> dict:
+    with contextlib.redirect_stdout(sys.stderr):
+        config = load_config(
+            str(artifacts["ljspeech/multiband-melgan/config.json"])
+        )
+        vocoder = setup_generator(config)
+        vocoder.load_checkpoint(
+            config,
+            str(artifacts["ljspeech/multiband-melgan/model_file.pth"]),
+            eval=True,
+        )
+
+    frames = 8
+    mel = torch.linspace(-1.0, 1.0, 80 * frames, dtype=torch.float32).reshape(
+        1, 80, frames
+    )
+    waveform = vocoder.inference(mel).flatten()
+    if not torch.isfinite(waveform).all():
+        raise SystemExit("Coqui MultiBand-MelGAN reference produced non-finite output")
+
+    return {
+        "input_shape": list(mel.shape),
+        "input_pattern": "channel-major-linspace-negative-one-to-one",
+        "waveform": {
+            "sample_rate_hz": int(config.audio.sample_rate),
+            "channels": 1,
+            "samples": int(waveform.numel()),
+            "minimum": float(waveform.min()),
+            "maximum": float(waveform.max()),
+            "rms": float(waveform.square().mean().sqrt()),
+            "non_finite_samples": int((~torch.isfinite(waveform)).sum()),
+            "probes": [
+                [index, float(waveform[index])]
+                for index in [
+                    0,
+                    1,
+                    255,
+                    256,
+                    1000,
+                    waveform.numel() // 2,
+                    waveform.numel() - 2,
+                    waveform.numel() - 1,
+                ]
+            ],
+        },
+    }
+
+
+def melgan_reference(artifacts: dict[str, Path]) -> dict:
+    from mel2wav.modules import Generator
+
+    generator = Generator(80, 32, 3)
+    generator.load_state_dict(
+        torch.load(
+            artifacts["ljspeech/melgan/linda_johnson.pt"],
+            map_location=torch.device("cpu"),
+        )
+    )
+    generator.eval()
+    frames = 8
+    mel = torch.linspace(-1.0, 1.0, 80 * frames, dtype=torch.float32).reshape(
+        1, 80, frames
+    )
+    with torch.no_grad():
+        waveform = generator(mel).flatten()
+    if not torch.isfinite(waveform).all():
+        raise SystemExit("Descript MelGAN reference produced non-finite output")
+
+    return {
+        "input_shape": list(mel.shape),
+        "input_pattern": "channel-major-linspace-negative-one-to-one",
+        "waveform": {
+            "sample_rate_hz": 22050,
+            "channels": 1,
+            "samples": int(waveform.numel()),
+            "minimum": float(waveform.min()),
+            "maximum": float(waveform.max()),
+            "rms": float(waveform.square().mean().sqrt()),
+            "non_finite_samples": int((~torch.isfinite(waveform)).sum()),
+            "probes": [
+                [index, float(waveform[index])]
+                for index in [
+                    0,
+                    1,
+                    255,
+                    256,
+                    1000,
+                    waveform.numel() // 2,
+                    waveform.numel() - 2,
+                    waveform.numel() - 1,
+                ]
+            ],
+        },
+    }
+
+
 def vits_speaker_reference(model, token_tensor: torch.Tensor, speaker: str) -> dict:
     speaker_id = model.speaker_manager.speaker_ids[speaker]
     speaker_tensor = torch.tensor([speaker_id], dtype=torch.long)
@@ -392,6 +503,14 @@ def vits_reference(artifacts: dict[str, Path]) -> dict:
 
 def main() -> None:
     args = parse_args()
+    if sum(
+        [
+            args.fastpitch_only,
+            args.melgan_only,
+            args.multiband_melgan_only,
+        ]
+    ) > 1:
+        raise SystemExit("only one model-specific evidence mode may be selected")
     if args.fastpitch_only:
         required = {
             "ljspeech/fast-pitch/config.json",
@@ -420,6 +539,60 @@ def main() -> None:
             sys.stdout.write(serialized)
         return
 
+    if args.melgan_only:
+        required = {"ljspeech/melgan/linda_johnson.pt"}
+        artifacts = require_artifacts(args.model_root, required)
+        evidence = {
+            "schema": "tongues-melgan-conformance-v1",
+            "reference_runtime": {
+                "name": "descriptinc/melgan-neurips",
+                "revision": DESCRIPT_MELGAN_REVISION,
+                "torch": torch.__version__,
+            },
+            "artifacts_sha256": {
+                key: EXPECTED_SHA256[key] for key in sorted(required)
+            },
+            "melgan": melgan_reference(artifacts),
+        }
+        serialized = json.dumps(
+            evidence, indent=2, sort_keys=True, allow_nan=False
+        ) + "\n"
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(serialized, encoding="utf-8")
+        else:
+            sys.stdout.write(serialized)
+        return
+
+    if args.multiband_melgan_only:
+        required = {
+            "ljspeech/multiband-melgan/config.json",
+            "ljspeech/multiband-melgan/model_file.pth",
+            "ljspeech/multiband-melgan/scale_stats.npy",
+        }
+        artifacts = require_artifacts(args.model_root, required)
+        evidence = {
+            "schema": "tongues-multiband-melgan-conformance-v1",
+            "reference_runtime": {
+                "name": "Coqui TTS",
+                "revision": COQUI_TTS_REVISION,
+                "torch": torch.__version__,
+            },
+            "artifacts_sha256": {
+                key: EXPECTED_SHA256[key] for key in sorted(required)
+            },
+            "multiband_melgan": multiband_melgan_reference(artifacts),
+        }
+        serialized = json.dumps(
+            evidence, indent=2, sort_keys=True, allow_nan=False
+        ) + "\n"
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(serialized, encoding="utf-8")
+        else:
+            sys.stdout.write(serialized)
+        return
+
     artifacts = require_artifacts(args.model_root)
     torch.manual_seed(27)
     evidence = {
@@ -431,6 +604,8 @@ def main() -> None:
         },
         "artifacts_sha256": EXPECTED_SHA256,
         "fast_pitch": fast_pitch_reference(artifacts),
+        "melgan": melgan_reference(artifacts),
+        "multiband_melgan": multiband_melgan_reference(artifacts),
         "speedy_speech_hifigan": speedy_speech_reference(artifacts),
         "vits": vits_reference(artifacts),
     }

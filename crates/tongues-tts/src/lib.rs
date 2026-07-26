@@ -26,12 +26,21 @@ use tongues_g2p2g::{load_model, ModelConfig, Seq2SeqModel};
 use tongues_wiktionary::{wiktionary_infer_source, WiktionaryInferNotation};
 
 pub mod burn_acoustic;
+pub mod burn_delightful_tts;
 pub mod burn_fast_pitch;
 pub mod burn_fast_pitch_acoustic;
 pub mod burn_fast_pitch_pipeline;
+pub mod burn_fastspeech;
+pub mod burn_glow_tts;
+pub mod burn_glow_tts_acoustic;
+pub mod burn_glow_tts_pipeline;
 pub mod burn_hifigan;
+pub mod burn_melgan;
 pub mod burn_pipeline;
 pub mod burn_speedy_speech;
+pub mod burn_tacotron;
+pub mod burn_tacotron_acoustic;
+pub mod burn_variance_acoustic;
 pub mod burn_vits;
 pub mod burn_vits_decoder;
 pub mod burn_vits_duration;
@@ -40,7 +49,9 @@ pub mod burn_vits_text;
 pub mod burn_vocoder;
 mod checkpoint;
 pub mod components;
+pub mod delightful_tts_config;
 pub mod device;
+pub mod glow_tts_config;
 pub mod model_catalog;
 pub mod model_config;
 pub mod model_package;
@@ -48,21 +59,46 @@ pub mod orchestration;
 pub mod phoneme_projector;
 pub mod profiling;
 pub mod speakers;
+pub mod tacotron_config;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
 
+pub use burn_delightful_tts::{
+    DelightfulTts, DelightfulTtsControls, DelightfulTtsError, DelightfulTtsOutput,
+};
 pub use burn_fast_pitch::{
     FastPitch, FastPitchConfig, FastPitchControls, FastPitchError, FastPitchOutput,
     FeedForwardTransformerConfig,
 };
 pub use burn_fast_pitch_acoustic::BurnFastPitchAcoustic;
 pub use burn_fast_pitch_pipeline::BurnFastPitchPipeline;
+pub use burn_fastspeech::{
+    FastSpeech, FastSpeechConfig, FastSpeechControls, FastSpeechError, FastSpeechOutput,
+    FastSpeechVariant, VariancePredictorConfig,
+};
+pub use burn_glow_tts::{
+    GlowDecoder, GlowEncoderPrenet, GlowInvertibleConv, GlowTextEncoder, GlowTextEncoderOutput,
+    GlowTts, GlowTtsError, GlowTtsOutput, StochasticGlowTts, DEFAULT_GLOW_MAX_OUTPUT_FRAMES,
+};
+pub use burn_glow_tts_acoustic::{BurnGlowTtsAcoustic, COQUI_D_VECTOR_SPACE};
+pub use burn_glow_tts_pipeline::BurnGlowTtsPipeline;
 pub use burn_hifigan::{HifiganError, HifiganGenerator, HifiganGeneratorConfig};
+pub use burn_melgan::{
+    MelganError, MelganGenerator, MelganGeneratorConfig, MultibandMelganGenerator, Pqmf, PqmfConfig,
+};
 pub use burn_pipeline::BurnSpeedySpeechPipeline;
 pub use burn_speedy_speech::{
     ResidualConvConfig, SpeedySpeech, SpeedySpeechConfig, SpeedySpeechError, SpeedySpeechOutput,
 };
+pub use burn_tacotron::{
+    PytorchBiLstm, PytorchLstmCell, Tacotron2, TacotronConditioning, TacotronControls,
+    TacotronError, TacotronOriginalAttention, TacotronOutput, TacotronTermination,
+};
+pub use burn_tacotron_acoustic::{
+    BurnTacotron2Acoustic, TacotronGraphemeProjector, CAPACITRON_LATENT_SPACE,
+};
+pub use burn_variance_acoustic::{BurnDelightfulTtsAcoustic, BurnFastSpeechAcoustic};
 pub use burn_vits::BurnVitsSpeech;
 pub use burn_vits_decoder::{
     VitsWaveformDecoder, VitsWaveformDecoderConfig, VitsWaveformDecoderError,
@@ -77,7 +113,10 @@ pub use burn_vits_flow::{
 pub use burn_vits_text::{
     VitsTextPriorConfig, VitsTextPriorEncoder, VitsTextPriorError, VitsTextPriorOutput,
 };
-pub use burn_vocoder::BurnHifiganVocoder;
+pub use burn_vocoder::{
+    BurnHifiganVocoder, BurnMelganVocoder, BurnMultibandMelganVocoder, BurnTensorVocoder,
+    BurnVocoder,
+};
 pub use components::{
     AcousticArtifact, AcousticModel, AcousticOutputContract, CodecContract, CodecDecoder,
     CodecDecoderAdapter, CodecTokenSequence, ConditioningEmbedding, ConditioningKind,
@@ -87,10 +126,16 @@ pub use components::{
     SpectrogramLayout, SpectrogramNormalization, SpectrogramPadMode, SpectrogramScale,
     SpeechPipeline, VocoderDecoder, Waveform, WaveformContract, WaveformLayout,
 };
+pub use delightful_tts_config::{
+    DelightfulAudioConfig, DelightfulConformerConfig, DelightfulProsodyConfig,
+    DelightfulSpeakerConfig, DelightfulTtsConfig, DelightfulVarianceConfig,
+    DEFAULT_DELIGHTFUL_MAX_OUTPUT_FRAMES,
+};
 pub use device::{
     resolve_speech_device, ResolvedSpeechDevice, SpeechDeviceRequest, SpeechDeviceSelection,
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
+pub use glow_tts_config::{GlowTtsEncoderConfig, GlowTtsInferenceConfig, GlowTtsNetworkConfig};
 pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,
     private_catalog_paths_from_environment, CatalogArchiveMember, CatalogArtifact, CatalogLicense,
@@ -98,7 +143,10 @@ pub use model_catalog::{
     ModelCatalogEntry, ModelInstallProgress, ModelStore, VerifiedModel, EMBEDDED_MODEL_CATALOG,
     INSTALLED_MODEL_SCHEMA_VERSION, MODEL_CATALOG_SCHEMA_VERSION,
 };
-pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
+pub use model_config::{
+    AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams, MelganBundleConfig,
+    MelganGeneratorParams, MelganVariant,
+};
 pub use model_package::{
     import_coqui_model, import_coqui_model_with_progress, inspect_coqui_import,
     inspect_coqui_import_with_progress, migrate_model_package_manifest, open_model_package,
@@ -111,11 +159,11 @@ pub use model_package::{
 };
 pub use orchestration::{
     variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
-    CapabilityValue, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,
-    OutputAudioContract, PitchCapabilities, PlanEngineBackend, ReferenceAudioCapabilities,
-    ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection, StyleCapabilities,
-    StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming, SynthesizerBackend,
-    SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
+    CapabilityValue, EnergyCapabilities, NamedCapability, NormalizedAudioChunk,
+    NormalizedAudioSink, OutputAudioContract, PitchCapabilities, PlanEngineBackend,
+    ReferenceAudioCapabilities, ReferenceAudioRequest, SpeakerCapabilities, SpeakerSelection,
+    StyleCapabilities, StyleSelection, SynthesisContractError, SynthesisMetadata, SynthesisTiming,
+    SynthesizerBackend, SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
 };
 pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
@@ -125,6 +173,11 @@ pub use profiling::{
     SynthesisProfiler, SynthesisStage,
 };
 pub use speakers::SpeakerCatalog;
+pub use tacotron_config::{
+    CapacitronInferenceConfig, TacotronArchitecture, TacotronAttentionNormalization,
+    TacotronConfigError, TacotronInferenceConfig, TacotronVariant,
+    DEFAULT_TACOTRON_MAX_DECODER_STEPS,
+};
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
@@ -253,6 +306,12 @@ pub struct SynthesisOptions {
     pub durations: Option<Vec<u32>>,
     /// Explicit per-token values in the model's pitch-conditioning space.
     pub pitch: Option<Vec<f32>>,
+    /// Multiplies token-level energy predictions for variance-conditioned models.
+    pub energy_scale: Option<f32>,
+    /// Adds an offset in the model's energy-conditioning space.
+    pub energy_shift: Option<f32>,
+    /// Explicit per-token values in the model's energy-conditioning space.
+    pub energy: Option<Vec<f32>>,
     /// Backend RNG seed for repeatable stochastic inference.
     pub seed: Option<u64>,
 }
@@ -269,6 +328,9 @@ impl Default for SynthesisOptions {
             pitch_shift: None,
             durations: None,
             pitch: None,
+            energy_scale: None,
+            energy_shift: None,
+            energy: None,
             seed: None,
         }
     }

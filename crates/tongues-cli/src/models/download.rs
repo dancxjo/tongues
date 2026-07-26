@@ -12,7 +12,7 @@ use crate::models::manifest::{
     bundle_archive_members, bundle_entrypoint_relative_path, bundle_primary_asset,
     bundle_required_assets, find_archive, find_asset, find_bundle, ModelArchive, ModelAsset,
     ModelBundle, ModelKind, DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
-    DEFAULT_NEURAL_VOCODER_ID, DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
+    DEFAULT_NEURAL_VOCODER_ID, DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID, MODEL_BUNDLES,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_mortar_home, selected_bundle, selected_llm_model_path,
@@ -190,6 +190,21 @@ pub fn fetch_model(model: Option<&str>, force: bool) -> Result<PathBuf> {
     selected_llm_model_path()
 }
 
+pub fn fetch_all_models(force: bool) -> Result<()> {
+    for bundle in all_catalog_bundles() {
+        fetch_bundle(bundle, force)
+            .with_context(|| format!("fetching model bundle `{}`", bundle.id))?;
+        if bundle.kind == ModelKind::StyleTts2 {
+            ensure_styletts2_reference_audio_extracted()?;
+        }
+    }
+    Ok(())
+}
+
+fn all_catalog_bundles() -> impl Iterator<Item = &'static ModelBundle> {
+    MODEL_BUNDLES.iter()
+}
+
 fn fetch_all_runtime_bundles(force: bool) -> Result<()> {
     for bundle in default_runtime_bundles()? {
         fetch_bundle(bundle, force)?;
@@ -216,9 +231,6 @@ fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
 }
 
 fn fetch_bundle(bundle: &ModelBundle, force: bool) -> Result<()> {
-    if bundle.kind == ModelKind::Llm {
-        write_selected_model(bundle.id)?;
-    }
     if let Some(entry) = licensed_catalog_entry(bundle.id)? {
         licensed_model_store()?.install(&entry, force)?;
         return Ok(());
@@ -624,5 +636,22 @@ mod tests {
         assert!(ids.contains(&DEFAULT_ACOUSTIC_MODEL_ID));
         assert!(ids.contains(&DEFAULT_NEURAL_VOCODER_ID));
         assert!(ids.contains(&DEFAULT_VOICE_MODEL_ID));
+    }
+
+    #[test]
+    fn all_catalog_fetch_includes_every_registered_piper_voice() {
+        let voice_ids = all_catalog_bundles()
+            .filter(|bundle| bundle.kind == ModelKind::VoiceModel)
+            .map(|bundle| bundle.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            voice_ids,
+            vec![
+                "voice-ryan-medium",
+                "voice-amy-medium",
+                "voice-ljspeech-high"
+            ]
+        );
     }
 }

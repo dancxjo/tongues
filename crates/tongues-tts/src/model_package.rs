@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -22,9 +23,11 @@ use zip::ZipArchive;
 
 use crate::vits_config::ImportedVitsConfig;
 use crate::{
-    AudioFeatureConfig, BurnVitsSpeech, FastPitchConfig, HifiganBundleConfig,
-    PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog, SpeedySpeechConfig,
-    VitsInferenceConfig,
+    AudioFeatureConfig, BurnVitsSpeech, DelightfulTtsConfig, FastPitchConfig, FastSpeechConfig,
+    FastSpeechVariant, GlowTts, GlowTtsInferenceConfig, HifiganBundleConfig, MelganBundleConfig,
+    MelganVariant, PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog,
+    SpeedySpeechConfig, StochasticGlowTts, TacotronArchitecture, TacotronGraphemeProjector,
+    TacotronInferenceConfig, VitsInferenceConfig,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;
@@ -42,8 +45,16 @@ const MAX_TENSOR_ELEMENTS: usize = 1 << 34;
 #[serde(rename_all = "snake_case")]
 pub enum ModelPackageArchitecture {
     FastPitch,
+    FastSpeech,
+    FastSpeech2,
     SpeedySpeech,
+    Tacotron,
+    Tacotron2,
+    DelightfulTts,
     HifiGan,
+    MelGan,
+    MultibandMelGan,
+    GlowTts,
     Vits,
     SpeakerEncoder,
 }
@@ -52,8 +63,16 @@ impl ModelPackageArchitecture {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FastPitch => "fast_pitch",
+            Self::FastSpeech => "fast_speech",
+            Self::FastSpeech2 => "fast_speech_2",
             Self::SpeedySpeech => "speedy_speech",
+            Self::Tacotron => "tacotron",
+            Self::Tacotron2 => "tacotron2",
+            Self::DelightfulTts => "delightful_tts",
             Self::HifiGan => "hifi_gan",
+            Self::MelGan => "mel_gan",
+            Self::MultibandMelGan => "multiband_mel_gan",
+            Self::GlowTts => "glow_tts",
             Self::Vits => "vits",
             Self::SpeakerEncoder => "speaker_encoder",
         }
@@ -287,9 +306,36 @@ enum ParsedConfig {
         parameters: Value,
         symbols: Vec<String>,
     },
+    Tacotron {
+        inference: TacotronInferenceConfig,
+        audio: AudioFeatureConfig,
+        parameters: Value,
+        symbols: Vec<String>,
+    },
+    FastSpeech {
+        model: FastSpeechConfig,
+        audio: AudioFeatureConfig,
+        parameters: Value,
+        symbols: Vec<String>,
+    },
+    DelightfulTts {
+        model: DelightfulTtsConfig,
+        parameters: Value,
+        symbols: Vec<String>,
+        padding_id: usize,
+    },
     HifiGan {
         model: HifiganBundleConfig,
         parameters: Value,
+    },
+    MelGan {
+        model: MelganBundleConfig,
+        parameters: Value,
+    },
+    GlowTts {
+        inference: GlowTtsInferenceConfig,
+        parameters: Value,
+        symbols: Vec<String>,
     },
     Vits {
         inference: VitsInferenceConfig,
@@ -307,7 +353,21 @@ impl ParsedConfig {
         match self {
             Self::FastPitch { .. } => ModelPackageArchitecture::FastPitch,
             Self::Speedy { .. } => ModelPackageArchitecture::SpeedySpeech,
+            Self::Tacotron { inference, .. } => match inference.architecture {
+                TacotronArchitecture::Tacotron => ModelPackageArchitecture::Tacotron,
+                TacotronArchitecture::Tacotron2 => ModelPackageArchitecture::Tacotron2,
+            },
+            Self::FastSpeech { model, .. } => match model.variant {
+                FastSpeechVariant::FastSpeech => ModelPackageArchitecture::FastSpeech,
+                FastSpeechVariant::FastSpeech2 => ModelPackageArchitecture::FastSpeech2,
+            },
+            Self::DelightfulTts { .. } => ModelPackageArchitecture::DelightfulTts,
             Self::HifiGan { .. } => ModelPackageArchitecture::HifiGan,
+            Self::MelGan { model, .. } => match model.variant().expect("validated MelGAN config") {
+                MelganVariant::Melgan => ModelPackageArchitecture::MelGan,
+                MelganVariant::Multiband => ModelPackageArchitecture::MultibandMelGan,
+            },
+            Self::GlowTts { .. } => ModelPackageArchitecture::GlowTts,
             Self::Vits { .. } => ModelPackageArchitecture::Vits,
             Self::SpeakerEncoder { .. } => ModelPackageArchitecture::SpeakerEncoder,
         }
@@ -317,7 +377,12 @@ impl ParsedConfig {
         match self {
             Self::FastPitch { parameters, .. }
             | Self::Speedy { parameters, .. }
+            | Self::Tacotron { parameters, .. }
+            | Self::FastSpeech { parameters, .. }
+            | Self::DelightfulTts { parameters, .. }
             | Self::HifiGan { parameters, .. }
+            | Self::MelGan { parameters, .. }
+            | Self::GlowTts { parameters, .. }
             | Self::Vits { parameters, .. }
             | Self::SpeakerEncoder { parameters, .. } => parameters,
         }
@@ -325,8 +390,22 @@ impl ParsedConfig {
 
     fn audio(&self) -> Option<PackageAudio> {
         let audio = match self {
-            Self::FastPitch { audio, .. } | Self::Speedy { audio, .. } => audio,
+            Self::FastPitch { audio, .. }
+            | Self::Speedy { audio, .. }
+            | Self::Tacotron { audio, .. }
+            | Self::FastSpeech { audio, .. } => audio,
+            Self::DelightfulTts { model, .. } => {
+                return Some(PackageAudio {
+                    sample_rate_hz: model.audio.sample_rate,
+                    fft_size: Some(model.audio.fft_size),
+                    window_size: Some(model.audio.win_length),
+                    hop_size: Some(model.audio.hop_length),
+                    mel_bins: Some(model.audio.num_mels),
+                });
+            }
             Self::HifiGan { model, .. } => &model.audio,
+            Self::MelGan { model, .. } => &model.audio,
+            Self::GlowTts { inference, .. } => &inference.audio,
             Self::Vits { inference, .. } => &inference.audio,
             Self::SpeakerEncoder { model, .. } => {
                 return Some(PackageAudio {
@@ -351,8 +430,12 @@ impl ParsedConfig {
         match self {
             Self::FastPitch { symbols, .. }
             | Self::Speedy { symbols, .. }
+            | Self::Tacotron { symbols, .. }
+            | Self::FastSpeech { symbols, .. }
+            | Self::DelightfulTts { symbols, .. }
+            | Self::GlowTts { symbols, .. }
             | Self::Vits { symbols, .. } => symbols.clone(),
-            Self::HifiGan { .. } | Self::SpeakerEncoder { .. } => Vec::new(),
+            Self::HifiGan { .. } | Self::MelGan { .. } | Self::SpeakerEncoder { .. } => Vec::new(),
         }
     }
 }
@@ -458,7 +541,11 @@ pub fn inspect_coqui_import_with_progress(
     progress(ModelImportProgress::ScanningCheckpoint {
         path: options.checkpoint_path.clone(),
     });
-    scan_safe_pytorch_checkpoint(&options.checkpoint_path)?;
+    if matches!(parsed, ParsedConfig::MelGan { .. }) {
+        scan_safe_melgan_checkpoint(options)?;
+    } else {
+        scan_safe_pytorch_checkpoint(&options.checkpoint_path)?;
+    }
     let reader = checkpoint_reader(options)?;
     let tensors = tensor_metadata(&reader)?;
     let speakers = load_speakers(options, &parsed)?;
@@ -550,7 +637,7 @@ pub fn import_coqui_model_with_progress(
         },
         provenance: PackageProvenance {
             source: options.source.trim().into(),
-            source_format: "coqui-pytorch-zip".into(),
+            source_format: checkpoint_source_format(&options.checkpoint_path)?.into(),
             importer: "tongues-tts".into(),
             importer_version: env!("CARGO_PKG_VERSION").into(),
             coqui_version: options.coqui_version.clone(),
@@ -571,6 +658,28 @@ pub fn import_coqui_model_with_progress(
         sha256: manifest_sha256,
     });
     Ok(manifest)
+}
+
+fn checkpoint_source_format(path: &Path) -> Result<&'static str> {
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to inspect checkpoint format {}", path.display()))?;
+    let mut magic = [0u8; 4];
+    let read = file.read(&mut magic)?;
+    if read == magic.len() && magic == *b"PK\x03\x04" {
+        return Ok("coqui-pytorch-zip");
+    }
+    let descript_layout = PytorchReader::new(path).is_ok_and(|reader| {
+        reader.tensors().keys().any(|name| {
+            name.strip_prefix("model.")
+                .and_then(|suffix| suffix.split('.').next())
+                .is_some_and(|index| index.parse::<usize>().is_ok())
+        })
+    });
+    Ok(if descript_layout {
+        "descript-pytorch-legacy"
+    } else {
+        "coqui-pytorch-legacy"
+    })
 }
 
 pub fn read_model_package(path: impl AsRef<Path>) -> Result<ModelPackageManifest> {
@@ -799,6 +908,80 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
                 symbols: projector.vocabulary().iter().map(char::to_string).collect(),
             }
         }
+        ModelPackageArchitecture::FastSpeech | ModelPackageArchitecture::FastSpeech2 => {
+            reject_model_args(
+                object,
+                &[
+                    "d_vector_dim",
+                    "d_vector_file",
+                    "decoder_params",
+                    "decoder_type",
+                    "detach_duration_predictor",
+                    "duration_predictor_dropout_p",
+                    "duration_predictor_hidden_channels",
+                    "duration_predictor_kernel_size",
+                    "encoder_params",
+                    "encoder_type",
+                    "energy_embedding_kernel_size",
+                    "energy_predictor_dropout_p",
+                    "energy_predictor_hidden_channels",
+                    "energy_predictor_kernel_size",
+                    "hidden_channels",
+                    "length_scale",
+                    "max_duration",
+                    "num_chars",
+                    "num_speakers",
+                    "out_channels",
+                    "pitch_embedding_kernel_size",
+                    "pitch_predictor_dropout_p",
+                    "pitch_predictor_hidden_channels",
+                    "pitch_predictor_kernel_size",
+                    "poisitonal_encoding_use_scale",
+                    "positional_encoding",
+                    "speakers_file",
+                    "use_aligner",
+                    "use_d_vector_file",
+                    "use_energy",
+                    "use_pitch",
+                    "use_speaker_embedding",
+                ],
+            )?;
+            let model = FastSpeechConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(
+                    (architecture, model.variant),
+                    (
+                        ModelPackageArchitecture::FastSpeech,
+                        FastSpeechVariant::FastSpeech
+                    ) | (
+                        ModelPackageArchitecture::FastSpeech2,
+                        FastSpeechVariant::FastSpeech2
+                    )
+                ),
+                "detected FastSpeech architecture disagrees with model config"
+            );
+            let audio = AudioFeatureConfig::from_json5_str(&source)?;
+            let tokenizer: PhonemeTokenizerConfig =
+                json5::from_str(&source).context("invalid FastSpeech tokenizer config")?;
+            let projector = PhonemeVocabularyProjector::from_config(tokenizer.clone())?;
+            ensure!(
+                projector.vocabulary().len() == model.num_chars,
+                "FastSpeech symbol count {} does not match num_chars {}",
+                projector.vocabulary().len(),
+                model.num_chars
+            );
+            let parameters = json!({
+                "model": model,
+                "audio": audio,
+                "tokenizer": tokenizer,
+            });
+            ParsedConfig::FastSpeech {
+                model,
+                audio,
+                parameters,
+                symbols: projector.vocabulary().iter().map(char::to_string).collect(),
+            }
+        }
         ModelPackageArchitecture::SpeedySpeech => {
             reject_model_args(
                 object,
@@ -852,6 +1035,103 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
                 symbols: projector.vocabulary().iter().map(char::to_string).collect(),
             }
         }
+        ModelPackageArchitecture::Tacotron | ModelPackageArchitecture::Tacotron2 => {
+            let inference =
+                TacotronInferenceConfig::from_json_value(&root).map_err(anyhow::Error::new)?;
+            ensure!(
+                matches!(
+                    (architecture, inference.architecture),
+                    (
+                        ModelPackageArchitecture::Tacotron,
+                        TacotronArchitecture::Tacotron
+                    ) | (
+                        ModelPackageArchitecture::Tacotron2,
+                        TacotronArchitecture::Tacotron2
+                    )
+                ),
+                "detected Tacotron architecture disagrees with model config"
+            );
+            let audio = AudioFeatureConfig::from_file(path)?;
+            let mut tokenizer: PhonemeTokenizerConfig =
+                json5::from_str(&source).context("invalid Tacotron tokenizer config")?;
+            if root
+                .get("characters")
+                .and_then(|characters| characters.get("is_sorted"))
+                .is_none()
+            {
+                tokenizer.characters.is_sorted = false;
+            }
+            let symbols = if tokenizer.use_phonemes {
+                PhonemeVocabularyProjector::from_config(tokenizer.clone())?
+                    .vocabulary()
+                    .iter()
+                    .map(char::to_string)
+                    .collect::<Vec<_>>()
+            } else {
+                TacotronGraphemeProjector::from_config(&tokenizer)?
+                    .vocabulary()
+                    .iter()
+                    .map(char::to_string)
+                    .collect::<Vec<_>>()
+            };
+            ensure!(
+                symbols.len() == inference.num_chars,
+                "Tacotron symbol count {} does not match num_chars {}",
+                symbols.len(),
+                inference.num_chars
+            );
+            let parameters = json!({
+                "model": inference,
+                "audio": audio,
+                "tokenizer": tokenizer,
+            });
+            ParsedConfig::Tacotron {
+                inference,
+                audio,
+                parameters,
+                symbols,
+            }
+        }
+        ModelPackageArchitecture::DelightfulTts => {
+            ensure!(
+                !object
+                    .get("use_language_embedding")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "native DelightfulTTS does not support language embeddings"
+            );
+            let model = DelightfulTtsConfig::from_json_value(&root)?;
+            let tokenizer: PhonemeTokenizerConfig =
+                json5::from_str(&source).context("invalid DelightfulTTS tokenizer config")?;
+            let projector = PhonemeVocabularyProjector::from_config(tokenizer.clone())?;
+            ensure!(
+                projector.vocabulary().len() == model.num_chars,
+                "DelightfulTTS symbol count {} does not match num_chars {}",
+                projector.vocabulary().len(),
+                model.num_chars
+            );
+            let padding_symbol = root
+                .get("characters")
+                .and_then(|value| value.get("pad"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.chars().next())
+                .context("DelightfulTTS config requires a one-character padding symbol")?;
+            let padding_id = projector
+                .symbol_id(padding_symbol)
+                .context("DelightfulTTS padding symbol is absent from its vocabulary")?;
+            let padding_id = usize::try_from(padding_id)
+                .context("DelightfulTTS padding ID must be non-negative")?;
+            let parameters = json!({
+                "model": model,
+                "tokenizer": tokenizer,
+            });
+            ParsedConfig::DelightfulTts {
+                model,
+                parameters,
+                symbols: projector.vocabulary().iter().map(char::to_string).collect(),
+                padding_id,
+            }
+        }
         ModelPackageArchitecture::HifiGan => {
             let params = object
                 .get("generator_model_params")
@@ -876,9 +1156,59 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
                     .unwrap_or(false),
                 "unsupported Coqui config field `use_pqmf=true`"
             );
-            let model = HifiganBundleConfig::from_json5_str(&source)?;
+            let model = HifiganBundleConfig::from_file(path)?;
             let parameters = serde_json::to_value(&model)?;
             ParsedConfig::HifiGan { model, parameters }
+        }
+        ModelPackageArchitecture::MelGan | ModelPackageArchitecture::MultibandMelGan => {
+            let params = object
+                .get("generator_model_params")
+                .and_then(Value::as_object)
+                .context("MelGAN config requires generator_model_params")?;
+            reject_unknown_keys(
+                params,
+                &[
+                    "in_channels",
+                    "out_channels",
+                    "proj_kernel",
+                    "base_channels",
+                    "upsample_factors",
+                    "res_kernel",
+                    "num_res_blocks",
+                    "inference_padding",
+                ],
+                "generator_model_params",
+            )?;
+            let model = MelganBundleConfig::from_file(path)?;
+            ensure!(
+                matches!(
+                    (architecture, model.variant()?),
+                    (ModelPackageArchitecture::MelGan, MelganVariant::Melgan)
+                        | (
+                            ModelPackageArchitecture::MultibandMelGan,
+                            MelganVariant::Multiband
+                        )
+                ),
+                "detected MelGAN architecture disagrees with generator config"
+            );
+            let parameters = serde_json::to_value(&model)?;
+            ParsedConfig::MelGan { model, parameters }
+        }
+        ModelPackageArchitecture::GlowTts => {
+            let inference = GlowTtsInferenceConfig::from_json5_str(&source)?;
+            let projector = PhonemeVocabularyProjector::from_legacy_config_with_duplicates(
+                inference.tokenizer.clone(),
+            )?;
+            let symbols = projector.vocabulary().iter().map(char::to_string).collect();
+            let parameters = json!({
+                "model": inference,
+                "tokenizer": inference.tokenizer,
+            });
+            ParsedConfig::GlowTts {
+                inference,
+                parameters,
+                symbols,
+            }
         }
         ModelPackageArchitecture::Vits => {
             reject_model_args(
@@ -962,16 +1292,35 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
 }
 
 fn detect_architecture(object: &Map<String, Value>) -> Result<ModelPackageArchitecture> {
-    if object
-        .get("generator_model")
-        .and_then(Value::as_str)
-        .is_some_and(|name| name == "hifigan_generator")
-    {
-        return Ok(ModelPackageArchitecture::HifiGan);
+    if let Some(generator) = object.get("generator_model").and_then(Value::as_str) {
+        return match generator {
+            "hifigan_generator" => Ok(ModelPackageArchitecture::HifiGan),
+            "melgan_generator" => Ok(ModelPackageArchitecture::MelGan),
+            "multiband_melgan_generator" => Ok(ModelPackageArchitecture::MultibandMelGan),
+            other => bail!("unsupported Coqui generator architecture `{other}`"),
+        };
     }
     match object.get("model").and_then(Value::as_str) {
         Some("fast_pitch") => Ok(ModelPackageArchitecture::FastPitch),
+        Some("fastspeech") | Some("fast_speech") => Ok(ModelPackageArchitecture::FastSpeech),
+        Some("fastspeech2") | Some("fast_speech2") => Ok(ModelPackageArchitecture::FastSpeech2),
         Some("speedy_speech") => Ok(ModelPackageArchitecture::SpeedySpeech),
+        Some(value) if value.eq_ignore_ascii_case("tacotron") => {
+            Ok(ModelPackageArchitecture::Tacotron)
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("tacotron2")
+                || value.eq_ignore_ascii_case("tacotron_2")
+                || value.eq_ignore_ascii_case("tacotron-2") =>
+        {
+            Ok(ModelPackageArchitecture::Tacotron2)
+        }
+        Some("delightful_tts") => Ok(ModelPackageArchitecture::DelightfulTts),
+        Some(value)
+            if value.eq_ignore_ascii_case("glow_tts") || value.eq_ignore_ascii_case("glow-tts") =>
+        {
+            Ok(ModelPackageArchitecture::GlowTts)
+        }
         Some(value) if value.eq_ignore_ascii_case("vits") => Ok(ModelPackageArchitecture::Vits),
         Some("speaker_encoder") | Some("speaker-encoder") => {
             Ok(ModelPackageArchitecture::SpeakerEncoder)
@@ -1011,7 +1360,13 @@ fn ignored_training_fields(
 ) -> Vec<String> {
     let retained = match architecture {
         ModelPackageArchitecture::FastPitch
+        | ModelPackageArchitecture::FastSpeech
+        | ModelPackageArchitecture::FastSpeech2
         | ModelPackageArchitecture::SpeedySpeech
+        | ModelPackageArchitecture::Tacotron
+        | ModelPackageArchitecture::Tacotron2
+        | ModelPackageArchitecture::DelightfulTts
+        | ModelPackageArchitecture::GlowTts
         | ModelPackageArchitecture::Vits => [
             "model",
             "model_args",
@@ -1029,9 +1384,66 @@ fn ignored_training_fields(
             "use_speaker_embedding",
             "use_language_embedding",
             "speaker_embedding_channels",
+            "out_channels",
+            "hidden_channels_enc",
+            "hidden_channels_encoder",
+            "hidden_channels_dec",
+            "hidden_channels_decoder",
+            "hidden_channels_dp",
+            "hidden_channels_duration_predictor",
+            "dropout_p_dp",
+            "dropout_p_dec",
+            "mean_only",
+            "num_flow_blocks_dec",
+            "kernel_size_dec",
+            "dilation_rate",
+            "num_block_layers",
+            "num_splits",
+            "num_squeeze",
+            "sigmoid_scale",
+            "encoder_type",
+            "encoder_params",
+            "use_encoder_prenet",
+            "use_d_vector_file",
+            "use_external_speaker_embedding_file",
+            "d_vector_dim",
+            "use_sdp",
+            "inference_noise_scale",
+            "inference_noise_scale_dp",
+            "length_scale",
+            "run_name",
+            "run_description",
+            "r",
+            "memory_size",
+            "prenet_type",
+            "prenet_dropout",
+            "prenet_dropout_at_inference",
+            "stopnet",
+            "separate_stopnet",
+            "max_decoder_steps",
+            "encoder_in_features",
+            "decoder_in_features",
+            "attention_type",
+            "attention_heads",
+            "attention_norm",
+            "attention_win",
+            "windowing",
+            "use_forward_attn",
+            "forward_attn_mask",
+            "transition_agent",
+            "location_attn",
+            "bidirectional_decoder",
+            "double_decoder_consistency",
+            "ddc_r",
+            "use_gst",
+            "gst",
+            "use_capacitron_vae",
+            "capacitron_vae",
         ]
         .as_slice(),
-        ModelPackageArchitecture::HifiGan => [
+        ModelPackageArchitecture::HifiGan
+        | ModelPackageArchitecture::MelGan
+        | ModelPackageArchitecture::MultibandMelGan => [
             "generator_model",
             "generator_model_params",
             "audio",
@@ -1071,6 +1483,32 @@ fn ignored_training_fields(
             .filter(|path| json_path_exists(object, path))
             .map(str::to_string),
         ),
+        ModelPackageArchitecture::FastSpeech | ModelPackageArchitecture::FastSpeech2 => {
+            ignored.extend(
+                [
+                    "model_args.detach_duration_predictor",
+                    "model_args.poisitonal_encoding_use_scale",
+                ]
+                .into_iter()
+                .filter(|path| json_path_exists(object, path))
+                .map(str::to_string),
+            );
+        }
+        ModelPackageArchitecture::DelightfulTts => ignored.extend(
+            [
+                "model_args.freeze_basis_vectors_predictor",
+                "model_args.freeze_decoder",
+                "model_args.freeze_duration_predictor",
+                "model_args.freeze_energy_predictor",
+                "model_args.freeze_pitch_predictor",
+                "model_args.freeze_text_encoder",
+                "model_args.freeze_vocoder",
+                "model_args.spec_segment_size",
+            ]
+            .into_iter()
+            .filter(|path| json_path_exists(object, path))
+            .map(str::to_string),
+        ),
         ModelPackageArchitecture::Vits => ignored.extend(
             [
                 "model_args.d_vector_file",
@@ -1094,7 +1532,12 @@ fn ignored_training_fields(
             .filter(|path| json_path_exists(object, path))
             .map(str::to_string),
         ),
-        ModelPackageArchitecture::HifiGan | ModelPackageArchitecture::SpeakerEncoder => {}
+        ModelPackageArchitecture::GlowTts => {}
+        ModelPackageArchitecture::Tacotron | ModelPackageArchitecture::Tacotron2 => {}
+        ModelPackageArchitecture::HifiGan
+        | ModelPackageArchitecture::MelGan
+        | ModelPackageArchitecture::MultibandMelGan
+        | ModelPackageArchitecture::SpeakerEncoder => {}
     }
     ignored.sort();
     ignored.dedup();
@@ -1123,6 +1566,10 @@ fn load_speakers(
         ParsedConfig::Vits { inference, .. } if inference.network.use_speaker_embedding => {
             Some(inference.network.num_speakers)
         }
+        ParsedConfig::DelightfulTts { model, .. } if model.speakers.use_speaker_embedding => Some(
+            u32::try_from(model.speakers.num_speakers)
+                .context("DelightfulTTS speaker count does not fit u32")?,
+        ),
         _ => None,
     };
     let Some(path) = options.speaker_map_path.as_deref() else {
@@ -1174,15 +1621,67 @@ fn load_languages(options: &CoquiImportOptions, root: &Value) -> Result<Vec<Pack
     Ok(languages)
 }
 
-fn checkpoint_reader(options: &CoquiImportOptions) -> Result<PytorchReader> {
-    PytorchReader::with_top_level_key(&options.checkpoint_path, &options.checkpoint_key)
-        .with_context(|| {
-            format!(
-                "failed to read tensor-only checkpoint key `{}` from {}",
-                options.checkpoint_key,
-                options.checkpoint_path.display()
-            )
-        })
+struct CheckpointReader {
+    reader: PytorchReader,
+    _sanitized: Option<crate::model_config::SanitizedLegacyCheckpoint>,
+}
+
+impl Deref for CheckpointReader {
+    type Target = PytorchReader;
+
+    fn deref(&self) -> &Self::Target {
+        &self.reader
+    }
+}
+
+fn checkpoint_reader(options: &CoquiImportOptions) -> Result<CheckpointReader> {
+    match PytorchReader::with_top_level_key(&options.checkpoint_path, &options.checkpoint_key) {
+        Ok(reader) => Ok(CheckpointReader {
+            reader,
+            _sanitized: None,
+        }),
+        Err(error) if error.to_string().contains("collections.Counter") => {
+            let sanitized =
+                crate::model_config::SanitizedLegacyCheckpoint::create(&options.checkpoint_path)?;
+            let reader =
+                PytorchReader::with_top_level_key(&sanitized.path, &options.checkpoint_key)
+                    .with_context(|| {
+                        format!(
+                            "failed to read safely sanitized legacy tensor key `{}` from {}",
+                            options.checkpoint_key,
+                            options.checkpoint_path.display()
+                        )
+                    })?;
+            Ok(CheckpointReader {
+                reader,
+                _sanitized: Some(sanitized),
+            })
+        }
+        Err(nested_error) => match PytorchReader::new(&options.checkpoint_path) {
+            Ok(reader) => Ok(CheckpointReader {
+                reader,
+                _sanitized: None,
+            }),
+            Err(root_error) => Err(root_error).with_context(|| {
+                format!(
+                    "failed to read tensor-only checkpoint {} either at root or key `{}`; nested-key error: {nested_error}",
+                    options.checkpoint_path.display(),
+                    options.checkpoint_key
+                )
+            }),
+        },
+    }
+}
+
+fn scan_safe_melgan_checkpoint(options: &CoquiImportOptions) -> Result<()> {
+    let reader = checkpoint_reader(options).with_context(|| {
+        format!(
+            "unsafe/unsupported MelGAN checkpoint {}: legacy files may contain only the data types accepted by Burn's non-executing pickle reader",
+            options.checkpoint_path.display()
+        )
+    })?;
+    tensor_metadata(&reader)?;
+    Ok(())
 }
 
 fn tensor_metadata(reader: &PytorchReader) -> Result<Vec<TensorMetadata>> {
@@ -1252,9 +1751,47 @@ fn validate_runtime_shapes(
                 .load_checkpoint(checkpoint_path)
                 .map_err(anyhow::Error::new)?;
         }
+        ParsedConfig::Tacotron { inference, .. } => {
+            ensure!(
+                inference.architecture == TacotronArchitecture::Tacotron2,
+                "Tacotron 1 checkpoint import is not yet shippable: its CBHG encoder and \
+                 autoregressive decoder topology differ from the native Tacotron 2 graph"
+            );
+            inference
+                .init_tacotron2::<Cpu>(&device)
+                .map_err(anyhow::Error::new)?
+                .load_checkpoint(checkpoint_path)
+                .map_err(anyhow::Error::new)?;
+        }
+        ParsedConfig::FastSpeech { model, .. } => {
+            model
+                .clone()
+                .init::<Cpu>(&device)
+                .map_err(anyhow::Error::new)?
+                .load_checkpoint(checkpoint_path)
+                .map_err(anyhow::Error::new)?;
+        }
+        ParsedConfig::DelightfulTts {
+            model, padding_id, ..
+        } => {
+            model
+                .clone()
+                .init::<Cpu>(*padding_id, &device)
+                .map_err(anyhow::Error::new)?
+                .load_checkpoint(checkpoint_path)
+                .map_err(anyhow::Error::new)?;
+        }
         ParsedConfig::HifiGan { model, .. } => {
             model.load_burn_generator::<Cpu>(checkpoint_path, &device)?;
         }
+        ParsedConfig::MelGan { model, .. } => match model.variant()? {
+            MelganVariant::Melgan => {
+                model.load_burn_generator::<Cpu>(checkpoint_path, &device)?;
+            }
+            MelganVariant::Multiband => {
+                model.load_burn_multiband_generator::<Cpu>(checkpoint_path, &device)?;
+            }
+        },
         ParsedConfig::Vits { .. } => {
             let speakers = options
                 .speaker_map_path
@@ -1262,6 +1799,15 @@ fn validate_runtime_shapes(
                 .context("VITS shape validation requires speaker_ids.json")?;
             BurnVitsSpeech::<Cpu>::load(&options.config_path, checkpoint_path, speakers, device)
                 .context("VITS checkpoint shape validation failed")?;
+        }
+        ParsedConfig::GlowTts { inference, .. } => {
+            if inference.network.use_sdp {
+                StochasticGlowTts::<Cpu>::load(inference.clone(), checkpoint_path, device)
+                    .context("stochastic Glow-TTS checkpoint shape validation failed")?;
+            } else {
+                GlowTts::<Cpu>::load(inference.clone(), checkpoint_path, device)
+                    .context("Glow-TTS checkpoint shape validation failed")?;
+            }
         }
         ParsedConfig::SpeakerEncoder { model, .. } => {
             validate_speaker_encoder_shapes(model, tensors)?;
@@ -1316,7 +1862,11 @@ fn convert_checkpoint(
     progress: &mut impl FnMut(ModelImportProgress),
 ) -> Result<()> {
     let reader = checkpoint_reader(options)?;
-    let mut tensors = reader.into_tensors().into_iter().collect::<Vec<_>>();
+    let mut tensors = reader
+        .tensors()
+        .iter()
+        .map(|(name, snapshot)| (name.clone(), snapshot.clone()))
+        .collect::<Vec<_>>();
     tensors.sort_by(|left, right| left.0.cmp(&right.0));
     ensure!(
         tensors.len() == expected.len(),
@@ -1783,6 +2333,42 @@ mod tests {
     }
 
     #[test]
+    fn detects_all_duration_based_acoustic_architectures() {
+        let detect = |model| {
+            let root = json!({"model": model});
+            detect_architecture(root.as_object().expect("object"))
+        };
+        assert_eq!(
+            detect("fastspeech").expect("FastSpeech"),
+            ModelPackageArchitecture::FastSpeech
+        );
+        assert_eq!(
+            detect("fastspeech2").expect("FastSpeech 2"),
+            ModelPackageArchitecture::FastSpeech2
+        );
+        assert_eq!(
+            detect("delightful_tts").expect("DelightfulTTS"),
+            ModelPackageArchitecture::DelightfulTts
+        );
+    }
+
+    #[test]
+    fn detects_legacy_mixed_case_tacotron_architectures() {
+        let detect = |model| {
+            let root = json!({"model": model});
+            detect_architecture(root.as_object().expect("object"))
+        };
+        assert_eq!(
+            detect("Tacotron").expect("Tacotron"),
+            ModelPackageArchitecture::Tacotron
+        );
+        assert_eq!(
+            detect("Tacotron2").expect("Tacotron 2"),
+            ModelPackageArchitecture::Tacotron2
+        );
+    }
+
+    #[test]
     fn migrates_v0_manifest_without_losing_metadata() {
         let value = json!({
             "version": 0,
@@ -1882,6 +2468,21 @@ mod tests {
     }
 
     #[test]
+    fn published_tacotron2_ddc_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_TACOTRON2_CONFIG",
+            "TONGUES_TEST_COQUI_TACOTRON2_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("Tacotron2-DDC import inspection");
+        assert_eq!(inspection.architecture, ModelPackageArchitecture::Tacotron2);
+        assert_eq!(inspection.audio.expect("audio").mel_bins, Some(80));
+        assert_eq!(inspection.symbols.len(), 64);
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
     fn published_fast_pitch_fixture_uses_common_importer_when_available() {
         let Some(options) = fixture_options(
             "TONGUES_TEST_COQUI_FASTPITCH_CONFIG",
@@ -1895,6 +2496,67 @@ mod tests {
     }
 
     #[test]
+    fn fastspeech_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_FASTSPEECH_CONFIG",
+            "TONGUES_TEST_COQUI_FASTSPEECH_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("FastSpeech import inspection");
+        assert_eq!(
+            inspection.architecture,
+            ModelPackageArchitecture::FastSpeech
+        );
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn fastspeech2_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_FASTSPEECH2_CONFIG",
+            "TONGUES_TEST_COQUI_FASTSPEECH2_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("FastSpeech 2 import inspection");
+        assert_eq!(
+            inspection.architecture,
+            ModelPackageArchitecture::FastSpeech2
+        );
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn delightful_tts_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_DELIGHTFUL_TTS_CONFIG",
+            "TONGUES_TEST_COQUI_DELIGHTFUL_TTS_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("DelightfulTTS import inspection");
+        assert_eq!(
+            inspection.architecture,
+            ModelPackageArchitecture::DelightfulTts
+        );
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn published_glow_tts_fixture_uses_common_importer_when_available() {
+        let Some(options) =
+            fixture_options("TONGUES_TEST_GLOW_CONFIG", "TONGUES_TEST_GLOW_CHECKPOINT")
+        else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("Glow-TTS import inspection");
+        assert_eq!(inspection.architecture, ModelPackageArchitecture::GlowTts);
+        assert_eq!(inspection.audio.expect("audio").mel_bins, Some(80));
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
     fn published_hifigan_fixture_uses_common_importer_when_available() {
         let Some(options) = fixture_options(
             "TONGUES_TEST_COQUI_HIFIGAN_CONFIG",
@@ -1904,6 +2566,36 @@ mod tests {
         };
         let inspection = inspect_coqui_import(&options).expect("HiFi-GAN import inspection");
         assert_eq!(inspection.architecture, ModelPackageArchitecture::HifiGan);
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn published_melgan_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_DESCRIPT_MELGAN_CONFIG",
+            "TONGUES_TEST_DESCRIPT_MELGAN_MODEL",
+        ) else {
+            return;
+        };
+        let inspection = inspect_coqui_import(&options).expect("MelGAN import inspection");
+        assert_eq!(inspection.architecture, ModelPackageArchitecture::MelGan);
+        assert!(!inspection.tensors.is_empty());
+    }
+
+    #[test]
+    fn published_multiband_melgan_fixture_uses_common_importer_when_available() {
+        let Some(options) = fixture_options(
+            "TONGUES_TEST_COQUI_MULTIBAND_MELGAN_CONFIG",
+            "TONGUES_TEST_COQUI_MULTIBAND_MELGAN_MODEL",
+        ) else {
+            return;
+        };
+        let inspection =
+            inspect_coqui_import(&options).expect("MultiBand-MelGAN import inspection");
+        assert_eq!(
+            inspection.architecture,
+            ModelPackageArchitecture::MultibandMelGan
+        );
         assert!(!inspection.tensors.is_empty());
     }
 

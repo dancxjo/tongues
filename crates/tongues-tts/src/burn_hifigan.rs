@@ -11,6 +11,11 @@
 //! when the parent has emitted ordinary JSON. [`HifiganGeneratorConfig::from_json_value`]
 //! is also provided for a parent that has already parsed JSON5 and wants
 //! checkpoint-compatible defaults applied before model construction.
+//!
+//! Source provenance: `audit-required`. This module targets published Coqui
+//! checkpoint structure and behavior; no claim of independent implementation
+//! or source adaptation should be made until the ledger in
+//! `docs/provenance.md` records a file-by-file comparison.
 
 use std::fmt;
 
@@ -215,6 +220,7 @@ pub struct WeightNormConvTranspose1d<B: Backend> {
     pub bias: Option<Param<Tensor<B, 1>>>,
     pub stride: usize,
     pub padding: usize,
+    pub output_padding: usize,
     pub dilation: usize,
 }
 
@@ -227,6 +233,31 @@ impl<B: Backend> WeightNormConvTranspose1d<B> {
         stride: usize,
         dilation: usize,
         padding: usize,
+        bias: bool,
+        device: &B::Device,
+    ) -> Self {
+        Self::new_with_output_padding(
+            channels_in,
+            channels_out,
+            kernel_size,
+            stride,
+            dilation,
+            padding,
+            0,
+            bias,
+            device,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_output_padding(
+        channels_in: usize,
+        channels_out: usize,
+        kernel_size: usize,
+        stride: usize,
+        dilation: usize,
+        padding: usize,
+        output_padding: usize,
         bias: bool,
         device: &B::Device,
     ) -> Self {
@@ -248,6 +279,7 @@ impl<B: Backend> WeightNormConvTranspose1d<B> {
             bias,
             stride,
             padding,
+            output_padding,
             dilation,
         }
     }
@@ -263,7 +295,13 @@ impl<B: Backend> WeightNormConvTranspose1d<B> {
             input,
             self.weight(),
             self.bias.as_ref().map(Param::val),
-            ConvTransposeOptions::new([self.stride], [self.padding], [0], [self.dilation], 1),
+            ConvTransposeOptions::new(
+                [self.stride],
+                [self.padding],
+                [self.output_padding],
+                [self.dilation],
+                1,
+            ),
         )
     }
 }

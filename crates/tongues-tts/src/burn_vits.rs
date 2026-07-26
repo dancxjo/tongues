@@ -3,6 +3,11 @@
 //! Tongues' linguistic plan remains the shared representation. The imported
 //! model vocabulary, token IDs, speaker rows, and checkpoint layout are
 //! resolved only inside this adapter.
+//!
+//! Source provenance: `audit-required`. This file was introduced by commit
+//! `8e3a9c6`, whose message combines import, adaptation, and reverse
+//! engineering without identifying the exact relationship. See
+//! `docs/provenance.md` before changing its license or provenance notice.
 
 use std::fs;
 use std::path::Path;

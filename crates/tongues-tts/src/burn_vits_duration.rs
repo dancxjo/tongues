@@ -4,6 +4,11 @@
 //! speaker conditioning, and either caller-provided or seeded Gaussian noise.
 //! It implements only the reverse (synthesis) graph. Posterior duration
 //! conditioning is training-only and is deliberately absent.
+//!
+//! Source provenance: `audit-required`. This file was introduced by commit
+//! `8e3a9c6`, whose message combines import, adaptation, and reverse
+//! engineering without identifying the exact relationship. See
+//! `docs/provenance.md` before changing its license or provenance notice.
 
 use std::fmt;
 use std::path::Path;
@@ -438,11 +443,23 @@ impl<B: Backend> StochasticDurationPredictor<B> {
     /// flows are loaded, including the first spline flow that the published
     /// reverse algorithm deliberately bypasses.
     pub fn load_checkpoint(
-        mut self,
+        self,
         checkpoint_path: impl AsRef<Path>,
     ) -> Result<Self, StochasticDurationError> {
+        self.load_checkpoint_with_prefix(checkpoint_path, "duration_predictor")
+    }
+
+    /// Strictly loads a stochastic-duration subtree nested under `prefix`.
+    ///
+    /// Glow-TTS-family checkpoints keep the predictor below `encoder`, while
+    /// VITS keeps it at the model root.
+    pub(crate) fn load_checkpoint_with_prefix(
+        mut self,
+        checkpoint_path: impl AsRef<Path>,
+        prefix: &str,
+    ) -> Result<Self, StochasticDurationError> {
         let mut key_remappings = vec![
-            (r"^duration_predictor\.".into(), String::new()),
+            (format!(r"^{prefix}\."), String::new()),
             (r"^flows\.0\.".into(), "affine.".into()),
         ];
         for index in 0..self.spline_flows.len() {

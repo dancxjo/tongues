@@ -158,6 +158,15 @@ pub struct PitchCapabilities {
     pub explicit_values: bool,
 }
 
+/// Discoverable token-level controls exposed by energy-conditioned acoustic
+/// models.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EnergyCapabilities {
+    pub scale: bool,
+    pub shift: bool,
+    pub explicit_values: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputAudioContract {
     pub sample_rate_hz: u32,
@@ -179,6 +188,8 @@ pub struct BackendCapabilities {
     pub speed: bool,
     #[serde(default)]
     pub pitch: PitchCapabilities,
+    #[serde(default)]
+    pub energy: EnergyCapabilities,
     #[serde(default)]
     pub durations: bool,
     pub seed: bool,
@@ -256,6 +267,39 @@ impl BackendCapabilities {
             }
             if !self.pitch.explicit_values {
                 return Err(unsupported_feature(&self.backend, "pitch"));
+            }
+        }
+        if let Some(value) = request.energy_scale {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "energy_scale",
+                    reason: "must be finite and positive".into(),
+                });
+            }
+            if !self.energy.scale {
+                return Err(unsupported_feature(&self.backend, "energy_scale"));
+            }
+        }
+        if let Some(value) = request.energy_shift {
+            if !value.is_finite() {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "energy_shift",
+                    reason: "must be finite".into(),
+                });
+            }
+            if !self.energy.shift {
+                return Err(unsupported_feature(&self.backend, "energy_shift"));
+            }
+        }
+        if let Some(values) = request.energy.as_ref() {
+            if values.is_empty() || !values.iter().all(|value| value.is_finite()) {
+                return Err(SynthesisContractError::InvalidRequest {
+                    field: "energy",
+                    reason: "must contain finite energy-conditioning values".into(),
+                });
+            }
+            if !self.energy.explicit_values {
+                return Err(unsupported_feature(&self.backend, "energy"));
             }
         }
         if let Some(values) = request.durations.as_ref() {
@@ -554,6 +598,12 @@ pub struct UnifiedSynthesisRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_shift: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub durations: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
@@ -597,6 +647,9 @@ impl UnifiedSynthesisRequest {
             pitch_scale: None,
             pitch_shift: None,
             pitch: None,
+            energy_scale: None,
+            energy_shift: None,
+            energy: None,
             durations: None,
             seed: None,
             noise_scale: None,
@@ -841,6 +894,9 @@ impl<E: SpeechSynthesisEngine + Send> SynthesizerBackend for PlanEngineBackend<E
                 pitch_shift: request.pitch_shift,
                 durations: request.durations.clone(),
                 pitch: request.pitch.clone(),
+                energy_scale: request.energy_scale,
+                energy_shift: request.energy_shift,
+                energy: request.energy.clone(),
                 seed: request.seed,
             },
         };
@@ -1000,6 +1056,7 @@ mod tests {
             reference_audio: ReferenceAudioCapabilities::default(),
             speed: true,
             pitch: PitchCapabilities::default(),
+            energy: EnergyCapabilities::default(),
             durations: false,
             seed: true,
             devices: vec![SpeechDeviceRequest::Cpu],
@@ -1055,6 +1112,43 @@ mod tests {
             capabilities.validate(&request),
             Err(SynthesisContractError::InvalidRequest {
                 field: "durations",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fastspeech2_energy_controls_are_capability_gated() {
+        let mut capabilities = fixture_capabilities();
+        capabilities.speakers = SpeakerCapabilities::unsupported();
+        let mut request = UnifiedSynthesisRequest::new("hello", "en-US");
+        request.device = SpeechDeviceRequest::Cpu;
+        request.energy_scale = Some(1.1);
+
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(SynthesisContractError::UnsupportedFeature {
+                feature: "energy_scale",
+                ..
+            })
+        ));
+
+        capabilities.energy = EnergyCapabilities {
+            scale: true,
+            shift: true,
+            explicit_values: true,
+        };
+        request.energy_shift = Some(-0.2);
+        request.energy = Some(vec![0.5, 0.8]);
+        capabilities
+            .validate(&request)
+            .expect("FastSpeech 2 energy controls");
+
+        request.energy = Some(vec![f32::NAN]);
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(SynthesisContractError::InvalidRequest {
+                field: "energy",
                 ..
             })
         ));

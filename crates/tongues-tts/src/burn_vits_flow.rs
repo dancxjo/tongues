@@ -5,6 +5,11 @@
 //! decoder. The flow field names deliberately match the established
 //! `flow.flows.N.*` checkpoint hierarchy after the outer `flow.` prefix is
 //! removed by [`ResidualCouplingFlow::load_checkpoint`].
+//!
+//! Source provenance: `audit-required`. This file was introduced by commit
+//! `8e3a9c6`, whose message combines import, adaptation, and reverse
+//! engineering without identifying the exact relationship. See
+//! `docs/provenance.md` before changing its license or provenance notice.
 
 use std::fmt;
 use std::path::Path;
@@ -386,7 +391,7 @@ pub struct FlowWeightNormConv1d<B: Backend> {
 
 impl<B: Backend> FlowWeightNormConv1d<B> {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub(crate) fn new(
         channels_in: usize,
         channels_out: usize,
         kernel_size: usize,
@@ -419,7 +424,7 @@ impl<B: Backend> FlowWeightNormConv1d<B> {
         weight_v.clone() * self.weight_g.val() / weight_norm_dim_zero(weight_v)
     }
 
-    fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub(crate) fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         conv1d(
             input,
             self.weight(),
@@ -443,7 +448,7 @@ pub struct CouplingWaveNet<B: Backend> {
 }
 
 impl<B: Backend> CouplingWaveNet<B> {
-    fn new(
+    pub(crate) fn new(
         hidden_channels: usize,
         kernel_size: usize,
         dilation_rate: usize,
@@ -499,7 +504,7 @@ impl<B: Backend> CouplingWaveNet<B> {
         }
     }
 
-    fn forward(
+    pub(crate) fn forward(
         &self,
         mut input: Tensor<B, 3>,
         mask: Tensor<B, 3>,

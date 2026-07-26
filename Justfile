@@ -262,10 +262,11 @@ interpreation *args:
 prepare *args:
     cargo run --bin tongues -- g2p2g prepare --out datasets/g2p2g/openepd-v0 "$@"
 
-# Fetch/Download pronunciation lexicon data files
+# Fetch pronunciation lexicons and every registered runtime model/voice
 fetch *args:
     cargo run --bin tongues -- fetch-cmudict --out data/cmudict.dict "$@"
     cargo run --bin tongues -- fetch-lexique --out data/Lexique383.tsv "$@"
+    cargo run --bin tongues -- models fetch --all "$@"
 
 # Update the markdown table of pronunciation discrepancies across pronouncers
 discrepancies *args:

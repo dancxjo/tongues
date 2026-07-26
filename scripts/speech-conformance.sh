@@ -16,6 +16,8 @@ model_root="${TONGUES_COQUI_MODEL_ROOT:-$data_root/mortar-sea/models/speech/coqu
 speedy_dir="$model_root/ljspeech/speedy-speech"
 fastpitch_dir="$model_root/ljspeech/fast-pitch"
 vocoder_dir="$model_root/ljspeech/hifigan-v2"
+multiband_dir="$model_root/ljspeech/multiband-melgan"
+melgan_model="$model_root/ljspeech/melgan/linda_johnson.pt"
 vits_dir="$model_root/vctk/vits"
 output_dir="${TONGUES_CONFORMANCE_OUTPUT:-$repo_root/target/speech-conformance}"
 image="${TONGUES_COQUI_REFERENCE_IMAGE:-tongues-coqui-reference}"
@@ -27,6 +29,10 @@ required_artifacts=(
     "$fastpitch_dir/model_file.pth"
     "$vocoder_dir/config.json"
     "$vocoder_dir/model_file.pth"
+    "$multiband_dir/config.json"
+    "$multiband_dir/model_file.pth"
+    "$multiband_dir/scale_stats.npy"
+    "$melgan_model"
     "$vits_dir/config.json"
     "$vits_dir/model_file.pth"
     "$vits_dir/speaker_ids.json"
@@ -115,6 +121,34 @@ env \
     cargo test --release -p tongues-tts \
         burn_fast_pitch::tests::published_checkpoint_stage_parity \
         -- --ignored --exact --nocapture
+
+echo "Comparing native MultiBand-MelGAN and PQMF output: $reference"
+env \
+    TONGUES_TEST_COQUI_MULTIBAND_MELGAN_CONFIG="$multiband_dir/config.json" \
+    TONGUES_TEST_COQUI_MULTIBAND_MELGAN_MODEL="$multiband_dir/model_file.pth" \
+    TONGUES_TEST_COQUI_REFERENCE="$reference" \
+    cargo test --release -p tongues-tts \
+        burn_vocoder::tests::published_multiband_melgan_checkpoint_parity \
+        -- --ignored --exact --nocapture
+
+echo "Comparing native MelGAN output against the pinned Descript checkpoint: $reference"
+env \
+    TONGUES_TEST_DESCRIPT_MELGAN_CONFIG="$repo_root/fixtures/speech/descript-melgan-linda-johnson-config.json" \
+    TONGUES_TEST_DESCRIPT_MELGAN_MODEL="$melgan_model" \
+    TONGUES_TEST_COQUI_REFERENCE="$reference" \
+    cargo test --release -p tongues-tts \
+        burn_vocoder::tests::published_melgan_checkpoint_parity \
+        -- --ignored --exact --nocapture
+
+echo "Inspecting both MelGAN checkpoint layouts through the safe package importer"
+env \
+    TONGUES_TEST_DESCRIPT_MELGAN_CONFIG="$repo_root/fixtures/speech/descript-melgan-linda-johnson-config.json" \
+    TONGUES_TEST_DESCRIPT_MELGAN_MODEL="$melgan_model" \
+    TONGUES_TEST_COQUI_MULTIBAND_MELGAN_CONFIG="$multiband_dir/config.json" \
+    TONGUES_TEST_COQUI_MULTIBAND_MELGAN_MODEL="$multiband_dir/model_file.pth" \
+    cargo test --release -p tongues-tts \
+        melgan_fixture_uses_common_importer \
+        -- --nocapture
 
 echo "Synthesizing and validating the registered ONNX voice: $output_dir/onnx"
 SPEECH_SMOKE_CASES=onnx \

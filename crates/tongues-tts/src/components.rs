@@ -338,6 +338,15 @@ pub enum SpectrogramNormalization {
         mean: Vec<f32>,
         scale: Vec<f32>,
     },
+    /// Mean/variance normalization whose safe, path-independent identity is
+    /// the digest of an upstream opaque statistics artifact.
+    ///
+    /// Some legacy Coqui bundles store statistics as pickled NumPy objects.
+    /// Composition needs their exact identity, but native inference does not
+    /// need to execute or deserialize that object.
+    OpaqueStandardized {
+        sha256: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +384,8 @@ pub struct SpectrogramContract {
     pub hop_size: usize,
     pub bins: usize,
     pub centered: bool,
+    /// Explicit time-domain padding applied before a non-centered STFT.
+    pub frame_padding: Option<(usize, usize)>,
     pub pad_mode: SpectrogramPadMode,
     pub preemphasis: Option<f32>,
     pub mel_filter_bank: Option<MelFilterBank>,
@@ -396,6 +407,12 @@ impl SpectrogramContract {
         );
         ensure!(self.hop_size > 0, "spectrogram hop size must be positive");
         ensure!(self.bins > 0, "spectrogram bin count must be positive");
+        if let Some((left, right)) = self.frame_padding {
+            ensure!(
+                !self.centered && (left > 0 || right > 0),
+                "explicit spectrogram frame padding requires a non-centered STFT and at least one padded sample"
+            );
+        }
         if let Some(preemphasis) = self.preemphasis {
             ensure!(
                 preemphasis.is_finite() && (0.0..1.0).contains(&preemphasis),
@@ -493,6 +510,16 @@ fn validate_normalization(normalization: &SpectrogramNormalization, bins: usize)
                 mean.iter().all(|value| value.is_finite())
                     && scale.iter().all(|value| value.is_finite() && *value != 0.0),
                 "spectrogram standardization vectors contain invalid values"
+            );
+            Ok(())
+        }
+        SpectrogramNormalization::OpaqueStandardized { sha256 } => {
+            ensure!(
+                sha256.len() == 64
+                    && sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                "opaque standardization SHA-256 must be 64 lowercase hexadecimal characters"
             );
             Ok(())
         }
@@ -922,6 +949,7 @@ mod tests {
             hop_size,
             bins: 80,
             centered: true,
+            frame_padding: None,
             pad_mode: SpectrogramPadMode::Reflect,
             preemphasis: None,
             mel_filter_bank: Some(MelFilterBank::Slaney),

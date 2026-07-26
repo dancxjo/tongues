@@ -4,6 +4,11 @@
 //! Transformer encoder and decoder stacks, parallel duration and pitch
 //! predictors, and a token-level pitch embedding. Text normalization and
 //! checkpoint-local vocabulary projection remain outside this module.
+//!
+//! Source provenance: `audit-required`. This module targets published Coqui
+//! checkpoint structure and behavior; no claim of independent implementation
+//! or source adaptation should be made until the ledger in
+//! `docs/provenance.md` records a file-by-file comparison.
 
 use std::fmt;
 use std::path::Path;
@@ -67,7 +72,7 @@ pub struct FeedForwardTransformerConfig {
 }
 
 impl FeedForwardTransformerConfig {
-    fn from_value(value: &Value, label: &str) -> Result<Self, FastPitchError> {
+    pub(crate) fn from_value(value: &Value, label: &str) -> Result<Self, FastPitchError> {
         let config = Self {
             hidden_channels_ffn: usize_at(value, &["hidden_channels_ffn"])?,
             num_heads: usize_at(value, &["num_heads"])?,
@@ -78,7 +83,7 @@ impl FeedForwardTransformerConfig {
         Ok(config)
     }
 
-    fn validate(&self, label: &str) -> Result<(), FastPitchError> {
+    pub(crate) fn validate(&self, label: &str) -> Result<(), FastPitchError> {
         if self.hidden_channels_ffn == 0 || self.num_heads == 0 || self.num_layers == 0 {
             return Err(config_error(format!(
                 "{label} FFN channels, heads, and layers must be positive"
@@ -457,7 +462,11 @@ pub struct FeedForwardTransformerBlock<B: Backend> {
 }
 
 impl<B: Backend> FeedForwardTransformerBlock<B> {
-    fn init(channels: usize, config: &FeedForwardTransformerConfig, device: &B::Device) -> Self {
+    pub(crate) fn init(
+        channels: usize,
+        config: &FeedForwardTransformerConfig,
+        device: &B::Device,
+    ) -> Self {
         Self {
             fft_layers: (0..config.num_layers)
                 .map(|_| FeedForwardTransformerLayer::init(channels, config, device))
@@ -465,7 +474,7 @@ impl<B: Backend> FeedForwardTransformerBlock<B> {
         }
     }
 
-    fn forward(&self, mut input: Tensor<B, 3>, mask: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub(crate) fn forward(&self, mut input: Tensor<B, 3>, mask: Tensor<B, 3>) -> Tensor<B, 3> {
         for layer in &self.fft_layers {
             input = layer.forward(input) * mask.clone();
         }
