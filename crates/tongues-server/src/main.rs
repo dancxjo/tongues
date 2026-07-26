@@ -4404,12 +4404,44 @@ fn discover_speech_path(
         capability_tier: tongues_tts::CapabilityTier::Unassigned,
         revision_capable: false,
     });
-    let catalog_ids = speech_path_catalog_ids(home, backend, Some(model)).unwrap_or_default();
+    let catalog_ids = if backend == "fairseq" {
+        vec![model.to_string()]
+    } else {
+        speech_path_catalog_ids(home, backend, Some(model)).unwrap_or_default()
+    };
     let catalog_entries = catalog_ids
         .iter()
         .filter_map(|id| catalog.find(id).cloned())
         .collect::<Vec<_>>();
-    let installed = speech_backend_installation_error(home, backend, Some(model)).is_none();
+    let installation_error = if backend == "fairseq" {
+        match catalog_entries.first() {
+            Some(entry) => {
+                let missing = entry
+                    .artifacts
+                    .iter()
+                    .flat_map(|artifact| {
+                        if artifact.members.is_empty() {
+                            vec![home.join(&artifact.install_path)]
+                        } else {
+                            artifact
+                                .members
+                                .iter()
+                                .map(|member| home.join(&member.install_path))
+                                .collect()
+                        }
+                    })
+                    .filter(|path| !path.is_file() && !path.is_dir())
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>();
+                (!missing.is_empty())
+                    .then(|| format!("missing model artifacts: {}", missing.join(", ")))
+            }
+            None => Some(format!("unknown Fairseq MMS catalog model `{model}`")),
+        }
+    } else {
+        speech_backend_installation_error(home, backend, Some(model))
+    };
+    let installed = installation_error.is_none();
     let verification_status = if backend == "mock" {
         tongues_tts::ModelVerificationStatus::Verified
     } else if catalog_entries.len() != catalog_ids.len() {
@@ -4430,7 +4462,7 @@ fn discover_speech_path(
     let verified = verification_status == tongues_tts::ModelVerificationStatus::Verified;
     let runnable = installed && verified;
     let unavailable_reason = if !installed {
-        speech_backend_installation_error(home, backend, Some(model))
+        installation_error
     } else if verified {
         None
     } else if let Some(error) = verification_error {
