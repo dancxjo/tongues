@@ -11,7 +11,7 @@ const controlDescriptions = {
     model: 'Model bundle id or model selector value.',
     '--all': 'Apply the clean operation to both prepared data and model artifacts.',
     '--archive-dir': 'Root directory where cleaned artifacts are archived.',
-    '--backend': 'Speech backend: Burn SpeedySpeech, Burn VITS, StyleTTS2, ONNX voice models, or mock output.',
+    '--backend': 'Speech backend: Burn SpeedySpeech, Burn FastPitch, Burn VITS, StyleTTS2, ONNX voice models, or mock output.',
     '--batch-size': 'Mini-batch size used during training.',
     '--cache-dir': 'Directory used for downloaded or cached source data.',
     '--config': 'TOML configuration file for this module.',
@@ -126,7 +126,7 @@ const controlDescriptions = {
 };
 
 const controlOptions = {
-    '--backend': ['burn', 'vits', 'styletts2', 'onnx', 'mock'],
+    '--backend': ['burn', 'fastpitch', 'vits', 'styletts2', 'onnx', 'mock'],
     '--corpus': ['ravdess', 'crema-d', 'tess', 'savee', 'emodb', 'iemocap'],
     '--mask-policy': ['variable', 'single'],
     '--method': ['speaker-neutral-delta'],
@@ -392,7 +392,7 @@ const commandPages = [
         fields: [
             { name: 'text', description: 'Text to synthesize; stdin is used in the CLI when omitted.' },
             { name: '--output', description: 'WAV file path written by the CLI.' },
-            { name: '--backend', options: ['burn', 'vits', 'onnx', 'styletts2', 'mock'], default: 'burn' },
+            { name: '--backend', options: ['burn', 'fastpitch', 'vits', 'onnx', 'styletts2', 'mock'], default: 'burn' },
             { name: '--variety' },
         ],
         advanced: ['--sample-rate-hz', '--speaker', '--voice-wav', '--style-wav', '--quality', '--diffusion-steps', '--speaker-reference-strength', '--style-reference-strength', '--style-alpha', '--style-beta', '--emotion-signatures', '--emotion', '--emotion-strength', '--embedding-scale', '--style-seed', '--speed', { name: '--debug-pronunciation', type: 'flag' }, { name: '--timings', type: 'flag' }, '--max-tts-symbols', { name: '--no-tts-chunking', type: 'flag' }, { name: '--fail-on-guessed-pronunciation', type: 'flag' }],
@@ -1759,6 +1759,8 @@ async function initSpeechStudio() {
         ['embedding_scale', 'embedding-scale-val', 2],
         ['noise_scale', 'noise-scale-val', 2],
         ['duration_noise_scale', 'duration-noise-scale-val', 2],
+        ['pitch_scale', 'pitch-scale-val', 2],
+        ['pitch_shift', 'pitch-shift-val', 2],
     ];
 
     const setStrength = (value) => {
@@ -1911,6 +1913,33 @@ async function initSpeechStudio() {
         model.backend === backendSelect.value && model.model === modelSelect.value
     ));
 
+    const backendLabels = {
+        styletts2: 'StyleTTS2',
+        burn: 'Burn SpeedySpeech + HiFi-GAN',
+        fastpitch: 'Burn FastPitch + HiFi-GAN',
+        vits: 'Burn VITS',
+        onnx: 'ONNX voice',
+        mock: 'Mock',
+    };
+
+    const renderBackends = () => {
+        const previous = backendSelect.value;
+        const backends = [...new Set(speechModels.map((model) => model.backend))];
+        backendSelect.innerHTML = '';
+        backends.forEach((backend) => {
+            const option = document.createElement('option');
+            option.value = backend;
+            option.textContent = backendLabels[backend] || backend;
+            backendSelect.appendChild(option);
+        });
+        if (backends.includes(previous)) {
+            backendSelect.value = previous;
+        } else if (backends.includes('burn')) {
+            backendSelect.value = 'burn';
+        }
+        backendSelect.disabled = backends.length < 2;
+    };
+
     const renderSpeakerEmbeddings = (model) => {
         speakerSelect.innerHTML = '<option value="">No speaker embedding</option>';
         speakerSelect.disabled = true;
@@ -1945,6 +1974,10 @@ async function initSpeechStudio() {
         });
         byId('speed-control').classList.toggle('hidden', !model?.speed);
         byId('seed-control').classList.toggle('hidden', !model?.seed);
+        byId('pitch-scale-control').classList.toggle('hidden', !model?.pitch?.scale);
+        byId('pitch-shift-control').classList.toggle('hidden', !model?.pitch?.shift);
+        byId('pitch-values-control').classList.toggle('hidden', !model?.pitch?.explicit_values);
+        byId('durations-control').classList.toggle('hidden', !model?.durations);
         renderSpeakerEmbeddings(model);
         syncBlendMode();
 
@@ -1986,7 +2019,28 @@ async function initSpeechStudio() {
         const res = await fetch('/api/speech/models');
         if (!res.ok) throw new Error(await res.text());
         speechModels = await res.json();
+        renderBackends();
         renderModels();
+    };
+
+    const parseNumberList = (inputId, label, { positiveIntegers = false } = {}) => {
+        const source = byId(inputId).value.trim();
+        if (!source) return null;
+        const parts = source.split(',').map((part) => part.trim());
+        const values = parts.map(Number);
+        const valid = parts.every(Boolean) && (
+            positiveIntegers
+                ? values.every((value) => Number.isSafeInteger(value) && value > 0)
+                : values.every(Number.isFinite)
+        );
+        if (!valid) {
+            throw new Error(
+                positiveIntegers
+                    ? `${label} must contain comma-separated positive integers.`
+                    : `${label} must contain comma-separated numbers.`,
+            );
+        }
+        return values;
     };
 
     const loadVarieties = async () => {
@@ -2086,6 +2140,22 @@ async function initSpeechStudio() {
             if (backend === 'onnx' || backend === 'vits') {
                 payload.noise_scale = Number(byId('noise_scale').value);
                 payload.duration_noise_scale = Number(byId('duration_noise_scale').value);
+            }
+            if (model?.pitch?.scale) {
+                payload.pitch_scale = Number(byId('pitch_scale').value);
+            }
+            if (model?.pitch?.shift) {
+                payload.pitch_shift = Number(byId('pitch_shift').value);
+            }
+            if (model?.pitch?.explicit_values) {
+                payload.pitch = parseNumberList('pitch_values', 'Per-token pitch');
+            }
+            if (model?.durations) {
+                payload.durations = parseNumberList(
+                    'durations',
+                    'Per-token durations',
+                    { positiveIntegers: true },
+                );
             }
             if (backend === 'styletts2') {
                 payload.voice_sample = voiceSelect.value || null;

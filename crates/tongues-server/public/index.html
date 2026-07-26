@@ -207,6 +207,7 @@
                                     <select id="backend">
                                         <option value="styletts2">StyleTTS2</option>
                                         <option value="burn">Burn SpeedySpeech + HiFi-GAN</option>
+                                        <option value="fastpitch">Burn FastPitch + HiFi-GAN</option>
                                         <option value="vits">Burn VITS</option>
                                         <option value="onnx">ONNX voice</option>
                                         <option value="mock">Mock</option>
@@ -353,6 +354,30 @@
                                         <label for="duration_noise_scale">Duration Noise (<span id="duration-noise-scale-val">0.80</span>)</label>
                                         <input type="range" id="duration_noise_scale" min="0.0" max="2.0" step="0.01" value="0.80">
                                         <small>Controls duration variation for VITS and Piper-compatible ONNX voices.</small>
+                                    </div>
+
+                                    <div class="form-group hidden" id="pitch-scale-control">
+                                        <label for="pitch_scale">Pitch Scale (<span id="pitch-scale-val">1.00</span>)</label>
+                                        <input type="range" id="pitch_scale" min="0.25" max="2.0" step="0.01" value="1.00">
+                                        <small>Multiplies normalized pitch conditioning for models such as FastPitch.</small>
+                                    </div>
+
+                                    <div class="form-group hidden" id="pitch-shift-control">
+                                        <label for="pitch_shift">Pitch Shift (<span id="pitch-shift-val">0.00</span>)</label>
+                                        <input type="range" id="pitch_shift" min="-2.0" max="2.0" step="0.01" value="0.00">
+                                        <small>Adds an offset in the model's normalized pitch space.</small>
+                                    </div>
+
+                                    <div class="form-group hidden" id="pitch-values-control">
+                                        <label for="pitch_values">Per-token Pitch</label>
+                                        <input type="text" id="pitch_values" placeholder="0.1, -0.2, 0.0">
+                                        <small>Optional comma-separated normalized pitch values, one per projected token.</small>
+                                    </div>
+
+                                    <div class="form-group hidden" id="durations-control">
+                                        <label for="durations">Per-token Durations</label>
+                                        <input type="text" id="durations" placeholder="4, 7, 3">
+                                        <small>Optional comma-separated positive mel-frame counts, one per projected token.</small>
                                     </div>
 
                                     <div class="form-group hidden" data-speech-backends="mock">
