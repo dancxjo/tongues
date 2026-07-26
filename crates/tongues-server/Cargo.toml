@@ -7,11 +7,13 @@ edition = "2024"
 anyhow.workspace = true
 axum = "0.8.9"
 axum-server = { version = "0.7.3", features = ["tls-rustls"] }
+base64 = "0.22.1"
 burn.workspace = true
 burn-cuda.workspace = true
 clap.workspace = true
 dirs.workspace = true
 hound.workspace = true
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 rustls = { version = "0.23.40", features = ["aws-lc-rs"] }

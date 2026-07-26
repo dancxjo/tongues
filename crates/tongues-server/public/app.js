@@ -991,6 +991,7 @@ function renderRoute() {
     if (page.path === '/speech') {
         const workflows = {
             '/speech': ['Speak', 'Generate and export speech from a complete, verified recipe.'],
+            '/speech/live': ['Live', 'Hear a streamed Ollama response while its later text is still being generated.'],
             '/speech/compose': ['Compose', 'Inspect and assemble contract-valid speech pipelines.'],
             '/speech/compare': ['Compare', 'Listen to several complete recipes using one shared prompt.'],
             '/speech/catalog': ['Catalog', 'Find ready voices, installable model families, and developer components.'],

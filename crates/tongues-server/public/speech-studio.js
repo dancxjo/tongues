@@ -27,14 +27,35 @@
         userRecipes: [],
         selectedStage: 'generator',
         jobsTimer: null,
+        liveProviders: [],
+        liveMessages: [],
+        liveTurn: null,
+        liveGeneration: 0,
+        liveSynthesisTail: Promise.resolve(),
+        liveAudioContext: null,
+        liveNextAudioTime: 0,
+        liveSources: new Set(),
+        liveSegments: new Map(),
+        liveAudioBuffers: [],
+        liveGenerated: '',
+        liveCommitted: '',
+        liveSpoken: '',
+        liveFinalTokenAt: 0,
+        liveFirstAudioAt: 0,
     };
     const VERIFICATION_CONCURRENCY = 1;
+    const DEFAULT_COMPARISON_CONCURRENCY = 2;
     const USER_RECIPES_KEY = 'tongues.speech.user-recipes.v1';
     const WORKFLOWS = {
         speak: {
             path: '/speech',
             label: 'Speak',
             summary: 'Generate and export speech from a complete, verified recipe.',
+        },
+        live: {
+            path: '/speech/live',
+            label: 'Live',
+            summary: 'Hear a streamed Ollama response while its later text is still being generated.',
         },
         compose: {
             path: '/speech/compose',
@@ -87,6 +108,26 @@
     const listedValues = (capability) => (
         capability?.support === 'listed' ? (capability.values || []) : []
     );
+    const comparisonSpeaker = (path, recipe = {}) => {
+        if (recipe.speaker) return recipe.speaker;
+        if (!path?.speakers?.required) return null;
+        const speakers = listedValues(path.speakers.values);
+        return speakers.find((speaker) => speaker.id === 'p225')?.id
+            || speakers[0]?.id
+            || null;
+    };
+    async function mapWithConcurrency(items, concurrency, callback) {
+        const limit = Math.max(1, Math.min(items.length, Math.floor(concurrency) || 1));
+        let next = 0;
+        const workers = Array.from({ length: limit }, async () => {
+            while (next < items.length) {
+                const index = next;
+                next += 1;
+                await callback(items[index], index);
+            }
+        });
+        await Promise.all(workers);
+    }
     const availablePaths = (discovery, includeTest = false) => (
         (discovery?.paths || []).filter((path) => includeTest || path.backend !== 'mock')
     );
@@ -432,6 +473,65 @@
                             <pre id="speech-diagnostics-output" class="source-preview"></pre>
                         </details>
                     </section>
+                </section>
+
+                <section id="speech-workflow-live" class="studio-workflow hidden"
+                    data-workflow="live" aria-labelledby="live-heading">
+                    <div class="workflow-heading">
+                        <div>
+                            <p class="eyebrow">Streaming conversation</p>
+                            <h2 id="live-heading">Hear the answer while it is written</h2>
+                            <p>Generated text appears immediately. Stable phrases enter speech, then one Web Audio timeline.</p>
+                        </div>
+                        <span id="live-state" class="runtime-badge" data-state="ready">Ready</span>
+                    </div>
+                    <div id="live-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
+                    <section class="live-controls" aria-label="Live conversation controls">
+                        <div class="form-group">
+                            <label for="live-provider">Text provider</label>
+                            <select id="live-provider"></select>
+                            <small id="live-provider-detail">Checking Ollama…</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="live-model">LLM model</label>
+                            <select id="live-model"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="live-recipe">Speech recipe</label>
+                            <select id="live-recipe"></select>
+                            <small>The recipe supplies language, script, and normalization instructions.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="live-instructions">Response instructions</label>
+                            <input id="live-instructions" type="text"
+                                placeholder="For example: Tell a vivid story in four paragraphs.">
+                        </div>
+                    </section>
+                    <div class="live-frontiers" aria-label="Turn frontiers">
+                        <div><span>Generated</span><strong id="live-generated-count">0</strong></div>
+                        <div><span>Planned</span><strong id="live-planned-count">0</strong></div>
+                        <div><span>Spoken</span><strong id="live-spoken-count">0</strong></div>
+                    </div>
+                    <section id="live-conversation" class="live-conversation"
+                        aria-label="Conversation" aria-live="polite">
+                        <p class="live-empty">Start a turn to watch generation, planning, and playback move independently.</p>
+                    </section>
+                    <form id="live-form" class="live-composer">
+                        <label class="sr-only" for="live-message">Message</label>
+                        <textarea id="live-message" rows="3" required
+                            placeholder="Ask for a story, explanation, dialogue, or translation."></textarea>
+                        <div class="action-bar split-actions">
+                            <button id="live-send" type="submit">Send</button>
+                            <button id="live-stop" type="button" class="danger-button" disabled>Stop</button>
+                            <button id="live-replay" type="button" class="secondary-button" disabled>Replay turn</button>
+                            <a id="live-download" class="secondary-button hidden"
+                                download="tongues-live-turn.wav">Download turn</a>
+                        </div>
+                    </form>
+                    <details class="advanced-section">
+                        <summary>Turn journal and exact artifacts</summary>
+                        <pre id="live-journal" class="source-preview">No turn events yet.</pre>
+                    </details>
                 </section>
 
                 <section id="speech-workflow-compose" class="studio-workflow hidden"
@@ -1012,8 +1112,11 @@
 
     function renderPathSelector() {
         const select = byId('speech-preset');
+        const liveSelect = byId('live-recipe');
         select.replaceChildren();
+        liveSelect?.replaceChildren();
         select.appendChild(new Option('Current pipeline', 'custom'));
+        liveSelect?.appendChild(new Option('Current pipeline', 'custom'));
         for (const preset of state.discovery.presets || []) {
             const composition = state.discovery.compositions.find(
                 (candidate) => candidate.id === preset.composition_id,
@@ -1024,6 +1127,7 @@
                 preset.id,
             );
             select.appendChild(option);
+            liveSelect?.appendChild(new Option(preset.display_name, preset.id));
         }
         for (const recipe of state.userRecipes) {
             const composition = state.discovery.compositions.find(
@@ -1031,6 +1135,7 @@
             );
             if (!composition) continue;
             select.appendChild(new Option(`${recipe.name} · saved`, recipe.id));
+            liveSelect?.appendChild(new Option(`${recipe.name} · saved`, recipe.id));
         }
         const matchingPreset = (state.discovery.presets || []).find((preset) => (
             preset.composition_id === state.pathKey && preset.id === state.presetId
@@ -1039,6 +1144,7 @@
             (recipe) => recipe.compositionId === state.pathKey && recipe.id === state.presetId,
         );
         select.value = matchingUserRecipe?.id || matchingPreset?.id || 'custom';
+        if (liveSelect) liveSelect.value = select.value;
         const voiceInput = byId('speech-voice');
         const voiceOptions = byId('speech-voice-options');
         voiceOptions.replaceChildren();
@@ -2237,13 +2343,25 @@
         return { payload, projection };
     }
 
-    async function requestSynthesis(path, values, context) {
+    async function requestSynthesis(path, values, context, options = {}) {
         const { payload, projection } = await synthesisPayload(path, values, context);
-        const response = await fetch('/api/speak', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
+        let response;
+        do {
+            response = await fetch('/api/speak', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: options.signal,
+            });
+            if (response.status !== 429 || !options.waitForCapacity) break;
+            const retryAfter = Number(response.headers.get('Retry-After'));
+            await response.text();
+            await new Promise((resolve) => window.setTimeout(
+                resolve,
+                Number.isFinite(retryAfter) ? Math.max(100, retryAfter * 1000) : 1000,
+            ));
+            if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        } while (true);
         if (!response.ok) throw new Error(await response.text());
         const metadata = JSON.parse(response.headers.get('X-Tongues-Speech-Metadata') || '{}');
         if (projection) {
@@ -2266,6 +2384,398 @@
             speaker: selectedSpeaker(path),
             emotionVector: state.emotions.find((item) => item.name === emotionName)?.vector,
         };
+    }
+
+    function speechInstructionForPath(path, variety = '') {
+        const catalog = path?.catalog || [];
+        const languages = [...new Set(catalog.flatMap((entry) => entry.languages || []))];
+        const scripts = [...new Set(catalog.map((entry) => entry.script).filter(Boolean))];
+        const preprocessing = [...new Set(
+            catalog.map((entry) => entry.preprocessing).filter(Boolean),
+        )];
+        const varietyOption = varietiesForPath(path).find((item) => item.id === variety);
+        return {
+            language: languages.join(', ') || varietyOption?.label || variety || null,
+            variety: varietyOption?.label || variety || null,
+            script: scripts.join(', ') || null,
+            normalization: preprocessing.join(', ') || null,
+        };
+    }
+
+    async function loadLiveProviders() {
+        const response = await fetch('/api/live/providers', { cache: 'no-store' });
+        if (!response.ok) throw new Error(await response.text());
+        state.liveProviders = (await response.json()).providers || [];
+        const select = byId('live-provider');
+        select.replaceChildren();
+        for (const provider of state.liveProviders) {
+            const option = new Option(provider.label, provider.id);
+            option.disabled = !provider.available;
+            select.appendChild(option);
+        }
+        const ollama = state.liveProviders.find((provider) => provider.id === 'ollama');
+        const preferred = ollama?.available && ollama.models.length
+            ? ollama
+            : state.liveProviders.find((provider) => provider.available);
+        if (preferred) select.value = preferred.id;
+        renderLiveProvider();
+    }
+
+    function renderLiveProvider() {
+        const provider = state.liveProviders.find(
+            (candidate) => candidate.id === byId('live-provider')?.value,
+        );
+        const models = byId('live-model');
+        models.replaceChildren();
+        for (const model of provider?.models || []) models.appendChild(new Option(model, model));
+        byId('live-provider-detail').textContent = provider?.detail || 'Provider unavailable.';
+        byId('live-send').disabled = !provider?.available || !(provider.models || []).length
+            || !selectedPath()?.runnable;
+    }
+
+    function appendLiveJournal(event) {
+        const journal = byId('live-journal');
+        const line = JSON.stringify(event);
+        journal.textContent = journal.textContent === 'No turn events yet.'
+            ? line
+            : `${journal.textContent}\n${line}`;
+        journal.scrollTop = journal.scrollHeight;
+    }
+
+    function resetLiveTurn(userText) {
+        state.liveGenerated = '';
+        state.liveCommitted = '';
+        state.liveSpoken = '';
+        state.liveSegments = new Map();
+        state.liveAudioBuffers = [];
+        state.liveNextAudioTime = 0;
+        state.liveFinalTokenAt = 0;
+        state.liveFirstAudioAt = 0;
+        byId('live-journal').textContent = 'No turn events yet.';
+        for (const id of ['live-generated-count', 'live-planned-count', 'live-spoken-count']) {
+            byId(id).textContent = '0';
+        }
+        byId('live-replay').disabled = true;
+        byId('live-download').classList.add('hidden');
+        const conversation = byId('live-conversation');
+        conversation.querySelector('.live-empty')?.remove();
+        const message = (role, text, className) => {
+            const article = document.createElement('article');
+            article.className = `live-message ${className}`;
+            const label = document.createElement('strong');
+            label.textContent = role;
+            const body = document.createElement('p');
+            body.textContent = text;
+            article.append(label, body);
+            return article;
+        };
+        conversation.append(message('You', userText, 'user'));
+        const assistant = message('Tongues', '', 'assistant');
+        assistant.querySelector('p').id = 'live-assistant-text';
+        assistant.querySelector('p').className = 'live-assistant-text';
+        conversation.append(assistant);
+        conversation.scrollTop = conversation.scrollHeight;
+    }
+
+    function renderLiveAssistant() {
+        const body = byId('live-assistant-text');
+        if (!body) return;
+        body.replaceChildren();
+        let plannedChars = 0;
+        for (const segment of state.liveSegments.values()) {
+            const span = document.createElement('span');
+            span.dataset.segmentId = String(segment.segment_id);
+            span.className = `live-segment ${segment.playback || 'planned'}`;
+            span.textContent = segment.text;
+            body.appendChild(span);
+            plannedChars += [...segment.text].length;
+        }
+        const generatedChars = [...state.liveGenerated];
+        const pending = generatedChars.slice(plannedChars).join('');
+        if (pending) {
+            const span = document.createElement('span');
+            span.className = 'live-generating';
+            span.textContent = pending;
+            body.appendChild(span);
+        }
+        byId('live-generated-count').textContent = String(generatedChars.length);
+        byId('live-planned-count').textContent = String([...state.liveCommitted].length);
+        byId('live-spoken-count').textContent = String([...state.liveSpoken].length);
+        byId('live-conversation').scrollTop = byId('live-conversation').scrollHeight;
+    }
+
+    async function* ndjsonEvents(response) {
+        if (!response.body) throw new Error('The browser did not expose the live response stream.');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+            let newline;
+            while ((newline = buffer.indexOf('\n')) >= 0) {
+                const line = buffer.slice(0, newline).trim();
+                buffer = buffer.slice(newline + 1);
+                if (line) yield JSON.parse(line);
+            }
+            if (done) break;
+        }
+        if (buffer.trim()) yield JSON.parse(buffer);
+    }
+
+    function liveAudioContext() {
+        if (!state.liveAudioContext) {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) throw new Error('This browser does not support Web Audio.');
+            state.liveAudioContext = new AudioContextClass();
+        }
+        return state.liveAudioContext;
+    }
+
+    function markLiveSegment(segmentId, playback) {
+        const segment = state.liveSegments.get(segmentId);
+        if (!segment) return;
+        segment.playback = playback;
+        renderLiveAssistant();
+    }
+
+    async function synthesizeLiveSegment(event, generation, signal) {
+        if (generation !== state.liveGeneration || signal.aborted) return;
+        appendLiveJournal({
+            type: 'synthesis_started',
+            turn_id: state.liveTurn?.id,
+            segment_id: event.segment_id,
+            text: event.text,
+            at_ms: Date.now(),
+        });
+        const path = selectedPath();
+        const result = await requestSynthesis(
+            path,
+            state.values,
+            currentSynthesisContext(event.text, path),
+            { signal, waitForCapacity: true },
+        );
+        if (generation !== state.liveGeneration || signal.aborted) return;
+        const context = liveAudioContext();
+        await context.resume();
+        const audioBuffer = await context.decodeAudioData(await result.blob.arrayBuffer());
+        if (generation !== state.liveGeneration || signal.aborted) return;
+        state.liveAudioBuffers.push(audioBuffer);
+        appendLiveJournal({
+            type: 'audio_segment_ready',
+            turn_id: state.liveTurn?.id,
+            segment_id: event.segment_id,
+            duration_seconds: audioBuffer.duration,
+            speech_request: result.payload,
+            speech_metadata: result.metadata,
+            at_ms: Date.now(),
+        });
+        const source = context.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(context.destination);
+        const startsAt = Math.max(context.currentTime + 0.035, state.liveNextAudioTime);
+        state.liveNextAudioTime = startsAt + audioBuffer.duration;
+        const delayMs = Math.max(0, (startsAt - context.currentTime) * 1000);
+        const startTimer = window.setTimeout(() => {
+            if (generation !== state.liveGeneration) return;
+            if (!state.liveFirstAudioAt) state.liveFirstAudioAt = performance.now();
+            markLiveSegment(event.segment_id, 'speaking');
+            appendLiveJournal({
+                type: 'playback_acknowledged',
+                turn_id: state.liveTurn?.id,
+                segment_id: event.segment_id,
+                state: 'started',
+                at_ms: Date.now(),
+            });
+        }, delayMs);
+        source.onended = () => {
+            window.clearTimeout(startTimer);
+            state.liveSources.delete(source);
+            if (generation !== state.liveGeneration) return;
+            state.liveSpoken += event.text;
+            markLiveSegment(event.segment_id, 'spoken');
+            appendLiveJournal({
+                type: 'playback_acknowledged',
+                turn_id: state.liveTurn?.id,
+                segment_id: event.segment_id,
+                state: 'completed',
+                at_ms: Date.now(),
+            });
+        };
+        state.liveSources.add(source);
+        source.start(startsAt);
+    }
+
+    function enqueueLiveSegment(event, generation, signal) {
+        state.liveSegments.set(event.segment_id, { ...event, playback: 'planned' });
+        state.liveCommitted += event.text;
+        renderLiveAssistant();
+        state.liveSynthesisTail = state.liveSynthesisTail
+            .then(() => synthesizeLiveSegment(event, generation, signal))
+            .catch((error) => {
+                if (error.name !== 'AbortError' && generation === state.liveGeneration) {
+                    appendLiveJournal({
+                        type: 'synthesis_failed',
+                        segment_id: event.segment_id,
+                        message: error.message,
+                        at_ms: Date.now(),
+                    });
+                    showError(`Live synthesis failed: ${error.message}`, byId('live-error'));
+                    markLiveSegment(event.segment_id, 'failed');
+                }
+            });
+    }
+
+    function wavBlobFromBuffers(buffers) {
+        if (!buffers.length) return null;
+        const sampleRate = buffers[0].sampleRate;
+        if (buffers.some((buffer) => buffer.sampleRate !== sampleRate)) {
+            throw new Error('Live segment sample rates changed during the turn.');
+        }
+        const samples = buffers.reduce((total, buffer) => total + buffer.length, 0);
+        const array = new ArrayBuffer(44 + samples * 2);
+        const view = new DataView(array);
+        const writeText = (offset, text) => {
+            for (let index = 0; index < text.length; index += 1) {
+                view.setUint8(offset + index, text.charCodeAt(index));
+            }
+        };
+        writeText(0, 'RIFF');
+        view.setUint32(4, 36 + samples * 2, true);
+        writeText(8, 'WAVEfmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeText(36, 'data');
+        view.setUint32(40, samples * 2, true);
+        let offset = 44;
+        for (const buffer of buffers) {
+            for (const sample of buffer.getChannelData(0)) {
+                const clamped = Math.max(-1, Math.min(1, sample));
+                view.setInt16(offset, clamped < 0 ? clamped * 32768 : clamped * 32767, true);
+                offset += 2;
+            }
+        }
+        return new Blob([array], { type: 'audio/wav' });
+    }
+
+    async function replayLiveAudio() {
+        const context = liveAudioContext();
+        await context.resume();
+        let startsAt = context.currentTime + 0.035;
+        for (const buffer of state.liveAudioBuffers) {
+            const source = context.createBufferSource();
+            source.buffer = buffer;
+            source.connect(context.destination);
+            source.start(startsAt);
+            startsAt += buffer.duration;
+        }
+    }
+
+    async function stopLiveTurn() {
+        const turn = state.liveTurn;
+        if (!turn) return;
+        state.liveGeneration += 1;
+        turn.controller.abort();
+        for (const source of state.liveSources) {
+            try { source.stop(); } catch (_) { /* already stopped */ }
+        }
+        state.liveSources.clear();
+        state.liveSynthesisTail = Promise.resolve();
+        fetch(`/api/live/turn/${encodeURIComponent(turn.id)}/cancel`, {
+            method: 'POST',
+        }).catch(() => {});
+        state.liveTurn = null;
+        byId('live-state').dataset.state = 'failed';
+        byId('live-state').textContent = 'Stopped';
+        byId('live-stop').disabled = true;
+        byId('live-send').disabled = false;
+        appendLiveJournal({ type: 'turn_cancelled', turn_id: turn.id, at_ms: Date.now() });
+    }
+
+    async function startLiveTurn(userText) {
+        const path = selectedPath();
+        if (!path?.runnable) throw new Error('Choose a ready speech recipe first.');
+        const provider = byId('live-provider').value;
+        const model = byId('live-model').value;
+        if (!provider || !model) throw new Error('Choose an available text provider and model.');
+        const generation = state.liveGeneration + 1;
+        state.liveGeneration = generation;
+        const turnId = `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const controller = new AbortController();
+        state.liveTurn = { id: turnId, controller };
+        state.liveSynthesisTail = Promise.resolve();
+        resetLiveTurn(userText);
+        clearError(byId('live-error'));
+        byId('live-state').dataset.state = 'busy';
+        byId('live-state').textContent = 'Generating';
+        byId('live-stop').disabled = false;
+        byId('live-send').disabled = true;
+        state.liveMessages.push({ role: 'user', content: userText });
+        const response = await fetch('/api/live/turn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+                turn_id: turnId,
+                provider,
+                model,
+                messages: state.liveMessages,
+                response_instructions: byId('live-instructions').value.trim(),
+                speech: speechInstructionForPath(path, selectedVariety(path)),
+            }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        let completedEvent = null;
+        for await (const event of ndjsonEvents(response)) {
+            if (generation !== state.liveGeneration) return;
+            appendLiveJournal(event);
+            if (event.type === 'text_delta') {
+                state.liveGenerated += event.delta;
+                renderLiveAssistant();
+            } else if (event.type === 'segment_committed') {
+                enqueueLiveSegment(event, generation, controller.signal);
+            } else if (event.type === 'turn_completed') {
+                state.liveFinalTokenAt = performance.now();
+                completedEvent = event;
+            } else if (event.type === 'turn_failed') {
+                throw new Error(event.message);
+            }
+        }
+        await state.liveSynthesisTail;
+        if (generation !== state.liveGeneration) return;
+        if (completedEvent?.generated_text !== state.liveCommitted) {
+            throw new Error('Committed speech transcript does not exactly match generated text.');
+        }
+        state.liveMessages.push({ role: 'assistant', content: state.liveGenerated });
+        const overlap = state.liveFirstAudioAt > 0
+            && state.liveFirstAudioAt < state.liveFinalTokenAt;
+        appendLiveJournal({
+            type: 'turn_acceptance',
+            turn_id: turnId,
+            transcript_exact: state.liveGenerated === state.liveCommitted,
+            first_audio_before_final_token: overlap,
+            generated_chars: [...state.liveGenerated].length,
+            committed_chars: [...state.liveCommitted].length,
+            at_ms: Date.now(),
+        });
+        const wav = wavBlobFromBuffers(state.liveAudioBuffers);
+        if (wav) {
+            const download = byId('live-download');
+            if (download.href) URL.revokeObjectURL(download.href);
+            download.href = URL.createObjectURL(wav);
+            download.classList.remove('hidden');
+            byId('live-replay').disabled = false;
+        }
+        state.liveTurn = null;
+        byId('live-state').dataset.state = overlap ? 'ready' : 'loading';
+        byId('live-state').textContent = overlap ? 'Streamed' : 'Completed';
+        byId('live-stop').disabled = true;
+        byId('live-send').disabled = false;
     }
 
     function comparisonRecipes() {
@@ -2385,7 +2895,12 @@
         byId('generate-all').disabled = true;
         byId('compare-status').textContent = `${recipes.length} candidates queued.`;
         startRuntimePolling();
-        const tasks = recipes.map(async (recipe) => {
+        const runtime = await loadRuntime().catch(() => null);
+        const concurrency = Math.max(
+            1,
+            Number(runtime?.capacity) || DEFAULT_COMPARISON_CONCURRENCY,
+        );
+        await mapWithConcurrency(recipes, concurrency, async (recipe) => {
             const lane = target.querySelector(`[data-recipe-id="${CSS.escape(recipe.id)}"]`);
             const badge = lane.querySelector('[data-compare-state]');
             badge.textContent = 'Running';
@@ -2400,11 +2915,21 @@
             const context = {
                 text,
                 variety: recipe.variety || varietiesForPath(path)[0]?.id,
-                speaker: recipe.speaker || null,
+                speaker: comparisonSpeaker(path, recipe),
             };
             try {
-                const result = await requestSynthesis(path, values, context);
-                result.recipe = { ...recipe, controls: Object.fromEntries(values) };
+                const result = await requestSynthesis(
+                    path,
+                    values,
+                    context,
+                    { waitForCapacity: true },
+                );
+                result.recipe = {
+                    ...recipe,
+                    variety: result.payload.variety || recipe.variety || null,
+                    speaker: result.payload.speaker || recipe.speaker || null,
+                    controls: Object.fromEntries(values),
+                };
                 state.compareResults.set(recipe.id, result);
                 lane.dataset.state = 'completed';
                 badge.textContent = 'Completed';
@@ -2428,7 +2953,6 @@
                 lane.querySelector('[data-compare-detail]').textContent = error.message;
             }
         });
-        await Promise.allSettled(tasks);
         stopRuntimePolling();
         const successes = [...state.compareResults.values()].filter((result) => result.url).length;
         byId('compare-status').textContent = `${successes} of ${recipes.length} candidates completed. Results remain playable without regeneration.`;
@@ -2546,6 +3070,7 @@
         try {
             await loadAuxiliaryDiscovery();
             await refreshDiscovery(false);
+            await loadLiveProviders();
         } catch (error) {
             showError(`Speech discovery failed: ${error.message}`);
             submit.disabled = true;
@@ -2617,6 +3142,35 @@
             state.pathKey = preset.composition_id;
             state.presetId = preset.id;
             renderSelectedPath();
+        });
+        byId('live-recipe').addEventListener('change', (event) => {
+            byId('speech-preset').value = event.target.value;
+            byId('speech-preset').dispatchEvent(new Event('change'));
+        });
+        byId('live-provider').addEventListener('change', renderLiveProvider);
+        byId('live-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const input = byId('live-message');
+            const text = input.value.trim();
+            if (!text) return;
+            input.value = '';
+            startLiveTurn(text).catch((error) => {
+                if (error.name === 'AbortError') return;
+                showError(`Live turn failed: ${error.message}`, byId('live-error'));
+                byId('live-state').dataset.state = 'failed';
+                byId('live-state').textContent = 'Failed';
+                byId('live-stop').disabled = true;
+                byId('live-send').disabled = false;
+                state.liveTurn = null;
+            });
+        });
+        byId('live-stop').addEventListener('click', () => {
+            stopLiveTurn().catch(() => {});
+        });
+        byId('live-replay').addEventListener('click', () => {
+            replayLiveAudio().catch((error) => {
+                showError(`Replay failed: ${error.message}`, byId('live-error'));
+            });
         });
         byId('speech-voice').addEventListener('change', (event) => {
             const option = [...byId('speech-voice-options').options].find(
@@ -2940,6 +3494,8 @@
         mergeInventoryDiscovery,
         mergeSelectedResultIntoDiscovery,
         missingCatalogIds,
+        comparisonSpeaker,
+        mapWithConcurrency,
         pendingVerificationIds,
         preservesVerificationProgress,
         recipeSnapshot,
@@ -2948,6 +3504,7 @@
         selectInitialPath,
         selectInitialComposition,
         setWorkflow,
+        speechInstructionForPath,
         studioShell,
         varietiesForPath,
         workflowForPath,

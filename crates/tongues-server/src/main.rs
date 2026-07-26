@@ -38,6 +38,8 @@ use tongues_duplex::{
 };
 use tower_http::services::ServeDir;
 
+mod live;
+
 const STYLE_VECTOR_DIMS: usize = 256;
 const DEFAULT_DUPLEX_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
@@ -112,6 +114,7 @@ struct AppState {
     speech_admission: SpeechAdmission,
     speech_phase: Arc<AtomicU8>,
     speech_device: tongues_tts::ResolvedSpeechDevice,
+    live_turns: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
@@ -213,6 +216,7 @@ async fn run_server() -> Result<(), StartupError> {
         speech_admission: SpeechAdmission::new(speech_max_in_flight),
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
         speech_device,
+        live_turns: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = build_app(state);
@@ -309,6 +313,9 @@ fn build_app(state: AppState) -> Router {
         .route("/api/speech/runtime", get(get_speech_runtime))
         .route("/api/speech/runtime/reload", post(reload_speech_runtime))
         .route("/api/speech/runtime/unload", post(unload_speech_runtime))
+        .route("/api/live/providers", get(get_live_providers))
+        .route("/api/live/turn", post(start_live_turn))
+        .route("/api/live/turn/{turn_id}/cancel", post(cancel_live_turn))
         .route(
             "/api/styletts2-reference-audio/{*sample_id}",
             get(get_styletts2_reference_audio),
@@ -336,6 +343,123 @@ fn build_app(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn(enforce_request_policy))
         .with_state(state)
+}
+
+async fn get_live_providers() -> impl IntoResponse {
+    Json(json!({
+        "providers": live::provider_discovery().await,
+    }))
+}
+
+async fn start_live_turn(
+    State(state): State<AppState>,
+    Json(request): Json<live::ChatTurnRequest>,
+) -> Response {
+    let turn_id = request.turn_id.trim().to_string();
+    if turn_id.is_empty()
+        || turn_id.len() > 96
+        || !turn_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "turn_id must contain only ASCII letters, digits, hyphens, or underscores",
+        )
+            .into_response();
+    }
+    if request.model.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "model is required").into_response();
+    }
+    if request.messages.is_empty()
+        || !request
+            .messages
+            .iter()
+            .any(|message| message.role == "user" && !message.content.trim().is_empty())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a non-empty user message is required",
+        )
+            .into_response();
+    }
+    if request.messages.iter().any(|message| {
+        !matches!(message.role.as_str(), "user" | "assistant" | "system")
+            || message.content.len() > 64 * 1024
+    }) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "messages must use user, assistant, or system roles and remain under 64 KiB",
+        )
+            .into_response();
+    }
+
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut turns = match state.live_turns.lock() {
+            Ok(turns) => turns,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "live turn registry lock is poisoned",
+                )
+                    .into_response();
+            }
+        };
+        if turns.contains_key(&turn_id) {
+            return (StatusCode::CONFLICT, "turn_id is already active").into_response();
+        }
+        turns.insert(turn_id.clone(), Arc::clone(&cancelled));
+    }
+
+    let source = live::spawn_turn(request, cancelled);
+    let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<String>(64);
+    let registry = Arc::clone(&state.live_turns);
+    tokio::spawn(async move {
+        let mut source = source;
+        while let Some(event) = source.recv().await {
+            let line = match serde_json::to_string(&event) {
+                Ok(line) => format!("{line}\n"),
+                Err(_) => continue,
+            };
+            if stream_tx.send(line).await.is_err() {
+                break;
+            }
+        }
+        if let Ok(mut turns) = registry.lock() {
+            turns.remove(&turn_id);
+        }
+    });
+    let body = axum::body::Body::from_stream(
+        tokio_stream::wrappers::ReceiverStream::new(stream_rx)
+            .map(Ok::<String, std::convert::Infallible>),
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Accel-Buffering", "no")
+        .body(body)
+        .unwrap()
+}
+
+async fn cancel_live_turn(State(state): State<AppState>, Path(turn_id): Path<String>) -> Response {
+    let cancelled = state
+        .live_turns
+        .lock()
+        .ok()
+        .and_then(|turns| turns.get(&turn_id).cloned());
+    match cancelled {
+        Some(cancelled) => {
+            cancelled.store(true, Ordering::Release);
+            Json(json!({ "turn_id": turn_id, "cancelled": true })).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            format!("live turn `{turn_id}` is not active"),
+        )
+            .into_response(),
+    }
 }
 
 fn validate_bind_address(addr: SocketAddr) -> Result<(), StartupError> {

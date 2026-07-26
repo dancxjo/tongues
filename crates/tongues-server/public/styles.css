@@ -388,6 +388,137 @@ a {
     padding: 0.9rem 1rem;
 }
 
+.live-controls {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.live-frontiers {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.live-frontiers > div {
+    background: var(--panel-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    display: flex;
+    justify-content: space-between;
+    padding: 0.8rem 1rem;
+}
+
+.live-frontiers span {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.live-conversation {
+    background: color-mix(in srgb, var(--panel-soft) 70%, transparent);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    display: grid;
+    gap: 1rem;
+    max-height: 34rem;
+    min-height: 15rem;
+    overflow-y: auto;
+    padding: 1rem;
+}
+
+.live-empty {
+    align-self: center;
+    color: var(--text-muted);
+    justify-self: center;
+    max-width: 34rem;
+    text-align: center;
+}
+
+.live-message {
+    border-radius: 12px;
+    line-height: 1.65;
+    max-width: min(88%, 52rem);
+    padding: 0.85rem 1rem;
+}
+
+.live-message strong {
+    display: block;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+}
+
+.live-message p {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.live-message.user {
+    background: var(--primary);
+    color: white;
+    justify-self: end;
+}
+
+.live-message.assistant {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    justify-self: start;
+}
+
+.live-generating {
+    color: var(--text-muted);
+}
+
+.live-segment {
+    border-radius: 3px;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.live-segment.planned {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.live-segment.speaking {
+    background: var(--primary);
+    color: white;
+}
+
+.live-segment.spoken {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+}
+
+.live-segment.failed {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.live-composer {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.live-composer textarea {
+    resize: vertical;
+}
+
+.sr-only {
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    width: 1px;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+}
+
 .recipe-summary p {
     color: var(--text-muted);
     line-height: 1.4;
@@ -1758,6 +1889,8 @@ audio::-webkit-media-controls-panel {
     }
 
     .speak-choice-grid,
+    .live-controls,
+    .live-frontiers,
     .compare-candidates,
     .compare-results,
     .recipe-summary dl {

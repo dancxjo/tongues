@@ -235,6 +235,41 @@ test('filters varieties from the selected path capability', () => {
     );
 });
 
+test('live generation inherits language script and normalization from the speech recipe', () => {
+    const instruction = studio.speechInstructionForPath(fixturePath({
+        catalog: [{
+            languages: ['amh'],
+            script: 'Ethiopic',
+            preprocessing: 'mms-text-normalization',
+        }],
+    }), 'en-US-GA');
+    assert.deepEqual(instruction, {
+        language: 'amh',
+        variety: 'General American English',
+        script: 'Ethiopic',
+        normalization: 'mms-text-normalization',
+    });
+});
+
+test('live workflow uses streamed NDJSON, one Web Audio clock, and unified cancellation', () => {
+    assert.match(studioSource, /fetch\('\/api\/live\/turn'/);
+    assert.match(studioSource, /response\.body\.getReader\(\)/);
+    assert.match(studioSource, /context\.createBufferSource\(\)/);
+    assert.match(studioSource, /Math\.max\(context\.currentTime \+ 0\.035, state\.liveNextAudioTime\)/);
+    assert.match(studioSource, /turn\.controller\.abort\(\)/);
+    assert.match(studioSource, /\/api\/live\/turn\/\$\{encodeURIComponent\(turn\.id\)\}\/cancel/);
+    assert.doesNotMatch(studioSource, /new Audio\(/);
+});
+
+test('live turn records the overlap and exact-transcript acceptance evidence', () => {
+    assert.match(studioSource, /first_audio_before_final_token: overlap/);
+    assert.match(studioSource, /transcript_exact: state\.liveGenerated === state\.liveCommitted/);
+    assert.match(
+        studioSource,
+        /completedEvent\?\.generated_text !== state\.liveCommitted/,
+    );
+});
+
 test('selects runnable component compositions independently of legacy paths', () => {
     const pipeline = {
         input: 'text',
@@ -415,6 +450,49 @@ test('requires named speakers and rejects unavailable paths before submission', 
     );
 });
 
+test('comparison recipes select a deterministic listed speaker when one is required', () => {
+    const vits = fixturePath({
+        speakers: {
+            required: true,
+            values: {
+                support: 'listed',
+                values: [
+                    { id: 'p226', label: 'p226', numeric_id: 1 },
+                    { id: 'p225', label: 'p225', numeric_id: 0 },
+                ],
+            },
+        },
+    });
+    assert.equal(studio.comparisonSpeaker(vits), 'p225');
+    assert.equal(studio.comparisonSpeaker(vits, { speaker: 'p226' }), 'p226');
+    assert.equal(studio.comparisonSpeaker({
+        ...vits,
+        speakers: {
+            ...vits.speakers,
+            values: {
+                support: 'listed',
+                values: [{ id: 'jane', label: 'Jane' }],
+            },
+        },
+    }), 'jane');
+    assert.equal(studio.comparisonSpeaker(fixturePath()), null);
+});
+
+test('comparison work is bounded to the runtime concurrency', async () => {
+    let active = 0;
+    let peak = 0;
+    const completed = [];
+    await studio.mapWithConcurrency([0, 1, 2, 3, 4], 2, async (item) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        completed.push(item);
+        active -= 1;
+    });
+    assert.equal(peak, 2);
+    assert.deepEqual(completed.sort(), [0, 1, 2, 3, 4]);
+});
+
 test('validates expert numeric arrays inline before network submission', () => {
     assert.deepEqual(studio.parseNumberArray('1, 2.5, -3'), [1, 2.5, -3]);
     assert.deepEqual(studio.parseNumberArray('4, 7, 3', true), [4, 7, 3]);
@@ -526,7 +604,8 @@ test('client navigation waits for an ordinary unmodified click', () => {
 
 test('compare preserves per-recipe results and permits partial failure', () => {
     assert.match(studioSource, /compareResults: new Map\(\)/);
-    assert.match(studioSource, /Promise\.allSettled\(tasks\)/);
+    assert.match(studioSource, /mapWithConcurrency\(recipes, concurrency/);
+    assert.match(studioSource, /waitForCapacity: true/);
     assert.match(studioSource, /lane\.dataset\.state = 'failed'/);
     assert.match(studioSource, /Results remain playable without regeneration/);
     assert.match(studioSource, /Blind listening mode/);
