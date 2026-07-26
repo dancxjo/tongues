@@ -4,6 +4,7 @@ const fs = require('node:fs');
 
 const studio = require('./speech-studio.js');
 const studioSource = fs.readFileSync(require.resolve('./speech-studio.js'), 'utf8');
+const stylesSource = fs.readFileSync(require.resolve('./styles.css'), 'utf8');
 
 function fixturePath(overrides = {}) {
     return {
@@ -211,6 +212,27 @@ test('builds payloads only from declared controls', () => {
     });
 });
 
+test('builds duplex requests from prompt lines or saved journals', () => {
+    assert.deepEqual(
+        studio.duplexLines('Who shot John?\n\nKennedy?'),
+        ['Who shot John?', 'Kennedy?'],
+    );
+    assert.deepEqual(studio.buildDuplexRequest({
+        text: 'Who shot John?\nKennedy?',
+        mockAcoustics: 'who shot\njohn kennedy',
+        variety: 'en-US-GA',
+    }), {
+        chunks: ['Who shot John?', 'Kennedy?'],
+        mock_acoustics: ['who shot', 'john kennedy'],
+        variety: 'en-US-GA',
+    });
+    assert.deepEqual(studio.buildDuplexRequest({
+        journalPath: ' target/duplex/oracle-chunks.journal.json ',
+    }), {
+        journal_path: 'target/duplex/oracle-chunks.journal.json',
+    });
+});
+
 test('requires named speakers and rejects unavailable paths before submission', () => {
     const vits = fixturePath({
         backend: 'vits',
@@ -244,4 +266,10 @@ test('validates expert numeric arrays inline before network submission', () => {
     assert.deepEqual(studio.parseNumberArray('4, 7, 3', true), [4, 7, 3]);
     assert.throws(() => studio.parseNumberArray('4, 0', true), /positive whole numbers/);
     assert.throws(() => studio.parseNumberArray('1, nope'), /finite numbers/);
+});
+
+test('renders predicted duplex tokens distinctly and loads the server-projected schema', () => {
+    assert.match(studioSource, /\/api\/duplex\/project/);
+    assert.match(stylesSource, /\.duplex-token-predicted/);
+    assert.match(studioSource, /predicted[\s\S]*playable client audio/i);
 });
