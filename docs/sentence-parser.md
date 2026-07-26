@@ -61,6 +61,48 @@ just sentence-parser infer \
   "Kennedy?"
 ```
 
+Evaluate a trained model on the test split:
+
+```sh
+just sentence-parser eval \
+  --model models/sentence-parser/v0 \
+  --data datasets/sentence-parser/v0 \
+  --split test
+```
+
+Evaluation first validates the artifact manifest, then loads the requested split and
+runs model inference over each sampled example using the same input/output projection
+as `infer`.  Reported metrics include:
+
+- exact action accuracy (how often the predicted action token matches gold);
+- boundary precision, recall, and F1 (treating Emit, Repair, and MissingHead as the
+  positive class);
+- no-boundary precision, recall, and F1 (treating Continue as the positive class);
+- mean character-level edit distance for Repair examples;
+- invalid output rate (predictions that cannot be parsed as any known action token);
+- a deterministic sample of up to eight disagreements between gold and predicted output.
+
+Use `--limit` and `--seed` for quick bounded checks:
+
+```sh
+just sentence-parser eval \
+  --model models/sentence-parser/v0 \
+  --data datasets/sentence-parser/v0 \
+  --split test \
+  --limit 50 \
+  --seed 7
+```
+
+Write machine-readable metrics to a JSON file:
+
+```sh
+just sentence-parser eval \
+  --model models/sentence-parser/v0 \
+  --data datasets/sentence-parser/v0 \
+  --split test \
+  --report eval_metrics.json
+```
+
 Stream stdin into newline-delimited sentences:
 
 ```sh

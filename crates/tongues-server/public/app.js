@@ -519,8 +519,9 @@ const commandPages = [
         path: '/sentence-parser/eval',
         command: 'tongues sentence-parser eval',
         group: 'Sentence Parser',
-        summary: 'Validate a sentence parser artifact scaffold.',
-        fields: ['--model', '--split'],
+        summary: 'Evaluate a trained sentence parser model on a prepared split.',
+        fields: ['--model', '--data', '--split'],
+        advanced: ['--limit', '--seed', '--report'],
     },
     {
         title: 'Sentence Parser Parse',

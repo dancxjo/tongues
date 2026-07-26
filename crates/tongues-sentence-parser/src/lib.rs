@@ -927,6 +927,199 @@ pub fn parse_boundary_output(output: &str) -> (&str, &str) {
     ("", output)
 }
 
+/// Returns true if the action token represents a sentence-boundary crossing.
+fn is_boundary_action(action: &str) -> bool {
+    matches!(action, EMIT_TOKEN | MISSING_HEAD_TOKEN | REPAIR_TOKEN)
+}
+
+/// Per-class precision / recall / F1 scores.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassMetrics {
+    pub tp: usize,
+    pub fp: usize,
+    #[serde(rename = "fn")]
+    pub fn_: usize,
+    pub precision: f64,
+    pub recall: f64,
+    pub f1: f64,
+}
+
+impl ClassMetrics {
+    fn new(tp: usize, fp: usize, fn_: usize) -> Self {
+        let precision = if tp + fp == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fp) as f64
+        };
+        let recall = if tp + fn_ == 0 {
+            0.0
+        } else {
+            tp as f64 / (tp + fn_) as f64
+        };
+        let f1 = if precision + recall == 0.0 {
+            0.0
+        } else {
+            2.0 * precision * recall / (precision + recall)
+        };
+        Self {
+            tp,
+            fp,
+            fn_,
+            precision,
+            recall,
+            f1,
+        }
+    }
+}
+
+/// Aggregate metrics for a sentence-parser behavioural evaluation run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMetrics {
+    /// Total examples evaluated.
+    pub total: usize,
+    /// Examples where the predicted action token exactly matched gold.
+    pub exact_action: usize,
+    /// Examples where model output could not be parsed as a valid action.
+    pub invalid: usize,
+    /// `exact_action / total`.
+    pub exact_action_accuracy: f64,
+    /// `invalid / total`.
+    pub invalid_rate: f64,
+    /// Precision / recall / F1 treating boundary (Emit, Repair, MissingHead) as the positive class.
+    pub boundary: ClassMetrics,
+    /// Precision / recall / F1 treating no-boundary (Continue) as the positive class.
+    pub no_boundary: ClassMetrics,
+    /// Number of gold-Repair examples in the sample.
+    pub repair_count: usize,
+    /// Sum of character-level edit distances for Repair examples (gold text vs predicted text).
+    pub repair_char_distance_sum: usize,
+    /// Mean character-level edit distance for Repair examples, or 0.0 when there are none.
+    pub mean_repair_char_distance: f64,
+}
+
+/// Compute character-level edit distance (Levenshtein) between two strings.
+pub fn char_edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
+            } else {
+                1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
+            };
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+/// Evaluate sentence-parser predictions against gold outputs.
+///
+/// `pairs` is a slice of `(gold_output, predicted_output)` string pairs.
+/// Both strings should be raw model output strings (e.g. `"<boundary:emit>Hello.\n"`).
+pub fn evaluate_predictions(pairs: &[(&str, &str)]) -> EvalMetrics {
+    let total = pairs.len();
+    let mut exact_action = 0usize;
+    let mut invalid = 0usize;
+
+    // Binary classification: positive class = boundary-crossing action.
+    let mut boundary_tp = 0usize;
+    let mut boundary_fp = 0usize;
+    let mut boundary_fn = 0usize;
+    let mut no_boundary_tp = 0usize;
+    let mut no_boundary_fp = 0usize;
+    let mut no_boundary_fn = 0usize;
+
+    let mut repair_count = 0usize;
+    let mut repair_char_distance_sum = 0usize;
+
+    for &(gold, predicted) in pairs {
+        let (gold_action, gold_text) = parse_boundary_output(gold);
+        let (pred_action, pred_text) = parse_boundary_output(predicted);
+
+        if pred_action.is_empty() {
+            invalid += 1;
+        }
+
+        if gold_action == pred_action {
+            exact_action += 1;
+        }
+
+        let gold_is_boundary = is_boundary_action(gold_action);
+        let pred_is_boundary = is_boundary_action(pred_action);
+
+        match (gold_is_boundary, pred_is_boundary) {
+            (true, true) => {
+                boundary_tp += 1;
+                no_boundary_fp += 0; // neither FP nor FN for no-boundary
+            }
+            (true, false) => {
+                boundary_fn += 1;
+                no_boundary_fp += 1;
+            }
+            (false, true) => {
+                boundary_fp += 1;
+                no_boundary_fn += 1;
+            }
+            (false, false) => {
+                no_boundary_tp += 1;
+            }
+        }
+
+        if gold_action == REPAIR_TOKEN {
+            repair_count += 1;
+            let gold_repair = gold_text.trim_end_matches('\n');
+            let pred_repair = if pred_action == REPAIR_TOKEN {
+                pred_text.trim_end_matches('\n')
+            } else {
+                predicted
+            };
+            repair_char_distance_sum += char_edit_distance(gold_repair, pred_repair);
+        }
+    }
+
+    let exact_action_accuracy = if total == 0 {
+        0.0
+    } else {
+        exact_action as f64 / total as f64
+    };
+    let invalid_rate = if total == 0 {
+        0.0
+    } else {
+        invalid as f64 / total as f64
+    };
+    let mean_repair_char_distance = if repair_count == 0 {
+        0.0
+    } else {
+        repair_char_distance_sum as f64 / repair_count as f64
+    };
+
+    EvalMetrics {
+        total,
+        exact_action,
+        invalid,
+        exact_action_accuracy,
+        invalid_rate,
+        boundary: ClassMetrics::new(boundary_tp, boundary_fp, boundary_fn),
+        no_boundary: ClassMetrics::new(no_boundary_tp, no_boundary_fp, no_boundary_fn),
+        repair_count,
+        repair_char_distance_sum,
+        mean_repair_char_distance,
+    }
+}
+
 pub fn parse_sentence(text: &str, lowercase: bool) -> SentenceSyntaxAnalysis {
     let mut words = text
         .split_whitespace()
@@ -1528,5 +1721,92 @@ mod tests {
 
     fn tempfile_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn evaluate_predictions_all_correct_gives_perfect_metrics() {
+        let pairs = vec![
+            ("<boundary:emit>Hello.\n", "<boundary:emit>Hello.\n"),
+            ("<boundary:continue>", "<boundary:continue>"),
+            ("<boundary:repair>A B", "<boundary:repair>A B"),
+        ];
+        let pairs_ref: Vec<(&str, &str)> = pairs.iter().map(|&(a, b)| (a, b)).collect();
+        let m = evaluate_predictions(&pairs_ref);
+
+        assert_eq!(m.total, 3);
+        assert_eq!(m.exact_action, 3);
+        assert_eq!(m.invalid, 0);
+        assert!((m.exact_action_accuracy - 1.0).abs() < 1e-9);
+        assert!((m.invalid_rate).abs() < 1e-9);
+        assert!((m.boundary.f1 - 1.0).abs() < 1e-9);
+        assert!((m.no_boundary.f1 - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn evaluate_predictions_wrong_action_changes_accuracy() {
+        // Gold says emit but model says continue
+        let pairs = vec![
+            ("<boundary:emit>Hello.\n", "<boundary:continue>"),
+            ("<boundary:emit>World.\n", "<boundary:emit>World.\n"),
+        ];
+        let pairs_ref: Vec<(&str, &str)> = pairs.iter().map(|&(a, b)| (a, b)).collect();
+        let m = evaluate_predictions(&pairs_ref);
+
+        assert_eq!(m.total, 2);
+        assert_eq!(m.exact_action, 1);
+        assert!((m.exact_action_accuracy - 0.5).abs() < 1e-9);
+        // One boundary gold missed → FN
+        assert_eq!(m.boundary.fn_, 1);
+        // No-boundary wrongly predicted once → no_boundary FP
+        assert_eq!(m.no_boundary.fp, 1);
+    }
+
+    #[test]
+    fn evaluate_predictions_invalid_output_counted() {
+        let pairs = vec![
+            ("<boundary:emit>Hello.\n", "garbage output"),
+            ("<boundary:emit>World.\n", "<boundary:emit>World.\n"),
+        ];
+        let pairs_ref: Vec<(&str, &str)> = pairs.iter().map(|&(a, b)| (a, b)).collect();
+        let m = evaluate_predictions(&pairs_ref);
+
+        assert_eq!(m.invalid, 1);
+        assert!((m.invalid_rate - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn evaluate_predictions_repair_distance_computed() {
+        let gold = "<boundary:repair>Who shot John F. Kennedy?";
+        let pred_correct = "<boundary:repair>Who shot John F. Kennedy?";
+        let pred_wrong = "<boundary:repair>Who shot John F.";
+
+        let pairs_perfect: Vec<(&str, &str)> = vec![(gold, pred_correct)];
+        let m_perfect = evaluate_predictions(&pairs_perfect);
+        assert_eq!(m_perfect.repair_count, 1);
+        assert_eq!(m_perfect.repair_char_distance_sum, 0);
+        assert!((m_perfect.mean_repair_char_distance).abs() < 1e-9);
+
+        let pairs_wrong: Vec<(&str, &str)> = vec![(gold, pred_wrong)];
+        let m_wrong = evaluate_predictions(&pairs_wrong);
+        assert_eq!(m_wrong.repair_count, 1);
+        assert!(m_wrong.repair_char_distance_sum > 0);
+        assert!(m_wrong.mean_repair_char_distance > 0.0);
+    }
+
+    #[test]
+    fn char_edit_distance_empty_strings() {
+        assert_eq!(char_edit_distance("", ""), 0);
+        assert_eq!(char_edit_distance("abc", ""), 3);
+        assert_eq!(char_edit_distance("", "abc"), 3);
+    }
+
+    #[test]
+    fn char_edit_distance_equal_strings() {
+        assert_eq!(char_edit_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn char_edit_distance_single_substitution() {
+        assert_eq!(char_edit_distance("cat", "bat"), 1);
     }
 }

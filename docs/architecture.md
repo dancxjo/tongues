@@ -299,16 +299,16 @@ ASR system. The streaming heads are meant to learn monotonic partial output and
 alignment. The after-utterance head is meant to learn correction with more
 context. Both share the same cheap acoustic frontend and model artifact layout.
 
-## Sentence Parser Scaffold
+## Sentence Parser
 
 ```sh
 cargo run --release -- sentence-parser prepare
 cargo run --release -- sentence-parser train
-cargo run --release -- sentence-parser eval --model models/sentence-parser/v0
+cargo run --release -- sentence-parser eval --model models/sentence-parser/v0 --data datasets/sentence-parser/v0 --split test
 cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
 ```
 
-The parser scaffold writes the expected model-family artifact files and returns JSON shaped as `speaking::syntax::SentenceSyntaxAnalysis`. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
+The sentence parser family trains a cursor-boundary seq2seq model. `eval` runs model inference on a prepared split and reports action accuracy, boundary precision/recall/F1, and repair edit distance. The `parse` command runs the separate rule-based `SentenceSyntaxAnalysis` utility. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
 
 ## Rule-Based Speech Helpers
 
