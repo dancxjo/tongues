@@ -5,7 +5,7 @@
 //! The XML/wikitext extraction itself is intentionally stubbed until the parser
 //! policy for Wiktionary pronunciation templates is implemented.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -4090,7 +4090,7 @@ fn extract_control_value<'a>(input: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn split_examples(
-    mut examples: Vec<TrainingExample>,
+    examples: Vec<TrainingExample>,
     train_frac: f64,
     valid_frac: f64,
     seed: u64,
@@ -4099,15 +4099,66 @@ fn split_examples(
     Vec<TrainingExample>,
     Vec<TrainingExample>,
 ) {
-    let mut rng = StdRng::seed_from_u64(seed);
-    examples.shuffle(&mut rng);
-    let train_len = ((examples.len() as f64) * train_frac).round() as usize;
-    let valid_len = ((examples.len() as f64) * valid_frac).round() as usize;
-    let train_end = train_len.min(examples.len());
-    let valid_end = (train_end + valid_len).min(examples.len());
-    let test = examples.split_off(valid_end);
-    let valid = examples.split_off(train_end);
-    (examples, valid, test)
+    let mut grouped = BTreeMap::<String, Vec<TrainingExample>>::new();
+    for example in examples {
+        grouped
+            .entry(training_example_group_key(&example))
+            .or_default()
+            .push(example);
+    }
+    let mut groups = grouped.keys().cloned().collect::<Vec<_>>();
+    groups.shuffle(&mut StdRng::seed_from_u64(seed));
+    let train_len = ((groups.len() as f64) * train_frac).round() as usize;
+    let valid_len = ((groups.len() as f64) * valid_frac).round() as usize;
+    let train_end = train_len.min(groups.len());
+    let valid_end = (train_end + valid_len).min(groups.len());
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(rows) = grouped.remove(group) {
+            if index < train_end {
+                train.extend(rows);
+            } else if index < valid_end {
+                valid.extend(rows);
+            } else {
+                test.extend(rows);
+            }
+        }
+    }
+    (train, valid, test)
+}
+
+fn training_example_group_key(example: &TrainingExample) -> String {
+    let lang = example.lang.as_deref().unwrap_or("und");
+    let normalized_input = normalize_group_text(&example.input);
+    let normalized_output = normalize_group_text(&example.output);
+    match example.task {
+        WiktionaryTask::PhonologyToOrthography => format!("{lang}|{}", normalized_output),
+        WiktionaryTask::OrthographyToPhonology
+        | WiktionaryTask::NormalizeText
+        | WiktionaryTask::FindEtymology
+        | WiktionaryTask::GuessLangFromOrthography => format!("{lang}|{}", normalized_input),
+        WiktionaryTask::GuessLangFromOrthographyAndPhonology => {
+            if let Some((orthography, _)) = normalized_input.split_once("=>") {
+                format!("{lang}|{}", orthography.trim())
+            } else {
+                format!("{lang}|{}", normalized_input)
+            }
+        }
+        _ => format!("{lang}|{}|{}", normalized_input, normalized_output),
+    }
+}
+
+fn normalize_group_text(input: &str) -> String {
+    let mut tokens = Vec::new();
+    for token in input.split_whitespace() {
+        if token.starts_with('<') && token.ends_with('>') {
+            continue;
+        }
+        tokens.push(token);
+    }
+    tokens.join(" ").to_lowercase()
 }
 
 fn write_jsonl_with_progress<T: Serialize>(
@@ -5660,5 +5711,43 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
                 && example.input.contains("<WORD> <repr:phones> do")
                 && example.output == "ˈdu"
         }));
+    }
+
+    #[test]
+    fn split_examples_keeps_group_variants_together() {
+        let rows = vec![
+            TrainingExample {
+                task: WiktionaryTask::OrthographyToPhonology,
+                lang: Some("eng".to_string()),
+                notation: Some("phonemes".to_string()),
+                accent: None,
+                input: "<task:orthography_to_phonology> <lang:eng> cat".to_string(),
+                output: "kæt".to_string(),
+                source: "enwiktionary".to_string(),
+            },
+            TrainingExample {
+                task: WiktionaryTask::PhonologyToOrthography,
+                lang: Some("eng".to_string()),
+                notation: Some("phonemes".to_string()),
+                accent: None,
+                input: "<task:phonology_to_orthography> <lang:eng> kæt".to_string(),
+                output: "cat".to_string(),
+                source: "enwiktionary".to_string(),
+            },
+            TrainingExample {
+                task: WiktionaryTask::OrthographyToPhonology,
+                lang: Some("eng".to_string()),
+                notation: Some("phonemes".to_string()),
+                accent: None,
+                input: "<task:orthography_to_phonology> <lang:eng> dog".to_string(),
+                output: "dɔɡ".to_string(),
+                source: "enwiktionary".to_string(),
+            },
+        ];
+        let (train, valid, test) = split_examples(rows, 0.5, 0.25, 11);
+        let cat_splits = usize::from(train.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")))
+            + usize::from(valid.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")))
+            + usize::from(test.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")));
+        assert_eq!(cat_splits, 1);
     }
 }

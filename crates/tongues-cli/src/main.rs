@@ -6183,13 +6183,7 @@ fn cmd_wiktionary_train_while_preparing(
             );
         }
         if sight_words {
-            let added = add_wiktionary_sight_word_training_examples(
-                &mut train_rows,
-                [
-                    &valid_rows[..],
-                    (&[] as &[tongues_wiktionary::TrainingExample]),
-                ],
-            );
+            let added = add_wiktionary_sight_word_training_examples(&mut train_rows);
             if added > 0 {
                 println!(
                     "  rolling epoch included {} extra Wiktionary sight-word rows",
@@ -6386,10 +6380,7 @@ fn cmd_wiktionary_train(
         );
     }
     if sight_words {
-        let added = add_wiktionary_sight_word_training_examples(
-            &mut train_rows,
-            [&valid_rows[..], &_test_rows[..]],
-        );
+        let added = add_wiktionary_sight_word_training_examples(&mut train_rows);
         if added > 0 {
             println!(
                 "  included {} extra Wiktionary sight-word training rows (repeat={})",
@@ -6555,10 +6546,7 @@ fn cmd_wiktionary_train_prepared_rows(
         );
     }
     if sight_words {
-        let added = add_wiktionary_sight_word_training_examples(
-            &mut train_rows,
-            [&valid_rows[..], &test_rows[..]],
-        );
+        let added = add_wiktionary_sight_word_training_examples(&mut train_rows);
         if added > 0 {
             println!(
                 "  included {} extra Wiktionary sight-word training rows (repeat={})",
@@ -6707,15 +6695,14 @@ fn load_or_build_wiktionary_vocab(
     Ok((vocab, train_rows, valid_rows))
 }
 
-fn add_wiktionary_sight_word_training_examples<const N: usize>(
+fn add_wiktionary_sight_word_training_examples(
     train_rows: &mut Vec<tongues_wiktionary::TrainingExample>,
-    extra_sources: [&[tongues_wiktionary::TrainingExample]; N],
 ) -> usize {
     let sight_words: std::collections::BTreeSet<&str> = SIGHT_WORDS.iter().copied().collect();
     let mut seen = std::collections::BTreeSet::new();
     let mut selected = Vec::new();
 
-    for row in train_rows.iter().chain(extra_sources.into_iter().flatten()) {
+    for row in train_rows.iter() {
         if wiktionary_sight_word_for_example(row, &sight_words).is_some()
             && seen.insert(wiktionary_training_example_key(row))
         {
@@ -6783,8 +6770,8 @@ fn wiktionary_frequency_repeat_count_for_example(
 fn write_wiktionary_augmented_train_rows(
     data: &Path,
     train_rows: &[tongues_wiktionary::TrainingExample],
-    valid_rows: &[tongues_wiktionary::TrainingExample],
-    test_rows: &[tongues_wiktionary::TrainingExample],
+    _valid_rows: &[tongues_wiktionary::TrainingExample],
+    _test_rows: &[tongues_wiktionary::TrainingExample],
     sight_words: bool,
 ) -> Result<()> {
     let rarity_by_word = load_openepd_rarity_by_word()?;
@@ -6796,7 +6783,7 @@ fn write_wiktionary_augmented_train_rows(
             DEFAULT_FREQUENCY_RARITY_CAP,
         );
     let sight_added = if sight_words {
-        add_wiktionary_sight_word_training_examples(&mut augmented_rows, [valid_rows, test_rows])
+        add_wiktionary_sight_word_training_examples(&mut augmented_rows)
     } else {
         0
     };
@@ -13181,9 +13168,9 @@ mod tests {
             },
         ];
 
-        let added = add_wiktionary_sight_word_training_examples(&mut train_rows, [&valid_rows[..]]);
+        let added = add_wiktionary_sight_word_training_examples(&mut train_rows);
 
-        assert_eq!(added, SIGHT_WORD_TRAINING_REPEATS * 2);
+        assert_eq!(added, SIGHT_WORD_TRAINING_REPEATS);
         assert_eq!(
             train_rows
                 .iter()
@@ -13191,10 +13178,7 @@ mod tests {
                 .count(),
             SIGHT_WORD_TRAINING_REPEATS + 1
         );
-        assert_eq!(
-            train_rows.iter().filter(|row| row.output == "one").count(),
-            SIGHT_WORD_TRAINING_REPEATS
-        );
+        assert_eq!(train_rows.iter().filter(|row| row.output == "one").count(), 0);
         assert!(!train_rows
             .iter()
             .any(|row| row.lang.as_deref() == Some("deu")));
