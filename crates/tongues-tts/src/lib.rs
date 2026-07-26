@@ -892,18 +892,26 @@ pub fn phoneme_ids_from_text(
 }
 
 pub fn utterance_plan_from_text(request: SpeechRequest) -> Result<UtterancePlan> {
+    let phonemicized = phonemicize_speech_text(request)?;
+    Ok(utterance_plan_from_phonemicized(&phonemicized))
+}
+
+/// Run the shared pronunciation pipeline and return the full [`PhonemicizeOutput`],
+/// including pronunciation warnings (guessed words, unknown pronunciations, etc.).
+/// Use this to inspect warnings before or alongside synthesis without running a
+/// separate pronunciation algorithm.
+pub fn phonemicize_speech_text(request: SpeechRequest) -> Result<PhonemicizeOutput> {
     install_default_unknown_pronunciation_fallback();
     let variety = VarietyId(request.variety);
     let phonemicizer = phonemicizer_for_variety(&variety)
         .map_err(|error| anyhow::anyhow!("failed to load phonemicizer: {error}"))?;
-    let phonemicized = phonemicizer
+    phonemicizer
         .phonemicize(&PhonemicizeRequest {
             text: request.text,
             variety,
             style: None,
         })
-        .context("failed to phonemicize text into a speech plan")?;
-    Ok(utterance_plan_from_phonemicized(&phonemicized))
+        .context("failed to phonemicize text into a speech plan")
 }
 
 /// Convert phonemicizer output into a TTS plan while preserving the public
