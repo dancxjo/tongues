@@ -765,7 +765,7 @@ fn write_prepare_state(
 
 fn write_readme(out: &Path, config: &EmotionPrepareConfig, labels: &[String]) -> Result<()> {
     let text = format!(
-        "# Emotion cuts dataset\n\nDataset id: `{}`\nSource manifest: `{}`\nFeature kind: `{}`\nLabels: {}\n\nPrepared by `tongues emotions prepare`. Each row is a random or full-length WAV cut represented as pooled log-mel mean and standard deviation features.\n",
+        "# Emotion cuts dataset\n\nDataset id: `{}`\nSource manifest: `{}`\nFeature kind: `{}`\nLabels: {}\n\nPrepared by `tongues emotions prepare`. Each row is a random or full-length WAV cut represented as pooled log-mel mean and standard deviation features.\n\nSplit policy: group-aware by `speaker + source WAV path`; all cuts from one WAV stay in exactly one split.\n",
         config.dataset_id,
         config.source_manifest.display(),
         feature_kind(config),

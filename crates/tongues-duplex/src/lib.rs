@@ -2521,7 +2521,7 @@ fn duplex_dataset_readme(
          | valid | {valid_rows} |\n\
          | test  | {test_rows}  |\n\
          \n\
-         Splits are deterministic (seed = 42, 80/10/10 ratio) and non-overlapping.\n\
+         Splits are deterministic (seed = 42, 80/10/10 ratio), group-aware by `fixture_id`, and non-overlapping.\n\
          \n\
          ## Schema fields\n\
          \n\

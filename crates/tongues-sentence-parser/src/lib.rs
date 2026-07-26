@@ -1600,7 +1600,7 @@ fn dataset_readme(
     naive_discrepancy_examples: usize,
 ) -> String {
     format!(
-        "# Sentence boundary dataset\n\nDataset: `{}`\n\nSources: {} Project Gutenberg-style text files\nDetected sentences: {}\nTraining rows: {}\nNaive-discrepancy correction rows: {}\n\nInput shape:\n\n```text\n{}{}<previous sentence>{}<cursor prefix>\n```\n\nTargets:\n\n```text\n{}<sentence>\\n\n{}\n{}<tail fragment>\n{}<repaired sentence>\n```\n\nThe source intentionally includes only the previously parsed sentence and current cursor prefix. No following sentence is provided.\n",
+        "# Sentence boundary dataset\n\nDataset: `{}`\n\nSources: {} Project Gutenberg-style text files\nDetected sentences: {}\nTraining rows: {}\nNaive-discrepancy correction rows: {}\n\nInput shape:\n\n```text\n{}{}<previous sentence>{}<cursor prefix>\n```\n\nTargets:\n\n```text\n{}<sentence>\\n\n{}\n{}<tail fragment>\n{}<repaired sentence>\n```\n\nThe source intentionally includes only the previously parsed sentence and current cursor prefix. No following sentence is provided.\n\nSplit policy: group-aware by source document path so all derived rows from one source stay together.\n",
         config.dataset_id,
         source_files,
         sentences,

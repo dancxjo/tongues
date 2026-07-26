@@ -5344,7 +5344,7 @@ fn edit_distance<T: Eq>(left: &[T], right: &[T]) -> usize {
 
 fn dataset_readme(config: &InterpretationConfig) -> String {
     format!(
-        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\nFeature width: `{}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable acoustic feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. The default acoustic vector is `[log_mel_{}, delta_mel_{}, energy, vad, zcr, spectral_centroid, spectral_flux, f0, voiced_prob]`. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
+        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\nFeature width: `{}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable acoustic feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. The default acoustic vector is `[log_mel_{}, delta_mel_{}, energy, vad, zcr, spectral_centroid, spectral_flux, f0, voiced_prob]`. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nSplit policy: group-aware by `speaker_id + chapter_id` so related utterances remain in one split.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
         config.dataset_id,
         config.subset,
         audio_feature_bins(config),
