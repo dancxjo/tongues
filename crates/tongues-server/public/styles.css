@@ -319,9 +319,318 @@ a {
     gap: 1.25rem;
 }
 
+.studio-workflows {
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    gap: 0.25rem;
+    overflow-x: auto;
+}
+
+.studio-workflows a {
+    border-bottom: 3px solid transparent;
+    color: var(--text-muted);
+    flex: 0 0 auto;
+    font-weight: 800;
+    padding: 0.8rem 0.95rem;
+}
+
+.studio-workflows a:hover,
+.studio-workflows a:focus-visible,
+.studio-workflows a.active {
+    border-bottom-color: var(--primary);
+    color: var(--primary-hover);
+    outline: none;
+}
+
+.studio-workflow {
+    display: grid;
+    gap: 1.25rem;
+    min-width: 0;
+}
+
+.studio-workflow.hidden {
+    display: none;
+}
+
+.workflow-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+}
+
+.workflow-heading h2 {
+    font-size: 1.45rem;
+    margin: 0.1rem 0 0.35rem;
+}
+
+.workflow-heading p:last-child {
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.speak-choice-grid,
+.compose-detail-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.recipe-summary {
+    align-items: start;
+    background: var(--panel-soft);
+    border-left: 4px solid var(--primary);
+    border-radius: 6px;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(180px, 0.8fr) minmax(0, 2fr);
+    margin: 1rem 0;
+    padding: 0.9rem 1rem;
+}
+
+.recipe-summary p {
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin-top: 0.2rem;
+}
+
+.recipe-summary dl {
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.recipe-summary dt {
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.recipe-summary dd {
+    margin: 0.2rem 0 0;
+    overflow-wrap: anywhere;
+}
+
+.action-bar,
+.split-actions,
+.compose-recipe-actions,
+.copy-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.action-bar {
+    margin-top: 1rem;
+}
+
+.action-bar > button,
+.compose-recipe-actions > button {
+    width: auto;
+}
+
+.pipeline-stage {
+    color: var(--text-main);
+    text-align: left;
+}
+
+.pipeline-stage:focus-visible,
+.pipeline-stage.selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+    outline: none;
+}
+
+.stage-inspector {
+    background: var(--panel-soft);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 1rem;
+}
+
+.stage-inspector h3 {
+    margin: 0.25rem 0 0.55rem;
+}
+
+.stage-inspector h4 {
+    font-size: 0.78rem;
+    margin-top: 0.9rem;
+    text-transform: uppercase;
+}
+
+.stage-inspector p,
+.stage-inspector li {
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.stage-inspector ul {
+    margin: 0.4rem 0 0;
+    padding-left: 1.2rem;
+}
+
+.copy-row code {
+    background: var(--panel-soft);
+    border-radius: 8px;
+    flex: 1 1 400px;
+    overflow-wrap: anywhere;
+    padding: 0.85rem;
+}
+
+.compare-fieldset {
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.compare-fieldset legend {
+    font-weight: 800;
+    padding: 0 0.35rem;
+}
+
+.compare-candidates {
+    display: grid;
+    gap: 0.55rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compare-candidate {
+    align-items: center;
+    background: var(--panel-soft);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--text-main);
+    cursor: pointer;
+    display: flex;
+    gap: 0.7rem;
+    margin: 0;
+    padding: 0.75rem;
+    text-transform: none;
+}
+
+.compare-candidate:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.compare-candidate small,
+.preferred-choice small {
+    color: var(--text-muted);
+    display: block;
+    font-weight: 400;
+    margin-top: 0.2rem;
+}
+
+.compare-results {
+    display: grid;
+    gap: 0.8rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compare-lane,
+.operate-section,
+.operate-job {
+    background: var(--panel-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 1rem;
+}
+
+.compare-lane[data-state="failed"] {
+    border-color: #f1b7b1;
+}
+
+.compare-lane audio,
+#compose-audio {
+    margin-top: 0.8rem;
+    width: 100%;
+}
+
+.preferred-choice {
+    align-items: center;
+    color: var(--text-main);
+    display: flex;
+    gap: 0.4rem;
+    margin: 0;
+    text-transform: none;
+}
+
+.operate-jobs {
+    display: grid;
+    gap: 0.65rem;
+    margin-top: 0.8rem;
+}
+
+.operate-job {
+    background: var(--panel-bg);
+    padding: 0;
+}
+
+.operate-job > summary {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    padding: 0.85rem;
+}
+
+.operate-job summary small {
+    color: var(--text-muted);
+    display: block;
+    margin-top: 0.2rem;
+}
+
+.operate-job-detail {
+    border-top: 1px solid var(--panel-border);
+    padding: 0.85rem;
+}
+
+.operate-job-detail code {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.operate-job-detail .job-artifacts {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.operate-labs {
+    border-top: 1px solid var(--panel-border);
+    padding-top: 1rem;
+}
+
+.operate-labs > summary {
+    cursor: pointer;
+    font-weight: 800;
+}
+
+.nav-advanced {
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    padding-top: 0.85rem;
+}
+
+.nav-advanced > summary {
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+    font-weight: 800;
+    padding: 0.5rem 0.65rem;
+}
+
+.nav-advanced-body {
+    display: grid;
+    gap: 1rem;
+    margin-top: 0.8rem;
+}
+
 .pipeline-toolbar {
     display: grid;
-    grid-template-columns: minmax(240px, 420px);
+    gap: 0.8rem;
+    grid-template-columns: minmax(240px, 1fr) auto;
     margin: 1rem 0;
 }
 
@@ -702,7 +1011,11 @@ textarea {
 textarea:focus,
 select:focus,
 input[type="number"]:focus,
-input[type="text"]:focus {
+input[type="text"]:focus,
+input[type="search"]:focus,
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible {
     border-color: var(--primary);
     box-shadow: 0 0 0 3px var(--focus-ring);
     outline: none;
@@ -1329,6 +1642,15 @@ audio::-webkit-media-controls-panel {
     .metadata-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .recipe-summary,
+    .compose-detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .recipe-summary dl {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 .duplex-panel {
@@ -1435,6 +1757,13 @@ audio::-webkit-media-controls-panel {
         grid-template-columns: 1fr;
     }
 
+    .speak-choice-grid,
+    .compare-candidates,
+    .compare-results,
+    .recipe-summary dl {
+        grid-template-columns: 1fr;
+    }
+
     .pipeline-toolbar {
         grid-template-columns: 1fr;
     }
@@ -1471,5 +1800,75 @@ audio::-webkit-media-controls-panel {
 
     .speech-section-heading .secondary-button {
         width: 100%;
+    }
+
+    .workflow-heading,
+    .operate-job > summary {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .action-bar > button,
+    .compose-recipe-actions > button {
+        width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-color: #15212a;
+        --panel-bg: #1d2b35;
+        --panel-soft: #263844;
+        --panel-border: #3b4d59;
+        --primary: #52caba;
+        --primary-hover: #8be0d5;
+        --accent: #ff9288;
+        --accent-soft: #422c2c;
+        --warning: #f5b85b;
+        --ink: #edf5f7;
+        --text-main: #edf5f7;
+        --text-muted: #b3c3cc;
+        --text-soft: #d0dce1;
+        --sidebar-bg: #101a21;
+        --sidebar-soft: #263844;
+        --focus-ring: rgba(82, 202, 186, 0.3);
+    }
+
+    textarea,
+    select,
+    input[type="number"],
+    input[type="text"],
+    input[type="search"],
+    select option,
+    .pipeline-stage,
+    .speech-runtime-panel,
+    .model-card,
+    .result-panel,
+    .engine-inventory,
+    .metadata-grid > div,
+    .control-checkbox,
+    .fixed-value,
+    .advanced-section,
+    .catalog-family,
+    .component-card {
+        background: var(--panel-bg);
+        color: var(--text-main);
+    }
+
+    .runtime-badge,
+    .status-badge {
+        background: #21483f;
+        color: #9fe8dc;
     }
 }

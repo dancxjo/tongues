@@ -5,6 +5,7 @@
 }(typeof window !== 'undefined' ? window : null, function buildSpeechStudio() {
     'use strict';
 
+    const browser = typeof window !== 'undefined' ? window : null;
     const state = {
         discovery: null,
         pathKey: '',
@@ -20,8 +21,42 @@
         catalogDiscovery: null,
         catalogView: 'ready',
         catalogRequestGeneration: 0,
+        workflow: 'speak',
+        compareResults: new Map(),
+        comparePreferred: '',
+        userRecipes: [],
+        selectedStage: 'generator',
+        jobsTimer: null,
     };
     const VERIFICATION_CONCURRENCY = 1;
+    const USER_RECIPES_KEY = 'tongues.speech.user-recipes.v1';
+    const WORKFLOWS = {
+        speak: {
+            path: '/speech',
+            label: 'Speak',
+            summary: 'Generate and export speech from a complete, verified recipe.',
+        },
+        compose: {
+            path: '/speech/compose',
+            label: 'Compose',
+            summary: 'Inspect and assemble contract-valid speech pipelines.',
+        },
+        compare: {
+            path: '/speech/compare',
+            label: 'Compare',
+            summary: 'Listen to several complete recipes using one shared prompt.',
+        },
+        catalog: {
+            path: '/speech/catalog',
+            label: 'Catalog',
+            summary: 'Find ready voices, installable model families, and developer components.',
+        },
+        operate: {
+            path: '/speech/operate',
+            label: 'Operate',
+            summary: 'Inspect runtime state, verification, jobs, failures, and evidence.',
+        },
+    };
 
     const pathKey = (path) => `${path.backend}::${path.model}`;
     const compositionGenerator = (composition) => (
@@ -218,136 +253,337 @@
     }
 
     function studioShell() {
+        const workflowTabs = Object.values(WORKFLOWS).map((workflow) => `
+            <a href="${workflow.path}" data-studio-route="${workflow.path}"
+                role="tab" aria-selected="false">${workflow.label}</a>
+        `).join('');
         return `
             <main class="glass-panel speech-studio">
-                <div class="page-doc">
-                    <p>Assemble a text-to-audio pipeline. Every connection is checked against
-                    the component contracts reported by the resident speech runtime.</p>
-                </div>
-                <section class="speech-runtime-panel" aria-labelledby="speech-runtime-heading">
-                    <div class="speech-section-heading">
+                <nav class="studio-workflows" role="tablist" aria-label="Speech Studio workflows">
+                    ${workflowTabs}
+                </nav>
+
+                <section id="speech-workflow-speak" class="studio-workflow" data-workflow="speak"
+                    aria-labelledby="speak-heading">
+                    <div class="workflow-heading">
                         <div>
-                            <span id="speech-runtime-state" class="runtime-badge" data-state="loading">Checking</span>
-                            <h2 id="speech-runtime-heading">Resident runtime</h2>
+                            <p class="eyebrow">Quick synthesis</p>
+                            <h2 id="speak-heading">Turn text into speech</h2>
+                            <p>Choose a complete recipe, adjust only the controls it supports, and generate audio.</p>
                         </div>
-                        <button id="reload-speech-runtime" type="button" class="secondary-button">Reload models</button>
                     </div>
-                    <dl id="speech-runtime-grid" class="metadata-grid" aria-live="polite"></dl>
-                    <div id="speech-runtime-errors" class="inline-error hidden" role="alert"></div>
+                    <form id="synth-form" novalidate>
+                        <div id="speech-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
+                        <div class="form-group">
+                            <label for="text">Text to speak</label>
+                            <textarea id="text" required>Wow, the magic wand actually worked!</textarea>
+                        </div>
+                        <div class="speak-choice-grid">
+                            <div class="form-group">
+                                <label for="speech-voice">Voice or language</label>
+                                <input id="speech-voice" type="search" list="speech-voice-options"
+                                    autocomplete="off" placeholder="Search a voice, language, or model">
+                                <datalist id="speech-voice-options"></datalist>
+                                <small>Searchable complete speech paths only; technical components are in Compose.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="speech-preset">Recipe</label>
+                                <select id="speech-preset"></select>
+                                <small id="synthesis-path-detail">Loading recipes…</small>
+                            </div>
+                        </div>
+                        <div class="controls-grid">
+                            <div class="form-group" id="variety-control">
+                                <label for="variety">Language or variety</label>
+                                <select id="variety"></select>
+                                <div id="fixed-variety" class="fixed-value hidden"></div>
+                                <small id="variety-detail"></small>
+                            </div>
+                            <div class="form-group hidden" id="speaker-control">
+                                <label for="speaker">Voice or speaker</label>
+                                <input id="speaker" type="search" list="speaker-options"
+                                    autocomplete="off" placeholder="Search named speakers">
+                                <datalist id="speaker-options"></datalist>
+                                <small id="speaker-detail"></small>
+                            </div>
+                        </div>
+                        <section id="speech-recipe-summary" class="recipe-summary" aria-live="polite"></section>
+                        <div id="speech-controls-basic" class="controls-grid"></div>
+                        <details class="advanced-section">
+                            <summary>Advanced synthesis controls</summary>
+                            <div id="speech-controls-advanced" class="controls-grid"></div>
+                        </details>
+                        <details class="advanced-section">
+                            <summary>Expert token controls</summary>
+                            <p class="expert-warning">Token arrays are checked against the selected
+                            model projection before synthesis.</p>
+                            <div id="speech-controls-expert" class="controls-grid"></div>
+                        </details>
+                        <details id="speech-developer" class="advanced-section">
+                            <summary>Developer and testing</summary>
+                            <div id="speech-controls-developer" class="controls-grid"></div>
+                            <button id="select-mock-path" type="button" class="secondary-button hidden">
+                                Use deterministic test path
+                            </button>
+                        </details>
+                        <div class="action-bar split-actions">
+                            <button type="submit" id="submit-btn" disabled>
+                                <span class="btn-text">Generate speech</span>
+                                <div class="spinner"></div>
+                            </button>
+                            <button id="show-pipeline" type="button" class="secondary-button">Show pipeline</button>
+                            <button id="add-current-to-compare" type="button" class="secondary-button">Add to Compare</button>
+                        </div>
+                        <div id="speech-submit-status" role="status" aria-live="polite"></div>
+                    </form>
+                    <section id="result-container" class="result-panel hidden"
+                        aria-labelledby="speech-result-heading">
+                        <div class="speech-section-heading">
+                            <div>
+                                <span id="speech-result-state" class="runtime-badge" data-state="ready">Completed</span>
+                                <h2 id="speech-result-heading">Speech result</h2>
+                            </div>
+                            <a id="speech-download" class="secondary-button"
+                                download="tongues-speech.wav">Download WAV</a>
+                        </div>
+                        <audio id="audio-player" controls></audio>
+                        <dl id="speech-result-metadata" class="metadata-grid"></dl>
+                        <details id="speech-result-diagnostics" class="advanced-section hidden">
+                            <summary>Additional details</summary>
+                            <pre id="speech-diagnostics-output" class="source-preview"></pre>
+                        </details>
+                    </section>
                 </section>
 
-                <form id="synth-form" novalidate>
-                    <div id="speech-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
-                    <div class="form-group">
-                        <label for="text">Prompt</label>
-                        <textarea id="text" required>Wow, the magic wand actually worked!</textarea>
-                        <small>Text is planned and synthesized through the selected component pipeline.</small>
+                <section id="speech-workflow-compose" class="studio-workflow hidden"
+                    data-workflow="compose" aria-labelledby="compose-heading">
+                    <div class="workflow-heading">
+                        <div>
+                            <p class="eyebrow">Typed patch bay</p>
+                            <h2 id="compose-heading">Compose a speech pipeline</h2>
+                            <p>Each selectable connection is filtered by the runtime’s executable contract graph.</p>
+                        </div>
+                        <span id="compose-validity" class="runtime-badge" data-state="loading">Checking</span>
                     </div>
+                    <div id="compose-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
                     <div class="pipeline-toolbar">
                         <div class="form-group">
-                            <label for="speech-preset">Pipeline preset</label>
-                            <select id="speech-preset"></select>
-                            <small id="synthesis-path-detail">Loading component discovery…</small>
+                            <label for="compose-recipe-name">Recipe name</label>
+                            <input id="compose-recipe-name" type="text" placeholder="My speech recipe">
+                        </div>
+                        <div class="compose-recipe-actions">
+                            <button id="duplicate-recipe" type="button" class="secondary-button">Duplicate</button>
+                            <button id="save-recipe" type="button">Save recipe</button>
+                            <button id="restore-recipe" type="button" class="secondary-button">Restore</button>
                         </div>
                     </div>
                     <section class="pipeline-workbench" aria-label="Speech synthesis pipeline">
-                        <div class="pipeline-stage" data-stage="input">
+                        <div class="pipeline-stage" role="group" tabindex="0" data-stage="input">
                             <span class="pipeline-stage-label">Input</span>
                             <strong>Text</strong>
                             <small>Tongues linguistic plan</small>
                         </div>
                         <span class="pipeline-connector" aria-hidden="true">→</span>
-                        <div class="pipeline-stage" data-stage="projector">
+                        <div class="pipeline-stage" role="group" tabindex="0" data-stage="projector">
                             <label class="pipeline-stage-label" for="pipeline-projector">Projector</label>
                             <select id="pipeline-projector"></select>
                             <small id="pipeline-projector-detail"></small>
                         </div>
                         <span class="pipeline-connector" aria-hidden="true">→</span>
                         <div class="pipeline-generator-stack">
-                            <div class="pipeline-stage pipeline-conditioning" data-stage="conditioner">
+                            <div class="pipeline-stage pipeline-conditioning" role="group" tabindex="0" data-stage="conditioner">
                                 <span class="pipeline-stage-label">Conditioning</span>
                                 <strong id="pipeline-conditioning-name">Model controls</strong>
                                 <small id="pipeline-conditioning-detail">Speaker, language, style, and prosody</small>
                             </div>
                             <span class="pipeline-branch" aria-hidden="true">↓</span>
-                            <div class="pipeline-stage" data-stage="generator">
+                            <div class="pipeline-stage" role="group" tabindex="0" data-stage="generator">
                                 <label class="pipeline-stage-label" for="pipeline-generator">Acoustic model</label>
                                 <select id="pipeline-generator"></select>
                                 <small id="pipeline-generator-detail"></small>
                             </div>
                         </div>
                         <span class="pipeline-connector" aria-hidden="true">→</span>
-                        <div class="pipeline-stage" id="pipeline-vocoder-stage" data-stage="vocoder">
+                        <div class="pipeline-stage" id="pipeline-vocoder-stage" role="group" tabindex="0" data-stage="vocoder">
                             <label class="pipeline-stage-label" for="pipeline-vocoder">Vocoder</label>
                             <select id="pipeline-vocoder"></select>
                             <small id="pipeline-vocoder-detail"></small>
                         </div>
                         <span class="pipeline-connector" aria-hidden="true">→</span>
-                        <div class="pipeline-stage" data-stage="output">
+                        <div class="pipeline-stage" role="group" tabindex="0" data-stage="output">
                             <span class="pipeline-stage-label">Output</span>
                             <strong>WAV audio</strong>
-                            <small>Playback, download, and details</small>
+                            <small>Playback and download</small>
                         </div>
                     </section>
-                    <div class="controls-grid">
-                        <div class="form-group" id="variety-control">
-                            <label for="variety">Linguistic variety</label>
-                            <select id="variety"></select>
-                            <div id="fixed-variety" class="fixed-value hidden"></div>
-                            <small id="variety-detail"></small>
+                    <div class="compose-detail-grid">
+                        <section id="pipeline-stage-inspector" class="stage-inspector" aria-live="polite"></section>
+                        <details class="model-card">
+                            <summary>Recipe provenance, readiness, and license</summary>
+                            <section id="speech-model-card" aria-live="polite"></section>
+                        </details>
+                    </div>
+                    <div class="form-group">
+                        <label for="compose-cli">Exact CLI representation</label>
+                        <div class="copy-row">
+                            <code id="compose-cli"></code>
+                            <button id="copy-compose-cli" type="button" class="secondary-button">Copy</button>
                         </div>
-                        <div class="form-group hidden" id="speaker-control">
-                            <label for="speaker">Speaker</label>
-                            <input id="speaker" type="search" list="speaker-options"
-                                autocomplete="off" placeholder="Search p### speakers">
-                            <datalist id="speaker-options"></datalist>
-                            <small id="speaker-detail"></small>
-                        </div>
                     </div>
-
-                    <section id="speech-model-card" class="model-card" aria-live="polite"></section>
-                    <div id="speech-controls-basic" class="controls-grid"></div>
-                    <details class="advanced-section">
-                        <summary>Advanced synthesis controls</summary>
-                        <div id="speech-controls-advanced" class="controls-grid"></div>
-                    </details>
-                    <details class="advanced-section">
-                        <summary>Expert token controls</summary>
-                        <p class="expert-warning">Token arrays are checked for valid numeric values.
-                        They are rejected by the server if they do not match the model projection.</p>
-                        <div id="speech-controls-expert" class="controls-grid"></div>
-                    </details>
-                    <details id="speech-developer" class="advanced-section">
-                        <summary>Developer and testing</summary>
-                        <p>The deterministic mock generates test audio and is not a voice engine.</p>
-                        <div id="speech-controls-developer" class="controls-grid"></div>
-                        <button id="select-mock-path" type="button" class="secondary-button hidden">
-                            Use deterministic test path
-                        </button>
-                    </details>
-                    <div class="action-bar">
-                        <button type="submit" id="submit-btn" disabled>
-                            <span class="btn-text">Generate speech</span>
-                            <div class="spinner"></div>
-                        </button>
+                    <div class="action-bar split-actions">
+                        <button id="test-pipeline" type="button">Test pipeline</button>
+                        <button id="open-pipeline-in-speak" type="button" class="secondary-button">Open in Speak</button>
+                        <button id="add-pipeline-to-compare" type="button" class="secondary-button">Add to Compare</button>
                     </div>
-                    <div id="speech-submit-status" class="sr-status" role="status" aria-live="polite"></div>
-                </form>
-
-                <section id="result-container" class="result-panel hidden" aria-labelledby="speech-result-heading">
-                    <div class="speech-section-heading">
-                        <h2 id="speech-result-heading">Synthesis result</h2>
-                        <a id="speech-download" class="secondary-button" download="tongues-speech.wav">Download WAV</a>
-                    </div>
-                    <audio id="audio-player" controls></audio>
-                    <dl id="speech-result-metadata" class="metadata-grid"></dl>
-                    <details id="speech-result-diagnostics" class="advanced-section hidden">
-                        <summary>Diagnostics</summary>
-                        <pre id="speech-diagnostics-output" class="source-preview"></pre>
-                    </details>
+                    <div id="compose-test-status" role="status" aria-live="polite"></div>
+                    <audio id="compose-audio" class="hidden" controls></audio>
                 </section>
 
-                <section class="duplex-panel" aria-labelledby="duplex-heading">
+                <section id="speech-workflow-compare" class="studio-workflow hidden"
+                    data-workflow="compare" aria-labelledby="compare-heading">
+                    <div class="workflow-heading">
+                        <div>
+                            <p class="eyebrow">Listening test</p>
+                            <h2 id="compare-heading">Compare complete recipes</h2>
+                            <p>Every candidate receives the same prompt and remains tied to its exact controls.</p>
+                        </div>
+                    </div>
+                    <div id="compare-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
+                    <div class="form-group">
+                        <label for="compare-text">Shared prompt</label>
+                        <textarea id="compare-text" required></textarea>
+                    </div>
+                    <fieldset class="compare-fieldset">
+                        <legend>Recipes to compare</legend>
+                        <div id="compare-candidates" class="compare-candidates"></div>
+                    </fieldset>
+                    <label class="checkbox-row">
+                        <input id="compare-blind" type="checkbox">
+                        <span>Blind listening mode<small>Hide identities until results are revealed.</small></span>
+                    </label>
+                    <div class="action-bar split-actions">
+                        <button id="generate-all" type="button">Generate all</button>
+                        <button id="reveal-comparison" type="button" class="secondary-button">Reveal identities</button>
+                        <button id="save-preferred" type="button" class="secondary-button" disabled>Save preferred recipe</button>
+                    </div>
+                    <div id="compare-status" role="status" aria-live="polite"></div>
+                    <div id="compare-results" class="compare-results"></div>
+                </section>
+
+                <section id="speech-workflow-catalog" class="studio-workflow hidden"
+                    data-workflow="catalog" aria-labelledby="model-catalog-heading">
+                    <div class="workflow-heading">
+                        <div>
+                            <p class="eyebrow">Capability discovery</p>
+                            <h2 id="model-catalog-heading">Catalog <span id="component-count"></span></h2>
+                            <p>Start with usable speech paths. Expand model families only when you need them.</p>
+                        </div>
+                    </div>
+                    <div class="catalog-view-tabs" role="tablist" aria-label="Catalog view">
+                        <button type="button" role="tab" data-catalog-view="ready" aria-selected="true">Ready now</button>
+                        <button type="button" role="tab" data-catalog-view="downloadable" aria-selected="false">Available to fetch</button>
+                        <button type="button" role="tab" data-catalog-view="components" aria-selected="false">Developer components</button>
+                    </div>
+                    <div class="catalog-filters" aria-label="Catalog filters">
+                        <div class="form-group">
+                            <label for="catalog-search">Search models and languages</label>
+                            <input id="catalog-search" type="search"
+                                placeholder="Language, script, voice, architecture, or capability">
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-family">Family</label>
+                            <select id="catalog-family">
+                                <option value="">All families</option>
+                                <option value="mms">MMS VITS</option>
+                                <option value="styletts2">StyleTTS2</option>
+                                <option value="other">Other native families</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-license">License</label>
+                            <select id="catalog-license">
+                                <option value="">All licenses</option>
+                                <option value="CC-BY-NC-4.0">CC-BY-NC-4.0</option>
+                                <option value="MIT">MIT</option>
+                                <option value="NOASSERTION">Metadata unavailable</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-capability">Capability</label>
+                            <select id="catalog-capability">
+                                <option value="">All capabilities</option>
+                                <option value="speech">Text to speech</option>
+                                <option value="voice_conversion">Voice conversion or cloning</option>
+                                <option value="vocoder">Vocoder</option>
+                                <option value="developer">Trainer or developer component</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-verification">Verification</label>
+                            <select id="catalog-verification">
+                                <option value="">Any verification state</option>
+                                <option value="verified">Verified</option>
+                                <option value="pending">Pending or changed</option>
+                                <option value="failed">Failed or unavailable</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="catalog-device">Device support</label>
+                            <select id="catalog-device">
+                                <option value="">Any supported device</option>
+                                <option value="cpu">CPU</option>
+                                <option value="cuda">CUDA</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p id="catalog-status" class="catalog-status" role="status" aria-live="polite"></p>
+                    <div id="component-inventory" class="component-inventory"></div>
+                    <button id="catalog-load-more" type="button" class="secondary-button hidden">Load more models</button>
+                </section>
+
+                <section id="speech-workflow-operate" class="studio-workflow hidden"
+                    data-workflow="operate" aria-labelledby="operate-heading">
+                    <div class="workflow-heading">
+                        <div>
+                            <p class="eyebrow">Runtime and evidence</p>
+                            <h2 id="operate-heading">Operate Speech Studio</h2>
+                            <p>Runtime capabilities, verification, activity, and expert evidence share one state model.</p>
+                        </div>
+                    </div>
+                    <section class="speech-runtime-panel" aria-labelledby="speech-runtime-heading">
+                        <div class="speech-section-heading">
+                            <div>
+                                <span id="speech-runtime-state" class="runtime-badge" data-state="loading">Checking</span>
+                                <h2 id="speech-runtime-heading">Resident runtime</h2>
+                            </div>
+                            <button id="reload-speech-runtime" type="button" class="secondary-button">Reload models</button>
+                        </div>
+                        <dl id="speech-runtime-grid" class="metadata-grid" aria-live="polite"></dl>
+                        <div id="speech-runtime-errors" class="inline-error hidden" role="alert"></div>
+                    </section>
+                    <section class="operate-section" aria-labelledby="verification-heading">
+                        <div class="speech-section-heading">
+                            <div>
+                                <h2 id="verification-heading">Verification</h2>
+                                <p>Verify only installed models that changed since their last evidence check.</p>
+                            </div>
+                            <button id="verify-all-models" type="button">Verify changed models</button>
+                        </div>
+                        <p id="verification-status" role="status" aria-live="polite"></p>
+                    </section>
+                    <section class="operate-section" aria-labelledby="activity-heading">
+                        <div class="speech-section-heading">
+                            <div>
+                                <h2 id="activity-heading">Jobs and activity</h2>
+                                <p>Human-readable work first; commands, logs, and artifacts remain in details.</p>
+                            </div>
+                            <button id="refresh-operate-jobs" type="button" class="secondary-button">Refresh</button>
+                        </div>
+                        <div id="operate-jobs" class="operate-jobs" aria-live="polite"></div>
+                    </section>
+                    <details class="operate-labs">
+                        <summary>Labs: predictive duplex evidence</summary>
+                        <section class="duplex-panel" aria-labelledby="duplex-heading">
                     <div class="speech-section-heading">
                         <div>
                             <h2 id="duplex-heading">Predictive duplex timeline</h2>
@@ -378,55 +614,176 @@
                     <div id="duplex-error" class="inline-error hidden" role="alert"></div>
                     <div id="duplex-summary" class="duplex-summary hidden"></div>
                     <ol id="duplex-timeline" class="duplex-timeline hidden"></ol>
-                </section>
-
-                <section class="engine-inventory" aria-labelledby="model-catalog-heading">
-                    <div class="speech-section-heading">
-                        <div>
-                            <h2 id="model-catalog-heading">Model catalog <span id="component-count"></span></h2>
-                            <p class="catalog-description">Start with complete speech pipelines.
-                            Installable models and low-level components remain available when you
-                            need to change or repair a pipeline.</p>
-                        </div>
-                        <button id="verify-all-models" type="button" class="secondary-button">Verify all changed models</button>
-                    </div>
-                    <div class="catalog-view-tabs" role="tablist" aria-label="Catalog view">
-                        <button type="button" role="tab" data-catalog-view="ready" aria-selected="true">Usable now</button>
-                        <button type="button" role="tab" data-catalog-view="downloadable" aria-selected="false">Downloadable</button>
-                        <button type="button" role="tab" data-catalog-view="components" aria-selected="false">Developer components</button>
-                    </div>
-                    <div class="catalog-filters" aria-label="Catalog filters">
-                        <div class="form-group">
-                            <label for="catalog-search">Search</label>
-                            <input id="catalog-search" type="search" placeholder="Model, language, script, or architecture">
-                        </div>
-                        <div class="form-group">
-                            <label for="catalog-family">Family</label>
-                            <select id="catalog-family">
-                                <option value="">All families</option>
-                                <option value="mms">MMS</option>
-                                <option value="styletts2">StyleTTS2</option>
-                                <option value="other">Other native families</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="catalog-license">License</label>
-                            <select id="catalog-license">
-                                <option value="">All licenses</option>
-                                <option value="CC-BY-NC-4.0">CC-BY-NC-4.0</option>
-                                <option value="MIT">MIT</option>
-                                <option value="NOASSERTION">Metadata unavailable</option>
-                            </select>
-                        </div>
-                    </div>
-                    <p id="catalog-status" class="catalog-status" role="status" aria-live="polite"></p>
-                    <div id="component-inventory" class="component-inventory"></div>
-                    <button id="catalog-load-more" type="button" class="secondary-button hidden">Load more models</button>
+                        </section>
+                    </details>
                 </section>
             </main>`;
     }
 
     const byId = (id) => document.getElementById(id);
+
+    function workflowForPath(pathname) {
+        const normalized = String(pathname || '/speech').replace(/\/+$/, '') || '/speech';
+        return Object.entries(WORKFLOWS).find(([, workflow]) => workflow.path === normalized)?.[0]
+            || 'speak';
+    }
+
+    function setWorkflow(pathname, { focus = false } = {}) {
+        const workflow = WORKFLOWS[workflowForPath(pathname)] ? workflowForPath(pathname) : 'speak';
+        state.workflow = workflow;
+        if (typeof document === 'undefined') return workflow;
+        if (workflow !== 'operate' && state.jobsTimer != null) {
+            window.clearTimeout(state.jobsTimer);
+            state.jobsTimer = null;
+        }
+        document.querySelectorAll('[data-workflow]').forEach((section) => {
+            section.classList.toggle('hidden', section.dataset.workflow !== workflow);
+        });
+        document.querySelectorAll('[data-studio-route]').forEach((link) => {
+            const selected = workflowForPath(link.dataset.studioRoute) === workflow;
+            link.classList.toggle('active', selected);
+            link.setAttribute('aria-selected', String(selected));
+            if (selected) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+        });
+        if (workflow === 'compare') {
+            if (byId('compare-text') && !byId('compare-text').value) {
+                byId('compare-text').value = byId('text')?.value || '';
+            }
+            renderCompareCandidates();
+        }
+        if (workflow === 'operate') {
+            refreshOperateJobs().catch((error) => {
+                if (byId('operate-jobs')) {
+                    byId('operate-jobs').textContent = `Activity unavailable: ${error.message}`;
+                }
+            });
+        }
+        if (focus) {
+            const heading = byId(`speech-workflow-${workflow}`)?.querySelector('h2');
+            heading?.setAttribute('tabindex', '-1');
+            heading?.focus();
+        }
+        return workflow;
+    }
+
+    function navigateWorkflow(workflow) {
+        const destination = WORKFLOWS[workflow]?.path || WORKFLOWS.speak.path;
+        if (browser?.history && browser.location?.pathname !== destination) {
+            browser.history.pushState({}, '', destination);
+            browser.dispatchEvent(new PopStateEvent('popstate'));
+        } else {
+            setWorkflow(destination, { focus: true });
+        }
+    }
+
+    function loadUserRecipes() {
+        try {
+            const parsed = JSON.parse(browser?.localStorage?.getItem(USER_RECIPES_KEY) || '[]');
+            state.userRecipes = Array.isArray(parsed) ? parsed.filter((recipe) => (
+                recipe && typeof recipe.id === 'string' && typeof recipe.compositionId === 'string'
+            )) : [];
+        } catch (_error) {
+            state.userRecipes = [];
+        }
+        return state.userRecipes;
+    }
+
+    function persistUserRecipes() {
+        browser?.localStorage?.setItem(USER_RECIPES_KEY, JSON.stringify(state.userRecipes));
+    }
+
+    function selectedVariety(path = selectedPath()) {
+        const varieties = varietiesForPath(path);
+        return varieties.length === 1 ? varieties[0].id : (byId('variety')?.value || varieties[0]?.id);
+    }
+
+    function selectedSpeaker(path = selectedPath()) {
+        if (!path || byId('speaker-control')?.classList.contains('hidden')) return null;
+        return byId('speaker')?.value.trim() || null;
+    }
+
+    function controlSnapshot(path = selectedPath()) {
+        const controls = {};
+        for (const control of path?.controls || []) {
+            const value = state.values.get(control.field);
+            if (value != null && value !== '') controls[control.field] = value;
+        }
+        return controls;
+    }
+
+    function recipeSnapshot(name = '', path = selectedPath()) {
+        if (!path) return null;
+        return {
+            id: `user/${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            name: name.trim() || `${path.display_name} copy`,
+            builtIn: false,
+            compositionId: state.pathKey,
+            pipeline: path.pipeline || null,
+            backend: path.backend,
+            model: path.model,
+            variety: selectedVariety(path),
+            speaker: selectedSpeaker(path),
+            controls: controlSnapshot(path),
+            updatedAt: new Date().toISOString(),
+        };
+    }
+
+    function applyRecipe(recipe) {
+        if (!recipe) return false;
+        const composition = (state.discovery?.compositions || []).find(
+            (candidate) => candidate.id === recipe.compositionId,
+        );
+        if (!composition) return false;
+        state.pathKey = composition.id;
+        state.presetId = '';
+        for (const [field, value] of Object.entries(recipe.controls || {})) {
+            state.values.set(field, value);
+        }
+        if (recipe.variety) state.values.set(`variety:${composition.id}`, recipe.variety);
+        if (recipe.speaker) state.values.set(`speaker:${composition.id}`, recipe.speaker);
+        renderPathSelector();
+        renderSelectedPath();
+        if (byId('compose-recipe-name')) byId('compose-recipe-name').value = recipe.name;
+        return true;
+    }
+
+    function shellQuote(value) {
+        const source = String(value ?? '');
+        return /^[A-Za-z0-9_./:+-]+$/.test(source)
+            ? source
+            : `'${source.replaceAll("'", "'\\''")}'`;
+    }
+
+    function cliRepresentation(path, values = state.values, context = {}) {
+        if (!path) return '';
+        const parts = ['tongues', 'speak'];
+        const text = context.text ?? byId('text')?.value;
+        if (text?.trim()) parts.push(shellQuote(text.trim()));
+        parts.push('--backend', shellQuote(path.backend));
+        if (path.model) parts.push('--model', shellQuote(path.model));
+        if (path.pipeline?.vocoder) {
+            const vocoder = path.pipeline.vocoder.includes('multiband') ? 'multiband-melgan' : 'hifigan';
+            parts.push('--vocoder', vocoder);
+        }
+        const variety = context.variety ?? selectedVariety(path);
+        if (variety) parts.push('--variety', shellQuote(variety));
+        const speaker = context.speaker ?? selectedSpeaker(path);
+        if (speaker) parts.push('--speaker', shellQuote(speaker));
+        for (const control of path.controls || []) {
+            const value = values.get(control.field);
+            if (value == null || value === '' || control.field === 'device') continue;
+            const flag = `--${control.field.replaceAll('_', '-')}`;
+            if (control.kind === 'boolean') {
+                if (value) parts.push(flag);
+            } else {
+                parts.push(flag, shellQuote(Array.isArray(value) ? value.join(',') : value));
+            }
+        }
+        const device = values.get('device');
+        if (device === 'cpu') parts.splice(2, 0, '--cpu');
+        return parts.join(' ');
+    }
 
     function showError(message, target = byId('speech-error')) {
         target.textContent = message;
@@ -555,7 +912,7 @@
     function renderPathSelector() {
         const select = byId('speech-preset');
         select.replaceChildren();
-        select.appendChild(new Option('Custom pipeline', 'custom'));
+        select.appendChild(new Option('Current pipeline', 'custom'));
         for (const preset of state.discovery.presets || []) {
             const composition = state.discovery.compositions.find(
                 (candidate) => candidate.id === preset.composition_id,
@@ -567,10 +924,44 @@
             );
             select.appendChild(option);
         }
+        for (const recipe of state.userRecipes) {
+            const composition = state.discovery.compositions.find(
+                (candidate) => candidate.id === recipe.compositionId,
+            );
+            if (!composition) continue;
+            select.appendChild(new Option(`${recipe.name} · saved`, recipe.id));
+        }
         const matchingPreset = (state.discovery.presets || []).find((preset) => (
             preset.composition_id === state.pathKey && preset.id === state.presetId
         ));
-        select.value = matchingPreset?.id || 'custom';
+        const matchingUserRecipe = state.userRecipes.find(
+            (recipe) => recipe.compositionId === state.pathKey && recipe.id === state.presetId,
+        );
+        select.value = matchingUserRecipe?.id || matchingPreset?.id || 'custom';
+        const voiceInput = byId('speech-voice');
+        const voiceOptions = byId('speech-voice-options');
+        voiceOptions.replaceChildren();
+        for (const composition of availableCompositions(state.discovery)) {
+            const path = (state.discovery.paths || []).find((candidate) => (
+                candidate.backend === composition.backend && candidate.model === composition.model
+            ));
+            const option = document.createElement('option');
+            option.value = composition.display_name;
+            option.dataset.compositionId = composition.id;
+            const languages = [...new Set((path?.catalog || []).flatMap(
+                (entry) => entry.languages || [],
+            ))];
+            option.label = [
+                languages.join(', '),
+                composition.backend,
+                composition.runnable ? 'ready' : 'unavailable',
+            ].filter(Boolean).join(' · ');
+            voiceOptions.appendChild(option);
+        }
+        const selected = selectedComposition();
+        if (voiceInput && document.activeElement !== voiceInput) {
+            voiceInput.value = selected?.display_name || selectedPath()?.display_name || '';
+        }
         const mock = (state.discovery.compositions || []).find((path) => path.backend === 'mock');
         byId('select-mock-path').classList.toggle('hidden', !mock);
     }
@@ -677,6 +1068,11 @@
                 compatibilityFor(state.discovery, generatorId, pipeline.vocoder)?.reason
                 || 'Only exact contract matches can be selected.'
             );
+            if (pipeline.vocoder?.includes('standardiz')) {
+                byId('pipeline-vocoder').previousElementSibling.textContent = 'Adapter + vocoder';
+            } else {
+                byId('pipeline-vocoder').previousElementSibling.textContent = 'Vocoder';
+            }
         }
         const conditioners = (pipeline.conditioners || []).map((id) => (
             componentById(id)?.display_name || id
@@ -689,6 +1085,96 @@
             path.reference_audio?.speaker ? 'reference voice' : null,
             path.styles?.reference_audio ? 'reference style' : null,
         ].filter(Boolean).join(' · ') || 'Variety and synthesis controls';
+        renderStageInspector(path, state.selectedStage);
+    }
+
+    function stageComponent(path, stage) {
+        const pipeline = path?.pipeline || {};
+        const id = {
+            input: pipeline.input,
+            projector: pipeline.projector,
+            conditioner: pipeline.conditioners?.[0],
+            generator: pipeline.end_to_end || pipeline.acoustic_model,
+            vocoder: pipeline.vocoder || (pipeline.end_to_end ? pipeline.end_to_end : null),
+            output: pipeline.output,
+        }[stage];
+        return id ? componentById(id) : null;
+    }
+
+    function contractList(contracts, fallback) {
+        if (!(contracts || []).length) return `<li>${escapeHtml(fallback)}</li>`;
+        return contracts.map((contract) => `
+            <li><strong>${escapeHtml(contract.kind)}</strong> · ${escapeHtml(contract.summary || contract.key)}</li>
+        `).join('');
+    }
+
+    function renderStageInspector(path, stage = 'generator') {
+        const target = byId('pipeline-stage-inspector');
+        if (!target || !path) return;
+        state.selectedStage = stage;
+        document.querySelectorAll('.pipeline-stage[data-stage]').forEach((element) => {
+            element.classList.toggle('selected', element.dataset.stage === stage);
+        });
+        const component = stageComponent(path, stage);
+        const pipeline = path.pipeline || {};
+        const generatorId = pipeline.end_to_end || pipeline.acoustic_model;
+        let ownership = 'This stage is selected independently when an executable replacement exists.';
+        if (stage === 'projector') {
+            ownership = compatibilityFor(state.discovery, pipeline.projector, generatorId)?.reason
+                || 'The projector is owned by the selected checkpoint and cannot be substituted independently.';
+        } else if (stage === 'vocoder' && pipeline.end_to_end) {
+            ownership = 'Waveform decoding is integrated into the end-to-end checkpoint.';
+        } else if (stage === 'vocoder' && pipeline.vocoder?.includes('standardiz')) {
+            ownership = 'The named standardizer is an explicit part of this adapter and vocoder stage.';
+        }
+        const statuses = component?.statuses || path.statuses || [];
+        target.innerHTML = `
+            <p class="eyebrow">${escapeHtml(stage.replaceAll('_', ' '))}</p>
+            <h3>${escapeHtml(component?.display_name || stage)}</h3>
+            <p>${escapeHtml(component?.explanation || ownership)}</p>
+            <div class="status-badges">${statuses.map(
+                (status) => `<span class="status-badge">${escapeHtml(status)}</span>`,
+            ).join('')}</div>
+            <h4>Accepts</h4>
+            <ul>${contractList(component?.accepts, stage === 'input' ? 'User text' : 'No separate input contract')}</ul>
+            <h4>Emits</h4>
+            <ul>${contractList(component?.produces, stage === 'output' ? 'Downloadable WAV audio' : 'No separate output contract')}</ul>
+            <h4>Ownership and compatibility</h4>
+            <p>${escapeHtml(ownership)}</p>
+        `;
+    }
+
+    function renderRecipeSummary(path) {
+        const target = byId('speech-recipe-summary');
+        if (!target || !path) return;
+        const varieties = varietiesForPath(path);
+        const device = state.values.get('device')
+            || path.controls?.find((control) => control.field === 'device')?.default
+            || 'runtime default';
+        target.innerHTML = `
+            <div>
+                <p class="eyebrow">Selected recipe</p>
+                <strong>${escapeHtml(path.display_name)}</strong>
+                <p>${escapeHtml(
+                    listedValues(path.speakers?.values)[0]?.label
+                    || varieties[0]?.label
+                    || path.family
+                    || 'Speech synthesis'
+                )}</p>
+            </div>
+            <dl>
+                <div><dt>Language</dt><dd>${escapeHtml(varieties[0]?.label || 'Model default')}</dd></div>
+                <div><dt>Audio</dt><dd>${escapeHtml(
+                    path.output?.sample_rate_hz
+                        ? `${path.output.sample_rate_hz} Hz WAV`
+                        : 'WAV'
+                )}</dd></div>
+                <div><dt>Request device</dt><dd>${escapeHtml(device)}</dd></div>
+                <div><dt>Verification</dt><dd>${escapeHtml(
+                    path.verified ? 'Verified' : path.verification_status || 'Unknown'
+                )}</dd></div>
+            </dl>
+        `;
     }
 
     function renderVarieties(path) {
@@ -818,6 +1304,8 @@
         if (!path) {
             showError(state.discovery?.error || 'No synthesis paths were discovered.');
             byId('submit-btn').disabled = true;
+            byId('compose-validity').dataset.state = 'failed';
+            byId('compose-validity').textContent = 'Incomplete';
             return;
         }
         clearError();
@@ -828,8 +1316,32 @@
         renderVarieties(path);
         renderSpeakers(path);
         renderModelCard(path);
+        renderRecipeSummary(path);
         renderControls(path);
         byId('submit-btn').disabled = !path.complete || !path.runnable;
+        const validity = byId('compose-validity');
+        validity.dataset.state = path.runnable ? 'ready' : 'failed';
+        validity.textContent = path.runnable ? 'Contract valid' : 'Blocked';
+        byId('test-pipeline').disabled = !path.complete || !path.runnable;
+        byId('open-pipeline-in-speak').disabled = !path.complete || !path.runnable;
+        byId('compose-cli').textContent = cliRepresentation(path);
+        const name = byId('compose-recipe-name');
+        if (name && document.activeElement !== name) {
+            const preset = (state.discovery.presets || []).find(
+                (candidate) => candidate.composition_id === state.pathKey,
+            );
+            const userRecipe = state.userRecipes.find((candidate) => candidate.id === state.presetId);
+            name.value = userRecipe?.name || preset?.display_name || path.display_name;
+        }
+        if (!path.runnable) {
+            showError(
+                path.unavailable_reason || 'This pipeline is incomplete or unavailable.',
+                byId('compose-error'),
+            );
+        } else {
+            clearError(byId('compose-error'));
+        }
+        renderCompareCandidates();
     }
 
     function catalogFamily(item) {
@@ -882,9 +1394,43 @@
         const search = byId('catalog-search')?.value.trim().toLocaleLowerCase() || '';
         const family = byId('catalog-family')?.value || '';
         const license = byId('catalog-license')?.value || '';
+        const capability = byId('catalog-capability')?.value || '';
+        const verification = byId('catalog-verification')?.value || '';
+        const device = byId('catalog-device')?.value || '';
+        const capabilityText = [
+            item.kind,
+            item.stage,
+            item.family,
+            item.capabilities?.family,
+            item.backend,
+            ...(item.spans || []),
+        ].filter(Boolean).join(' ').toLocaleLowerCase();
+        const statuses = (item.statuses || []).join(' ').toLocaleLowerCase();
+        const devices = [
+            ...(item.devices || []),
+            ...(item.capabilities?.devices || []),
+            ...((item.controls || []).find(
+                (control) => control.field === 'device',
+            )?.options || []),
+        ].map((entry) => typeof entry === 'string' ? entry : `${entry.value} ${entry.label}`)
+            .join(' ').toLocaleLowerCase();
+        const capabilityMatches = !capability
+            || (capability === 'speech' && (
+                item.pipeline || /acoustic|end.to.end|speech|voice/.test(capabilityText)
+            ))
+            || (capability === 'voice_conversion' && /conversion|clone/.test(capabilityText))
+            || (capability === 'vocoder' && /vocoder/.test(capabilityText))
+            || (capability === 'developer' && /trainer|developer|import|test/.test(capabilityText));
+        const verificationMatches = !verification
+            || (verification === 'verified' && /verified/.test(statuses))
+            || (verification === 'pending' && /pending|changed/.test(statuses))
+            || (verification === 'failed' && /failed|unavailable|missing/.test(statuses));
         return (!search || catalogText(item).includes(search))
             && (!family || catalogFamily(item).id === family)
-            && (!license || catalogLicense(item).includes(license));
+            && (!license || catalogLicense(item).includes(license))
+            && capabilityMatches
+            && verificationMatches
+            && (!device || devices.includes(device));
     }
 
     function statusBadges(statuses) {
@@ -897,6 +1443,25 @@
             badges.appendChild(badge);
         }
         return badges;
+    }
+
+    async function startCatalogFetch(path, label) {
+        const modelId = path?.catalog?.[0]?.id;
+        if (!modelId) throw new Error('This catalog entry has no installable model identifier.');
+        const response = await fetch('/api/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                label: `Fetched ${label}`,
+                command: 'cargo',
+                args: ['run', '--bin', 'tongues', '--', 'models', 'install', modelId],
+            }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        navigateWorkflow('operate');
+        await refreshOperateJobs();
+        return result;
     }
 
     function catalogPipelineCard(composition, discovery) {
@@ -921,29 +1486,62 @@
         const actions = document.createElement('div');
         actions.className = 'model-actions';
         if (composition.runnable) {
-            const use = document.createElement('button');
-            use.type = 'button';
-            use.className = 'secondary-button';
-            use.textContent = 'Use pipeline';
-            use.addEventListener('click', () => {
+            const selectComposition = () => {
                 state.discovery = mergeDiscovery(state.discovery, discovery);
                 state.pathKey = composition.id;
                 state.presetId = '';
                 renderPathSelector();
                 renderSelectedPath();
-                byId('synth-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.textContent = 'Use in Speak';
+            use.addEventListener('click', () => {
+                selectComposition();
+                navigateWorkflow('speak');
             });
             actions.appendChild(use);
+            const compose = document.createElement('button');
+            compose.type = 'button';
+            compose.className = 'secondary-button';
+            compose.textContent = 'Open in Compose';
+            compose.addEventListener('click', () => {
+                selectComposition();
+                navigateWorkflow('compose');
+            });
+            actions.appendChild(compose);
         } else if (path.install_command) {
             const install = document.createElement('button');
             install.type = 'button';
             install.className = 'secondary-button';
-            install.textContent = 'Copy install command';
+            install.textContent = 'Fetch';
             install.addEventListener('click', async () => {
-                await navigator.clipboard.writeText(path.install_command);
-                install.textContent = 'Install command copied';
+                install.disabled = true;
+                try {
+                    await startCatalogFetch(path, composition.display_name);
+                } catch (error) {
+                    byId('catalog-status').textContent = `Fetch failed: ${error.message}`;
+                    install.disabled = false;
+                }
             });
             actions.appendChild(install);
+        }
+        if (path.installed && path.verification_status !== 'verified') {
+            const verify = document.createElement('button');
+            verify.type = 'button';
+            verify.className = 'secondary-button';
+            verify.textContent = 'Verify';
+            verify.addEventListener('click', async () => {
+                verify.disabled = true;
+                try {
+                    await verifyModelIds((path.catalog || []).map((entry) => entry.id));
+                } catch (error) {
+                    byId('catalog-status').textContent = `Verification failed: ${error.message}`;
+                } finally {
+                    verify.disabled = false;
+                }
+            });
+            actions.appendChild(verify);
         }
         card.append(heading, facts, actions);
         return card;
@@ -1453,10 +2051,358 @@
         byId('duplex-timeline').classList.add('hidden');
     }
 
+    function pathForComposition(composition, discovery = state.discovery) {
+        if (!composition) return null;
+        const legacy = (discovery?.paths || []).find((path) => (
+            path.backend === composition.backend && path.model === composition.model
+        )) || {};
+        return {
+            ...legacy,
+            ...(composition.capabilities || {}),
+            ...composition,
+            id: composition.model,
+            complete: true,
+            acoustic_model: composition.pipeline.acoustic_model,
+            vocoder: composition.pipeline.vocoder,
+            voice_model: composition.pipeline.end_to_end,
+        };
+    }
+
+    async function synthesisPayload(path, values, context) {
+        const payload = buildPayload(path, values, context);
+        const tokenFields = ['pitch', 'energy', 'durations']
+            .filter((field) => Array.isArray(payload[field]));
+        let projection = null;
+        if (tokenFields.length) {
+            const projectionResponse = await fetch('/api/speech/project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: payload.text,
+                    variety: payload.variety,
+                    ...(payload.pipeline
+                        ? { pipeline: payload.pipeline }
+                        : { backend: payload.backend }),
+                }),
+            });
+            if (!projectionResponse.ok) throw new Error(await projectionResponse.text());
+            projection = await projectionResponse.json();
+            for (const field of tokenFields) {
+                if (payload[field].length !== projection.projected_token_count) {
+                    throw new Error(
+                        `${field} has ${payload[field].length} values, but the selected model projects ${projection.projected_token_count} tokens.`,
+                    );
+                }
+            }
+        }
+        return { payload, projection };
+    }
+
+    async function requestSynthesis(path, values, context) {
+        const { payload, projection } = await synthesisPayload(path, values, context);
+        const response = await fetch('/api/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const metadata = JSON.parse(response.headers.get('X-Tongues-Speech-Metadata') || '{}');
+        if (projection) {
+            metadata.diagnostics = { ...(metadata.diagnostics || {}), projection };
+        }
+        const blob = await response.blob();
+        return {
+            metadata,
+            blob,
+            url: URL.createObjectURL(blob),
+            payload,
+        };
+    }
+
+    function currentSynthesisContext(text = byId('text')?.value, path = selectedPath()) {
+        const emotionName = state.values.get('emotion');
+        return {
+            text,
+            variety: selectedVariety(path),
+            speaker: selectedSpeaker(path),
+            emotionVector: state.emotions.find((item) => item.name === emotionName)?.vector,
+        };
+    }
+
+    function comparisonRecipes() {
+        const builtIns = availableCompositions(state.discovery)
+            .filter((composition) => composition.runnable)
+            .map((composition) => ({
+                id: composition.id,
+                name: composition.display_name,
+                compositionId: composition.id,
+                builtIn: true,
+                controls: {},
+            }));
+        return [
+            ...builtIns,
+            ...state.userRecipes.filter((recipe) => (
+                builtIns.some((candidate) => candidate.compositionId === recipe.compositionId)
+            )),
+        ];
+    }
+
+    function renderCompareCandidates() {
+        const target = byId('compare-candidates');
+        if (!target || !state.discovery) return;
+        const checked = new Set(
+            [...target.querySelectorAll('input:checked')].map((input) => input.value),
+        );
+        const recipes = comparisonRecipes();
+        target.replaceChildren();
+        recipes.forEach((recipe, index) => {
+            const label = document.createElement('label');
+            label.className = 'compare-candidate';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.name = 'compare-recipe';
+            input.value = recipe.id;
+            input.checked = checked.size ? checked.has(recipe.id) : index < 2;
+            const text = document.createElement('span');
+            text.innerHTML = `<strong>${escapeHtml(recipe.name)}</strong><small>${
+                recipe.builtIn ? 'Built-in verified recipe' : 'Saved user recipe'
+            }</small>`;
+            label.append(input, text);
+            target.appendChild(label);
+        });
+    }
+
+    function selectedComparisonRecipes() {
+        const ids = new Set(
+            [...byId('compare-candidates').querySelectorAll('input:checked')]
+                .map((input) => input.value),
+        );
+        return comparisonRecipes().filter((recipe) => ids.has(recipe.id));
+    }
+
+    function comparisonLane(recipe, index, blind) {
+        const lane = document.createElement('article');
+        lane.className = 'compare-lane';
+        lane.dataset.recipeId = recipe.id;
+        lane.dataset.state = 'queued';
+        lane.innerHTML = `
+            <div class="speech-section-heading">
+                <div>
+                    <span class="runtime-badge" data-compare-state data-state="loading">Queued</span>
+                    <h3 data-compare-name>${escapeHtml(blind ? `Candidate ${String.fromCharCode(65 + index)}` : recipe.name)}</h3>
+                </div>
+                <label class="preferred-choice hidden">
+                    <input type="radio" name="preferred-recipe" value="${escapeAttribute(recipe.id)}">
+                    <span>Preferred</span>
+                </label>
+            </div>
+            <p data-compare-detail>${escapeHtml(blind ? 'Identity hidden' : (recipe.builtIn ? 'Built-in recipe' : 'Saved recipe'))}</p>
+            <audio class="hidden" controls></audio>
+            <details class="advanced-section hidden">
+                <summary>Execution details</summary>
+                <pre class="source-preview"></pre>
+            </details>
+        `;
+        lane.querySelector('input[name="preferred-recipe"]').addEventListener('change', (event) => {
+            state.comparePreferred = event.target.value;
+            byId('save-preferred').disabled = false;
+        });
+        return lane;
+    }
+
+    function revealComparison() {
+        const recipes = new Map(comparisonRecipes().map((recipe) => [recipe.id, recipe]));
+        byId('compare-results').querySelectorAll('.compare-lane').forEach((lane) => {
+            const recipe = recipes.get(lane.dataset.recipeId);
+            if (recipe) lane.querySelector('[data-compare-name]').textContent = recipe.name;
+            lane.querySelector('[data-compare-detail]').textContent = recipe?.builtIn
+                ? 'Built-in recipe'
+                : 'Saved user recipe';
+        });
+        byId('compare-blind').checked = false;
+    }
+
+    async function generateComparison() {
+        clearError(byId('compare-error'));
+        const recipes = selectedComparisonRecipes();
+        const text = byId('compare-text').value.trim();
+        if (!text) {
+            showError('Enter one shared prompt for the comparison.', byId('compare-error'));
+            return;
+        }
+        if (recipes.length < 2) {
+            showError('Select at least two complete recipes.', byId('compare-error'));
+            return;
+        }
+        for (const result of state.compareResults.values()) {
+            if (result.url) URL.revokeObjectURL(result.url);
+        }
+        state.compareResults.clear();
+        state.comparePreferred = '';
+        byId('save-preferred').disabled = true;
+        const blind = byId('compare-blind').checked;
+        const target = byId('compare-results');
+        target.replaceChildren(...recipes.map((recipe, index) => comparisonLane(recipe, index, blind)));
+        byId('generate-all').disabled = true;
+        byId('compare-status').textContent = `${recipes.length} candidates queued.`;
+        startRuntimePolling();
+        const tasks = recipes.map(async (recipe) => {
+            const lane = target.querySelector(`[data-recipe-id="${CSS.escape(recipe.id)}"]`);
+            const badge = lane.querySelector('[data-compare-state]');
+            badge.textContent = 'Running';
+            badge.dataset.state = 'busy';
+            lane.dataset.state = 'running';
+            const composition = state.discovery.compositions.find(
+                (candidate) => candidate.id === recipe.compositionId,
+            );
+            const path = pathForComposition(composition);
+            const values = new Map(state.values);
+            for (const [field, value] of Object.entries(recipe.controls || {})) values.set(field, value);
+            const context = {
+                text,
+                variety: recipe.variety || varietiesForPath(path)[0]?.id,
+                speaker: recipe.speaker || null,
+            };
+            try {
+                const result = await requestSynthesis(path, values, context);
+                result.recipe = { ...recipe, controls: Object.fromEntries(values) };
+                state.compareResults.set(recipe.id, result);
+                lane.dataset.state = 'completed';
+                badge.textContent = 'Completed';
+                badge.dataset.state = 'ready';
+                const audio = lane.querySelector('audio');
+                audio.src = result.url;
+                audio.classList.remove('hidden');
+                lane.querySelector('.preferred-choice').classList.remove('hidden');
+                const details = lane.querySelector('details');
+                details.classList.remove('hidden');
+                details.querySelector('pre').textContent = JSON.stringify({
+                    recipe: result.recipe,
+                    request: result.payload,
+                    synthesis: result.metadata,
+                }, null, 2);
+            } catch (error) {
+                state.compareResults.set(recipe.id, { recipe, error: error.message });
+                lane.dataset.state = 'failed';
+                badge.textContent = 'Failed';
+                badge.dataset.state = 'failed';
+                lane.querySelector('[data-compare-detail]').textContent = error.message;
+            }
+        });
+        await Promise.allSettled(tasks);
+        stopRuntimePolling();
+        const successes = [...state.compareResults.values()].filter((result) => result.url).length;
+        byId('compare-status').textContent = `${successes} of ${recipes.length} candidates completed. Results remain playable without regeneration.`;
+        byId('generate-all').disabled = false;
+    }
+
+    function humanJobLabel(job) {
+        if (job.label && !job.label.startsWith('cargo ')) return job.label;
+        const args = job.args || [];
+        const command = args.slice(args.indexOf('--') + 1);
+        if (command[0] === 'models' && command[1] === 'install') {
+            return `Fetched ${command[2] || 'speech model'}`;
+        }
+        if (command[0] === 'speak') return 'Generated speech utterance';
+        return command.join(' ') || job.label || 'Tongues job';
+    }
+
+    function operateJobCard(job) {
+        const details = document.createElement('details');
+        details.className = 'operate-job';
+        const summary = document.createElement('summary');
+        summary.innerHTML = `
+            <span><strong>${escapeHtml(humanJobLabel(job))}</strong>
+            <small>${escapeHtml(job.progress?.phase || job.status)}</small></span>
+            <span class="runtime-badge" data-state="${escapeAttribute(job.status)}">${escapeHtml(job.status)}</span>
+        `;
+        const body = document.createElement('div');
+        body.className = 'operate-job-detail';
+        body.innerHTML = `
+            <div class="progress-shell"><div class="progress-bar"></div></div>
+            <p>${escapeHtml(job.progress?.total
+                ? `${job.progress.current || 0} / ${job.progress.total}`
+                : job.progress?.phase || job.status)}</p>
+            ${job.status === 'running'
+                ? `<button type="button" class="danger-button" data-cancel-job="${escapeAttribute(job.id)}">Cancel</button>`
+                : ''}
+            <details class="advanced-section">
+                <summary>Command, logs, and artifacts</summary>
+                <code>${escapeHtml(`${job.command} ${(job.args || []).join(' ')}`)}</code>
+                <pre class="source-preview">Loading details…</pre>
+                <div class="job-artifacts"></div>
+            </details>
+        `;
+        const percent = job.progress?.total
+            ? Math.min(100, Math.round((job.progress.current || 0) / job.progress.total * 100))
+            : (job.status === 'running' ? 35 : 100);
+        body.querySelector('.progress-bar').style.width = `${percent}%`;
+        body.querySelector('[data-cancel-job]')?.addEventListener('click', async (event) => {
+            event.currentTarget.disabled = true;
+            const response = await fetch(
+                `/api/jobs/${encodeURIComponent(event.currentTarget.dataset.cancelJob)}/cancel`,
+                { method: 'POST' },
+            );
+            if (!response.ok) byId('operate-jobs').textContent = await response.text();
+            await refreshOperateJobs();
+        });
+        const raw = body.querySelector('.advanced-section');
+        raw.addEventListener('toggle', async () => {
+            if (!raw.open || raw.dataset.loaded) return;
+            raw.dataset.loaded = 'true';
+            const response = await fetch(`/api/jobs/${encodeURIComponent(job.id)}`);
+            if (!response.ok) {
+                raw.querySelector('pre').textContent = await response.text();
+                return;
+            }
+            const detail = await response.json();
+            raw.querySelector('pre').textContent = (detail.output || [])
+                .map((line) => `[${line.stream}] ${line.line}`).join('\n') || 'No log output.';
+            const artifacts = raw.querySelector('.job-artifacts');
+            artifacts.replaceChildren(...(detail.artifacts || []).map((artifact) => {
+                const item = document.createElement(artifact.download_url ? 'a' : 'span');
+                item.textContent = artifact.label || artifact.path;
+                if (artifact.download_url) item.href = artifact.download_url;
+                return item;
+            }));
+        });
+        details.append(summary, body);
+        return details;
+    }
+
+    async function refreshOperateJobs() {
+        if (!byId('operate-jobs')) return;
+        const response = await fetch('/api/jobs', { cache: 'no-store' });
+        if (!response.ok) throw new Error(await response.text());
+        const jobs = await response.json();
+        const target = byId('operate-jobs');
+        target.replaceChildren(...jobs.map(operateJobCard));
+        if (!jobs.length) {
+            const empty = document.createElement('p');
+            empty.className = 'catalog-empty';
+            empty.textContent = 'No background activity yet.';
+            target.appendChild(empty);
+        }
+        if (state.jobsTimer != null) window.clearTimeout(state.jobsTimer);
+        if (state.workflow === 'operate' && jobs.some((job) => job.status === 'running')) {
+            state.jobsTimer = window.setTimeout(() => {
+                refreshOperateJobs().catch(() => {});
+            }, 1500);
+        }
+    }
+
     async function init() {
         const page = byId('speech-page');
         if (!page) return;
         page.innerHTML = studioShell();
+        loadUserRecipes();
+        document.querySelectorAll('[data-studio-route]').forEach((link) => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                navigateWorkflow(workflowForPath(link.dataset.studioRoute));
+            });
+        });
+        setWorkflow(browser?.location?.pathname || '/speech');
         const submit = byId('submit-btn');
         try {
             await loadAuxiliaryDiscovery();
@@ -1489,7 +2435,13 @@
                 });
             }, 250);
         });
-        for (const id of ['catalog-family', 'catalog-license']) {
+        for (const id of [
+            'catalog-family',
+            'catalog-license',
+            'catalog-capability',
+            'catalog-verification',
+            'catalog-device',
+        ]) {
             byId(id).addEventListener('change', () => {
                 refreshCatalog().catch((error) => {
                     byId('catalog-status').textContent = `Catalog filter failed: ${error.message}`;
@@ -1508,12 +2460,39 @@
         });
 
         byId('speech-preset').addEventListener('change', (event) => {
+            const userRecipe = state.userRecipes.find(
+                (candidate) => candidate.id === event.target.value,
+            );
+            if (userRecipe) {
+                state.presetId = userRecipe.id;
+                applyRecipe(userRecipe);
+                return;
+            }
             const preset = state.discovery.presets.find(
                 (candidate) => candidate.id === event.target.value,
             );
-            if (!preset) return;
+            if (!preset) {
+                state.presetId = '';
+                return;
+            }
             state.pathKey = preset.composition_id;
             state.presetId = preset.id;
+            renderSelectedPath();
+        });
+        byId('speech-voice').addEventListener('change', (event) => {
+            const option = [...byId('speech-voice-options').options].find(
+                (candidate) => candidate.value === event.target.value,
+            );
+            const next = state.discovery.compositions.find(
+                (composition) => composition.id === option?.dataset.compositionId,
+            );
+            if (!next) {
+                showError('Choose a voice or language from the discovered complete recipes.');
+                return;
+            }
+            state.pathKey = next.id;
+            state.presetId = '';
+            renderPathSelector();
             renderSelectedPath();
         });
         const selectCompositionForStage = (stage, componentId) => {
@@ -1544,6 +2523,15 @@
         byId('pipeline-vocoder').addEventListener('change', (event) => {
             selectCompositionForStage('vocoder', event.target.value);
         });
+        document.querySelectorAll('.pipeline-stage[data-stage]').forEach((stage) => {
+            stage.addEventListener('click', (event) => {
+                if (event.target.closest('select')) return;
+                renderStageInspector(selectedPath(), stage.dataset.stage);
+            });
+            stage.addEventListener('focusin', () => {
+                renderStageInspector(selectedPath(), stage.dataset.stage);
+            });
+        });
         byId('variety').addEventListener('change', (event) => {
             const path = selectedPath();
             if (path) state.values.set(`variety:${path.id}`, event.target.value);
@@ -1563,10 +2551,12 @@
         byId('verify-all-models').addEventListener('click', async (event) => {
             const button = event.currentTarget;
             button.disabled = true;
+            byId('verification-status').textContent = 'Verifying changed installed models…';
             try {
                 await verifyModelIds(pendingVerificationIds(state.discovery));
+                byId('verification-status').textContent = 'Changed models verified.';
             } catch (error) {
-                showError(`Model verification failed: ${error.message}`);
+                byId('verification-status').textContent = `Verification failed: ${error.message}`;
             } finally {
                 renderInventory();
             }
@@ -1627,84 +2617,154 @@
             }
         });
 
+        byId('show-pipeline').addEventListener('click', () => navigateWorkflow('compose'));
+        byId('open-pipeline-in-speak').addEventListener('click', () => navigateWorkflow('speak'));
+        for (const id of ['add-current-to-compare', 'add-pipeline-to-compare']) {
+            byId(id).addEventListener('click', () => {
+                navigateWorkflow('compare');
+                const checkbox = [...byId('compare-candidates').querySelectorAll('input')]
+                    .find((input) => input.value === state.pathKey);
+                if (checkbox) checkbox.checked = true;
+            });
+        }
+        byId('copy-compose-cli').addEventListener('click', async (event) => {
+            await navigator.clipboard.writeText(byId('compose-cli').textContent);
+            event.currentTarget.textContent = 'Copied';
+        });
+        byId('duplicate-recipe').addEventListener('click', () => {
+            byId('compose-recipe-name').value = `${byId('compose-recipe-name').value || selectedPath()?.display_name} copy`;
+            state.presetId = '';
+        });
+        byId('save-recipe').addEventListener('click', () => {
+            const recipe = recipeSnapshot(byId('compose-recipe-name').value);
+            if (!recipe) {
+                showError('Select a complete pipeline before saving.', byId('compose-error'));
+                return;
+            }
+            const existingIndex = state.userRecipes.findIndex(
+                (candidate) => candidate.id === state.presetId,
+            );
+            if (existingIndex >= 0) {
+                recipe.id = state.userRecipes[existingIndex].id;
+                state.userRecipes.splice(existingIndex, 1, recipe);
+            } else {
+                state.userRecipes.push(recipe);
+            }
+            state.presetId = recipe.id;
+            persistUserRecipes();
+            renderPathSelector();
+            renderCompareCandidates();
+            byId('compose-test-status').textContent = `Saved ${recipe.name}.`;
+        });
+        byId('restore-recipe').addEventListener('click', () => {
+            const recipe = state.userRecipes.find((candidate) => candidate.id === state.presetId);
+            if (recipe) applyRecipe(recipe);
+            else {
+                const preset = state.discovery.presets.find(
+                    (candidate) => candidate.composition_id === state.pathKey,
+                );
+                if (preset) {
+                    state.presetId = preset.id;
+                    renderSelectedPath();
+                }
+            }
+            byId('compose-test-status').textContent = 'Recipe restored.';
+        });
+        byId('test-pipeline').addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            const path = selectedPath();
+            if (!path?.runnable) {
+                showError(
+                    path?.unavailable_reason || 'The pipeline is not executable.',
+                    byId('compose-error'),
+                );
+                return;
+            }
+            button.disabled = true;
+            byId('compose-test-status').textContent = 'Pipeline test running.';
+            try {
+                const result = await requestSynthesis(
+                    path,
+                    state.values,
+                    currentSynthesisContext(byId('text').value, path),
+                );
+                const audio = byId('compose-audio');
+                if (audio.src) URL.revokeObjectURL(audio.src);
+                audio.src = result.url;
+                audio.classList.remove('hidden');
+                byId('compose-test-status').textContent = 'Pipeline test completed.';
+            } catch (error) {
+                showError(`Pipeline test failed: ${error.message}`, byId('compose-error'));
+                byId('compose-test-status').textContent = 'Pipeline test failed.';
+            } finally {
+                button.disabled = !selectedPath()?.runnable;
+            }
+        });
+        byId('generate-all').addEventListener('click', () => {
+            generateComparison().catch((error) => {
+                showError(`Comparison failed: ${error.message}`, byId('compare-error'));
+                byId('generate-all').disabled = false;
+            });
+        });
+        byId('reveal-comparison').addEventListener('click', revealComparison);
+        byId('save-preferred').addEventListener('click', () => {
+            const result = state.compareResults.get(state.comparePreferred);
+            if (!result?.recipe) return;
+            const composition = state.discovery.compositions.find(
+                (candidate) => candidate.id === result.recipe.compositionId,
+            );
+            if (!composition) return;
+            state.pathKey = composition.id;
+            const path = pathForComposition(composition);
+            const recipe = recipeSnapshot(`${result.recipe.name} preferred`, path);
+            recipe.controls = result.recipe.controls || {};
+            recipe.variety = result.payload?.variety || recipe.variety;
+            recipe.speaker = result.payload?.speaker || recipe.speaker;
+            state.userRecipes.push(recipe);
+            state.presetId = recipe.id;
+            persistUserRecipes();
+            renderPathSelector();
+            renderCompareCandidates();
+            byId('compare-status').textContent = `Saved ${recipe.name}.`;
+        });
+        byId('refresh-operate-jobs').addEventListener('click', () => {
+            refreshOperateJobs().catch((error) => {
+                byId('operate-jobs').textContent = `Activity unavailable: ${error.message}`;
+            });
+        });
+
         byId('synth-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             clearError();
             const path = selectedPath();
-            const variety = varietiesForPath(path).length === 1
-                ? varietiesForPath(path)[0].id
-                : byId('variety').value;
-            const emotionName = state.values.get('emotion');
-            const emotionVector = state.emotions.find((item) => item.name === emotionName)?.vector;
-            let payload;
-            let projection = null;
-            try {
-                payload = buildPayload(path, state.values, {
-                    text: byId('text').value,
-                    variety,
-                    speaker: byId('speaker-control').classList.contains('hidden')
-                        ? null
-                        : byId('speaker').value.trim(),
-                    emotionVector,
-                });
-                const tokenFields = ['pitch', 'energy', 'durations']
-                    .filter((field) => Array.isArray(payload[field]));
-                if (tokenFields.length) {
-                    const projectionResponse = await fetch('/api/speech/project', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            text: payload.text,
-                            variety: payload.variety,
-                            ...(payload.pipeline
-                                ? { pipeline: payload.pipeline }
-                                : { backend: payload.backend }),
-                        }),
-                    });
-                    if (!projectionResponse.ok) {
-                        throw new Error(await projectionResponse.text());
-                    }
-                    projection = await projectionResponse.json();
-                    for (const field of tokenFields) {
-                        if (payload[field].length !== projection.projected_token_count) {
-                            throw new Error(
-                                `${field} has ${payload[field].length} values, but the selected model projects ${projection.projected_token_count} tokens.`,
-                            );
-                        }
-                    }
-                }
-            } catch (error) {
-                showError(error.message);
-                return;
-            }
             submit.disabled = true;
             submit.classList.add('loading');
-            byId('speech-submit-status').textContent = 'Synthesis in progress.';
+            byId('speech-submit-status').textContent = 'Speech queued.';
+            byId('speech-result-state').dataset.state = 'loading';
+            byId('speech-result-state').textContent = 'Queued';
             byId('result-container').classList.add('hidden');
             hideDuplexResult();
             startRuntimePolling();
             try {
-                const response = await fetch('/api/speak', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                if (!response.ok) throw new Error(await response.text());
-                const metadata = JSON.parse(response.headers.get('X-Tongues-Speech-Metadata') || '{}');
-                if (projection) {
-                    metadata.diagnostics = {
-                        ...(metadata.diagnostics || {}),
-                        projection,
-                    };
-                }
-                const blob = await response.blob();
+                byId('speech-submit-status').textContent = 'Speech synthesis running.';
+                byId('speech-result-state').dataset.state = 'busy';
+                byId('speech-result-state').textContent = 'Running';
+                const result = await requestSynthesis(
+                    path,
+                    state.values,
+                    currentSynthesisContext(byId('text').value, path),
+                );
                 if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
-                state.audioUrl = URL.createObjectURL(blob);
-                renderResult(metadata, state.audioUrl);
+                state.audioUrl = result.url;
+                renderResult(result.metadata, state.audioUrl);
+                byId('speech-result-state').dataset.state = 'ready';
+                byId('speech-result-state').textContent = 'Completed';
                 byId('speech-submit-status').textContent = 'Speech synthesis complete.';
                 byId('audio-player').play().catch(() => {});
             } catch (error) {
                 showError(`Synthesis failed: ${error.message}`);
+                byId('speech-result-state').dataset.state = 'failed';
+                byId('speech-result-state').textContent = 'Failed';
                 byId('speech-submit-status').textContent = 'Speech synthesis failed.';
             } finally {
                 stopRuntimePolling();
@@ -1731,15 +2791,20 @@
         compatibilityFor,
         compositionGenerator,
         controlsForPath,
+        cliRepresentation,
         duplexLines,
         init,
         parseNumberArray,
         pathKey,
+        pathForComposition,
         mergeDiscovery,
         pendingVerificationIds,
         preservesVerificationProgress,
+        recipeSnapshot,
         selectInitialPath,
         selectInitialComposition,
+        setWorkflow,
         varietiesForPath,
+        workflowForPath,
     };
 }));

@@ -319,6 +319,7 @@ fn build_app(state: AppState) -> Router {
         .route("/styletts2/", get(serve_app_index))
         .route("/speech", get(serve_app_index))
         .route("/speech/", get(serve_app_index))
+        .route("/speech/{*path}", get(serve_app_index))
         .route("/jobs", get(serve_app_index))
         .route("/jobs/", get(serve_app_index))
         .route("/pronunciation-demo", get(serve_app_index))
@@ -892,6 +893,7 @@ const ALLOWED_JOB_PREFIXES: &[&[&str]] = &[
     &["interpretation", "stream"],
     &["interpretation", "train"],
     &["models", "fetch"],
+    &["models", "install"],
     &["models", "list"],
     &["models", "menu"],
     &["models", "path"],
@@ -1743,6 +1745,9 @@ fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> R
             validate_job_argument_value(workspace_root, command_prefix, token, value)?;
             cursor += 2;
             continue;
+        }
+        if token.starts_with("--") {
+            return Err(format!("job flag `{token}` is not approved"));
         }
         validate_job_positional_value(workspace_root, command_prefix, token)?;
         cursor += 1;

@@ -882,14 +882,36 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function renderNavigation() {
     const nav = byId('primary-nav');
-    const groups = [...new Set(commandPages.map((page) => page.group))];
-    nav.innerHTML = groups.map((group) => {
+    const primaryPages = commandPages.filter((page) => (
+        ['/speech', '/pronunciation-demo'].includes(page.path)
+    ));
+    const commandOnlyPages = commandPages.filter((page) => !primaryPages.includes(page));
+    const groups = [...new Set(commandOnlyPages.map((page) => page.group))];
+    const primaryLinks = primaryPages.map(
+        (page) => `<a href="${page.path}" data-route="${page.path}">${page.title}</a>`,
+    ).join('');
+    const commandGroups = groups.map((group) => {
         const links = commandPages
-            .filter((page) => page.group === group)
+            .filter((page) => page.group === group && commandOnlyPages.includes(page))
             .map((page) => `<a href="${page.path}" data-route="${page.path}">${page.title}</a>`)
             .join('');
         return `<div class="nav-group"><div class="nav-heading">${group}</div>${links}</div>`;
-    }).join('') + '<div class="nav-group"><div class="nav-heading">Runtime</div><a href="/jobs" data-route="/jobs">Background Jobs</a></div>';
+    }).join('');
+    nav.innerHTML = `
+        <div class="nav-group">
+            <div class="nav-heading">Workspaces</div>
+            ${primaryLinks}
+        </div>
+        <details class="nav-advanced">
+            <summary>Commands &amp; Advanced</summary>
+            <div class="nav-advanced-body">
+                ${commandGroups}
+                <div class="nav-group">
+                    <div class="nav-heading">Runtime</div>
+                    <a href="/jobs" data-route="/jobs">Background Jobs</a>
+                </div>
+            </div>
+        </details>`;
 
     const handleNavActivation = (event) => {
         const link = event.target.closest('a[data-route]');
@@ -966,9 +988,25 @@ function renderRoute() {
     }
 
     byId('page-kicker').textContent = page.group;
-    byId('page-title').textContent = page.title;
-    byId('page-summary').textContent = page.summary;
-    byId('page-command').textContent = page.command;
+    if (page.path === '/speech') {
+        const workflows = {
+            '/speech': ['Speak', 'Generate and export speech from a complete, verified recipe.'],
+            '/speech/compose': ['Compose', 'Inspect and assemble contract-valid speech pipelines.'],
+            '/speech/compare': ['Compare', 'Listen to several complete recipes using one shared prompt.'],
+            '/speech/catalog': ['Catalog', 'Find ready voices, installable model families, and developer components.'],
+            '/speech/operate': ['Operate', 'Inspect runtime state, verification, jobs, failures, and evidence.'],
+        };
+        const workflow = workflows[path] || workflows['/speech'];
+        byId('page-kicker').textContent = 'Speech Studio';
+        byId('page-title').textContent = workflow[0];
+        byId('page-summary').textContent = workflow[1];
+        byId('page-command').textContent = 'speech workbench';
+        window.SpeechStudio?.setWorkflow(path, { focus: false });
+    } else {
+        byId('page-title').textContent = page.title;
+        byId('page-summary').textContent = page.summary;
+        byId('page-command').textContent = page.command;
+    }
     activePage = page;
 
     if (!page.implemented) {
