@@ -19,6 +19,8 @@ use crate::open_model_package;
 pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const INSTALLED_MODEL_SCHEMA_VERSION: u32 = 1;
 pub const EMBEDDED_MODEL_CATALOG: &str = include_str!("../catalog/models-v1.json");
+pub const EMBEDDED_FAIRSEQ_MODEL_CATALOG: &str =
+    include_str!("../catalog/fairseq-mms-models-v1.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalog {
@@ -50,6 +52,9 @@ pub struct ModelCatalogEntry {
     pub sample_rate_hz: Option<u32>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Ordered preprocessing contracts required before model tokenization.
+    #[serde(default)]
+    pub preprocessing: Vec<String>,
     pub license: CatalogLicense,
     pub provenance: CatalogProvenance,
     #[serde(default)]
@@ -155,7 +160,9 @@ pub struct ModelStore {
 
 impl ModelCatalog {
     pub fn embedded() -> Result<Self> {
-        Self::from_json(EMBEDDED_MODEL_CATALOG)
+        let mut catalog = Self::from_json(EMBEDDED_MODEL_CATALOG)?;
+        catalog.merge(Self::from_json(EMBEDDED_FAIRSEQ_MODEL_CATALOG)?)?;
+        Ok(catalog)
     }
 
     pub fn from_json(source: &str) -> Result<Self> {
@@ -257,6 +264,7 @@ impl ModelCatalog {
                 .chain(entry.languages.iter().map(String::as_str))
                 .chain(entry.varieties.iter().map(String::as_str))
                 .chain(entry.capabilities.iter().map(String::as_str))
+                .chain(entry.preprocessing.iter().map(String::as_str))
                 .any(|value| value.to_ascii_lowercase().contains(&query))
             })
             .collect::<Vec<_>>();
@@ -283,6 +291,13 @@ impl ModelCatalogEntry {
                 .iter()
                 .all(|value| !value.trim().is_empty()),
             "catalog model `{}` has an empty compatibility identifier",
+            self.id
+        );
+        ensure!(
+            self.preprocessing
+                .iter()
+                .all(|value| !value.trim().is_empty()),
+            "catalog model `{}` has an empty preprocessing requirement",
             self.id
         );
         ensure!(
@@ -524,6 +539,7 @@ impl ModelStore {
                 .as_ref()
                 .map(|audio| audio.sample_rate_hz),
             capabilities: vec!["tongues-model-package".into()],
+            preprocessing: Vec::new(),
             license: CatalogLicense {
                 expression: package.manifest.license.expression.clone(),
                 evidence: package.manifest.provenance.source.clone(),
@@ -1265,6 +1281,7 @@ mod tests {
             speakers: CatalogSpeakers::default(),
             sample_rate_hz: None,
             capabilities: Vec::new(),
+            preprocessing: Vec::new(),
             license: CatalogLicense {
                 expression: "MIT".into(),
                 evidence: "https://example.invalid/license".into(),
@@ -1311,6 +1328,7 @@ mod tests {
             speakers: CatalogSpeakers::default(),
             sample_rate_hz: None,
             capabilities: vec!["fixture".into()],
+            preprocessing: Vec::new(),
             license: CatalogLicense {
                 expression: "LicenseRef-Private".into(),
                 evidence: "https://example.invalid/private-license".into(),
@@ -1355,9 +1373,35 @@ mod tests {
     #[test]
     fn search_is_backend_neutral() {
         let catalog = ModelCatalog::embedded().expect("embedded catalog");
-        assert_eq!(catalog.search("coqui").len(), 8);
+        let coqui = catalog.search("coqui");
+        assert!(coqui.iter().any(|entry| entry.id == "vits-vctk"));
+        assert!(
+            coqui.iter().any(|entry| entry.id == "fairseq-mms-vits-eng"),
+            "compatibility metadata should make Fairseq models discoverable by Coqui ancestry"
+        );
         assert_eq!(catalog.search("onnx").len(), 4);
         assert_eq!(catalog.search("109").len(), 0);
+        assert!(!catalog.search("uroman").is_empty());
+    }
+
+    #[test]
+    fn embedded_fairseq_catalog_has_the_pinned_upstream_inventory() {
+        let catalog = ModelCatalog::embedded().expect("embedded catalog");
+        let fairseq = catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.provenance.format == "fairseq-mms-vits")
+            .collect::<Vec<_>>();
+        assert_eq!(fairseq.len(), 1_143);
+
+        let english = catalog.find("tts_models/eng/fairseq/vits").unwrap();
+        assert_eq!(english.id, "fairseq-mms-vits-eng");
+        assert_eq!(english.languages, ["eng"]);
+        assert!(
+            english.varieties.is_empty(),
+            "a language id is not evidence for pronunciation-variety coverage"
+        );
+        assert_eq!(english.artifacts.len(), 3);
     }
 
     #[test]

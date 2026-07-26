@@ -11,3 +11,16 @@ Large upstream model archives remain outside the repository. Their SHA-256
 digests are pinned in `scripts/coqui-reference.py`, and
 `scripts/speech-conformance.sh` fails explicitly when any required artifact is
 missing.
+
+The harness also requires the pinned Glow-TTS LJSpeech config and checkpoint
+and runs real native inference plus safe-import inspection. SC-GlowTTS is not
+counted as an available conformance artifact: the historical official registry
+left both the VCTK acoustic model and its paired vocoder license fields empty.
+
+`fairseq-mms-vits-conformance.json` pins the original English MMS checkpoint,
+the exact Fairseq blank-insertion and vocabulary-filtering behavior for
+English, pre-romanized Amharic, and native-script Thai, plus a seeded waveform
+probe produced by the upstream Fairseq runtime. Regenerate the probe with
+`scripts/fairseq-mms-reference.py`; the script records its Fairseq revision and
+Torch version so reference drift is visible. The production adapter is native
+Rust and never invokes Python.

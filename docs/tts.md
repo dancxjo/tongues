@@ -254,6 +254,65 @@ permission to redistribute. The current Coqui `v0.6.1` model registry leaves
 the relevant licenses `TBD` or blank, so those entries use `NOASSERTION` rather
 than incorrectly inheriting the source repository's license.
 
+### Fairseq MMS VITS
+
+The embedded catalog also contains the 1,143 language- and script-specific
+Fairseq MMS VITS checkpoints in Meta's pinned source inventory. Every entry
+records the original `G_100000.pth`, `config.json`, and `vocab.txt` as separate
+size- and SHA-256-verified artifacts. These models are published under
+CC-BY-NC-4.0, so inspect the license before use:
+
+```sh
+cargo run --bin tongues -- models inspect fairseq-mms-vits-eng
+cargo run --bin tongues -- models install fairseq-mms-vits-eng
+
+# The verified installation is sufficient; no Python or network is used.
+TONGUES_OFFLINE=1 cargo run --bin tongues -- speak \
+  --backend fairseq --model fairseq-mms-vits-eng \
+  --output hello.wav "This is a test."
+```
+
+Coqui's `tts_models/eng/fairseq/vits` name is retained as a catalog alias.
+Script-qualified upstream ids remain separate entries, and language ids do not
+claim pronunciation-variety support that the source metadata does not
+establish. Models whose original config names a `.uroman` training input
+require the same preprocessing at inference time. Point
+`TONGUES_UROMAN` at a local `uroman.pl` or compatible executable; if it is
+absent or fails, synthesis stops with an explicit preprocessing error instead
+of silently feeding the wrong alphabet.
+
+The server uses the same verified installation and model id:
+
+```json
+{
+  "backend": "fairseq",
+  "model": "fairseq-mms-vits-eng",
+  "text": "This is a test.",
+  "variety": "en"
+}
+```
+
+Catalog maintenance is split into two deterministic stages. The source
+snapshot records the upstream language/script inventory, license evidence, and
+all three artifact hashes; the Rust generator validates that metadata and
+writes the runtime catalog atomically:
+
+```sh
+scripts/generate-fairseq-mms-source.py \
+  --checkout /path/to/facebook-mms-tts \
+  --language-index /path/to/all-tts-languages.html \
+  --out crates/tongues-tts/catalog/fairseq-mms-source-v1.json
+cargo run --bin tongues -- models generate-fairseq-catalog \
+  --source crates/tongues-tts/catalog/fairseq-mms-source-v1.json \
+  --language-index /path/to/all-tts-languages.html \
+  --out crates/tongues-tts/catalog/fairseq-mms-models-v1.json
+```
+
+Both stages detect additions, removals, and renamed language rows. Catalog
+validation rejects missing license evidence, checksums, sizes, scripts, or
+preprocessing metadata. CI tests the committed 1,143-entry snapshot and a
+small cross-script fixture matrix; it does not download every checkpoint.
+
 The server exposes the same metadata and verification state at
 `GET /api/models/catalog`. Resident speech backends pass catalog verification
 before model construction, so file presence alone is never treated as an

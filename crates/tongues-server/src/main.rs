@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{
-        Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
+        Html, IntoResponse, Response,
     },
     routing::{get, post},
+    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
@@ -22,12 +22,12 @@ use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicU8, Ordering},
+    Arc, Mutex,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Semaphore, broadcast};
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tokio::sync::{broadcast, Semaphore};
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
@@ -2325,8 +2325,8 @@ fn resident_engine_key(
         ));
     }
     Ok(match backend {
-        "onnx" => format!(
-            "onnx-{}-{device_key}",
+        "onnx" | "fairseq" => format!(
+            "{backend}-{}-{device_key}",
             speech_model_id(&resolve_mortar_home(), backend, payload.model.as_deref(),)?
         ),
         "styletts2" => "styletts2-en-us".into(),
@@ -2378,6 +2378,10 @@ const RESIDENT_BACKEND_PROVIDERS: &[ResidentBackendProvider] = &[
     ResidentBackendProvider {
         id: "vits",
         load: load_vits_provider,
+    },
+    ResidentBackendProvider {
+        id: "fairseq",
+        load: load_fairseq_provider,
     },
     ResidentBackendProvider {
         id: "yourtts",
@@ -2468,6 +2472,64 @@ fn load_vits_provider(
                 capabilities,
                 device,
                 load_resident_vits::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
+            )))
+        }
+    }
+}
+
+fn load_fairseq_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    let model = speech_model_id(home, "fairseq", payload.model.as_deref())?;
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )?;
+    let entry = catalog
+        .find(&model)
+        .with_context(|| format!("Fairseq MMS model `{model}` is not in the catalog"))?;
+    let checkpoint = entry
+        .artifacts
+        .iter()
+        .find(|artifact| {
+            FsPath::new(&artifact.install_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                == Some(tongues_tts::FAIRSEQ_MMS_CHECKPOINT)
+        })
+        .context("Fairseq MMS catalog entry has no checkpoint artifact")?;
+    let model_dir = home
+        .join(&checkpoint.install_path)
+        .parent()
+        .context("Fairseq MMS checkpoint path has no parent")?
+        .to_path_buf();
+    let language = entry
+        .languages
+        .first()
+        .context("Fairseq MMS catalog entry has no language identity")?;
+    match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                tongues_tts::BurnVitsSpeech::<NdArray<f32>>::load_fairseq(
+                    model_dir,
+                    language,
+                    NdArrayDevice::Cpu,
+                )?,
+            )))
+        }
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                tongues_tts::BurnVitsSpeech::<Cuda<f32, i32>>::load_fairseq(
+                    model_dir,
+                    language,
+                    CudaDevice::new(index),
+                )?,
             )))
         }
     }
@@ -2635,6 +2697,27 @@ fn resolve_legacy_composition(
     model: Option<&str>,
 ) -> anyhow::Result<tongues_tts::RegisteredSpeechComposition> {
     let model = speech_model_id(home, backend, model)?;
+    if backend == "fairseq" {
+        let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+            &tongues_tts::private_catalog_paths_from_environment(),
+        )?;
+        let entry = catalog
+            .find(&model)
+            .context("resolved Fairseq MMS model disappeared from the catalog")?;
+        let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
+            format!("projector/{}", entry.id),
+            entry.id.clone(),
+            Vec::new(),
+        );
+        return Ok(tongues_tts::RegisteredSpeechComposition {
+            id: pipeline.canonical_id()?,
+            display_name: entry.display_name.clone(),
+            backend: "fairseq".into(),
+            model: entry.id.clone(),
+            pipeline,
+            recommended: entry.id == "fairseq-mms-vits-eng",
+        });
+    }
     registered_speech_compositions_at(home)
         .into_iter()
         .find(|composition| composition.backend == backend && composition.model == model)
@@ -2694,7 +2777,7 @@ fn speech_model_id(
         "freevc" => Some("freevc24-vctk"),
         "styletts2" => Some("styletts2-en-us"),
         "mock" => Some("deterministic-mock"),
-        "onnx" => None,
+        "onnx" | "fairseq" => None,
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     };
     if let Some(expected) = fixed_model {
@@ -2705,6 +2788,21 @@ fn speech_model_id(
             );
         }
         return Ok(expected.into());
+    }
+
+    if backend == "fairseq" {
+        let requested = requested_model.unwrap_or("fairseq-mms-vits-eng");
+        let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+            &tongues_tts::private_catalog_paths_from_environment(),
+        )?;
+        let entry = catalog
+            .find(requested)
+            .with_context(|| format!("unknown catalog model `{requested}`"))?;
+        anyhow::ensure!(
+            entry.provenance.format == "fairseq-mms-vits",
+            "catalog model `{requested}` is not a Fairseq MMS VITS checkpoint"
+        );
+        return Ok(entry.id.clone());
     }
 
     let model = requested_model
@@ -2830,6 +2928,46 @@ fn speech_backend_capabilities(
                 devices,
                 output: output(22_050),
                 provenance: vec!["Published Coqui release artifact".into()],
+            }
+        }
+        "fairseq" => {
+            let model = speech_model_id(home, backend, model)?;
+            let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+                &tongues_tts::private_catalog_paths_from_environment(),
+            )?;
+            let entry = catalog
+                .find(&model)
+                .context("resolved Fairseq MMS model disappeared from the catalog")?;
+            tongues_tts::BackendCapabilities {
+                backend: "fairseq".into(),
+                model: entry.id.clone(),
+                family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+                // The selected checkpoint consumes raw graphemes. Catalog
+                // `varieties` remains the authority for voice-variety claims;
+                // runtime planning may use any Tongues text plan.
+                varieties: tongues_tts::CapabilityValue::Any,
+                languages: tongues_tts::LanguageCapabilities {
+                    values: tongues_tts::CapabilityValue::Listed(
+                        entry
+                            .languages
+                            .iter()
+                            .map(|language| tongues_tts::NamedCapability::new(language, language))
+                            .collect(),
+                    ),
+                    required: false,
+                    numeric_ids: false,
+                },
+                speakers: unsupported_speakers(),
+                styles: unsupported_styles(),
+                reference_audio: Default::default(),
+                speed: true,
+                pitch: Default::default(),
+                energy: Default::default(),
+                durations: false,
+                seed: true,
+                devices,
+                output: output(entry.sample_rate_hz.unwrap_or(16_000)),
+                provenance: vec![entry.provenance.source.clone()],
             }
         }
         "yourtts" => {
@@ -4357,15 +4495,14 @@ fn speech_path_catalog_ids(
         ],
         "fastpitch" => vec!["fastpitch-ljspeech".into(), "hifigan-v2-ljspeech".into()],
         "vits" => vec!["vits-vctk".into()],
+        "fairseq" => vec![speech_model_id(home, backend, model)?],
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
         "styletts2" => vec!["styletts2-en-us".into()],
-        "onnx" => vec![
-            model
-                .filter(|model| !model.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or(speech_model_id(home, backend, None)?),
-        ],
+        "onnx" => vec![model
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(speech_model_id(home, backend, None)?)],
         "mock" => Vec::new(),
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })
@@ -4389,6 +4526,12 @@ fn speech_path_components(
             vec!["fastpitch".into(), "hifigan".into()],
         ),
         "vits" => (None, None, Some("vits-vctk".into()), vec!["vits".into()]),
+        "fairseq" => (
+            None,
+            None,
+            Some(model.into()),
+            vec!["fairseq-mms-vits".into(), "vits".into()],
+        ),
         "yourtts" => (
             None,
             None,
@@ -4712,7 +4855,7 @@ fn speech_control_discovery(
             "Diffusion embedding guidance scale.",
         ));
     }
-    if matches!(backend, "vits" | "yourtts" | "onnx") {
+    if matches!(backend, "vits" | "fairseq" | "yourtts" | "onnx") {
         controls.push(speech_number_control(
             "noise_scale",
             "Noise scale",
@@ -5231,6 +5374,7 @@ fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
         "burn" => "SpeedySpeech + HiFi-GAN",
         "fastpitch" => "FastPitch + HiFi-GAN",
         "vits" => "VITS VCTK",
+        "fairseq" => model,
         "yourtts" => "YourTTS Multilingual",
         "freevc" => "FreeVC24 Voice Conversion",
         "styletts2" => "StyleTTS2 en-US",
@@ -5262,6 +5406,26 @@ fn speech_backend_installation_error(
             home.join(VITS_RELATIVE_DIR).join("model_file.pth"),
             home.join(VITS_RELATIVE_DIR).join("speaker_ids.json"),
         ],
+        "fairseq" => {
+            let model = match speech_model_id(home, backend, model) {
+                Ok(model) => model,
+                Err(error) => return Some(error.to_string()),
+            };
+            let catalog = match tongues_tts::ModelCatalog::with_private_catalogs(
+                &tongues_tts::private_catalog_paths_from_environment(),
+            ) {
+                Ok(catalog) => catalog,
+                Err(error) => return Some(error.to_string()),
+            };
+            let Some(entry) = catalog.find(&model) else {
+                return Some(format!("unknown Fairseq MMS catalog model `{model}`"));
+            };
+            entry
+                .artifacts
+                .iter()
+                .map(|artifact| home.join(&artifact.install_path))
+                .collect()
+        }
         "yourtts" => [
             "config.json",
             "model_file.pth.tar",
@@ -6460,11 +6624,9 @@ mod tests {
                 && preset.composition_id
                     == preset.pipeline.canonical_id().expect("preset pipeline id")
         }));
-        assert!(
-            discovery
-                .verification_ids
-                .contains(&"fastpitch-ljspeech".into())
-        );
+        assert!(discovery
+            .verification_ids
+            .contains(&"fastpitch-ljspeech".into()));
         let fastpitch = discovery
             .paths
             .iter()
@@ -6481,12 +6643,10 @@ mod tests {
         assert!(fastpitch.controls.iter().any(|control| {
             control.field == "pitch" && control.kind == "number_array" && control.group == "expert"
         }));
-        assert!(
-            fastpitch
-                .compatible_vocoders
-                .iter()
-                .any(|vocoder| vocoder.component_id == "hifigan-v2-ljspeech" && vocoder.compatible)
-        );
+        assert!(fastpitch
+            .compatible_vocoders
+            .iter()
+            .any(|vocoder| vocoder.component_id == "hifigan-v2-ljspeech" && vocoder.compatible));
         assert!(fastpitch.compatible_vocoders.iter().any(|vocoder| {
             vocoder.component_id == "multiband-melgan-ljspeech"
                 && !vocoder.compatible
@@ -6539,12 +6699,10 @@ mod tests {
             fastpitch_component.stage,
             tongues_tts::SpeechPipelineStage::AcousticModel
         );
-        assert!(
-            fastpitch_component
-                .control_fields
-                .iter()
-                .any(|field| field == "pitch")
-        );
+        assert!(fastpitch_component
+            .control_fields
+            .iter()
+            .any(|field| field == "pitch"));
         assert_eq!(fastpitch_component.produces[0].kind, "mel_spectrogram");
 
         let speedy = discovery
@@ -6579,13 +6737,11 @@ mod tests {
             &verification,
         );
         assert!(verified_discovery.verification_ids.is_empty());
-        assert!(
-            verified_discovery
-                .paths
-                .iter()
-                .find(|path| path.capabilities.backend == "fastpitch")
-                .is_some_and(|path| path.verified && !path.verification_pending)
-        );
+        assert!(verified_discovery
+            .paths
+            .iter()
+            .find(|path| path.capabilities.backend == "fastpitch")
+            .is_some_and(|path| path.verified && !path.verification_pending));
 
         std::fs::remove_dir_all(&mortar_home).expect("remove discovery home");
     }
@@ -6623,12 +6779,10 @@ mod tests {
             "pipeline": normalized.pipeline,
         }))
         .expect("ambiguous request shape");
-        assert!(
-            normalize_speak_request(ambiguous)
-                .err()
-                .expect("ambiguous request rejected")
-                .contains("cannot be combined")
-        );
+        assert!(normalize_speak_request(ambiguous)
+            .err()
+            .expect("ambiguous request rejected")
+            .contains("cannot be combined"));
     }
 
     fn listed_capability_ids(value: &tongues_tts::CapabilityValue) -> Vec<&str> {
@@ -6756,13 +6910,11 @@ mod tests {
             capabilities.devices,
             vec![tongues_tts::SpeechDeviceRequest::Cpu]
         );
-        assert!(
-            registered_speech_compositions_at(FsPath::new("/tmp"))
-                .iter()
-                .any(|composition| {
-                    composition.backend == "freevc" && composition.model == "freevc24-vctk"
-                })
-        );
+        assert!(registered_speech_compositions_at(FsPath::new("/tmp"))
+            .iter()
+            .any(|composition| {
+                composition.backend == "freevc" && composition.model == "freevc24-vctk"
+            }));
     }
 
     #[test]
@@ -6908,8 +7060,13 @@ mod tests {
             speech_model_id(home, "onnx", Some("voice-amy-medium")).unwrap(),
             "voice-amy-medium"
         );
+        assert_eq!(
+            speech_model_id(home, "fairseq", Some("tts_models/eng/fairseq/vits")).unwrap(),
+            "fairseq-mms-vits-eng"
+        );
         assert!(speech_model_id(home, "onnx", Some("voice-unknown")).is_err());
         assert!(speech_model_id(home, "vits", Some("voice-amy-medium")).is_err());
+        assert!(speech_model_id(home, "fairseq", Some("vits-vctk")).is_err());
     }
 
     #[test]

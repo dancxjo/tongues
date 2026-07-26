@@ -21,6 +21,10 @@ use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use speaking::{SpeakerReferenceSource, UtterancePlan};
 
 use crate::burn_vits_flow::expand_prior_statistics_with_frames;
+use crate::fairseq_vits::{
+    FairseqVitsConfig, FairseqVitsProjector, FairseqVitsTokenizer, FAIRSEQ_MMS_CHECKPOINT,
+    FAIRSEQ_MMS_CONFIG, FAIRSEQ_MMS_VOCAB,
+};
 use crate::profiling::{
     finish_backend_stage, finish_host_stage, reborrow_profiler, record_load_stage,
 };
@@ -40,6 +44,28 @@ use crate::{LinguisticProjector, ModelInputContract};
 
 const DEFAULT_MAX_OUTPUT_FRAMES: usize = 65_536;
 const STREAM_LATENT_FRAMES: usize = 64;
+
+#[derive(Debug, Clone)]
+enum VitsProjector {
+    Coqui(VitsLinguisticProjector),
+    Fairseq(FairseqVitsProjector),
+}
+
+impl VitsProjector {
+    fn contract(&self) -> &ModelInputContract {
+        match self {
+            Self::Coqui(projector) => projector.contract(),
+            Self::Fairseq(projector) => projector.contract(),
+        }
+    }
+
+    fn project(&self, plan: &UtterancePlan) -> Result<crate::PhonemeTokenIds> {
+        match self {
+            Self::Coqui(projector) => projector.project(plan),
+            Self::Fairseq(projector) => projector.project(plan),
+        }
+    }
+}
 
 fn speaker_embedding_tensor(path: &str, _container: &str) -> bool {
     path.starts_with("emb_g.")
@@ -160,7 +186,7 @@ impl<B: Backend> LanguageEmbedding<B> {
 /// Native end-to-end VITS engine using Tongues plans and named speakers.
 pub struct BurnVitsSpeech<B: Backend> {
     config: VitsInferenceConfig,
-    projector: VitsLinguisticProjector,
+    projector: VitsProjector,
     speakers: Option<SpeakerCatalog>,
     d_vectors: Option<DVectorCatalog>,
     languages: Option<LanguageCatalog>,
@@ -176,6 +202,27 @@ pub struct BurnVitsSpeech<B: Backend> {
 }
 
 impl<B: Backend> BurnVitsSpeech<B> {
+    /// Load an installed original Fairseq MMS VITS directory.
+    ///
+    /// The directory must contain the published `config.json`, `vocab.txt`,
+    /// and `G_100000.pth` names. No Python or Fairseq runtime is involved.
+    pub fn load_fairseq(
+        model_dir: impl AsRef<Path>,
+        language: impl Into<String>,
+        device: B::Device,
+    ) -> Result<Self> {
+        Self::load_fairseq_internal(model_dir, language.into(), device, None)
+    }
+
+    pub fn load_fairseq_profiled(
+        model_dir: impl AsRef<Path>,
+        language: impl Into<String>,
+        device: B::Device,
+        profiler: &mut dyn FnMut(ModelLoadProfileEvent),
+    ) -> Result<Self> {
+        Self::load_fairseq_internal(model_dir, language.into(), device, Some(profiler))
+    }
+
     pub fn load(
         config_path: impl AsRef<Path>,
         checkpoint_path: impl AsRef<Path>,
@@ -307,7 +354,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
             "this VITS engine requires exactly one speaker-conditioning mode"
         );
 
-        let projector = VitsLinguisticProjector::from_config(imported)?;
+        let projector = VitsProjector::Coqui(VitsLinguisticProjector::from_config(imported)?);
         let speakers = network
             .use_speaker_embedding
             .then(|| SpeakerCatalog::from_file(&speaker_map_path, network.num_speakers))
@@ -446,6 +493,96 @@ impl<B: Backend> BurnVitsSpeech<B> {
         })
     }
 
+    fn load_fairseq_internal(
+        model_dir: impl AsRef<Path>,
+        language: String,
+        device: B::Device,
+        profiler: Option<&mut dyn FnMut(ModelLoadProfileEvent)>,
+    ) -> Result<Self> {
+        let mut profiler = profiler;
+        let started = Instant::now();
+        let model_dir = model_dir.as_ref();
+        let config_path = model_dir.join(FAIRSEQ_MMS_CONFIG);
+        let vocab_path = model_dir.join(FAIRSEQ_MMS_VOCAB);
+        let checkpoint_path = model_dir.join(FAIRSEQ_MMS_CHECKPOINT);
+        let source = fs::read_to_string(&config_path).with_context(|| {
+            format!(
+                "failed to read Fairseq MMS config {}",
+                config_path.display()
+            )
+        })?;
+        let fairseq_config = FairseqVitsConfig::from_json_str(&source)?;
+        let tokenizer = FairseqVitsTokenizer::from_file(
+            language,
+            &vocab_path,
+            fairseq_config.add_blank(),
+            fairseq_config.preprocessing(),
+        )?;
+        let config = fairseq_config.inference_config(tokenizer.symbols().len())?;
+        let projector = VitsProjector::Fairseq(FairseqVitsProjector::new(tokenizer)?);
+        let network = &config.network;
+        let text_config = VitsTextPriorConfig::from_model_config(&config)?;
+        let duration_config = StochasticDurationConfig::new(text_config.encoder_channels(), 192, 3);
+        let flow_config = ResidualCouplingFlowConfig {
+            channels: network.hidden_channels,
+            hidden_channels: network.hidden_channels,
+            kernel_size: network.kernel_size_flow,
+            dilation_rate: network.dilation_rate_flow,
+            num_layers: network.num_layers_flow,
+            num_flows: 4,
+            conditioning_channels: 0,
+        };
+        let decoder_config = VitsWaveformDecoderConfig::from_model_config(&config)?;
+        let output_contract = WaveformContract::mono(config.audio.sample_rate);
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ConfigCheckpointParsing,
+            started,
+            Some("fairseq-mms-vits"),
+        );
+
+        let started = Instant::now();
+        let text_prior = text_config.init(&device)?;
+        let duration_predictor = duration_config.init(&device)?;
+        let flow = flow_config.init(&device)?;
+        let waveform_decoder = decoder_config.init(&device)?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::ModelConstruction,
+            started,
+            Some("fairseq-mms-vits"),
+        );
+
+        let started = Instant::now();
+        let text_prior = text_prior.load_checkpoint_with_prefix(&checkpoint_path, "enc_p")?;
+        let duration_predictor = duration_predictor.load_fairseq_checkpoint(&checkpoint_path)?;
+        let flow = flow.load_checkpoint(&checkpoint_path)?;
+        let waveform_decoder = waveform_decoder.load_checkpoint_subtree(&checkpoint_path, "dec")?;
+        record_load_stage(
+            &mut profiler,
+            ModelLoadStage::WeightUpload,
+            started,
+            Some("fairseq-mms-vits"),
+        );
+
+        Ok(Self {
+            config,
+            projector,
+            speakers: None,
+            d_vectors: None,
+            languages: None,
+            speaker_embedding: None,
+            reference_encoder: None,
+            language_embedding: None,
+            text_prior,
+            duration_predictor,
+            flow,
+            waveform_decoder,
+            output_contract,
+            device,
+        })
+    }
+
     pub fn input_contract(&self) -> &ModelInputContract {
         self.projector.contract()
     }
@@ -490,7 +627,10 @@ impl<B: Backend> BurnVitsSpeech<B> {
         Ok(waveform)
     }
 
-    fn speaker_conditioning(&mut self, request: &SpeechSynthesisRequest) -> Result<Tensor<B, 3>> {
+    fn speaker_conditioning(
+        &mut self,
+        request: &SpeechSynthesisRequest,
+    ) -> Result<Option<Tensor<B, 3>>> {
         if let (Some(speakers), Some(embedding)) = (&self.speakers, &self.speaker_embedding) {
             ensure!(
                 request.plan.speaker_reference.is_none(),
@@ -498,7 +638,17 @@ impl<B: Backend> BurnVitsSpeech<B> {
             );
             let speaker_id =
                 speakers.resolve(request.plan.speaker.as_ref(), request.options.speaker_id)?;
-            return Ok(embedding.forward(speaker_id, &self.device));
+            return Ok(Some(embedding.forward(speaker_id, &self.device)));
+        }
+
+        if self.d_vectors.is_none() {
+            ensure!(
+                request.plan.speaker.is_none()
+                    && request.plan.speaker_reference.is_none()
+                    && request.options.speaker_id.is_none(),
+                "single-speaker Fairseq MMS VITS does not accept speaker selection or reference audio"
+            );
+            return Ok(None);
         }
 
         ensure!(
@@ -554,17 +704,17 @@ impl<B: Backend> BurnVitsSpeech<B> {
             embedding.contract == expected,
             "speaker embedding contract does not match this VITS checkpoint"
         );
-        Ok(Tensor::from_data(
+        Ok(Some(Tensor::from_data(
             TensorData::new(embedding.values, [1, expected.dimensions, 1]),
             &self.device,
-        ))
+        )))
     }
 
     fn prepare_latent(
         &mut self,
         request: &SpeechSynthesisRequest,
         profiler: Option<&mut dyn SynthesisProfiler>,
-    ) -> Result<(Tensor<B, 3>, Tensor<B, 3>)> {
+    ) -> Result<(Tensor<B, 3>, Option<Tensor<B, 3>>)> {
         let mut profiler = profiler;
         self.projector.contract().ensure_supports(&request.plan)?;
         let started = Instant::now();
@@ -614,7 +764,10 @@ impl<B: Backend> BurnVitsSpeech<B> {
             started,
             [
                 SynthesisDimension::new("tokens", token_count),
-                SynthesisDimension::new("speaker_channels", conditioning.dims()[1]),
+                SynthesisDimension::new(
+                    "speaker_channels",
+                    conditioning.as_ref().map_or(0, |value| value.dims()[1]),
+                ),
             ],
         )?;
 
@@ -647,7 +800,8 @@ impl<B: Backend> BurnVitsSpeech<B> {
             .config
             .network
             .condition_dp_on_speaker
-            .then(|| conditioning.clone());
+            .then(|| conditioning.clone())
+            .flatten();
         let started = Instant::now();
         let log_durations = match request.options.seed {
             Some(seed) => self.duration_predictor.reverse_seeded_conditioned(
@@ -725,7 +879,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
         let latent = self.flow.reverse(
             latent_prior,
             expanded.frame_mask.clone(),
-            Some(conditioning.clone()),
+            conditioning.clone(),
         )?;
         let latent = latent * expanded.frame_mask;
         let latent = if let Some(max_frames) = self.config.network.max_inference_len {
@@ -768,7 +922,7 @@ impl<B: Backend> BurnVitsSpeech<B> {
         // the full HiFi-GAN decoder repeatedly and recomputed 64 context frames
         // around nearly every 64-frame output chunk.
         let started = Instant::now();
-        let decoded = self.waveform_decoder.forward(latent, Some(conditioning))?;
+        let decoded = self.waveform_decoder.forward(latent, conditioning)?;
         let expected_samples = frames * upsample;
         ensure!(
             decoded.dims() == [batch, 1, expected_samples],
@@ -830,7 +984,7 @@ impl<B: Backend> SpeechSynthesisEngine for BurnVitsSpeech<B> {
     fn capabilities(&self) -> SpeechModelCapabilities {
         SpeechModelCapabilities {
             family: SpeechModelFamily::EndToEndSpeech,
-            supports_named_speakers: true,
+            supports_named_speakers: self.speakers.is_some() || self.d_vectors.is_some(),
             supports_languages: self.languages.is_some(),
             supports_reference_audio: self.reference_encoder.is_some(),
             supports_voice_conversion: false,
@@ -871,6 +1025,78 @@ mod tests {
     use crate::{cosine_similarity, utterance_plan_from_text, SpeechRequest, SynthesisOptions};
 
     type TestBackend = NdArray<f32>;
+
+    #[test]
+    #[ignore = "requires a pinned original Fairseq MMS model directory"]
+    fn published_fairseq_mms_checkpoint_loads_and_synthesizes_without_python() {
+        let model_dir = std::env::var_os("TONGUES_TEST_FAIRSEQ_MMS_MODEL_DIR")
+            .expect("TONGUES_TEST_FAIRSEQ_MMS_MODEL_DIR is required");
+        let language =
+            std::env::var("TONGUES_TEST_FAIRSEQ_MMS_LANGUAGE").unwrap_or_else(|_| "eng".into());
+        let mut engine =
+            BurnVitsSpeech::<TestBackend>::load_fairseq(model_dir, language, NdArrayDevice::Cpu)
+                .expect("published Fairseq MMS engine");
+        let plan = utterance_plan_from_text(SpeechRequest {
+            text: "This is a test.".into(),
+            variety: "en-US".into(),
+        })
+        .expect("native linguistic plan");
+        let projected = engine.projected_input(&plan).expect("MMS tokenization");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/speech/fairseq-mms-vits-conformance.json"
+        ))
+        .expect("Fairseq MMS conformance fixture");
+        let expected_ids = fixture["tokenization"][0]["token_ids"]
+            .as_array()
+            .expect("English token ids")
+            .iter()
+            .map(|value| value.as_i64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(projected.ids, expected_ids);
+        let request = SpeechSynthesisRequest {
+            plan,
+            options: SynthesisOptions {
+                seed: Some(7),
+                ..Default::default()
+            },
+        };
+        let waveform = engine.synthesize(&request).expect("native MMS waveform");
+        assert_eq!(waveform.contract.sample_rate_hz, 16_000);
+        assert!(!waveform.samples.is_empty());
+        assert!(waveform.samples.iter().all(|sample| sample.is_finite()));
+        let minimum = waveform
+            .samples
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        let maximum = waveform
+            .samples
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let rms = (waveform
+            .samples
+            .iter()
+            .map(|sample| sample * sample)
+            .sum::<f32>()
+            / waveform.samples.len() as f32)
+            .sqrt();
+        let reference = &fixture["waveform_probe"];
+        let reference_samples = reference["sample_count"].as_u64().unwrap() as f32;
+        let duration_delta =
+            (waveform.samples.len() as f32 - reference_samples).abs() / reference_samples;
+        assert!(
+            duration_delta < 0.15,
+            "native/reference duration drift is {duration_delta:.3}"
+        );
+        for (name, actual) in [("minimum", minimum), ("maximum", maximum), ("rms", rms)] {
+            let expected = reference[name].as_f64().unwrap() as f32;
+            assert!(
+                (actual - expected).abs() < 0.05,
+                "native {name} {actual} differs from reference {expected}"
+            );
+        }
+    }
 
     #[test]
     #[ignore = "requires pinned Coqui VITS artifacts; run scripts/speech-conformance.sh"]

@@ -52,6 +52,8 @@ pub mod components;
 pub mod d_vectors;
 pub mod delightful_tts_config;
 pub mod device;
+pub mod fairseq_catalog;
+pub mod fairseq_vits;
 pub mod freevc;
 pub mod freevc_config;
 pub mod glow_tts_config;
@@ -147,6 +149,16 @@ pub use device::{
     resolve_speech_device, ResolvedSpeechDevice, SpeechDeviceRequest, SpeechDeviceSelection,
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
+pub use fairseq_catalog::{
+    generate_fairseq_catalog, parse_fairseq_language_index, FairseqCatalogDrift,
+    FairseqCatalogFile, FairseqCatalogRename, FairseqCatalogSource, FairseqCatalogSourceEntry,
+};
+pub use fairseq_vits::{
+    FairseqPreprocessingRequirement, FairseqTokenization, FairseqVitsConfig, FairseqVitsProjector,
+    FairseqVitsTokenizer, FAIRSEQ_MMS_CHECKPOINT, FAIRSEQ_MMS_CONFIG, FAIRSEQ_MMS_LICENSE,
+    FAIRSEQ_MMS_LICENSE_EVIDENCE, FAIRSEQ_MMS_SOURCE, FAIRSEQ_MMS_VOCAB,
+    UROMAN_ENVIRONMENT_VARIABLE,
+};
 pub use freevc::{
     FreeVc, FreeVcSpeakerEncoder, FREEVC_BACKEND_ID, FREEVC_MODEL_ID,
     FREEVC_SPEAKER_EMBEDDING_SPACE,
@@ -158,8 +170,9 @@ pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,
     private_catalog_paths_from_environment, CatalogArchiveMember, CatalogArtifact, CatalogLicense,
     CatalogProvenance, CatalogSpeakers, InstalledModelFile, InstalledModelRecord, ModelCatalog,
-    ModelCatalogEntry, ModelInstallProgress, ModelStore, VerifiedModel, EMBEDDED_MODEL_CATALOG,
-    INSTALLED_MODEL_SCHEMA_VERSION, MODEL_CATALOG_SCHEMA_VERSION,
+    ModelCatalogEntry, ModelInstallProgress, ModelStore, VerifiedModel,
+    EMBEDDED_FAIRSEQ_MODEL_CATALOG, EMBEDDED_MODEL_CATALOG, INSTALLED_MODEL_SCHEMA_VERSION,
+    MODEL_CATALOG_SCHEMA_VERSION,
 };
 pub use model_config::{
     AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams, MelganBundleConfig,

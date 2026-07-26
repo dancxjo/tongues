@@ -45,6 +45,15 @@ it must not infer it from the source license. The native Tacotron 2 and
 Glow-TTS source files separately remain MPL-covered modifications because they
 adapt Coqui inference graphs.
 
+The historical VCTK SC-GlowTTS artifact is not one of those licensed
+exceptions. Coqui's `v0.0.13` and `v0.1.0` registries publish
+`tts_models--en--vctk--sc-glowtts-transformer.zip` but leave its `license`
+field empty. The paired VCTK HiFi-GAN v2 entry is likewise unlabeled, and the
+SC-GlowTTS entry was removed from later registries. Tongues therefore does not
+catalog either artifact or treat an opt-in local checkpoint test as licensing
+evidence. SC-GlowTTS remains an import/runtime compatibility path for
+user-supplied artifacts whose owner records affirmative model-specific terms.
+
 The plain MelGAN conformance checkpoint is Descript's `linda_johnson.pt` from
 `descriptinc/melgan-neurips`, whose repository declares MIT. Its revision and
 artifact checksum are pinned independently from the Coqui artifacts.

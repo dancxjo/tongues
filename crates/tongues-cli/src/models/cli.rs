@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use inquire::Select;
 use owo_colors::OwoColorize;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use crate::models::download::{fetch_all_models, fetch_model};
@@ -46,6 +48,11 @@ pub enum ModelsCommand {
         about = "Validate and print a Tongues model package manifest"
     )]
     InspectPackage(ModelsInspectPackageCommand),
+    #[command(
+        name = "generate-fairseq-catalog",
+        about = "Generate and drift-check a checksum-pinned Fairseq MMS catalog"
+    )]
+    GenerateFairseqCatalog(ModelsGenerateFairseqCatalogCommand),
 }
 
 #[derive(Debug, Args)]
@@ -178,6 +185,19 @@ pub struct ModelsInspectPackageCommand {
     package: PathBuf,
 }
 
+#[derive(Debug, Args)]
+pub struct ModelsGenerateFairseqCatalogCommand {
+    /// Checksum/source metadata JSON for all MMS model files
+    #[arg(long)]
+    source: PathBuf,
+    /// Optional downloaded all-tts-languages.html used to detect drift
+    #[arg(long = "language-index")]
+    language_index: Option<PathBuf>,
+    /// Destination catalog JSON
+    #[arg(long)]
+    out: PathBuf,
+}
+
 pub fn run(command: Option<ModelsCommand>) -> Result<()> {
     match command.unwrap_or(ModelsCommand::Menu) {
         ModelsCommand::Menu => model_menu(),
@@ -199,7 +219,65 @@ pub fn run(command: Option<ModelsCommand>) -> Result<()> {
         }
         ModelsCommand::ImportCoqui(command) => import_coqui(command),
         ModelsCommand::InspectPackage(command) => inspect_package(command),
+        ModelsCommand::GenerateFairseqCatalog(command) => generate_fairseq_catalog(command),
     }
+}
+
+fn generate_fairseq_catalog(command: ModelsGenerateFairseqCatalogCommand) -> Result<()> {
+    eprintln!("fairseq-catalog: reading {}", command.source.display());
+    let source_text = fs::read_to_string(&command.source)
+        .with_context(|| format!("failed to read {}", command.source.display()))?;
+    let source = tongues_tts::FairseqCatalogSource::from_json(&source_text)
+        .with_context(|| format!("invalid source snapshot {}", command.source.display()))?;
+    if let Some(language_index) = command.language_index {
+        eprintln!(
+            "fairseq-catalog: checking upstream language ids against {}",
+            language_index.display()
+        );
+        let html = fs::read_to_string(&language_index)
+            .with_context(|| format!("failed to read {}", language_index.display()))?;
+        source.ensure_matches_language_index(&html)?;
+    }
+    let catalog = tongues_tts::generate_fairseq_catalog(&source)?;
+    let part = command.out.with_extension(
+        command
+            .out
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map_or_else(
+                || "part".to_string(),
+                |extension| format!("{extension}.part"),
+            ),
+    );
+    if let Some(parent) = command.out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    eprintln!(
+        "fairseq-catalog: writing {} entries to {}",
+        catalog.entries.len(),
+        part.display()
+    );
+    let file =
+        File::create(&part).with_context(|| format!("failed to create {}", part.display()))?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, &catalog)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    fs::rename(&part, &command.out).with_context(|| {
+        format!(
+            "failed to finalize {} from {}",
+            command.out.display(),
+            part.display()
+        )
+    })?;
+    eprintln!(
+        "fairseq-catalog: complete {} entries at {}",
+        catalog.entries.len(),
+        command.out.display()
+    );
+    Ok(())
 }
 
 fn import_coqui(command: ModelsImportCoquiCommand) -> Result<()> {

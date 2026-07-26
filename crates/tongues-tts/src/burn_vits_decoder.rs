@@ -187,13 +187,15 @@ impl<B: Backend> VitsWaveformDecoder<B> {
                 waveform_decoder_tensor as fn(&str, &str) -> bool,
                 r"^waveform_decoder\.",
             ),
-            "dec" => (freevc_decoder_tensor as fn(&str, &str) -> bool, r"^dec\."),
+            "dec" => (waveform_decoder_tensor as fn(&str, &str) -> bool, r"^dec\."),
             other => {
                 return Err(VitsWaveformDecoderError::Checkpoint(format!(
                     "unsupported decoder checkpoint subtree `{other}`"
                 )));
             }
         };
+        // Store predicates see paths after remapping, so both upstream outer
+        // names intentionally use the shared prefix-free tensor predicate.
         let result = crate::checkpoint::load_pytorch_layout_checkpoint(
             &mut self.generator,
             checkpoint_path.as_ref(),
@@ -201,12 +203,12 @@ impl<B: Backend> VitsWaveformDecoder<B> {
                 top_level_key: Some("model"),
                 predicate: Some(predicate),
                 key_remappings: vec![
-                    (prefix.into(), String::new()),
-                    (r"^cond\.".into(), "cond_layer.".into()),
                     (
-                        r"^(conv_pre|conv_post)\.weight$".into(),
+                        r"^(?:waveform_decoder|dec)\.(conv_pre|conv_post)\.weight$".into(),
                         "$1.weight_v".into(),
                     ),
+                    (prefix.into(), String::new()),
+                    (r"^cond\.".into(), "cond_layer.".into()),
                 ],
                 map_indices_contiguous: false,
                 allow_partial: true,
@@ -309,11 +311,6 @@ fn waveform_decoder_tensor(path: &str, _container: &str) -> bool {
     ]
     .iter()
     .any(|prefix| path.starts_with(prefix))
-}
-
-fn freevc_decoder_tensor(path: &str, _container: &str) -> bool {
-    path.strip_prefix("dec.")
-        .is_some_and(|path| path.starts_with("cond.") || waveform_decoder_tensor(path, ""))
 }
 
 fn weight_norm_dim_zero<B: Backend>(weight: Tensor<B, 3>) -> Tensor<B, 3> {

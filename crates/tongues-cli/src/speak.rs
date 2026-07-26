@@ -29,6 +29,7 @@ use styletts2::{StyleTts2DiffusionOptions, StyleTts2OnnxBackend};
 const DEFAULT_STYLE_ALPHA: f32 = 0.3;
 const DEFAULT_STYLE_BETA: f32 = 0.1;
 const DEFAULT_SPEED: f64 = 1.0;
+const DEFAULT_FAIRSEQ_MMS_MODEL: &str = "fairseq-mms-vits-eng";
 
 #[derive(Debug, Args, Clone)]
 pub struct SpeakCommand {
@@ -42,6 +43,11 @@ pub struct SpeakCommand {
     pub variety: String,
     #[arg(long, value_enum, default_value_t = SpeakBackend::Burn, help = "Speech backend to use")]
     pub backend: SpeakBackend,
+    #[arg(
+        long,
+        help = "Catalog model id or alias; required for model-selectable backends such as Fairseq MMS"
+    )]
+    pub model: Option<String>,
     #[arg(
         long,
         value_enum,
@@ -193,6 +199,7 @@ impl Default for SpeakCommand {
             text: None,
             variety: "en-US".into(),
             backend: SpeakBackend::Burn,
+            model: None,
             vocoder: SpeakVocoder::Hifigan,
             output: None,
             sample_rate_hz: 24_000,
@@ -261,6 +268,7 @@ pub enum SpeakBackend {
     Burn,
     Fastpitch,
     Vits,
+    Fairseq,
     Yourtts,
     Mock,
     Styletts2,
@@ -507,6 +515,14 @@ enum BackendInstance {
     FastPitchCuda(Box<CudaFastPitchBackend>),
     VitsCpu(Box<CpuVitsBackend>),
     VitsCuda(Box<CudaVitsBackend>),
+    FairseqCpu {
+        engine: Box<CpuVitsBackend>,
+        entry: speech::ModelCatalogEntry,
+    },
+    FairseqCuda {
+        engine: Box<CudaVitsBackend>,
+        entry: speech::ModelCatalogEntry,
+    },
     Mock(MockStyleTts2Backend),
     #[cfg(feature = "styletts2-onnx")]
     StyleTts2(StyleTts2OnnxBackend),
@@ -535,6 +551,8 @@ impl BackendInstance {
             Self::FastPitchCuda(_) => "fastpitch-cuda",
             Self::VitsCpu(_) => "vits-cpu",
             Self::VitsCuda(_) => "vits-cuda",
+            Self::FairseqCpu { .. } => "fairseq-mms-vits-cpu",
+            Self::FairseqCuda { .. } => "fairseq-mms-vits-cuda",
             Self::Mock(_) => "mock",
             Self::StyleTts2 { .. } => "styletts2",
             Self::Onnx { .. } => "onnx",
@@ -617,6 +635,12 @@ impl BackendInstance {
                 varieties,
                 engine.sample_rate_hz(),
             ),
+            Self::FairseqCpu { engine, entry } => {
+                fairseq_cli_capabilities(entry, devices, engine.sample_rate_hz())
+            }
+            Self::FairseqCuda { engine, entry } => {
+                fairseq_cli_capabilities(entry, devices, engine.sample_rate_hz())
+            }
             Self::Mock(_) => {
                 let mut capabilities = base(
                     "mock",
@@ -727,6 +751,12 @@ impl BackendInstance {
             }
             Self::VitsCuda(ref mut backend) => {
                 synthesize_burn_engine(backend.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::FairseqCpu { ref mut engine, .. } => {
+                synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
+            }
+            Self::FairseqCuda { ref mut engine, .. } => {
+                synthesize_burn_engine(engine.as_mut(), plan, options, on_audio, command.timings)
             }
             Self::Mock(ref mut backend) => {
                 let styletts2_plan = prepare_styletts2_plan(
@@ -915,6 +945,16 @@ impl BackendInstance {
                     .projected_input(plan)
                     .context("failed to project VITS checkpoint input")?,
             )),
+            Self::FairseqCpu { engine, .. } => {
+                Ok(Some(engine.projected_input(plan).context(
+                    "failed to project Fairseq MMS checkpoint input",
+                )?))
+            }
+            Self::FairseqCuda { engine, .. } => {
+                Ok(Some(engine.projected_input(plan).context(
+                    "failed to project Fairseq MMS checkpoint input",
+                )?))
+            }
             Self::Mock(_) | Self::StyleTts2 { .. } | Self::Onnx { .. } => Ok(None),
         }
     }
@@ -1011,6 +1051,58 @@ fn vits_cli_capabilities(
             streaming: true,
         },
         provenance: vec!["Published Coqui release artifact".into()],
+    }
+}
+
+fn fairseq_cli_capabilities(
+    entry: &speech::ModelCatalogEntry,
+    devices: Vec<speech::SpeechDeviceRequest>,
+    sample_rate_hz: u32,
+) -> speech::BackendCapabilities {
+    let values = entry
+        .languages
+        .iter()
+        .map(|language| speech::NamedCapability::new(language, language))
+        .collect::<Vec<_>>();
+    let varieties = if entry.varieties.is_empty() {
+        // The linguistic planner always carries a requested variety. Accept
+        // it as text-planning context without manufacturing catalog claims
+        // about which pronunciation varieties this single MMS voice covers.
+        speech::CapabilityValue::Any
+    } else {
+        speech::CapabilityValue::Listed(
+            entry
+                .varieties
+                .iter()
+                .map(|variety| speech::NamedCapability::new(variety, variety))
+                .collect(),
+        )
+    };
+    speech::BackendCapabilities {
+        backend: "fairseq".into(),
+        model: entry.id.clone(),
+        family: speech::SpeechModelFamily::EndToEndSpeech,
+        varieties,
+        languages: speech::LanguageCapabilities {
+            values: speech::CapabilityValue::Listed(values),
+            required: false,
+            numeric_ids: false,
+        },
+        speakers: speech::SpeakerCapabilities::unsupported(),
+        styles: speech::StyleCapabilities::unsupported(),
+        reference_audio: speech::ReferenceAudioCapabilities::default(),
+        speed: true,
+        pitch: speech::PitchCapabilities::default(),
+        energy: speech::EnergyCapabilities::default(),
+        durations: false,
+        seed: true,
+        devices,
+        output: speech::OutputAudioContract {
+            sample_rate_hz,
+            channels: 1,
+            streaming: true,
+        },
+        provenance: vec![entry.provenance.source.clone()],
     }
 }
 
@@ -1228,6 +1320,93 @@ fn load_backend(
             model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
             backend
         }
+        SpeakBackend::Fairseq => {
+            let started = Instant::now();
+            let requested = command
+                .model
+                .as_deref()
+                .unwrap_or(DEFAULT_FAIRSEQ_MMS_MODEL);
+            let catalog = speech::ModelCatalog::embedded()?;
+            let entry = catalog
+                .find(requested)
+                .cloned()
+                .with_context(|| format!("unknown catalog model `{requested}`"))?;
+            anyhow::ensure!(
+                entry.provenance.format == "fairseq-mms-vits",
+                "catalog model `{requested}` is not a Fairseq MMS VITS checkpoint"
+            );
+            let store = speech::ModelStore::from_environment()?;
+            let verified = store.install_with_progress(&entry, false, |event| match event {
+                speech::ModelInstallProgress::CheckingCache { path } => {
+                    eprintln!("fairseq: checking {}", path.display());
+                }
+                speech::ModelInstallProgress::Downloading {
+                    downloaded,
+                    total,
+                    part_path,
+                    ..
+                } => {
+                    eprintln!(
+                        "fairseq: downloaded {downloaded}/{total} bytes -> {}",
+                        part_path.display()
+                    );
+                }
+                speech::ModelInstallProgress::Verifying { path } => {
+                    eprintln!("fairseq: verifying {}", path.display());
+                }
+                speech::ModelInstallProgress::Installing { path } => {
+                    eprintln!("fairseq: installing {}", path.display());
+                }
+                speech::ModelInstallProgress::Complete { id, version } => {
+                    eprintln!("fairseq: ready {id} v{version}");
+                }
+            })?;
+            let checkpoint = verified
+                .files
+                .iter()
+                .find(|path| {
+                    path.file_name().and_then(|name| name.to_str())
+                        == Some(speech::FAIRSEQ_MMS_CHECKPOINT)
+                })
+                .context("installed Fairseq MMS model has no checkpoint")?;
+            let model_dir = checkpoint
+                .parent()
+                .context("Fairseq MMS checkpoint path has no parent")?;
+            let language = entry
+                .languages
+                .first()
+                .context("Fairseq MMS catalog entry has no language identity")?;
+            cache_check_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let started = Instant::now();
+            let backend = match device_arg {
+                DeviceArg::Cpu => BackendInstance::FairseqCpu {
+                    engine: Box::new(
+                        speech::BurnVitsSpeech::load_fairseq_profiled(
+                            model_dir,
+                            language,
+                            NdArrayDevice::Cpu,
+                            &mut |event| model_load_profile.push(event),
+                        )
+                        .context("failed to load Fairseq MMS VITS on CPU")?,
+                    ),
+                    entry,
+                },
+                DeviceArg::Cuda { index } => BackendInstance::FairseqCuda {
+                    engine: Box::new(
+                        speech::BurnVitsSpeech::load_fairseq_profiled(
+                            model_dir,
+                            language,
+                            CudaDevice::new(index),
+                            &mut |event| model_load_profile.push(event),
+                        )
+                        .context("failed to load Fairseq MMS VITS on CUDA")?,
+                    ),
+                    entry,
+                },
+            };
+            model_load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            backend
+        }
         SpeakBackend::Yourtts => {
             let started = Instant::now();
             let checkpoint =
@@ -1372,7 +1551,7 @@ fn run_speak_with_backend(
     let target_sample_rate = match command.backend {
         SpeakBackend::Burn | SpeakBackend::Fastpitch => 22_050,
         SpeakBackend::Vits => 22_050,
-        SpeakBackend::Yourtts => 16_000,
+        SpeakBackend::Fairseq | SpeakBackend::Yourtts => 16_000,
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => 22_050,
@@ -1482,7 +1661,10 @@ fn run_speak_with_backend(
         }
         let planning_ms = planning_started.elapsed().as_secs_f64() * 1_000.0;
 
-        if plan.intended_phonemes.is_empty() {
+        // Grapheme-native Fairseq MMS models consume intended_text directly.
+        // An unrelated/default phonemicizer may have no phones for that
+        // script, which must not turn valid model input into a silent success.
+        if plan.intended_phonemes.is_empty() && command.backend != SpeakBackend::Fairseq {
             return Ok(());
         }
 
@@ -1560,6 +1742,7 @@ fn run_speak_with_backend(
                 SpeakBackend::Burn
                 | SpeakBackend::Fastpitch
                 | SpeakBackend::Vits
+                | SpeakBackend::Fairseq
                 | SpeakBackend::Yourtts,
             ) => projected.projected_symbols.clone(),
             (
@@ -1567,6 +1750,7 @@ fn run_speak_with_backend(
                 SpeakBackend::Burn
                 | SpeakBackend::Fastpitch
                 | SpeakBackend::Vits
+                | SpeakBackend::Fairseq
                 | SpeakBackend::Yourtts,
             ) => {
                 anyhow::bail!("native Burn backend did not expose its checkpoint projection")
@@ -1691,6 +1875,7 @@ fn run_speak_with_backend(
             SpeakBackend::Burn
             | SpeakBackend::Fastpitch
             | SpeakBackend::Vits
+            | SpeakBackend::Fairseq
             | SpeakBackend::Yourtts => {
                 println!("  1: {backend_symbols}");
             }
@@ -1950,6 +2135,7 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
         SpeakBackend::Burn => "Burn components",
         SpeakBackend::Fastpitch => "FastPitch + HiFi-GAN",
         SpeakBackend::Vits => "VITS",
+        SpeakBackend::Fairseq => "Fairseq MMS VITS",
         SpeakBackend::Yourtts => "YourTTS",
         SpeakBackend::Onnx => "ONNX compatibility voice",
         SpeakBackend::Styletts2 => "StyleTTS2",

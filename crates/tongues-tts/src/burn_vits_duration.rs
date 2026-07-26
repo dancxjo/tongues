@@ -519,6 +519,65 @@ impl<B: Backend> StochasticDurationPredictor<B> {
         Ok(self)
     }
 
+    /// Load the original Fairseq/VITS stochastic-duration layout.
+    ///
+    /// Fairseq alternates learned spline flows with parameter-free flips and
+    /// names the first affine parameters `m`/`logs`. Coqui's adapter performs
+    /// these same renames in Python; Tongues applies them directly while
+    /// reading the checkpoint.
+    pub(crate) fn load_fairseq_checkpoint(
+        mut self,
+        checkpoint_path: impl AsRef<Path>,
+    ) -> Result<Self, StochasticDurationError> {
+        let mut key_remappings = vec![
+            (r"^dp\.".into(), String::new()),
+            (r"^flows\.0\.m$".into(), "affine.translation".into()),
+            (r"^flows\.0\.logs$".into(), "affine.log_scale".into()),
+        ];
+        for index in 0..self.spline_flows.len() {
+            key_remappings.push((
+                format!(r"^flows\.{}\.", index * 2 + 1),
+                format!("spline_flows.{index}."),
+            ));
+        }
+
+        let result = crate::checkpoint::load_pytorch_layout_checkpoint(
+            &mut self,
+            checkpoint_path.as_ref(),
+            crate::checkpoint::CheckpointLoadOptions {
+                top_level_key: Some("model"),
+                predicate: Some(duration_inference_tensor),
+                key_remappings,
+                map_indices_contiguous: false,
+                allow_partial: true,
+                skip_enum_variants: true,
+            },
+        )
+        .map_err(|error| StochasticDurationError::Checkpoint(error.to_string()))?;
+        let mut missing = result
+            .missing
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
+        missing.sort_unstable();
+        let mut unused = result
+            .unused
+            .iter()
+            .filter(|path| duration_inference_tensor(path, ""))
+            .cloned()
+            .collect::<Vec<_>>();
+        unused.sort_unstable();
+        if !missing.is_empty() || !result.errors.is_empty() || !unused.is_empty() {
+            return Err(StochasticDurationError::Checkpoint(format!(
+                "Fairseq duration inference subtree does not exactly match the Burn module: missing [{}], {} load errors, unused [{}]",
+                missing.join(", "),
+                result.errors.len(),
+                unused.join(", ")
+            )));
+        }
+        Ok(self)
+    }
+
     /// Reverse inference using caller-provided standard-normal noise.
     pub fn reverse_with_noise(
         &self,

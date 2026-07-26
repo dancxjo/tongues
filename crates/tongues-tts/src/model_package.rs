@@ -2934,12 +2934,10 @@ mod tests {
     }
 
     #[test]
-    fn published_glow_tts_fixture_uses_common_importer_when_available() {
-        let Some(options) =
-            fixture_options("TONGUES_TEST_GLOW_CONFIG", "TONGUES_TEST_GLOW_CHECKPOINT")
-        else {
-            return;
-        };
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    fn published_glow_tts_fixture_uses_common_importer() {
+        let options = fixture_options("TONGUES_TEST_GLOW_CONFIG", "TONGUES_TEST_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_GLOW_CONFIG and TONGUES_TEST_GLOW_CHECKPOINT are required");
         let inspection = inspect_coqui_import(&options).expect("Glow-TTS import inspection");
         assert_eq!(inspection.architecture, ModelPackageArchitecture::GlowTts);
         assert_eq!(inspection.audio.expect("audio").mel_bins, Some(80));

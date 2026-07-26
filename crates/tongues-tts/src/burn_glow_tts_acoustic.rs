@@ -301,13 +301,12 @@ mod tests {
     type TestBackend = NdArray<f32>;
 
     #[test]
-    fn published_acoustic_backend_emits_neutral_mel_when_available() {
-        let Some(config_path) = std::env::var_os("TONGUES_TEST_GLOW_CONFIG") else {
-            return;
-        };
-        let Some(checkpoint_path) = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT") else {
-            return;
-        };
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    fn published_acoustic_backend_emits_neutral_mel() {
+        let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")
+            .expect("TONGUES_TEST_GLOW_CONFIG is required");
+        let checkpoint_path = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_GLOW_CHECKPOINT is required");
         let device = NdArrayDevice::Cpu;
         let backend =
             BurnGlowTtsAcoustic::<TestBackend>::load(config_path, checkpoint_path, device)

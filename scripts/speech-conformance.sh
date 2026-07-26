@@ -17,6 +17,7 @@ speedy_dir="$model_root/ljspeech/speedy-speech"
 fastpitch_dir="$model_root/ljspeech/fast-pitch"
 vocoder_dir="$model_root/ljspeech/hifigan-v2"
 multiband_dir="$model_root/ljspeech/multiband-melgan"
+glow_dir="$model_root/ljspeech/glow-tts"
 melgan_model="$model_root/ljspeech/melgan/linda_johnson.pt"
 vits_dir="$model_root/vctk/vits"
 yourtts_dir="${TONGUES_YOURTTS_MODEL_ROOT:-$data_root/mortar-sea/models/speech/coqui/multilingual/yourtts}"
@@ -33,6 +34,8 @@ required_artifacts=(
     "$multiband_dir/config.json"
     "$multiband_dir/model_file.pth"
     "$multiband_dir/scale_stats.npy"
+    "$glow_dir/config.json"
+    "$glow_dir/model_file.pth.tar"
     "$melgan_model"
     "$vits_dir/config.json"
     "$vits_dir/model_file.pth"
@@ -144,6 +147,22 @@ env \
     TONGUES_TEST_COQUI_REFERENCE="$reference" \
     cargo test --release -p tongues-tts \
         burn_fast_pitch::tests::published_checkpoint_stage_parity \
+        -- --ignored --exact --nocapture
+
+echo "Running the published Glow-TTS checkpoint through native acoustic inference"
+env \
+    TONGUES_TEST_GLOW_CONFIG="$glow_dir/config.json" \
+    TONGUES_TEST_GLOW_CHECKPOINT="$glow_dir/model_file.pth.tar" \
+    cargo test --release -p tongues-tts \
+        burn_glow_tts::tests::published_glow_checkpoint_synthesizes \
+        -- --ignored --exact --nocapture
+
+echo "Inspecting Glow-TTS through the safe package importer"
+env \
+    TONGUES_TEST_GLOW_CONFIG="$glow_dir/config.json" \
+    TONGUES_TEST_GLOW_CHECKPOINT="$glow_dir/model_file.pth.tar" \
+    cargo test --release -p tongues-tts \
+        model_package::tests::published_glow_tts_fixture_uses_common_importer \
         -- --ignored --exact --nocapture
 
 echo "Comparing native MultiBand-MelGAN and PQMF output: $reference"

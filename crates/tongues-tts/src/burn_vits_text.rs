@@ -205,8 +205,18 @@ pub struct VitsTextPriorEncoder<B: Backend> {
 impl<B: Backend> VitsTextPriorEncoder<B> {
     /// Loads exactly the `text_encoder` subtree from a complete VITS checkpoint.
     pub fn load_checkpoint(
+        self,
+        checkpoint_path: impl AsRef<Path>,
+    ) -> Result<Self, VitsTextPriorError> {
+        self.load_checkpoint_with_prefix(checkpoint_path, "text_encoder")
+    }
+
+    /// Load an otherwise-compatible VITS text encoder stored under a
+    /// checkpoint-specific prefix such as Fairseq MMS's `enc_p`.
+    pub(crate) fn load_checkpoint_with_prefix(
         mut self,
         checkpoint_path: impl AsRef<Path>,
+        prefix: &str,
     ) -> Result<Self, VitsTextPriorError> {
         let result = crate::checkpoint::load_pytorch_layout_checkpoint(
             &mut self,
@@ -214,7 +224,7 @@ impl<B: Backend> VitsTextPriorEncoder<B> {
             crate::checkpoint::CheckpointLoadOptions {
                 top_level_key: Some("model"),
                 predicate: Some(text_prior_tensor),
-                key_remappings: vec![(r"^text_encoder\.".into(), String::new())],
+                key_remappings: vec![(format!(r"^{prefix}\."), String::new())],
                 map_indices_contiguous: false,
                 allow_partial: true,
                 skip_enum_variants: true,

@@ -1515,13 +1515,12 @@ mod tests {
     }
 
     #[test]
-    fn published_glow_checkpoint_loads_when_provided() {
-        let Some(config_path) = std::env::var_os("TONGUES_TEST_GLOW_CONFIG") else {
-            return;
-        };
-        let Some(checkpoint_path) = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT") else {
-            return;
-        };
+    #[ignore = "requires the checksum-pinned published Glow-TTS artifact"]
+    fn published_glow_checkpoint_synthesizes() {
+        let config_path = std::env::var_os("TONGUES_TEST_GLOW_CONFIG")
+            .expect("TONGUES_TEST_GLOW_CONFIG is required");
+        let checkpoint_path = std::env::var_os("TONGUES_TEST_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_GLOW_CHECKPOINT is required");
         let device = NdArrayDevice::Cpu;
         let config = GlowTtsInferenceConfig::from_file(config_path).expect("published config");
         let model =
@@ -1562,13 +1561,12 @@ mod tests {
     }
 
     #[test]
-    fn published_sc_glow_checkpoint_synthesizes_when_provided() {
-        let Some(config_path) = std::env::var_os("TONGUES_TEST_SC_GLOW_CONFIG") else {
-            return;
-        };
-        let Some(checkpoint_path) = std::env::var_os("TONGUES_TEST_SC_GLOW_CHECKPOINT") else {
-            return;
-        };
+    #[ignore = "requires an external SC-GlowTTS artifact with affirmative license evidence"]
+    fn external_sc_glow_checkpoint_synthesizes() {
+        let config_path = std::env::var_os("TONGUES_TEST_SC_GLOW_CONFIG")
+            .expect("TONGUES_TEST_SC_GLOW_CONFIG is required");
+        let checkpoint_path = std::env::var_os("TONGUES_TEST_SC_GLOW_CHECKPOINT")
+            .expect("TONGUES_TEST_SC_GLOW_CHECKPOINT is required");
         let device = NdArrayDevice::Cpu;
         let config = GlowTtsInferenceConfig::from_file(config_path).expect("published SC config");
         assert_eq!(config.network.speaker_conditioning_channels(), 256);

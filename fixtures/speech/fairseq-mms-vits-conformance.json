@@ -1,0 +1,73 @@
+{
+  "schema": "tongues-fairseq-mms-conformance-v1",
+  "checkpoint": {
+    "model_id": "eng",
+    "repository_revision": "44cc7fb408064ef9ea6e7c59130d88cac1274671",
+    "sha256": "fe70838b07c6d226c848c551bbe6ebadaf277a93fbb05f91ae10347f524209c8",
+    "size_bytes": 145484625
+  },
+  "reference_runtime": {
+    "source_revision": "65d863f41196654aa8b8f3dc586474a4c8f30934",
+    "torch": "1.13.1+cpu"
+  },
+  "tokenization": [
+    {
+      "language": "eng",
+      "preprocessing": "lowercase-and-filter-vocab",
+      "text": "This is a test.",
+      "normalized_text": "this is a test.",
+      "filtered_text": "this is a test",
+      "token_ids": [
+        0, 33, 0, 6, 0, 18, 0, 8, 0, 19, 0, 18, 0, 8, 0,
+        19, 0, 26, 0, 19, 0, 33, 0, 7, 0, 8, 0, 33, 0
+      ]
+    },
+    {
+      "language": "amh",
+      "preprocessing": "uroman",
+      "text": "selam",
+      "normalized_text": "selam",
+      "filtered_text": "selam",
+      "token_ids": [0, 13, 0, 5, 0, 2, 0, 21, 0, 6, 0]
+    },
+    {
+      "language": "tha",
+      "preprocessing": "lowercase-and-filter-vocab",
+      "text": "สวัสดี",
+      "normalized_text": "สวัสดี",
+      "filtered_text": "สวัสดี",
+      "token_ids": [0, 26, 0, 9, 0, 11, 0, 26, 0, 21, 0, 18, 0]
+    }
+  ],
+  "waveform_probe": {
+    "language": "eng",
+    "text": "This is a test.",
+    "seed": 7,
+    "sample_rate_hz": 16000,
+    "sample_count": 26112,
+    "minimum": -0.7022507190704346,
+    "maximum": 0.7454831004142761,
+    "rms": 0.09512633830308914,
+    "pcm_f32le_sha256": "52865db520cf71ccb8d8a096a00f0631af273a50a023ca3eb0c7c56616191d3d",
+    "first_samples": [
+      -0.000005657426754623884,
+      -0.000037260215322021395,
+      -0.000029776736482745036,
+      0.000015513998732785694,
+      0.0000001978956021275735,
+      -0.000036660971090896055,
+      -0.000021348574591684155,
+      -0.000025301824280177243
+    ],
+    "last_samples": [
+      -0.0000385524908779189,
+      -0.000054620566515950486,
+      -0.00008875480125425383,
+      -0.0000742647098377347,
+      -0.00004151496250415221,
+      0.00010168760491069406,
+      0.00005413714825408533,
+      -0.00004119232471566647
+    ]
+  }
+}
