@@ -1,6 +1,7 @@
 //! Native acoustic-model adapter for Glow-TTS and SC-GlowTTS.
 
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
 use burn::tensor::backend::Backend;
@@ -12,7 +13,9 @@ use crate::{
     GlowTts, GlowTtsInferenceConfig, GlowTtsOutput, InferenceRuntime, LinguisticProjector,
     ModelInputContract, PhonemeVocabularyProjector, Spectrogram, SpectrogramContract,
     SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisRequest, StochasticGlowTts,
+    SynthesisDimension, SynthesisProfiler, SynthesisStage,
 };
+use crate::profiling::finish_backend_stage;
 
 pub const COQUI_D_VECTOR_SPACE: &str = "coqui-speaker-encoder-d-vector-v1";
 
@@ -135,6 +138,23 @@ impl<B: Backend> BurnGlowTtsAcoustic<B> {
     }
 
     pub fn synthesize_tensor(&self, request: &SpeechSynthesisRequest) -> Result<Tensor<B, 3>> {
+        self.synthesize_tensor_internal(request, None)
+    }
+
+    pub fn synthesize_tensor_profiled(
+        &self,
+        request: &SpeechSynthesisRequest,
+        profiler: &mut dyn SynthesisProfiler,
+    ) -> Result<Tensor<B, 3>> {
+        self.synthesize_tensor_internal(request, Some(profiler))
+    }
+
+    fn synthesize_tensor_internal(
+        &self,
+        request: &SpeechSynthesisRequest,
+        mut profiler: Option<&mut dyn SynthesisProfiler>,
+    ) -> Result<Tensor<B, 3>> {
+        let started = Instant::now();
         self.projector.contract().ensure_supports(&request.plan)?;
         let projected = self.projector.project(&request.plan)?;
         let token_count = projected.ids.len();
@@ -197,6 +217,17 @@ impl<B: Backend> BurnGlowTtsAcoustic<B> {
             f64::from(noise_scale),
             f64::from(duration_noise_scale),
             request.options.seed,
+        )?;
+        let frames = output.mel.dims()[1];
+        finish_backend_stage::<B>(
+            &mut profiler,
+            &self.device,
+            SynthesisStage::AcousticModel,
+            started,
+            [
+                SynthesisDimension::new("tokens", token_count),
+                SynthesisDimension::new("mel_frames", frames),
+            ],
         )?;
         Ok(output.mel)
     }
