@@ -7094,6 +7094,70 @@ mod tests {
             .contains("cannot be combined"));
     }
 
+    #[test]
+    fn server_speech_frontend_uses_the_core_conformance_corpus() {
+        let corpus =
+            speaking::load_pronunciation_conformance_corpus().expect("pronunciation corpus");
+        for case in corpus.cases {
+            if case.careful_style {
+                continue;
+            }
+            let analysis = speaking::analyze_pronunciation(&speaking::PhonemicizeRequest {
+                text: case.input_text.clone(),
+                variety: speaking::VarietyId(case.variety.clone()),
+                style: None,
+            })
+            .expect("canonical pronunciation analysis");
+            let plan = tongues_tts::utterance_plan_from_text(tongues_tts::SpeechRequest {
+                text: case.input_text.clone(),
+                variety: case.variety.clone(),
+            })
+            .expect("server speech plan");
+            assert_eq!(plan.variety, analysis.plan.variety, "{}", case.id);
+            assert_eq!(plan.intended_text, analysis.plan.intended_text, "{}", case.id);
+            assert_eq!(
+                plan.intended_morphemes,
+                analysis.plan.intended_morphemes,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.intended_phonemes,
+                analysis.plan.intended_phonemes,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.target_phones, analysis.plan.target_phones, "{}", case.id);
+            assert_eq!(
+                plan.target_syllables,
+                analysis.plan.target_syllables,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.boundaries, analysis.plan.boundaries, "{}", case.id);
+            assert_eq!(
+                plan.target_prosody,
+                analysis.plan.target_prosody,
+                "{}",
+                case.id
+            );
+            assert_eq!(
+                plan.target_acoustics,
+                analysis.plan.target_acoustics,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.speaker, analysis.plan.speaker, "{}", case.id);
+            assert_eq!(
+                plan.speaker_reference,
+                analysis.plan.speaker_reference,
+                "{}",
+                case.id
+            );
+            assert_eq!(plan.style, analysis.plan.style, "{}", case.id);
+        }
+    }
+
     fn listed_capability_ids(value: &tongues_tts::CapabilityValue) -> Vec<&str> {
         match value {
             tongues_tts::CapabilityValue::Listed(values) => {
