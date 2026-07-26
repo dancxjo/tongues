@@ -3275,7 +3275,17 @@ async fn get_speech_models(State(state): State<AppState>) -> impl IntoResponse {
         .ok()
         .map(|service| service.engines.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    Json(speech_studio_discovery(&home, state.speech_device, &loaded))
+    let device = state.speech_device;
+    let response =
+        tokio::task::spawn_blocking(move || speech_studio_discovery(&home, device, &loaded))
+            .await
+            .unwrap_or_else(|error| SpeechStudioDiscovery {
+                schema_version: 2,
+                paths: Vec::new(),
+                components: Vec::new(),
+                error: Some(format!("speech model discovery task failed: {error}")),
+            });
+    Json(response)
 }
 
 async fn project_speech_request(Json(request): Json<SpeechProjectionRequest>) -> impl IntoResponse {
@@ -3412,7 +3422,7 @@ fn discover_speech_path(
     selected: bool,
     device: tongues_tts::ResolvedSpeechDevice,
     catalog: &tongues_tts::ModelCatalog,
-    store: &tongues_tts::ModelStore,
+    verification: &BTreeMap<String, Result<(), String>>,
     loaded: &[String],
 ) -> SpeechPathDiscovery {
     let capabilities = speech_backend_capabilities(home, backend, Some(model), device, 24_000)
@@ -3449,7 +3459,14 @@ fn discover_speech_path(
     } else {
         catalog_entries
             .iter()
-            .find_map(|entry| store.verify(entry).err().map(|error| format!("{error:#}")))
+            .find_map(|entry| match verification.get(&entry.id) {
+                Some(Ok(())) => None,
+                Some(Err(error)) => Some(error.clone()),
+                None => Some(format!(
+                    "catalog verification result is missing for `{}`",
+                    entry.id
+                )),
+            })
             .or_else(|| {
                 (catalog_entries.len() != catalog_ids.len())
                     .then(|| "one or more path components are absent from the model catalog".into())
@@ -3544,6 +3561,17 @@ fn speech_studio_discovery(
     let cache = tongues_tts::default_model_cache(home)
         .unwrap_or_else(|_| home.join("cache/model-downloads"));
     let store = tongues_tts::ModelStore::new(home, cache).with_offline(true);
+    let verification = catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let result = store
+                .verify(entry)
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}"));
+            (entry.id.clone(), result)
+        })
+        .collect::<BTreeMap<_, _>>();
     let selected_onnx =
         selected_onnx_voice_model_at(home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
     let mut paths = Vec::new();
@@ -3558,7 +3586,7 @@ fn speech_studio_discovery(
                     model.id == selected_onnx,
                     device,
                     &catalog,
-                    &store,
+                    &verification,
                     loaded,
                 ));
             }
@@ -3574,7 +3602,7 @@ fn speech_studio_discovery(
             provider.id != "mock",
             device,
             &catalog,
-            &store,
+            &verification,
             loaded,
         ));
     }
@@ -3584,7 +3612,7 @@ fn speech_studio_discovery(
     });
     SpeechStudioDiscovery {
         schema_version: 2,
-        components: speech_component_inventory(&catalog, &store, &paths, loaded),
+        components: speech_component_inventory(&catalog, &store, &verification, &paths, loaded),
         paths,
         error: None,
     }
@@ -4097,6 +4125,7 @@ fn native_component_inventory_without_catalog(loaded: &[String]) -> Vec<SpeechCo
 fn speech_component_inventory(
     catalog: &tongues_tts::ModelCatalog,
     store: &tongues_tts::ModelStore,
+    verification: &BTreeMap<String, Result<(), String>>,
     paths: &[SpeechPathDiscovery],
     loaded: &[String],
 ) -> Vec<SpeechComponentDiscovery> {
@@ -4107,7 +4136,7 @@ fn speech_component_inventory(
             .iter()
             .position(|component| component.id == component_id);
         let installed = catalog_entry_files_present(store.root(), entry);
-        let verified = store.verify(entry).is_ok();
+        let verified = matches!(verification.get(&entry.id), Some(Ok(())));
         let compatible_paths = paths
             .iter()
             .filter(|path| {

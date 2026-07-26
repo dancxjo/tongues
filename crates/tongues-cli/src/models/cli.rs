@@ -149,6 +149,9 @@ pub struct ModelsImportCoquiCommand {
     /// Optional Coqui language_ids.json
     #[arg(long = "languages")]
     language_map: Option<PathBuf>,
+    /// XTTS tokenizer vocab.json (required when model=xtts)
+    #[arg(long)]
+    tokenizer: Option<PathBuf>,
     /// Tensor dictionary key inside the checkpoint
     #[arg(long, default_value = "model")]
     checkpoint_key: String,
@@ -217,6 +220,7 @@ fn import_coqui(command: ModelsImportCoquiCommand) -> Result<()> {
     );
     options.speaker_map_path = command.speaker_map;
     options.language_map_path = command.language_map;
+    options.tokenizer_path = command.tokenizer;
     options.checkpoint_key = command.checkpoint_key;
     options.coqui_version = command.coqui_version;
 

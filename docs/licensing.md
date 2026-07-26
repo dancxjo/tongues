@@ -56,6 +56,15 @@ or running the model does not grant commercial use or permission to distribute
 modified weights. This model license is independent from both Tongues' MIT
 code and Coqui's MPL-2.0 source implementation.
 
+The official XTTS v2 repository publishes its model, tokenizer, conditioning
+statistics, and examples under the Coqui Public Model License 1.0.0
+(`LicenseRef-Coqui-Public-Model-License-1.0.0`). CPML 1.0.0 restricts the model
+and its outputs to the license's non-commercial purposes and requires
+recipients of the model, modifications, or outputs to receive the terms or
+their URL. Local conversion to SafeTensors does not remove those restrictions.
+Tongues must not catalog or redistribute converted XTTS artifacts under its MIT
+source license.
+
 Piper source is MIT, with its notice preserved in
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). Piper-distributed voice
 weights keep their individual cataloged license and evidence; Piper's MIT

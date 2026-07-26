@@ -51,6 +51,24 @@ rather than a successful truncated synthesis. Released configs that require
 prenet dropout at inference keep that behavior even on non-autodiff Burn
 backends.
 
+XTTS v2 package import is recognized as a separate `xtts_v2` architecture.
+The importer validates the checkpoint's GPT text/audio embeddings, transformer
+layer count, conditioning perceiver, HiFi decoder, and speaker encoder. It also
+validates `vocab.json` special and language tokens against the declared text
+vocabulary, records the 24 kHz output contract and declared model languages,
+and copies the tokenizer into the checksummed package. The Rust tokenizer
+accepts text only after the XTTS language-specific cleaner boundary, so number
+expansion and Chinese/Japanese/Korean transliteration cannot silently use an
+incomplete approximation. Native GPT generation, reference conditioning, and
+HiFi decoding are still being implemented; `xtts` is therefore not advertised
+as a CLI synthesis backend yet.
+
+The native stream assembler is available to that backend work now. It consumes
+the cumulative waveform produced as GPT code latents grow, emits only the
+newly stable suffix, crossfades the recomputed 1,024-sample overlap, and flushes
+the withheld tail on finalization. Tests require concatenated chunks to equal
+one-shot output exactly when cumulative decoder prefixes agree.
+
 ## Safe Coqui package import
 
 Legacy Coqui artifacts can be converted once into a backend-neutral, versioned
@@ -71,6 +89,23 @@ Omit `--speakers` for single-speaker acoustic models and vocoders. Use
 `--languages language_ids.json` when a multilingual artifact has a separate
 language map. `--checkpoint-key` defaults to `model`.
 
+XTTS v2 reads languages from `config.json` and requires the official tokenizer
+as a separate input:
+
+```sh
+cargo run --bin tongues -- models import-coqui \
+  --config /path/to/XTTS-v2/config.json \
+  --checkpoint /path/to/XTTS-v2/model.pth \
+  --tokenizer /path/to/XTTS-v2/vocab.json \
+  --out /path/to/xtts-v2-package \
+  --license LicenseRef-Coqui-Public-Model-License-1.0.0 \
+  --source https://huggingface.co/coqui/XTTS-v2/tree/cae391834a3834328bfa5a7b1ad3d6d6a46144c0 \
+  --coqui-version dbf1a08a0d4e47fdad6172e433eeb34bc6b13b4e
+```
+
+The `LicenseRef` in this example denotes the model repository's CPML 1.0.0
+terms; it is not an SPDX license or permission for commercial use.
+
 The package contains:
 
 | File | Purpose |
@@ -79,6 +114,7 @@ The package contains:
 | `model.json` | Canonical backend-neutral inference configuration |
 | `model.safetensors` | Deterministically ordered tensor names and weights |
 | `tensors.json` | Exact dtype and shape index used during validation |
+| `vocab.json` | XTTS tokenizer; present only in XTTS packages and covered by the package file checksums |
 
 Inspect without writing anything:
 
@@ -115,6 +151,13 @@ Python is never started, modules are never imported, and pickle callables are
 never executed. Unknown inference fields are errors; training-only fields are
 sorted into `ignored_training_fields` in the manifest rather than silently
 discarded.
+
+The XTTS profile additionally recognizes exactly four inert Coqui
+configuration dataclasses embedded by the official checkpoint (`XttsConfig`,
+`XttsArgs`, `XttsAudioConfig`, and `BaseDatasetConfig`) and the protocol-2
+`NEWOBJ` opcode that builds their data representation inside the Rust parser.
+No Python class is imported or executed; other globals, extension opcodes,
+dynamic `STACK_GLOBAL`, and unknown XTTS classes remain rejected.
 
 Plain MelGAN also recognizes the root state-dictionary layout used by the
 MIT-licensed Descript `melgan-neurips` checkpoints. The importer preserves

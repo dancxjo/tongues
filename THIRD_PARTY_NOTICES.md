@@ -20,6 +20,13 @@ MultiBand-MelGAN, VITS, and YourTTS, and targets the corresponding tensor names,
 token contracts, defaults, and inference behavior. Coqui reference executions
 also produced numerical conformance fixtures.
 
+`crates/tongues-tts/src/xtts.rs` adapts the XTTS v2 configuration, tokenizer
+boundary, and cumulative-waveform overlap semantics from Coqui TTS revision
+`dbf1a08a0d4e47fdad6172e433eeb34bc6b13b4e`, principally
+`TTS/tts/models/xtts.py`, `TTS/tts/configs/xtts_config.py`, and
+`TTS/tts/layers/xtts/tokenizer.py`. That file is an MPL-2.0 covered
+modification rather than MIT relicensing.
+
 `crates/tongues-tts/src/burn_tacotron.rs` and
 `crates/tongues-tts/src/tacotron_config.rs` adapt the Tacotron 2 inference graph
 and configuration contract from Coqui TTS revision
@@ -61,6 +68,12 @@ MultiBand-MelGAN registry entry declares `MPL`; imports must retain the
 applicable artifact-specific evidence. The multilingual YourTTS registry entry
 declares `CC BY-NC-ND 4.0`; Tongues records that separate non-commercial,
 no-derivatives model license in its catalog.
+
+The official XTTS v2 model repository separately declares the Coqui Public
+Model License 1.0.0, which restricts the model and its outputs to the
+license-defined non-commercial purposes. Native loading or SafeTensors
+conversion does not relicense the model, tokenizer, conditioning assets, or
+outputs.
 
 Repository history includes commit `8e3a9c6`, titled
 `Import/adapt/reverse engineer some components from coqui`. That title does not

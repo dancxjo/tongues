@@ -66,6 +66,7 @@ pub mod tacotron_config;
 pub mod vits_config;
 #[allow(dead_code)]
 mod vits_projector;
+pub mod xtts;
 
 pub use burn_delightful_tts::{
     DelightfulTts, DelightfulTtsControls, DelightfulTtsError, DelightfulTtsOutput,
@@ -193,6 +194,11 @@ pub use tacotron_config::{
 };
 pub use vits_config::{VitsInferenceConfig, VitsNetworkConfig};
 pub use vits_projector::VitsLinguisticProjector;
+pub use xtts::{
+    XttsAudioConfig, XttsModelArgs, XttsStreamAssembler, XttsTokenizer, XttsV2Config,
+    XTTS_V2_CONDITIONING_MEL_BINS, XTTS_V2_DEFAULT_STREAM_CODE_CHUNK,
+    XTTS_V2_STREAM_OVERLAP_SAMPLES,
+};
 
 pub const RYAN_MEDIUM_MODEL_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx";
 pub const RYAN_MEDIUM_CONFIG_URL: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json";

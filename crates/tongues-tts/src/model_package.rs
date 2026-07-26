@@ -28,7 +28,8 @@ use crate::{
     GlowTtsInferenceConfig, HifiganBundleConfig, LanguageCatalog, MelganBundleConfig,
     MelganVariant, PhonemeTokenizerConfig, PhonemeVocabularyProjector, SpeakerCatalog,
     SpeedySpeechConfig, StochasticGlowTts, TacotronArchitecture, TacotronGraphemeProjector,
-    TacotronInferenceConfig, VitsInferenceConfig, COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
+    TacotronInferenceConfig, VitsInferenceConfig, XttsV2Config,
+    COQUI_RESNET_SPEAKER_EMBEDDING_SPACE,
 };
 
 pub const MODEL_PACKAGE_SCHEMA_VERSION: u32 = 1;
@@ -57,6 +58,7 @@ pub enum ModelPackageArchitecture {
     MultibandMelGan,
     GlowTts,
     Vits,
+    XttsV2,
     SpeakerEncoder,
 }
 
@@ -75,6 +77,7 @@ impl ModelPackageArchitecture {
             Self::MultibandMelGan => "multiband_mel_gan",
             Self::GlowTts => "glow_tts",
             Self::Vits => "vits",
+            Self::XttsV2 => "xtts_v2",
             Self::SpeakerEncoder => "speaker_encoder",
         }
     }
@@ -222,6 +225,7 @@ pub struct CoquiImportOptions {
     pub output_dir: PathBuf,
     pub speaker_map_path: Option<PathBuf>,
     pub language_map_path: Option<PathBuf>,
+    pub tokenizer_path: Option<PathBuf>,
     pub checkpoint_key: String,
     pub license: String,
     pub source: String,
@@ -242,6 +246,7 @@ impl CoquiImportOptions {
             output_dir: output_dir.into(),
             speaker_map_path: None,
             language_map_path: None,
+            tokenizer_path: None,
             checkpoint_key: "model".into(),
             license: license.into(),
             source: source.into(),
@@ -343,6 +348,10 @@ enum ParsedConfig {
         parameters: Value,
         symbols: Vec<String>,
     },
+    Xtts {
+        model: XttsV2Config,
+        parameters: Value,
+    },
     SpeakerEncoder {
         model: SpeakerEncoderPackageConfig,
         parameters: Value,
@@ -370,6 +379,7 @@ impl ParsedConfig {
             },
             Self::GlowTts { .. } => ModelPackageArchitecture::GlowTts,
             Self::Vits { .. } => ModelPackageArchitecture::Vits,
+            Self::Xtts { .. } => ModelPackageArchitecture::XttsV2,
             Self::SpeakerEncoder { .. } => ModelPackageArchitecture::SpeakerEncoder,
         }
     }
@@ -385,6 +395,7 @@ impl ParsedConfig {
             | Self::MelGan { parameters, .. }
             | Self::GlowTts { parameters, .. }
             | Self::Vits { parameters, .. }
+            | Self::Xtts { parameters, .. }
             | Self::SpeakerEncoder { parameters, .. } => parameters,
         }
     }
@@ -408,6 +419,15 @@ impl ParsedConfig {
             Self::MelGan { model, .. } => &model.audio,
             Self::GlowTts { inference, .. } => &inference.audio,
             Self::Vits { inference, .. } => &inference.audio,
+            Self::Xtts { model, .. } => {
+                return Some(PackageAudio {
+                    sample_rate_hz: model.audio.output_sample_rate,
+                    fft_size: Some(2_048),
+                    window_size: Some(1_024),
+                    hop_size: Some(256),
+                    mel_bins: Some(crate::XTTS_V2_CONDITIONING_MEL_BINS),
+                });
+            }
             Self::SpeakerEncoder { model, .. } => {
                 return Some(PackageAudio {
                     sample_rate_hz: model.sample_rate_hz,
@@ -436,7 +456,10 @@ impl ParsedConfig {
             | Self::DelightfulTts { symbols, .. }
             | Self::GlowTts { symbols, .. }
             | Self::Vits { symbols, .. } => symbols.clone(),
-            Self::HifiGan { .. } | Self::MelGan { .. } | Self::SpeakerEncoder { .. } => Vec::new(),
+            Self::HifiGan { .. }
+            | Self::MelGan { .. }
+            | Self::Xtts { .. }
+            | Self::SpeakerEncoder { .. } => Vec::new(),
         }
     }
 }
@@ -598,12 +621,15 @@ pub fn inspect_coqui_import_with_progress(
     progress(ModelImportProgress::ReadingConfig {
         path: options.config_path.clone(),
     });
-    let (root, parsed, ignored_training_fields) = parse_config(&options.config_path)?;
+    let (root, parsed, ignored_training_fields) =
+        parse_config(&options.config_path, options.tokenizer_path.as_deref())?;
     progress(ModelImportProgress::ScanningCheckpoint {
         path: options.checkpoint_path.clone(),
     });
     if matches!(parsed, ParsedConfig::MelGan { .. }) {
         scan_safe_melgan_checkpoint(options)?;
+    } else if matches!(parsed, ParsedConfig::Xtts { .. }) {
+        scan_safe_xtts_pytorch_checkpoint(&options.checkpoint_path)?;
     } else {
         scan_safe_pytorch_checkpoint(&options.checkpoint_path)?;
     }
@@ -638,7 +664,7 @@ pub fn import_coqui_model_with_progress(
     mut progress: impl FnMut(ModelImportProgress),
 ) -> Result<ModelPackageManifest> {
     let inspection = inspect_coqui_import_with_progress(options, &mut progress)?;
-    let (_, parsed, _) = parse_config(&options.config_path)?;
+    let (_, parsed, _) = parse_config(&options.config_path, options.tokenizer_path.as_deref())?;
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
             "failed to create model package directory {}",
@@ -672,14 +698,27 @@ pub fn import_coqui_model_with_progress(
     });
     validate_runtime_shapes(options, &parsed, &inspection.tensors, &weights_path)?;
 
-    let files = [
+    let mut package_members = vec![
         MODEL_PACKAGE_CONFIG,
         MODEL_PACKAGE_WEIGHTS,
         MODEL_PACKAGE_TENSORS,
-    ]
-    .into_iter()
-    .map(|name| package_file(&options.output_dir.join(name), name))
-    .collect::<Result<Vec<_>>>()?;
+    ];
+    if matches!(parsed, ParsedConfig::Xtts { .. }) {
+        let tokenizer = options
+            .tokenizer_path
+            .as_deref()
+            .context("XTTS import requires vocab.json")?;
+        let destination = options.output_dir.join("vocab.json");
+        progress(ModelImportProgress::WritingMetadata {
+            path: destination.clone(),
+        });
+        copy_file_atomic(tokenizer, &destination)?;
+        package_members.push("vocab.json");
+    }
+    let files = package_members
+        .into_iter()
+        .map(|name| package_file(&options.output_dir.join(name), name))
+        .collect::<Result<Vec<_>>>()?;
     let manifest = ModelPackageManifest {
         schema_version: MODEL_PACKAGE_SCHEMA_VERSION,
         package_format: MODEL_PACKAGE_FORMAT.into(),
@@ -907,7 +946,10 @@ fn validate_options(options: &CoquiImportOptions) -> Result<()> {
     Ok(())
 }
 
-fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
+fn parse_config(
+    path: &Path,
+    tokenizer_path: Option<&Path>,
+) -> Result<(Value, ParsedConfig, Vec<String>)> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read Coqui config {}", path.display()))?;
     let root: Value = json5::from_str(&source)
@@ -1342,6 +1384,13 @@ fn parse_config(path: &Path) -> Result<(Value, ParsedConfig, Vec<String>)> {
                 symbols,
             }
         }
+        ModelPackageArchitecture::XttsV2 => {
+            let tokenizer_path =
+                tokenizer_path.context("XTTS import requires --tokenizer /path/to/vocab.json")?;
+            let model = XttsV2Config::from_json_value(&root, tokenizer_path)?;
+            let parameters = serde_json::to_value(&model)?;
+            ParsedConfig::Xtts { model, parameters }
+        }
         ModelPackageArchitecture::SpeakerEncoder => {
             let model = SpeakerEncoderPackageConfig::from_root(&root)?;
             let parameters = serde_json::to_value(&model)?;
@@ -1383,6 +1432,7 @@ fn detect_architecture(object: &Map<String, Value>) -> Result<ModelPackageArchit
             Ok(ModelPackageArchitecture::GlowTts)
         }
         Some(value) if value.eq_ignore_ascii_case("vits") => Ok(ModelPackageArchitecture::Vits),
+        Some(value) if value.eq_ignore_ascii_case("xtts") => Ok(ModelPackageArchitecture::XttsV2),
         Some("speaker_encoder") | Some("speaker-encoder") => {
             Ok(ModelPackageArchitecture::SpeakerEncoder)
         }
@@ -1511,6 +1561,22 @@ fn ignored_training_fields(
             "use_pqmf",
         ]
         .as_slice(),
+        ModelPackageArchitecture::XttsV2 => [
+            "model",
+            "model_args",
+            "audio",
+            "languages",
+            "temperature",
+            "length_penalty",
+            "repetition_penalty",
+            "top_k",
+            "top_p",
+            "gpt_cond_len",
+            "gpt_cond_chunk_len",
+            "max_ref_len",
+            "sound_norm_refs",
+        ]
+        .as_slice(),
         ModelPackageArchitecture::SpeakerEncoder => {
             ["model", "model_params", "model_args", "audio"].as_slice()
         }
@@ -1588,6 +1654,20 @@ fn ignored_training_fields(
                 "model_args.speakers_file",
                 "model_args.use_speaker_encoder_as_loss",
                 "model_args.use_spectral_norm_disriminator",
+            ]
+            .into_iter()
+            .filter(|path| json_path_exists(object, path))
+            .map(str::to_string),
+        ),
+        ModelPackageArchitecture::XttsV2 => ignored.extend(
+            [
+                "model_args.gpt_batch_size",
+                "model_args.enable_redaction",
+                "model_args.gpt_checkpoint",
+                "model_args.clvp_checkpoint",
+                "model_args.decoder_checkpoint",
+                "model_args.num_chars",
+                "model_args.tokenizer_file",
             ]
             .into_iter()
             .filter(|path| json_path_exists(object, path))
@@ -1689,7 +1769,20 @@ fn load_languages(
         }
         _ => None,
     };
-    let mut languages = if let Some(path) = options.language_map_path.as_deref() {
+    let mut languages = if let ParsedConfig::Xtts { model, .. } = parsed {
+        ensure!(
+            options.language_map_path.is_none(),
+            "XTTS languages come from config.json; do not pass --languages"
+        );
+        model
+            .languages
+            .iter()
+            .map(|tag| PackageLanguage {
+                id: None,
+                tag: tag.clone(),
+            })
+            .collect::<Vec<_>>()
+    } else if let Some(path) = options.language_map_path.as_deref() {
         let source = fs::read_to_string(path)
             .with_context(|| format!("failed to read language map {}", path.display()))?;
         let map: BTreeMap<String, u32> = serde_json::from_str(&source)
@@ -1936,7 +2029,78 @@ fn validate_runtime_shapes(
                     .context("ResNet speaker encoder checkpoint shape validation failed")?;
             }
         }
+        ParsedConfig::Xtts { model, .. } => validate_xtts_shapes(model, tensors)?,
     }
+    Ok(())
+}
+
+fn validate_xtts_shapes(config: &XttsV2Config, tensors: &[TensorMetadata]) -> Result<()> {
+    for required in [
+        "gpt.text_embedding.weight",
+        "gpt.mel_embedding.weight",
+        "gpt.mel_head.weight",
+        "gpt.final_norm.weight",
+        "hifigan_decoder.speaker_encoder.fc.weight",
+        "hifigan_decoder.waveform_decoder.conv_pre.weight",
+    ] {
+        ensure!(
+            tensors.iter().any(|tensor| tensor.name.ends_with(required)),
+            "XTTS checkpoint is missing `{required}`"
+        );
+    }
+    ensure!(
+        tensors
+            .iter()
+            .any(|tensor| tensor.name.contains("gpt.conditioning_perceiver")),
+        "XTTS v2 checkpoint is missing the conditioning perceiver"
+    );
+    let text_embedding = tensors
+        .iter()
+        .find(|tensor| tensor.name.ends_with("gpt.text_embedding.weight"))
+        .context("XTTS checkpoint has no text embedding")?;
+    ensure!(
+        text_embedding.shape
+            == [
+                config.model_args.gpt_number_text_tokens,
+                config.model_args.gpt_n_model_channels,
+            ],
+        "XTTS text embedding has shape {:?}, expected [{}, {}]",
+        text_embedding.shape,
+        config.model_args.gpt_number_text_tokens,
+        config.model_args.gpt_n_model_channels
+    );
+    let mel_embedding = tensors
+        .iter()
+        .find(|tensor| tensor.name.ends_with("gpt.mel_embedding.weight"))
+        .context("XTTS checkpoint has no audio-code embedding")?;
+    ensure!(
+        mel_embedding.shape
+            == [
+                config.model_args.gpt_num_audio_tokens,
+                config.model_args.gpt_n_model_channels,
+            ],
+        "XTTS audio-code embedding has shape {:?}, expected [{}, {}]",
+        mel_embedding.shape,
+        config.model_args.gpt_num_audio_tokens,
+        config.model_args.gpt_n_model_channels
+    );
+    let transformer_layers = tensors
+        .iter()
+        .filter_map(|tensor| {
+            tensor
+                .name
+                .strip_prefix("gpt.gpt.h.")
+                .or_else(|| tensor.name.strip_prefix("xtts.gpt.gpt.h."))
+                .and_then(|suffix| suffix.split('.').next())
+                .and_then(|index| index.parse::<usize>().ok())
+        })
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        transformer_layers.len() == config.model_args.gpt_layers,
+        "XTTS checkpoint exposes {} GPT layers, expected {}",
+        transformer_layers.len(),
+        config.model_args.gpt_layers
+    );
     Ok(())
 }
 
@@ -2111,6 +2275,9 @@ fn source_artifacts(options: &CoquiImportOptions) -> Result<Vec<PackageArtifact>
     if let Some(path) = &options.language_map_path {
         artifacts.push(source_artifact("languages", path)?);
     }
+    if let Some(path) = &options.tokenizer_path {
+        artifacts.push(source_artifact("tokenizer", path)?);
+    }
     artifacts.sort_by(|left, right| left.role.cmp(&right.role));
     Ok(artifacts)
 }
@@ -2152,6 +2319,22 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     writer.get_ref().sync_all()?;
     fs::rename(&part, path)
         .with_context(|| format!("failed to atomically install {}", path.display()))?;
+    Ok(())
+}
+
+fn copy_file_atomic(source: &Path, destination: &Path) -> Result<()> {
+    let part = part_path(destination);
+    let mut input = BufReader::new(
+        File::open(source).with_context(|| format!("failed to open {}", source.display()))?,
+    );
+    let mut output = BufWriter::new(
+        File::create(&part).with_context(|| format!("failed to create {}", part.display()))?,
+    );
+    std::io::copy(&mut input, &mut output)?;
+    output.flush()?;
+    output.get_ref().sync_all()?;
+    fs::rename(&part, destination)
+        .with_context(|| format!("failed to atomically install {}", destination.display()))?;
     Ok(())
 }
 
@@ -2243,7 +2426,14 @@ fn safe_dtype(dtype: DType) -> Result<SafeDtype> {
 /// tensor storage references. Parsing remains data-only; none of these
 /// callables are imported or executed.
 pub fn scan_safe_pytorch_checkpoint(path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
+    scan_safe_pytorch_checkpoint_profile(path.as_ref(), false)
+}
+
+fn scan_safe_xtts_pytorch_checkpoint(path: impl AsRef<Path>) -> Result<()> {
+    scan_safe_pytorch_checkpoint_profile(path.as_ref(), true)
+}
+
+fn scan_safe_pytorch_checkpoint_profile(path: &Path, allow_xtts_config: bool) -> Result<()> {
     let file = File::open(path)
         .with_context(|| format!("failed to open PyTorch checkpoint {}", path.display()))?;
     let mut archive = ZipArchive::new(file).with_context(|| {
@@ -2277,10 +2467,10 @@ pub fn scan_safe_pytorch_checkpoint(path: impl AsRef<Path>) -> Result<()> {
     );
     let mut pickle = Vec::with_capacity(entry.size() as usize);
     entry.read_to_end(&mut pickle)?;
-    scan_pickle_program(&pickle)
+    scan_pickle_program(&pickle, allow_xtts_config)
 }
 
-fn scan_pickle_program(bytes: &[u8]) -> Result<()> {
+fn scan_pickle_program(bytes: &[u8], allow_xtts_config: bool) -> Result<()> {
     let mut cursor = 0usize;
     let mut protocol = None;
     let mut stopped = false;
@@ -2300,7 +2490,7 @@ fn scan_pickle_program(bytes: &[u8]) -> Result<()> {
                 let module = take_line(bytes, &mut cursor, "GLOBAL module")?;
                 let name = take_line(bytes, &mut cursor, "GLOBAL name")?;
                 ensure!(
-                    allowed_pickle_global(module, name),
+                    allowed_pickle_global(module, name, allow_xtts_config),
                     "unsafe/unsupported pickle GLOBAL `{module}.{name}`; arbitrary Python callables are rejected"
                 );
             }
@@ -2340,6 +2530,7 @@ fn scan_pickle_program(bytes: &[u8]) -> Result<()> {
             }
             b')' | b'R' | b'(' | b't' | b'Q' | b'N' | 0x85 | 0x86 | 0x87 | 0x88 | 0x89 | b's'
             | b'u' | b'}' | b'd' | b'b' | b']' | b'l' | b'a' | b'e' | 0x94 => {}
+            0x81 if allow_xtts_config => {}
             0x81 | 0x82 | 0x83 | 0x84 | 0x91 | 0x92 | 0x93 => {
                 bail!(
                     "unsafe/unsupported pickle construction opcode 0x{opcode:02x}; arbitrary objects are rejected"
@@ -2359,7 +2550,7 @@ fn scan_pickle_program(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn allowed_pickle_global(module: &str, name: &str) -> bool {
+fn allowed_pickle_global(module: &str, name: &str, allow_xtts_config: bool) -> bool {
     matches!(
         (module, name),
         ("collections", "OrderedDict")
@@ -2376,7 +2567,14 @@ fn allowed_pickle_global(module: &str, name: &str) -> bool {
             | ("torch", "CharStorage")
             | ("torch", "ByteStorage")
             | ("torch", "BoolStorage")
-    )
+    ) || (allow_xtts_config
+        && matches!(
+            (module, name),
+            ("TTS.tts.models.xtts", "XttsAudioConfig")
+                | ("TTS.tts.models.xtts", "XttsArgs")
+                | ("TTS.tts.configs.xtts_config", "XttsConfig")
+                | ("TTS.tts.configs.shared_configs", "BaseDatasetConfig")
+        ))
 }
 
 fn take<'a>(bytes: &'a [u8], cursor: &mut usize, length: usize, label: &str) -> Result<&'a [u8]> {
@@ -2469,13 +2667,13 @@ mod tests {
     #[test]
     fn safe_pickle_scanner_accepts_tensor_rebuild_vocabulary() {
         let pickle = b"\x80\x02ccollections\nOrderedDict\nctorch._utils\n_rebuild_tensor_v2\nctorch\nFloatStorage\n.";
-        scan_pickle_program(pickle).expect("tensor-only pickle vocabulary");
+        scan_pickle_program(pickle, false).expect("tensor-only pickle vocabulary");
     }
 
     #[test]
     fn safe_pickle_scanner_rejects_arbitrary_global() {
         let pickle = b"\x80\x02cos\nsystem\n.";
-        let error = scan_pickle_program(pickle).expect_err("os.system must be rejected");
+        let error = scan_pickle_program(pickle, false).expect_err("os.system must be rejected");
         assert!(error.to_string().contains("os.system"));
         assert!(error.to_string().contains("arbitrary Python"));
     }
@@ -2483,8 +2681,22 @@ mod tests {
     #[test]
     fn safe_pickle_scanner_rejects_stack_global() {
         let pickle = b"\x80\x02\x93.";
-        let error = scan_pickle_program(pickle).expect_err("STACK_GLOBAL must be rejected");
+        let error = scan_pickle_program(pickle, false).expect_err("STACK_GLOBAL must be rejected");
         assert!(error.to_string().contains("opcode 0x93"));
+    }
+
+    #[test]
+    fn xtts_pickle_profile_allows_only_known_inert_config_classes() {
+        let pickle = b"\x80\x02cTTS.tts.models.xtts\nXttsArgs\n)\x81.";
+        scan_pickle_program(pickle, true).expect("known XTTS config dataclass");
+        let error =
+            scan_pickle_program(pickle, false).expect_err("generic tensor scan must stay strict");
+        assert!(error.to_string().contains("XttsArgs"));
+
+        let unknown = b"\x80\x02cTTS.tts.models.xtts\nRunMe\n)\x81.";
+        let error =
+            scan_pickle_program(unknown, true).expect_err("unknown XTTS global must be rejected");
+        assert!(error.to_string().contains("RunMe"));
     }
 
     #[test]
