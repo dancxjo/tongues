@@ -2731,6 +2731,8 @@ fn registered_speech_compositions_at(
             model: voice.id.into(),
             pipeline,
             recommended: voice.id == selected,
+            capability_tier: tongues_tts::CapabilityTier::TierB,
+            revision_capable: false,
         }
     }));
     if let Ok(catalog) = tongues_tts::ModelCatalog::with_private_catalogs(
@@ -2771,6 +2773,8 @@ fn fairseq_registered_composition(
         model: entry.id.clone(),
         pipeline,
         recommended: entry.id == "fairseq-mms-vits-eng",
+        capability_tier: tongues_tts::CapabilityTier::TierB,
+        revision_capable: false,
     }
 }
 
@@ -2791,6 +2795,8 @@ fn styletts2_registered_composition(
         model: entry.id.clone(),
         pipeline,
         recommended: entry.id == "styletts2-en-us",
+        capability_tier: tongues_tts::CapabilityTier::TierC,
+        revision_capable: false,
     }
 }
 
@@ -5057,6 +5063,10 @@ fn speech_path_catalog_ids(
                 .map(str::to_string)
                 .unwrap_or(speech_model_id(home, backend, None)?),
         ],
+        "onnx" => vec![model
+            .filter(|model| !model.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or(speech_model_id(home, backend, None)?)],
         "mock" => Vec::new(),
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
     })
