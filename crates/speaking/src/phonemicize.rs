@@ -11,6 +11,7 @@ use crate::data::{canonical_variety_id, variety_by_code};
 use crate::evidence::{EvidenceProvenance, EvidenceSource};
 use crate::feature::{FeatureBundle, FeatureValue};
 use crate::ids::{FeatureId, GraphemeId, PhoneId, PhonemeId, VarietyId};
+use crate::morphology::MorphemeKind;
 use crate::orthography::GraphemeToken;
 use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
@@ -1543,6 +1544,49 @@ fn pronunciation_for_word(
     pipeline.unknown_word_pronunciation(word, variety, context)
 }
 
+/// Returns the planned phonemes for a hyphenated part when it is recognized as a
+/// productive prefix in the variety's morphology.  Secondary stress on the prefix
+/// vowel is demoted to unstressed because productive prefixes do not carry lexical
+/// stress in connected hyphenated constructions.
+fn prefix_planned_phonemes(
+    part: &OrthographicToken,
+    variety: &LinguisticVariety,
+) -> Option<Vec<PlannedPhoneme>> {
+    let morphology = variety.morphology.as_ref()?;
+    let part_lower = part.text.to_lowercase();
+    let prefix = morphology.morphemes.values().find(|morpheme| {
+        morpheme.kind == MorphemeKind::Prefix
+            && morpheme.form.trim_end_matches('-') == part_lower
+    })?;
+    let stress_id = FeatureId("phonology.stress".into());
+    let planned: Vec<PlannedPhoneme> = prefix
+        .pronunciation
+        .iter()
+        .filter_map(|token| {
+            if let Spec::Known(id) = &token.phoneme {
+                let mut features = token.features.clone();
+                if let Some(Spec::Known(FeatureValue::Category(s))) =
+                    features.values.get(&stress_id)
+                {
+                    if s == "secondary" {
+                        features.values.insert(
+                            stress_id.clone(),
+                            Spec::Known(FeatureValue::Category("unstressed".into())),
+                        );
+                    }
+                }
+                Some(PlannedPhoneme {
+                    phoneme: id.clone(),
+                    features,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    (!planned.is_empty()).then_some(planned)
+}
+
 fn hyphenated_pronunciation_from_parts(
     pipeline: &(impl PronunciationPipeline + ?Sized),
     word: &WordToken,
@@ -1561,6 +1605,19 @@ fn hyphenated_pronunciation_from_parts(
         let normalized = normalize_surface_word(&part.text);
         if normalized.is_empty() {
             return None;
+        }
+        // For non-final parts, prefer the morphology's productive prefix pronunciation
+        // over a lexicon lookup so that "re-" → /ɹɪ/ rather than the solfège word "re"
+        // → /ɹeɪ/, "co-" → /koʊ/ rather than a spurious word match, etc.
+        let prefix_phonemes = if index + 1 < parts.len() {
+            prefix_planned_phonemes(part, variety)
+        } else {
+            None
+        };
+        if let Some(planned) = prefix_phonemes {
+            candidate.extend(planned);
+            break_offsets.push(candidate.len());
+            continue;
         }
         let part_word = WordToken {
             text: part.text.clone(),
@@ -4370,7 +4427,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known gap: productive hyphenated prefixes are split into separate words"]
     fn hyphenated_prefixed_words_should_compose_before_word_splitting() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("The co-op re-opened.", "en-US"))
