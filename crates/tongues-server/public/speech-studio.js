@@ -306,6 +306,39 @@
                     </details>
                 </section>
 
+                <section class="duplex-panel" aria-labelledby="duplex-heading">
+                    <div class="speech-section-heading">
+                        <div>
+                            <h2 id="duplex-heading">Predictive duplex timeline</h2>
+                            <p class="page-doc">
+                                The server projects replayable duplex belief snapshots so predicted
+                                text stays visible without ever becoming playable client audio.
+                            </p>
+                        </div>
+                        <div class="duplex-actions">
+                            <button id="run-duplex-preview" type="button" class="secondary-button">Preview timeline</button>
+                            <button id="replay-duplex-journal" type="button" class="secondary-button">Replay journal</button>
+                        </div>
+                    </div>
+                    <div class="controls-grid">
+                        <div class="form-group">
+                            <label for="duplex-mock-acoustics">Mock acoustic chunks</label>
+                            <textarea id="duplex-mock-acoustics"
+                                placeholder="Optional transcript chunks, one line per chunk"></textarea>
+                            <small>Leave blank to preview the prompt lines as direct text chunks.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="duplex-journal-path">Saved journal path</label>
+                            <input id="duplex-journal-path" type="text"
+                                placeholder="target/duplex/oracle-chunks.journal.json">
+                            <small>Replay a saved journal relative to the repository root.</small>
+                        </div>
+                    </div>
+                    <div id="duplex-error" class="inline-error hidden" role="alert"></div>
+                    <div id="duplex-summary" class="duplex-summary hidden"></div>
+                    <ol id="duplex-timeline" class="duplex-timeline hidden"></ol>
+                </section>
+
                 <details class="engine-inventory">
                     <summary>Engines and Models <span id="component-count"></span></summary>
                     <p>All native, catalog, compatibility, and test components are listed even when
@@ -924,6 +957,115 @@
         byId('result-container').classList.remove('hidden');
     }
 
+    function duplexLines(source) {
+        return String(source || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    function buildDuplexRequest({
+        text = '',
+        mockAcoustics = '',
+        variety = null,
+        journalPath = '',
+    } = {}) {
+        const replayPath = String(journalPath || '').trim();
+        if (replayPath) return { journal_path: replayPath };
+        const chunks = duplexLines(text);
+        const mockChunks = duplexLines(mockAcoustics);
+        if (!chunks.length && !mockChunks.length) {
+            throw new Error('Enter prompt text, mock acoustic chunks, or a saved journal path.');
+        }
+        return {
+            chunks,
+            mock_acoustics: mockChunks,
+            variety,
+        };
+    }
+
+    function duplexTokenMarkup(tokens, kind) {
+        if (!tokens?.length) return '<span class="duplex-empty">—</span>';
+        return tokens.map((token) => (
+            `<span class="duplex-token duplex-token-${kind}">${escapeHtml(token)}</span>`
+        )).join('');
+    }
+
+    function duplexSurfaceList(items) {
+        return (items || []).map((item) => (
+            typeof item === 'string' ? item : (item?.surface || item?.key || '')
+        )).filter(Boolean);
+    }
+
+    function formatDuplexTranscriptEvent(event) {
+        if (!event) return 'No transcript delta';
+        if (event.type === 'append') return `Append: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
+        if (event.type === 'withdraw') return `Withdraw: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
+        if (event.type === 'commit') return `Commit: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
+        if (event.type === 'replace') {
+            const previous = duplexSurfaceList(event.data?.previous).join(' ');
+            const replacement = duplexSurfaceList(event.data?.replacement).join(' ');
+            return `Replace: ${previous || '—'} → ${replacement || '—'}`;
+        }
+        return event.type;
+    }
+
+    function renderDuplexProjection(projection) {
+        const timeline = byId('duplex-timeline');
+        const summary = byId('duplex-summary');
+        const finalCommitted = projection?.final_state?.committed || [];
+        summary.innerHTML = `
+            <dl class="metadata-grid">
+                <div><dt>Run</dt><dd>${escapeHtml(projection.run_id)}</dd></div>
+                <div><dt>Replay</dt><dd>${projection.replay_verified ? 'Verified' : 'Mismatch'}</dd></div>
+                <div><dt>Events</dt><dd>${projection.timeline?.length || 0}</dd></div>
+                <div><dt>Final commit</dt><dd>${escapeHtml(finalCommitted.map((item) => item.surface).join(' ') || '—')}</dd></div>
+            </dl>`;
+        summary.classList.remove('hidden');
+        timeline.innerHTML = (projection.timeline || []).map((snapshot) => `
+            <li class="duplex-step">
+                <div class="duplex-step-heading">
+                    <strong>#${snapshot.sequence} ${escapeHtml(snapshot.layer)}</strong>
+                    <span>${escapeHtml(snapshot.event_type)}</span>
+                </div>
+                <p class="duplex-step-message">${escapeHtml(snapshot.message)}</p>
+                <div class="duplex-track"><span>Observed</span>${duplexTokenMarkup(snapshot.observed, 'observed')}</div>
+                <div class="duplex-track"><span>Shared</span>${duplexTokenMarkup(snapshot.shared_prefix, 'inferred')}</div>
+                <div class="duplex-track"><span>Committed</span>${duplexTokenMarkup(snapshot.committed, 'committed')}</div>
+                <div class="duplex-track"><span>Predicted</span>${duplexTokenMarkup(snapshot.predicted, 'predicted')}</div>
+                <div class="duplex-step-meta">
+                    <span>Frontier ${snapshot.commit_frontier}</span>
+                    <span>${snapshot.first_divergent_morpheme_index == null ? 'No branch divergence' : `First divergent stage ${snapshot.first_divergent_morpheme_index}`}</span>
+                    <span>${escapeHtml(formatDuplexTranscriptEvent(snapshot.transcript_event))}</span>
+                </div>
+                <details class="duplex-branches">
+                    <summary>Branches (${snapshot.branches.length})</summary>
+                    <ul>
+                        ${(snapshot.branches || []).map((branch) => `
+                            <li>
+                                <strong>${escapeHtml(branch.hypothesis_id)}</strong>
+                                <span>${branch.selected ? 'selected' : 'standby'} · p=${Number(branch.probability || 0).toFixed(3)}</span>
+                                <span>${escapeHtml(branch.provenance)}</span>
+                                <div class="duplex-track">${duplexTokenMarkup(branch.morphemes, branch.selected ? 'predicted' : 'observed')}</div>
+                            </li>
+                        `).join('')}
+                    </ul>
+                </details>
+            </li>
+        `).join('');
+        timeline.classList.remove('hidden');
+    }
+
+    async function loadDuplexProjection(payload) {
+        const response = await fetch('/api/duplex/project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, (character) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -1134,6 +1276,42 @@
                 button.disabled = false;
             }
         });
+        byId('run-duplex-preview').addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            clearError(byId('duplex-error'));
+            button.disabled = true;
+            try {
+                const path = selectedPath();
+                const variety = varietiesForPath(path).length === 1
+                    ? varietiesForPath(path)[0].id
+                    : byId('variety').value;
+                const projection = await loadDuplexProjection(buildDuplexRequest({
+                    text: byId('text').value,
+                    mockAcoustics: byId('duplex-mock-acoustics').value,
+                    variety,
+                }));
+                renderDuplexProjection(projection);
+            } catch (error) {
+                showError(`Duplex preview failed: ${error.message}`, byId('duplex-error'));
+            } finally {
+                button.disabled = false;
+            }
+        });
+        byId('replay-duplex-journal').addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            clearError(byId('duplex-error'));
+            button.disabled = true;
+            try {
+                const projection = await loadDuplexProjection(buildDuplexRequest({
+                    journalPath: byId('duplex-journal-path').value,
+                }));
+                renderDuplexProjection(projection);
+            } catch (error) {
+                showError(`Duplex replay failed: ${error.message}`, byId('duplex-error'));
+            } finally {
+                button.disabled = false;
+            }
+        });
 
         byId('synth-form').addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -1234,9 +1412,11 @@
         availablePaths,
         availableCompositions,
         buildPayload,
+        buildDuplexRequest,
         compatibilityFor,
         compositionGenerator,
         controlsForPath,
+        duplexLines,
         init,
         parseNumberArray,
         pathKey,

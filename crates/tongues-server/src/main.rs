@@ -28,9 +28,15 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Semaphore, broadcast};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tongues_duplex::{
+    DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
+    ObservedEvidence, OracleCompletionProvider, SimulatorConfig, SimulatorJournal,
+    studio_projection_from_journal,
+};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
+const DEFAULT_DUPLEX_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
 const STYLETTS2_REFERENCE_RELATIVE_DIR: &str = "models/styletts2/en-us/reference_audio";
 const VITS_SPEAKER_RELATIVE_PATH: &str = "models/speech/coqui/en/vctk/vits/speaker_ids.json";
 const SPEEDY_RELATIVE_DIR: &str = "models/speech/coqui/en/ljspeech/speedy-speech";
@@ -242,6 +248,7 @@ fn build_app(state: AppState) -> Router {
             "/api/speech/models/verify/{model_id}",
             get(verify_speech_model).post(verify_speech_model),
         )
+        .route("/api/duplex/project", post(project_duplex_request))
         .route("/api/speech/project", post(project_speech_request))
         .route("/api/speech/speakers", get(get_speech_speakers))
         .route("/api/speech/runtime", get(get_speech_runtime))
@@ -545,6 +552,22 @@ struct SpeechProjectionRequest {
     backend: Option<String>,
     #[serde(default)]
     pipeline: Option<tongues_tts::SpeechPipelineSelection>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DuplexProjectionRequest {
+    #[serde(default)]
+    fixture: Option<String>,
+    #[serde(default)]
+    chunks: Vec<String>,
+    #[serde(default)]
+    mock_acoustics: Vec<String>,
+    #[serde(default)]
+    variety: Option<String>,
+    #[serde(default)]
+    posterior_mass: Option<f64>,
+    #[serde(default)]
+    journal_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4138,6 +4161,121 @@ async fn project_speech_request(Json(request): Json<SpeechProjectionRequest>) ->
     }
 }
 
+async fn project_duplex_request(
+    State(state): State<AppState>,
+    Json(request): Json<DuplexProjectionRequest>,
+) -> impl IntoResponse {
+    match build_duplex_projection(&state.workspace_root, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
+}
+
+fn build_duplex_projection(
+    workspace_root: &FsPath,
+    request: DuplexProjectionRequest,
+) -> Result<DuplexStudioProjection, String> {
+    let (run_id, journal) = duplex_run_and_journal(workspace_root, &request)?;
+    studio_projection_from_journal(run_id, &journal).map_err(|error| error.to_string())
+}
+
+fn duplex_run_and_journal(
+    workspace_root: &FsPath,
+    request: &DuplexProjectionRequest,
+) -> Result<(String, SimulatorJournal), String> {
+    if let Some(journal_path) = request.journal_path.as_deref().map(str::trim) {
+        if journal_path.is_empty() {
+            return Err("journal_path cannot be empty".into());
+        }
+        let relative = safe_relative_path(journal_path)?;
+        let full_path = workspace_root.join(&relative);
+        let bytes = std::fs::read(&full_path)
+            .map_err(|error| format!("failed to read journal {}: {error}", full_path.display()))?;
+        let journal: SimulatorJournal = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("failed to parse journal {}: {error}", full_path.display()))?;
+        let run_id = relative
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("duplex-replay")
+            .to_string();
+        return Ok((run_id, journal));
+    }
+
+    if !request.chunks.is_empty() || !request.mock_acoustics.is_empty() {
+        let mut config = SimulatorConfig::default();
+        if let Some(posterior_mass) = request.posterior_mass {
+            config.posterior_mass = posterior_mass;
+        }
+        let run_id = "oracle-chunks".to_string();
+        let mut simulator = DuplexSimulator::new(
+            speaking::UtteranceId(run_id.clone()),
+            speaking::VarietyId(request.variety.clone().unwrap_or_else(|| "en-US-GA".into())),
+            config,
+            OracleCompletionProvider,
+        )
+        .map_err(|error| error.to_string())?;
+        for (index, chunk) in request.chunks.iter().enumerate() {
+            simulator
+                .observe(ObservedEvidence::text(format!("text:{index}"), chunk))
+                .map_err(|error| error.to_string())?;
+        }
+        for (index, transcript) in request.mock_acoustics.iter().enumerate() {
+            simulator
+                .observe(ObservedEvidence::acoustics(
+                    format!("acoustics:{index}"),
+                    transcript,
+                ))
+                .map_err(|error| error.to_string())?;
+        }
+        let (journal, _) = simulator.into_parts();
+        return Ok((run_id, journal));
+    }
+
+    let suite = load_duplex_fixture_suite(workspace_root)?;
+    let fixture_id = request.fixture.as_deref().unwrap_or("who-shot-john-f");
+    let fixture = suite
+        .fixture(fixture_id)
+        .ok_or_else(|| format!("unknown duplex fixture '{fixture_id}'"))?;
+    let mut config = fixture.config.clone();
+    if let Some(posterior_mass) = request.posterior_mass {
+        config.posterior_mass = posterior_mass;
+    }
+    let provider = FixtureCompletionProvider::new(fixture);
+    let mut simulator = DuplexSimulator::new(
+        fixture.utterance_id.clone(),
+        fixture.variety.clone(),
+        config,
+        provider,
+    )
+    .map_err(|error| error.to_string())?;
+    for step in &fixture.steps {
+        simulator
+            .observe(step.evidence.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    let (journal, _) = simulator.into_parts();
+    Ok((fixture.id.clone(), journal))
+}
+
+fn load_duplex_fixture_suite(workspace_root: &FsPath) -> Result<DuplexFixtureSuite, String> {
+    let path = workspace_root.join(DEFAULT_DUPLEX_FIXTURES_PATH);
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("failed to read duplex fixtures {}: {error}", path.display()))?;
+    let suite: DuplexFixtureSuite = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "failed to parse duplex fixtures {}: {error}",
+            path.display()
+        )
+    })?;
+    suite.validate().map_err(|error| {
+        format!(
+            "failed to validate duplex fixtures {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(suite)
+}
+
 async fn get_model_catalog() -> impl IntoResponse {
     let response = tokio::task::spawn_blocking(model_catalog_response)
         .await
@@ -4913,6 +5051,18 @@ fn speech_path_catalog_ids(
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
         "styletts2" => vec![speech_model_id(home, backend, model)?],
+        "onnx" => vec![
+            model
+                .filter(|model| !model.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or(speech_model_id(home, backend, None)?),
+        ],
+        "onnx" => vec![
+            model
+                .filter(|model| !model.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or(speech_model_id(home, backend, None)?),
+        ],
         "onnx" => vec![model
             .filter(|model| !model.trim().is_empty())
             .map(str::to_string)
@@ -4972,12 +5122,7 @@ fn speech_path_components(
                 "freevc-speaker-encoder".into(),
             ],
         ),
-        "styletts2" => (
-            None,
-            None,
-            Some(model.into()),
-            vec!["styletts2".into()],
-        ),
+        "styletts2" => (None, None, Some(model.into()), vec!["styletts2".into()]),
         "onnx" => (None, None, Some(model.into()), vec![model.into()]),
         "mock" => (
             None,
@@ -7304,6 +7449,78 @@ mod tests {
     }
 
     #[test]
+    fn duplex_projection_returns_replayable_branch_and_timeline_schema() {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("repository root")
+            .to_path_buf();
+        let projection = build_duplex_projection(
+            &workspace_root,
+            DuplexProjectionRequest {
+                fixture: Some("who-shot-john-f".into()),
+                ..DuplexProjectionRequest::default()
+            },
+        )
+        .expect("fixture projection");
+
+        assert!(projection.replay_verified);
+        assert!(!projection.timeline.is_empty());
+        assert!(
+            projection
+                .timeline
+                .iter()
+                .any(|snapshot| !snapshot.predicted.is_empty())
+        );
+        assert!(
+            projection
+                .timeline
+                .iter()
+                .any(|snapshot| snapshot.branches.iter().any(|branch| branch.selected))
+        );
+    }
+
+    #[test]
+    fn duplex_projection_can_replay_a_saved_relative_journal() {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("repository root")
+            .to_path_buf();
+        let generated = build_duplex_projection(
+            &workspace_root,
+            DuplexProjectionRequest {
+                chunks: vec!["Who shot".into(), "John F. Kennedy?".into()],
+                variety: Some("en-US-GA".into()),
+                ..DuplexProjectionRequest::default()
+            },
+        )
+        .expect("generated duplex projection");
+        let relative_path = format!("target/duplex-tests/{}.journal.json", uuid::Uuid::new_v4());
+        let full_path = workspace_root.join(&relative_path);
+        std::fs::create_dir_all(full_path.parent().expect("journal parent"))
+            .expect("create journal directory");
+        std::fs::write(
+            &full_path,
+            serde_json::to_vec_pretty(&generated.journal).expect("journal json"),
+        )
+        .expect("write journal");
+
+        let replayed = build_duplex_projection(
+            &workspace_root,
+            DuplexProjectionRequest {
+                journal_path: Some(relative_path.clone()),
+                ..DuplexProjectionRequest::default()
+            },
+        )
+        .expect("replayed duplex projection");
+
+        assert_eq!(generated.timeline, replayed.timeline);
+        assert_eq!(generated.transcript_events, replayed.transcript_events);
+        std::fs::remove_file(full_path).expect("remove saved journal");
+    }
+
+    #[test]
     fn server_speech_frontend_uses_the_core_conformance_corpus() {
         let corpus =
             speaking::load_pronunciation_conformance_corpus().expect("pronunciation corpus");
@@ -7644,8 +7861,12 @@ mod tests {
         }))
         .expect("Style request");
         assert_eq!(
-            resident_engine_key("styletts2", tongues_tts::ResolvedSpeechDevice::Cpu, &style_alias)
-                .unwrap(),
+            resident_engine_key(
+                "styletts2",
+                tongues_tts::ResolvedSpeechDevice::Cpu,
+                &style_alias
+            )
+            .unwrap(),
             "styletts2-styletts2-en-us-cpu"
         );
     }

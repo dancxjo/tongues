@@ -13,8 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result as AnyResult};
 use rand::SeedableRng;
-use rand::seq::SliceRandom;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use speaking::{
     CompletionHypothesisId, EvidenceProvenance, EvidenceSource, ProsodyTrack,
@@ -1446,6 +1446,54 @@ pub trait SpeculativeConsumer {
     fn on_event(&mut self, event: &SimulatorEvent);
 }
 
+pub const STUDIO_PROJECTION_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DuplexBranchSnapshot {
+    pub hypothesis_id: String,
+    pub probability: f64,
+    #[serde(default)]
+    pub morphemes: Vec<String>,
+    pub selected: bool,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DuplexTimelineSnapshot {
+    pub sequence: u64,
+    pub layer: String,
+    pub event_type: String,
+    pub message: String,
+    #[serde(default)]
+    pub observed: Vec<String>,
+    #[serde(default)]
+    pub shared_prefix: Vec<String>,
+    #[serde(default)]
+    pub predicted: Vec<String>,
+    #[serde(default)]
+    pub committed: Vec<String>,
+    pub commit_frontier: usize,
+    #[serde(default)]
+    pub branches: Vec<DuplexBranchSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_divergent_morpheme_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_event: Option<ProvisionalTranscriptEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DuplexStudioProjection {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub replay_verified: bool,
+    pub journal: SimulatorJournal,
+    pub final_state: SimulatorState,
+    #[serde(default)]
+    pub timeline: Vec<DuplexTimelineSnapshot>,
+    #[serde(default)]
+    pub transcript_events: Vec<ProvisionalTranscriptEvent>,
+}
+
 /// A [`SpeculativeConsumer`] that records all [`ProvisionalTranscriptEvent`]s
 /// as they are derived from the simulator journal.
 ///
@@ -1578,6 +1626,223 @@ pub fn run_fixture_with_consumer(
     }
     let (journal, state) = simulator.into_parts();
     Ok((journal, state, consumer))
+}
+
+pub fn studio_projection_from_journal(
+    run_id: impl Into<String>,
+    journal: &SimulatorJournal,
+) -> Result<DuplexStudioProjection, SimulatorError> {
+    if journal.version != SIMULATOR_JOURNAL_VERSION {
+        return Err(SimulatorError::UnsupportedJournalVersion {
+            expected: SIMULATOR_JOURNAL_VERSION,
+            found: journal.version,
+        });
+    }
+    validate_config(&journal.config)?;
+
+    let mut state = SimulatorState::new(journal.utterance_id.clone(), journal.variety.clone());
+    let mut consumer = RecordingSpeculativeConsumer::new();
+    let mut timeline = Vec::with_capacity(journal.events.len());
+    for (expected, event) in journal.events.iter().enumerate() {
+        if event.sequence != expected as u64 {
+            return Err(SimulatorError::OutOfOrderEvent {
+                expected: expected as u64,
+                found: event.sequence,
+            });
+        }
+        state.apply(&event.event)?;
+        let transcript_count = consumer.transcript_events.len();
+        consumer.on_event(event);
+        let transcript_event = consumer.transcript_events.get(transcript_count).cloned();
+        timeline.push(project_timeline_snapshot(&state, event, transcript_event));
+    }
+
+    let final_state = replay_journal(journal)?;
+    Ok(DuplexStudioProjection {
+        schema_version: STUDIO_PROJECTION_SCHEMA_VERSION,
+        run_id: run_id.into(),
+        replay_verified: state == final_state,
+        journal: journal.clone(),
+        final_state,
+        timeline,
+        transcript_events: consumer.transcript_events,
+    })
+}
+
+fn project_timeline_snapshot(
+    state: &SimulatorState,
+    event: &SimulatorEvent,
+    transcript_event: Option<ProvisionalTranscriptEvent>,
+) -> DuplexTimelineSnapshot {
+    DuplexTimelineSnapshot {
+        sequence: event.sequence,
+        layer: event.event.layer().to_string(),
+        event_type: studio_event_type(&event.event).to_string(),
+        message: studio_event_message(&event.event),
+        observed: observed_morphemes(state),
+        shared_prefix: state.shared_prefix.clone(),
+        predicted: state
+            .predicted_suffix()
+            .into_iter()
+            .map(|morpheme| morpheme.surface)
+            .collect(),
+        committed: state
+            .committed
+            .iter()
+            .map(|morpheme| morpheme.surface.clone())
+            .collect(),
+        commit_frontier: state.committed.len(),
+        branches: branch_snapshots(state),
+        first_divergent_morpheme_index: first_divergent_morpheme_index(state),
+        transcript_event,
+    }
+}
+
+fn studio_event_type(kind: &SimulatorEventKind) -> &'static str {
+    match kind {
+        SimulatorEventKind::EvidenceObserved { .. } => "evidence_observed",
+        SimulatorEventKind::HypothesisProposed { .. } => "hypothesis_proposed",
+        SimulatorEventKind::HypothesisWithdrawn { .. } => "hypothesis_withdrawn",
+        SimulatorEventKind::HypothesisRepaired { .. } => "hypothesis_repaired",
+        SimulatorEventKind::BeamInferred { .. } => "beam_inferred",
+        SimulatorEventKind::CommitFrontierAdvanced { .. } => "commit_frontier_advanced",
+        SimulatorEventKind::VerificationEvaluated { .. } => "verification_evaluated",
+    }
+}
+
+fn studio_event_message(kind: &SimulatorEventKind) -> String {
+    match kind {
+        SimulatorEventKind::EvidenceObserved { evidence } => format!(
+            "Observed {} chunk {}: {}",
+            match evidence.modality {
+                EvidenceModality::Text => "text",
+                EvidenceModality::Acoustics => "acoustic",
+            },
+            evidence.id,
+            evidence.content
+        ),
+        SimulatorEventKind::HypothesisProposed { hypothesis } => format!(
+            "Proposed branch {} at p={:.3}",
+            hypothesis.id.0, hypothesis.probability
+        ),
+        SimulatorEventKind::HypothesisWithdrawn { hypothesis, reason } => {
+            format!("Withdrew branch {}: {}", hypothesis.id.0, reason)
+        }
+        SimulatorEventKind::HypothesisRepaired {
+            previous,
+            replacement,
+            reason,
+        } => format!(
+            "Repaired branch {} p={:.3}→{:.3}: {}",
+            previous.id.0, previous.probability, replacement.probability, reason
+        ),
+        SimulatorEventKind::BeamInferred {
+            selected,
+            covered_probability,
+            ..
+        } => format!(
+            "Selected {} branches covering p={:.3}",
+            selected.len(),
+            covered_probability
+        ),
+        SimulatorEventKind::CommitFrontierAdvanced {
+            from,
+            to,
+            committed,
+        } => format!(
+            "Committed frontier {}→{}: {}",
+            from,
+            to,
+            committed
+                .iter()
+                .map(|morpheme| morpheme.surface.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        SimulatorEventKind::VerificationEvaluated { result } => format!(
+            "Verification {:?} ({} evidence rows, {} repair causes)",
+            result.decision,
+            result.evidence.len(),
+            result.repair_causes.len()
+        ),
+    }
+}
+
+fn observed_morphemes(state: &SimulatorState) -> Vec<String> {
+    state
+        .evidence
+        .values()
+        .flat_map(|evidence| {
+            if evidence.supports.is_empty() {
+                tokenize_morphemes(&evidence.content)
+            } else {
+                evidence.supports.clone()
+            }
+        })
+        .collect()
+}
+
+fn branch_snapshots(state: &SimulatorState) -> Vec<DuplexBranchSnapshot> {
+    let selected = state
+        .selected_hypotheses
+        .iter()
+        .map(|id| id.0.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut branches = state.hypotheses.values().cloned().collect::<Vec<_>>();
+    branches.sort_by(hypothesis_order);
+    branches
+        .into_iter()
+        .map(|hypothesis| DuplexBranchSnapshot {
+            hypothesis_id: hypothesis.id.0.clone(),
+            probability: hypothesis.probability,
+            morphemes: hypothesis
+                .morphemes
+                .into_iter()
+                .map(|morpheme| morpheme.surface)
+                .collect(),
+            selected: selected.contains(hypothesis.id.0.as_str()),
+            provenance: format!(
+                "{:?}:{}{}",
+                hypothesis.provenance.source,
+                hypothesis.provenance.method,
+                hypothesis
+                    .provenance
+                    .version
+                    .as_ref()
+                    .map(|version| format!("@{version}"))
+                    .unwrap_or_default()
+            ),
+        })
+        .collect()
+}
+
+fn first_divergent_morpheme_index(state: &SimulatorState) -> Option<usize> {
+    let active = state.hypotheses.values().collect::<Vec<_>>();
+    if active.len() < 2 {
+        return None;
+    }
+    let max_len = active
+        .iter()
+        .map(|hypothesis| hypothesis.morphemes.len())
+        .max()
+        .unwrap_or(0);
+    for index in 0..max_len {
+        let mut seen = BTreeSet::new();
+        for hypothesis in &active {
+            match hypothesis.morphemes.get(index) {
+                Some(morpheme) => {
+                    seen.insert(normalize_key(&morpheme.key));
+                }
+                None => {
+                    seen.insert(String::new());
+                }
+            }
+        }
+        if seen.len() > 1 {
+            return Some(index);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1805,8 +2070,8 @@ pub fn prepare_dataset_with_progress(
         message: format!("Loading fixture suite {}", fixtures_path.display()),
     });
 
-    let bytes = fs::read(fixtures_path)
-        .with_context(|| format!("reading {}", fixtures_path.display()))?;
+    let bytes =
+        fs::read(fixtures_path).with_context(|| format!("reading {}", fixtures_path.display()))?;
     let suite: DuplexFixtureSuite = serde_json::from_slice(&bytes)
         .with_context(|| format!("parsing {}", fixtures_path.display()))?;
     suite
@@ -1905,10 +2170,7 @@ pub fn prepare_dataset_with_progress(
 /// to learn `safe_commit_count` and `final_committed_text`, then performs an
 /// incremental **student pass** (replays one evidence step at a time) to emit
 /// Prefix, Completion, Rollback, and Repair rows.
-fn rows_for_fixture(
-    fixture: &DuplexFixture,
-    corpus: &str,
-) -> AnyResult<Vec<DuplexTrainingRow>> {
+fn rows_for_fixture(fixture: &DuplexFixture, corpus: &str) -> AnyResult<Vec<DuplexTrainingRow>> {
     // Teacher pass: run the fixture to completion to obtain the ground truth.
     let (_, final_state) = run_fixture(fixture)
         .with_context(|| format!("teacher pass for fixture '{}'", fixture.id))?;
@@ -1928,14 +2190,9 @@ fn rows_for_fixture(
     .with_context(|| format!("creating simulator for fixture '{}'", fixture.id))?;
 
     for (step_index, step) in fixture.steps.iter().enumerate() {
-        let events = simulator
-            .observe(step.evidence.clone())
-            .with_context(|| {
-                format!(
-                    "observing step {} of fixture '{}'",
-                    step_index, fixture.id
-                )
-            })?;
+        let events = simulator.observe(step.evidence.clone()).with_context(|| {
+            format!("observing step {} of fixture '{}'", step_index, fixture.id)
+        })?;
 
         let state = simulator.state();
 
@@ -1973,7 +2230,8 @@ fn rows_for_fixture(
             .iter()
             .find_map(|ev| {
                 if let SimulatorEventKind::BeamInferred {
-                    covered_probability, ..
+                    covered_probability,
+                    ..
                 } = &ev.event
                 {
                     Some(*covered_probability)
@@ -2036,7 +2294,10 @@ fn rows_for_fixture(
             match &ev.event {
                 SimulatorEventKind::CommitFrontierAdvanced { to, committed, .. } => {
                     let mut row = base(
-                        format!("{}:s{}:completion:{}", fixture.id, step_index, completion_idx),
+                        format!(
+                            "{}:s{}:completion:{}",
+                            fixture.id, step_index, completion_idx
+                        ),
                         TrainingRowKind::Completion,
                     );
                     // Override commit_frontier with the value at the moment of
@@ -2050,11 +2311,7 @@ fn rows_for_fixture(
                         if advance <= n {
                             row.committed_prefix.clone()
                         } else {
-                            row.committed_prefix
-                                .iter()
-                                .take(*to)
-                                .cloned()
-                                .collect()
+                            row.committed_prefix.iter().take(*to).cloned().collect()
                         }
                     };
                     rows.push(row);
@@ -2288,8 +2545,7 @@ fn write_jsonl_duplex(
 fn write_jsonl_duplex_atomic(path: &Path, rows: &[DuplexTrainingRow]) -> AnyResult<()> {
     let part = duplex_part_path(path);
     archive_interrupted_duplex_part(path)?;
-    let file =
-        fs::File::create(&part).with_context(|| format!("creating {}", part.display()))?;
+    let file = fs::File::create(&part).with_context(|| format!("creating {}", part.display()))?;
     let mut writer = BufWriter::new(file);
     for row in rows {
         let line = serde_json::to_string(row)
@@ -2684,6 +2940,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn studio_projection_replays_fixture_without_ui_logic() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("who-shot-john-f").unwrap();
+        let (journal, state) = run_fixture(fixture).unwrap();
+        let projection = studio_projection_from_journal(fixture.id.clone(), &journal).unwrap();
+
+        assert_eq!(projection.schema_version, STUDIO_PROJECTION_SCHEMA_VERSION);
+        assert!(projection.replay_verified);
+        assert_eq!(projection.final_state, state);
+        assert_eq!(projection.timeline.len(), journal.events.len());
+        assert!(
+            projection
+                .timeline
+                .iter()
+                .any(|snapshot| !snapshot.predicted.is_empty()),
+            "expected at least one projected prediction snapshot"
+        );
+        assert!(
+            projection.timeline.iter().any(|snapshot| {
+                snapshot
+                    .branches
+                    .iter()
+                    .any(|branch| branch.selected && branch.probability > 0.0)
+            }),
+            "expected at least one selected branch with probability"
+        );
+    }
+
+    #[test]
+    fn studio_projection_is_stable_when_replayed_twice() {
+        let suite: DuplexFixtureSuite = serde_json::from_str(include_str!(
+            "../../../fixtures/duplex/completion_scenarios_v1.json"
+        ))
+        .unwrap();
+        let fixture = suite.fixture("false-boundaries").unwrap();
+        let (journal, _) = run_fixture(fixture).unwrap();
+
+        let first = studio_projection_from_journal(fixture.id.clone(), &journal).unwrap();
+        let second = studio_projection_from_journal(fixture.id.clone(), &journal).unwrap();
+        assert_eq!(first.timeline, second.timeline);
+        assert_eq!(first.transcript_events, second.transcript_events);
+    }
+
     fn verification_sequence(words: &[&str], phones: &[&str]) -> VerificationSequence {
         VerificationSequence {
             morphemes: words.iter().map(|value| (*value).to_string()).collect(),
@@ -2833,15 +3136,9 @@ mod tests {
         let fixture = suite.fixture("garden-path").unwrap();
         let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
 
-        let has_prefix = rows
-            .iter()
-            .any(|r| r.row_kind == TrainingRowKind::Prefix);
-        let has_rollback = rows
-            .iter()
-            .any(|r| r.row_kind == TrainingRowKind::Rollback);
-        let has_repair = rows
-            .iter()
-            .any(|r| r.row_kind == TrainingRowKind::Repair);
+        let has_prefix = rows.iter().any(|r| r.row_kind == TrainingRowKind::Prefix);
+        let has_rollback = rows.iter().any(|r| r.row_kind == TrainingRowKind::Rollback);
+        let has_repair = rows.iter().any(|r| r.row_kind == TrainingRowKind::Repair);
 
         assert!(has_prefix, "expected at least one Prefix row");
         assert!(has_rollback, "expected at least one Rollback row");
@@ -2882,8 +3179,14 @@ mod tests {
         .unwrap();
         for fixture in &suite.fixtures {
             let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
-            for row in rows.iter().filter(|r| r.row_kind == TrainingRowKind::Rollback) {
-                let anchor = row.rollback.as_ref().expect("rollback row must have anchor");
+            for row in rows
+                .iter()
+                .filter(|r| r.row_kind == TrainingRowKind::Rollback)
+            {
+                let anchor = row
+                    .rollback
+                    .as_ref()
+                    .expect("rollback row must have anchor");
                 assert!(
                     !anchor.hypothesis_id.is_empty(),
                     "rollback anchor must name the hypothesis in fixture '{}'",
@@ -2907,7 +3210,10 @@ mod tests {
         .unwrap();
         for fixture in &suite.fixtures {
             let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
-            for row in rows.iter().filter(|r| r.row_kind == TrainingRowKind::Repair) {
+            for row in rows
+                .iter()
+                .filter(|r| r.row_kind == TrainingRowKind::Repair)
+            {
                 let anchor = row.repair.as_ref().expect("repair row must have anchor");
                 // A repair must have either reparandum or repair (one may be
                 // empty if the hypothesis only appended or only deleted).
@@ -2990,22 +3296,29 @@ mod tests {
         let rows = rows_for_fixture(fixture, "test-corpus").unwrap();
         for row in &rows {
             let json = serde_json::to_string(row).expect("serialize");
-            let recovered: DuplexTrainingRow =
-                serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(row, &recovered, "serde round-trip failed for {}", row.row_id);
+            let recovered: DuplexTrainingRow = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(
+                row, &recovered,
+                "serde round-trip failed for {}",
+                row.row_id
+            );
         }
     }
 
     #[test]
     fn prepare_dataset_writes_expected_files() {
-        let suite_path = std::path::Path::new(
-            "../../fixtures/duplex/completion_scenarios_v1.json",
-        );
+        let suite_path = std::path::Path::new("../../fixtures/duplex/completion_scenarios_v1.json");
         let out = tempfile::tempdir().expect("tempdir");
         let report = prepare_dataset(out.path(), suite_path).expect("prepare succeeds");
         assert!(report.fixtures > 0);
         assert!(report.prefix_rows > 0);
-        for name in &["examples.jsonl", "train.jsonl", "valid.jsonl", "test.jsonl", "README.md"] {
+        for name in &[
+            "examples.jsonl",
+            "train.jsonl",
+            "valid.jsonl",
+            "test.jsonl",
+            "README.md",
+        ] {
             assert!(
                 out.path().join(name).exists(),
                 "expected {name} to exist in output"
