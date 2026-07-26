@@ -28,6 +28,10 @@ pub struct BurnVocoderTrainingOutput<B: Backend> {
     pub predicted_waveform: Tensor<B, 3>,
     /// Architecture-specific discriminator outputs, when the model has them.
     pub discriminator_outputs: Option<Vec<Tensor<B, 3>>>,
+    /// Combined generator loss scalar for this step (present during generator phase).
+    pub generator_loss: Option<Tensor<B, 1>>,
+    /// Combined discriminator loss scalar for this step (present during discriminator phase).
+    pub discriminator_loss: Option<Tensor<B, 1>>,
 }
 
 /// Extension point consumed by the model-neutral native training platform.
@@ -79,3 +83,4 @@ mod tests {
         );
     }
 }
+

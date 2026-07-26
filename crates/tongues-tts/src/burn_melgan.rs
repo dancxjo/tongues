@@ -15,6 +15,7 @@ use burn::tensor::backend::Backend;
 use burn::tensor::module::{conv1d, conv_transpose1d};
 use burn::tensor::ops::{ConvOptions, ConvTransposeOptions, PadMode};
 use burn::tensor::{Tensor, TensorData};
+use serde::{Deserialize, Serialize};
 
 use crate::burn_hifigan::{WeightNormConv1d, WeightNormConvTranspose1d};
 
@@ -45,7 +46,7 @@ fn input_error(message: impl Into<String>) -> MelganError {
     MelganError::InvalidInput(message.into())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MelganGeneratorConfig {
     pub in_channels: usize,
     pub out_channels: usize,
@@ -338,7 +339,7 @@ impl<B: Backend> MelganGenerator<B> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PqmfConfig {
     pub bands: usize,
     pub taps: usize,
