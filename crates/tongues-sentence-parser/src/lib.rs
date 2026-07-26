@@ -7,6 +7,7 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, thread};
 
@@ -531,14 +532,9 @@ pub fn prepare_dataset_with_progress(
     );
     write_jsonl_with_progress(&out.join("sentences.jsonl"), &sentences, &mut progress)?;
     write_jsonl_with_progress(&out.join("examples.jsonl"), &examples, &mut progress)?;
-    let mut shuffled = examples;
-    shuffled.shuffle(&mut StdRng::seed_from_u64(config.seed));
-    let n = shuffled.len();
-    let train_end = (n as f64 * config.train_frac).round() as usize;
-    let valid_end = (train_end + (n as f64 * config.valid_frac).round() as usize).min(n);
-    let train = shuffled[..train_end.min(n)].to_vec();
-    let valid = shuffled[train_end.min(n)..valid_end].to_vec();
-    let test = shuffled[valid_end..].to_vec();
+    let (train, valid, test) =
+        split_examples_by_group(examples, config.train_frac, config.valid_frac, config.seed);
+    let n = train.len() + valid.len() + test.len();
 
     write_jsonl_with_progress(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_with_progress(&out.join("valid.jsonl"), &valid, &mut progress)?;
@@ -749,6 +745,46 @@ fn write_prepare_state(
         report: report.cloned(),
     };
     write_json_file_atomic(&out.join("prepare_state.json"), &state)
+}
+
+fn split_examples_by_group(
+    examples: Vec<BoundaryTrainingExample>,
+    train_frac: f64,
+    valid_frac: f64,
+    seed: u64,
+) -> (
+    Vec<BoundaryTrainingExample>,
+    Vec<BoundaryTrainingExample>,
+    Vec<BoundaryTrainingExample>,
+) {
+    let mut grouped = BTreeMap::<String, Vec<BoundaryTrainingExample>>::new();
+    for example in examples {
+        grouped
+            .entry(example.source.clone())
+            .or_default()
+            .push(example);
+    }
+    let mut groups = grouped.keys().cloned().collect::<Vec<_>>();
+    groups.shuffle(&mut StdRng::seed_from_u64(seed));
+    let n = groups.len();
+    let train_end = (n as f64 * train_frac).round() as usize;
+    let valid_end = (train_end + (n as f64 * valid_frac).round() as usize).min(n);
+
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(rows) = grouped.remove(group) {
+            if index < train_end {
+                train.extend(rows);
+            } else if index < valid_end {
+                valid.extend(rows);
+            } else {
+                test.extend(rows);
+            }
+        }
+    }
+    (train, valid, test)
 }
 
 fn config_fingerprint(config: &SentenceParserConfig) -> Result<String> {
@@ -1564,7 +1600,7 @@ fn dataset_readme(
     naive_discrepancy_examples: usize,
 ) -> String {
     format!(
-        "# Sentence boundary dataset\n\nDataset: `{}`\n\nSources: {} Project Gutenberg-style text files\nDetected sentences: {}\nTraining rows: {}\nNaive-discrepancy correction rows: {}\n\nInput shape:\n\n```text\n{}{}<previous sentence>{}<cursor prefix>\n```\n\nTargets:\n\n```text\n{}<sentence>\\n\n{}\n{}<tail fragment>\n{}<repaired sentence>\n```\n\nThe source intentionally includes only the previously parsed sentence and current cursor prefix. No following sentence is provided.\n",
+        "# Sentence boundary dataset\n\nDataset: `{}`\n\nSources: {} Project Gutenberg-style text files\nDetected sentences: {}\nTraining rows: {}\nNaive-discrepancy correction rows: {}\n\nInput shape:\n\n```text\n{}{}<previous sentence>{}<cursor prefix>\n```\n\nTargets:\n\n```text\n{}<sentence>\\n\n{}\n{}<tail fragment>\n{}<repaired sentence>\n```\n\nThe source intentionally includes only the previously parsed sentence and current cursor prefix. No following sentence is provided.\n\nSplit policy: group-aware by source document path so all derived rows from one source stay together.\n",
         config.dataset_id,
         source_files,
         sentences,
@@ -1655,6 +1691,32 @@ mod tests {
             rows[0].output,
             "<boundary:repair>Elizabeth met Mr. Darcy at Pemberley."
         );
+    }
+
+    #[test]
+    fn split_examples_by_group_keeps_sources_together() {
+        let mk = |source: &str, cursor: &str| BoundaryTrainingExample {
+            action: BoundaryAction::Emit,
+            row_source: TrainingRowSource::Seams,
+            previous: String::new(),
+            cursor: cursor.to_string(),
+            input: cursor.to_string(),
+            output: cursor.to_string(),
+            source: source.to_string(),
+        };
+        let rows = vec![
+            mk("a.txt", "a1"),
+            mk("a.txt", "a2"),
+            mk("b.txt", "b1"),
+            mk("c.txt", "c1"),
+        ];
+        let (train, valid, test) = split_examples_by_group(rows, 0.5, 0.25, 9);
+        for source in ["a.txt", "b.txt", "c.txt"] {
+            let placements = usize::from(train.iter().any(|row| row.source == source))
+                + usize::from(valid.iter().any(|row| row.source == source))
+                + usize::from(test.iter().any(|row| row.source == source));
+            assert_eq!(placements, 1);
+        }
     }
 
     #[test]

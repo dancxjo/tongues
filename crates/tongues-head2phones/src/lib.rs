@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::BTreeMap;
 use std::{env, thread};
 
 use anyhow::{Context, Result};
@@ -720,14 +721,12 @@ pub fn prepare_dataset_with_progress(
         no_head_examples
     );
 
-    let mut rng = StdRng::seed_from_u64(unit_seed(config.seed, "split-shuffle"));
-    examples.shuffle(&mut rng);
-    let n = examples.len();
-    let train_end = (n as f64 * config.train_frac).round() as usize;
-    let valid_end = (train_end + (n as f64 * config.valid_frac).round() as usize).min(n);
-    let train = examples[..train_end.min(n)].to_vec();
-    let valid = examples[train_end.min(n)..valid_end].to_vec();
-    let test = examples[valid_end..].to_vec();
+    let (train, valid, test) = split_examples_by_group(
+        examples.clone(),
+        config.train_frac,
+        config.valid_frac,
+        unit_seed(config.seed, "split-shuffle"),
+    );
 
     if config.verify_with_ollama {
         let report_path = out.join("ollama_verification.json");
@@ -971,6 +970,45 @@ fn write_prepare_state(
         report: report.cloned(),
     };
     write_json_file_atomic(&out.join("prepare_state.json"), &state)
+}
+
+fn split_examples_by_group(
+    examples: Vec<Head2PhonesTrainingExample>,
+    train_frac: f64,
+    valid_frac: f64,
+    seed: u64,
+) -> (
+    Vec<Head2PhonesTrainingExample>,
+    Vec<Head2PhonesTrainingExample>,
+    Vec<Head2PhonesTrainingExample>,
+) {
+    let mut grouped = BTreeMap::<String, Vec<Head2PhonesTrainingExample>>::new();
+    for example in examples {
+        grouped
+            .entry(example.source.clone())
+            .or_default()
+            .push(example);
+    }
+    let mut groups = grouped.keys().cloned().collect::<Vec<_>>();
+    groups.shuffle(&mut StdRng::seed_from_u64(seed));
+    let n = groups.len();
+    let train_end = (n as f64 * train_frac).round() as usize;
+    let valid_end = (train_end + (n as f64 * valid_frac).round() as usize).min(n);
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(rows) = grouped.remove(group) {
+            if index < train_end {
+                train.extend(rows);
+            } else if index < valid_end {
+                valid.extend(rows);
+            } else {
+                test.extend(rows);
+            }
+        }
+    }
+    (train, valid, test)
 }
 
 fn config_fingerprint(config: &Head2PhonesConfig) -> Result<String> {
@@ -3346,7 +3384,7 @@ fn dataset_readme(
     naive_seams_discrepancies: usize,
 ) -> String {
     format!(
-        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}`, a `{}` block with `{}`, `{}` broad IPA phone text `{}`, and `{}`, a `{}` block for wrong requested languages, a `{}` block with plain `<lang id=\"...\">...</lang>` spans for code switching, or `{}` repair rows. Rows with `input_has_variety=false` omit the input variety control and include `{}` with a normal language tag before phones or language spans. Repair rows start with `{}` confidence, then `{}`, `{}` with a Unicode grapheme-cluster rollback distance, and the same found-head block for corrected phones and split offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n",
+        "# head2phones {}\n\nTrain/valid/test rows: {}/{}/{}.\nNaive-vs-seams discrepancy rows: {} in `naive_seams_discrepancies.jsonl`.\n\nOutputs are exactly `{}`, a `{}` block with `{}`, `{}` broad IPA phone text `{}`, and `{}`, a `{}` block for wrong requested languages, a `{}` block with plain `<lang id=\"...\">...</lang>` spans for code switching, or `{}` repair rows. Rows with `input_has_variety=false` omit the input variety control and include `{}` with a normal language tag before phones or language spans. Repair rows start with `{}` confidence, then `{}`, `{}` with a Unicode grapheme-cluster rollback distance, and the same found-head block for corrected phones and split offset. Phone text is serialized from speaking IR and may include word boundaries, punctuation, stress, and intonation markers; backend-specific downcasting happens only at synthesis time.\n\nSplit policy: group-aware by source document/buffer family (`source`) so derived cursor/window rows remain in one split.\n",
         config.dataset_id,
         train.len(),
         valid.len(),
@@ -3422,6 +3460,33 @@ mod tests {
         let (prefix, suffix) = grapheme_split(text, 9);
         assert_eq!(prefix, "Cafe\u{301} now.");
         assert_eq!(suffix, " Later");
+    }
+
+    #[test]
+    fn split_examples_by_group_keeps_sources_together() {
+        let mk = |source: &str, input: &str| Head2PhonesTrainingExample {
+            row_source: TrainingRowSource::SourceText,
+            variety: "en-US".to_string(),
+            input_has_variety: true,
+            input: input.to_string(),
+            output: input.to_string(),
+            head: Some(input.to_string()),
+            split_after: Some(1),
+            source: source.to_string(),
+        };
+        let rows = vec![
+            mk("a.txt", "a1"),
+            mk("a.txt", "a2"),
+            mk("b.txt", "b1"),
+            mk("c.txt", "c1"),
+        ];
+        let (train, valid, test) = split_examples_by_group(rows, 0.5, 0.25, 5);
+        for source in ["a.txt", "b.txt", "c.txt"] {
+            let placements = usize::from(train.iter().any(|row| row.source == source))
+                + usize::from(valid.iter().any(|row| row.source == source))
+                + usize::from(test.iter().any(|row| row.source == source));
+            assert_eq!(placements, 1);
+        }
     }
 
     #[test]

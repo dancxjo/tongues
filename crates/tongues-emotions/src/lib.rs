@@ -207,7 +207,11 @@ pub fn prepare_dataset_with_progress(
     let mut examples_writer = BufWriter::new(examples_file);
 
     let mut rng = StdRng::seed_from_u64(config.seed);
+    let split_groups = split_source_groups(&sources, config, &mut rng);
     let mut examples = Vec::new();
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
     let mut skipped_wavs = 0usize;
     let mut cuts_total = 0usize;
     for source in &sources {
@@ -246,6 +250,16 @@ pub fn prepare_dataset_with_progress(
             serde_json::to_writer(&mut examples_writer, &example)
                 .context("writing emotion example")?;
             writeln!(examples_writer).context("writing emotion example newline")?;
+            let group = source_group_id(source);
+            if split_groups.train.contains(&group) {
+                train.push(example.clone());
+            } else if split_groups.valid.contains(&group) {
+                valid.push(example.clone());
+            } else if split_groups.test.contains(&group) {
+                test.push(example.clone());
+            } else {
+                anyhow::bail!("emotion source group `{group}` was not assigned to a split");
+            }
             examples.push(example);
             let cuts_done = examples.len();
             if cuts_done <= 8 || cuts_done % 100 == 0 {
@@ -270,13 +284,6 @@ pub fn prepare_dataset_with_progress(
     })?;
 
     anyhow::ensure!(!examples.is_empty(), "no emotion examples were prepared");
-    examples.shuffle(&mut rng);
-    let n = examples.len();
-    let train_end = (n as f64 * config.train_frac).round() as usize;
-    let valid_end = (train_end + (n as f64 * config.valid_frac).round() as usize).min(n);
-    let train = examples[..train_end.min(n)].to_vec();
-    let valid = examples[train_end.min(n)..valid_end].to_vec();
-    let test = examples[valid_end..].to_vec();
 
     write_jsonl_split(out, "train", &train, &mut progress)?;
     write_jsonl_split(out, "valid", &valid, &mut progress)?;
@@ -602,6 +609,39 @@ fn labels_from_sources(sources: &[EmotionSourceRow]) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Clone)]
+struct SplitGroups {
+    train: BTreeSet<String>,
+    valid: BTreeSet<String>,
+    test: BTreeSet<String>,
+}
+
+fn source_group_id(source: &EmotionSourceRow) -> String {
+    format!("{}|{}", source.speaker.as_deref().unwrap_or("_"), source.path.display())
+}
+
+fn split_source_groups(
+    sources: &[EmotionSourceRow],
+    config: &EmotionPrepareConfig,
+    rng: &mut StdRng,
+) -> SplitGroups {
+    let mut groups = sources
+        .iter()
+        .map(source_group_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    groups.shuffle(rng);
+    let n = groups.len();
+    let train_end = (n as f64 * config.train_frac).round() as usize;
+    let valid_end = (train_end + (n as f64 * config.valid_frac).round() as usize).min(n);
+    SplitGroups {
+        train: groups[..train_end.min(n)].iter().cloned().collect(),
+        valid: groups[train_end.min(n)..valid_end].iter().cloned().collect(),
+        test: groups[valid_end..].iter().cloned().collect(),
+    }
+}
+
 fn labels_from_examples(train: &[EmotionExample], valid: &[EmotionExample]) -> Vec<String> {
     train
         .iter()
@@ -725,7 +765,7 @@ fn write_prepare_state(
 
 fn write_readme(out: &Path, config: &EmotionPrepareConfig, labels: &[String]) -> Result<()> {
     let text = format!(
-        "# Emotion cuts dataset\n\nDataset id: `{}`\nSource manifest: `{}`\nFeature kind: `{}`\nLabels: {}\n\nPrepared by `tongues emotions prepare`. Each row is a random or full-length WAV cut represented as pooled log-mel mean and standard deviation features.\n",
+        "# Emotion cuts dataset\n\nDataset id: `{}`\nSource manifest: `{}`\nFeature kind: `{}`\nLabels: {}\n\nPrepared by `tongues emotions prepare`. Each row is a random or full-length WAV cut represented as pooled log-mel mean and standard deviation features.\n\nSplit policy: group-aware by `speaker + source WAV path`; all cuts from one WAV stay in exactly one split.\n",
         config.dataset_id,
         config.source_manifest.display(),
         feature_kind(config),
@@ -810,6 +850,7 @@ fn samples_to_ms(samples: usize, sample_rate: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn softmax_sums_to_one() {
@@ -832,6 +873,36 @@ mod tests {
         for (start, end) in random_cuts(&samples, &config, &mut rng) {
             assert!(start < end);
             assert!(end <= samples.len());
+        }
+    }
+
+    #[test]
+    fn split_source_groups_keeps_group_in_one_split() {
+        let sources = vec![
+            EmotionSourceRow {
+                emotion: "happy".to_string(),
+                path: PathBuf::from("a.wav"),
+                speaker: Some("s1".to_string()),
+            },
+            EmotionSourceRow {
+                emotion: "sad".to_string(),
+                path: PathBuf::from("b.wav"),
+                speaker: Some("s2".to_string()),
+            },
+            EmotionSourceRow {
+                emotion: "angry".to_string(),
+                path: PathBuf::from("c.wav"),
+                speaker: Some("s3".to_string()),
+            },
+        ];
+        let mut rng = StdRng::seed_from_u64(7);
+        let split = split_source_groups(&sources, &EmotionPrepareConfig::default(), &mut rng);
+        for source in &sources {
+            let group = source_group_id(source);
+            let placements = usize::from(split.train.contains(&group))
+                + usize::from(split.valid.contains(&group))
+                + usize::from(split.test.contains(&group));
+            assert_eq!(placements, 1);
         }
     }
 }

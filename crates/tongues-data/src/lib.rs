@@ -956,9 +956,35 @@ pub fn split_by_base_word<R: Rng>(
     (train, valid, test)
 }
 
-/// No-op verification helper for backward compatibility.
-pub fn check_split_leakage(_train: &[Lexeme], _valid: &[Lexeme], _test: &[Lexeme]) -> Vec<String> {
-    Vec::new()
+/// Verify that no base-word group appears in more than one split.
+pub fn check_split_leakage(train: &[Lexeme], valid: &[Lexeme], test: &[Lexeme]) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut seen: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
+    for lexeme in train {
+        seen.entry(lexeme.base_word.clone())
+            .or_default()
+            .insert("train");
+    }
+    for lexeme in valid {
+        seen.entry(lexeme.base_word.clone())
+            .or_default()
+            .insert("valid");
+    }
+    for lexeme in test {
+        seen.entry(lexeme.base_word.clone())
+            .or_default()
+            .insert("test");
+    }
+
+    seen.into_iter()
+        .filter_map(|(group, splits)| {
+            (splits.len() > 1).then(|| {
+                let split_list = splits.into_iter().collect::<Vec<_>>().join(", ");
+                format!("group `{group}` appears in multiple splits: {split_list}")
+            })
+        })
+        .collect()
 }
 
 // ── Seq2Seq Task Representation & Collation ────────────────────────────────
@@ -1120,6 +1146,26 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let (train, valid, test) = split_by_base_word(&lex, 0.5, 0.5, &mut rng);
         assert_eq!(train.len() + valid.len() + test.len(), 2);
+        assert!(check_split_leakage(&train, &valid, &test).is_empty());
+    }
+
+    #[test]
+    fn test_split_leakage_reports_conflicting_groups() {
+        let train = vec![Lexeme {
+            base_word: "cat".into(),
+            phonemes: "kæt".into(),
+            rarity: 1_000.0,
+        }];
+        let valid = vec![Lexeme {
+            base_word: "cat".into(),
+            phonemes: "kæt".into(),
+            rarity: 1_000.0,
+        }];
+        let conflicts = check_split_leakage(&train, &valid, &[]);
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("cat"));
+        assert!(conflicts[0].contains("train"));
+        assert!(conflicts[0].contains("valid"));
     }
 
     #[test]

@@ -1049,18 +1049,13 @@ fn prepare_dataset_inner(
     }
     write_prepare_state(out, "utterances", config, rows.len(), None)?;
 
-    let mut shuffled = rows;
     anyhow::ensure!(
-        !shuffled.is_empty(),
+        !rows.is_empty(),
         "no usable utterances remained after transcript preparation"
     );
-    shuffled.shuffle(&mut rand::rngs::StdRng::seed_from_u64(config.seed));
-    let n = shuffled.len();
-    let train_end = ((n as f64) * config.train_frac).round().min(n as f64) as usize;
-    let valid_end = (train_end + ((n as f64) * config.valid_frac).round() as usize).min(n);
-    let train = shuffled[..train_end].to_vec();
-    let valid = shuffled[train_end..valid_end].to_vec();
-    let test = shuffled[valid_end..].to_vec();
+    let (train, valid, test) =
+        split_rows_by_group(rows, config.train_frac, config.valid_frac, config.seed);
+    let n = train.len() + valid.len() + test.len();
     write_prepare_state(out, "writing", config, n, None)?;
     write_jsonl_atomic(&out.join("train.jsonl"), &train, progress)?;
     write_jsonl_atomic(&out.join("valid.jsonl"), &valid, progress)?;
@@ -2730,6 +2725,45 @@ fn split_tokens_for_words(tokens: &str, words: usize) -> Vec<String> {
             tokens[start.min(tokens.len())..end.min(tokens.len())].join(" ")
         })
         .collect()
+}
+
+fn split_rows_by_group(
+    rows: Vec<LibriSpeechUtterance>,
+    train_frac: f64,
+    valid_frac: f64,
+    seed: u64,
+) -> (
+    Vec<LibriSpeechUtterance>,
+    Vec<LibriSpeechUtterance>,
+    Vec<LibriSpeechUtterance>,
+) {
+    let mut grouped = BTreeMap::<String, Vec<LibriSpeechUtterance>>::new();
+    for row in rows {
+        grouped
+            .entry(format!("{}:{}", row.speaker_id, row.chapter_id))
+            .or_default()
+            .push(row);
+    }
+    let mut groups = grouped.keys().cloned().collect::<Vec<_>>();
+    groups.shuffle(&mut rand::rngs::StdRng::seed_from_u64(seed));
+    let n = groups.len();
+    let train_end = ((n as f64) * train_frac).round().min(n as f64) as usize;
+    let valid_end = (train_end + ((n as f64) * valid_frac).round() as usize).min(n);
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(group_rows) = grouped.remove(group) {
+            if index < train_end {
+                train.extend(group_rows);
+            } else if index < valid_end {
+                valid.extend(group_rows);
+            } else {
+                test.extend(group_rows);
+            }
+        }
+    }
+    (train, valid, test)
 }
 
 fn masked_word_examples(words: &[WordSupervision], transcript: &str) -> Vec<MaskedWordExample> {
@@ -5310,7 +5344,7 @@ fn edit_distance<T: Eq>(left: &[T], right: &[T]) -> usize {
 
 fn dataset_readme(config: &InterpretationConfig) -> String {
     format!(
-        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\nFeature width: `{}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable acoustic feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. The default acoustic vector is `[log_mel_{}, delta_mel_{}, energy, vad, zcr, spectral_centroid, spectral_flux, f0, voiced_prob]`. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
+        "# LibriSpeech ASR dataset\n\nDataset id: `{}`\nSubset: `{:?}`\nFeature width: `{}`\n\nPrepared by `tongues interpretation prepare`. Rows contain FLAC provenance, durable acoustic feature paths, Whisper-refined transcript text, seams sentence labels, and speaking phonemicizer supervision. The default acoustic vector is `[log_mel_{}, delta_mel_{}, energy, vad, zcr, spectral_centroid, spectral_flux, f0, voiced_prob]`. Whisper-refined transcripts are kept only when they decompose to approximately the original LibriSpeech transcript.\n\nSplit policy: group-aware by `speaker_id + chapter_id` so related utterances remain in one split.\n\nLibriSpeech is distributed from OpenSLR under CC BY 4.0. Preserve source attribution when redistributing derived artifacts.\n",
         config.dataset_id,
         config.subset,
         audio_feature_bins(config),
@@ -5356,6 +5390,47 @@ mod tests {
             commons_upload_url("Acca_word.ogg").as_deref(),
             Some("https://upload.wikimedia.org/wikipedia/commons/b/be/Acca_word.ogg")
         );
+    }
+
+    #[test]
+    fn split_rows_by_group_keeps_speaker_chapter_together() {
+        let mk = |id: &str, speaker: &str, chapter: &str| LibriSpeechUtterance {
+            utterance_id: id.to_string(),
+            speaker_id: speaker.to_string(),
+            chapter_id: chapter.to_string(),
+            audio_path: "a.flac".into(),
+            mel_path: "m.bin".into(),
+            num_frames: 10,
+            sample_rate_hz: DEFAULT_SAMPLE_RATE_HZ,
+            duration_ms: 100,
+            transcript: "hi".into(),
+            sentences: Vec::new(),
+            repair_examples: Vec::new(),
+            word_supervision: Vec::new(),
+            masked_word_examples: Vec::new(),
+        };
+        let rows = vec![
+            mk("u1", "s1", "c1"),
+            mk("u2", "s1", "c1"),
+            mk("u3", "s2", "c2"),
+            mk("u4", "s3", "c3"),
+        ];
+        let (train, valid, test) = split_rows_by_group(rows, 0.5, 0.25, 17);
+        for key in ["s1:c1", "s2:c2", "s3:c3"] {
+            let placements = usize::from(
+                train
+                    .iter()
+                    .any(|row| format!("{}:{}", row.speaker_id, row.chapter_id) == key),
+            ) + usize::from(
+                valid
+                    .iter()
+                    .any(|row| format!("{}:{}", row.speaker_id, row.chapter_id) == key),
+            ) + usize::from(
+                test.iter()
+                    .any(|row| format!("{}:{}", row.speaker_id, row.chapter_id) == key),
+            );
+            assert_eq!(placements, 1);
+        }
     }
 
     #[test]

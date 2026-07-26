@@ -2122,16 +2122,8 @@ pub fn prepare_dataset_with_progress(
 
     write_jsonl_duplex(&out.join("examples.jsonl"), &all_rows, &mut progress)?;
 
-    // Deterministic shuffle and 80/10/10 split (seed = 42).
-    let mut rng = StdRng::seed_from_u64(42);
-    let mut shuffled = all_rows.clone();
-    shuffled.shuffle(&mut rng);
-    let n = shuffled.len();
-    let train_end = (n as f64 * 0.8).round() as usize;
-    let valid_end = (train_end + (n as f64 * 0.1).round() as usize).min(n);
-    let train = shuffled[..train_end].to_vec();
-    let valid = shuffled[train_end..valid_end].to_vec();
-    let test = shuffled[valid_end..].to_vec();
+    let (train, valid, test) = split_rows_by_fixture_group(all_rows.clone(), 42, 0.8, 0.1);
+    let n = all_rows.len();
 
     write_jsonl_duplex(&out.join("train.jsonl"), &train, &mut progress)?;
     write_jsonl_duplex(&out.join("valid.jsonl"), &valid, &mut progress)?;
@@ -2162,6 +2154,42 @@ pub fn prepare_dataset_with_progress(
         valid_rows: valid.len(),
         test_rows: test.len(),
     })
+}
+
+fn split_rows_by_fixture_group(
+    rows: Vec<DuplexTrainingRow>,
+    seed: u64,
+    train_frac: f64,
+    valid_frac: f64,
+) -> (
+    Vec<DuplexTrainingRow>,
+    Vec<DuplexTrainingRow>,
+    Vec<DuplexTrainingRow>,
+) {
+    let mut grouped = BTreeMap::<String, Vec<DuplexTrainingRow>>::new();
+    for row in rows {
+        grouped.entry(row.fixture_id.clone()).or_default().push(row);
+    }
+    let mut groups = grouped.keys().cloned().collect::<Vec<_>>();
+    groups.shuffle(&mut StdRng::seed_from_u64(seed));
+    let n = groups.len();
+    let train_end = (n as f64 * train_frac).round() as usize;
+    let valid_end = (train_end + (n as f64 * valid_frac).round() as usize).min(n);
+    let mut train = Vec::new();
+    let mut valid = Vec::new();
+    let mut test = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if let Some(group_rows) = grouped.remove(group) {
+            if index < train_end {
+                train.extend(group_rows);
+            } else if index < valid_end {
+                valid.extend(group_rows);
+            } else {
+                test.extend(group_rows);
+            }
+        }
+    }
+    (train, valid, test)
 }
 
 /// Generate all training rows for a single fixture.
@@ -2238,6 +2266,7 @@ fn rows_for_fixture(fixture: &DuplexFixture, corpus: &str) -> AnyResult<Vec<Dupl
                 } else {
                     None
                 }
+
             })
             .unwrap_or(0.0);
 
@@ -2492,7 +2521,7 @@ fn duplex_dataset_readme(
          | valid | {valid_rows} |\n\
          | test  | {test_rows}  |\n\
          \n\
-         Splits are deterministic (seed = 42, 80/10/10 ratio) and non-overlapping.\n\
+         Splits are deterministic (seed = 42, 80/10/10 ratio), group-aware by `fixture_id`, and non-overlapping.\n\
          \n\
          ## Schema fields\n\
          \n\
@@ -3328,5 +3357,48 @@ mod tests {
             report.train_rows + report.valid_rows + report.test_rows,
             report.prefix_rows + report.completion_rows + report.rollback_rows + report.repair_rows
         );
+    }
+
+    #[test]
+    fn split_rows_by_fixture_group_keeps_fixture_together() {
+        let mk = |id: &str, fixture_id: &str| DuplexTrainingRow {
+            version: 1,
+            row_id: id.to_string(),
+            row_kind: TrainingRowKind::Prefix,
+            row_source: DuplexTrainingRowSource::Fixture,
+            utterance_id: "u".to_string(),
+            variety: "en-US".to_string(),
+            fixture_id: fixture_id.to_string(),
+            step_index: 0,
+            evidence_ids: Vec::new(),
+            evidence_modalities: Vec::new(),
+            heard: false,
+            committed_prefix: Vec::new(),
+            commit_frontier: 0,
+            shared_prefix: Vec::new(),
+            predicted_suffix: Vec::new(),
+            beam: Vec::new(),
+            covered_probability: 1.0,
+            safe_commit_count: 0,
+            final_committed_text: String::new(),
+            rollback: None,
+            repair: None,
+            corpus: "fixture".to_string(),
+            license: "test".to_string(),
+            derivation: "test".to_string(),
+        };
+        let rows = vec![
+            mk("r1", "f1"),
+            mk("r2", "f1"),
+            mk("r3", "f2"),
+            mk("r4", "f3"),
+        ];
+        let (train, valid, test) = split_rows_by_fixture_group(rows, 7, 0.5, 0.25);
+        for fixture in ["f1", "f2", "f3"] {
+            let placements = usize::from(train.iter().any(|row| row.fixture_id == fixture))
+                + usize::from(valid.iter().any(|row| row.fixture_id == fixture))
+                + usize::from(test.iter().any(|row| row.fixture_id == fixture));
+            assert_eq!(placements, 1);
+        }
     }
 }
