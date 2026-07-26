@@ -1,19 +1,26 @@
 //! HiFi-GAN training hooks: generator, MPD, and MSD working together.
 //!
 //! [`HifiganTrainer`] owns a generator and both discriminators and implements
-//! [`BurnVocoderTrainingHooks`].  The alternating generator / discriminator
-//! schedule follows the original HiFi-GAN paper (Jungil Kong et al., 2020).
+//! [`BurnVocoderTrainingHooks`]. The default schedule updates generator and
+//! discriminator once per batch; callers can also request a deterministic
+//! discriminator-then-generator cycle.
 //!
 //! ## Training schedule
 //!
-//! - **Generator step** (even global steps by default):
+//! - **Default (`EveryBatch`)**:
+//!   1. Compute generator loss.
+//!   2. Compute discriminator loss from a detached generator output.
+//!   3. Return both losses with [`VocoderTrainingPhase::Joint`].
+//! - **Alternating (`Cycle { discriminator_steps: 1, generator_steps: 1 }`)**:
+//!   discriminator, generator, discriminator, generator, ...
+//! - **Generator step**:
 //!   1. Forward-pass through the generator.
 //!   2. Forward-pass through MPD and MSD for both the real and generated
 //!      waveforms.
 //!   3. Compute adversarial generator loss + feature-matching loss.
 //!   4. Return combined generator loss in [`BurnVocoderTrainingOutput::generator_loss`].
 //!
-//! - **Discriminator step** (odd global steps by default):
+//! - **Discriminator step**:
 //!   1. Forward-pass through the generator (detached for discriminator update).
 //!   2. Forward-pass through MPD and MSD for both real and generated.
 //!   3. Compute LSGAN discriminator loss (real→1, fake→0).
@@ -32,7 +39,7 @@ use crate::burn_vocoder_losses::{
 };
 use crate::burn_vocoder_training::{
     BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, BurnVocoderTrainingOutput,
-    VocoderTrainingPhase,
+    VocoderAdversarialUpdateSchedule, VocoderTrainingPhase, VocoderTrainingProgress,
 };
 
 /// Bundled HiFi-GAN generator and discriminators for adversarial training.
@@ -45,10 +52,7 @@ pub struct HifiganTrainer<B: Backend> {
     pub generator: HifiganGenerator<B>,
     pub mpd: MultiPeriodDiscriminator<B>,
     pub msd: MultiScaleDiscriminator<B>,
-    /// Relative frequency of discriminator updates.  A value of `1` means both
-    /// networks are updated every step; `n` means the discriminator is updated
-    /// once per `n` generator updates.
-    disc_update_interval: u64,
+    adversarial_schedule: VocoderAdversarialUpdateSchedule,
     loss_weights: VocoderLossWeightsHolder,
 }
 
@@ -88,20 +92,25 @@ impl<B: Backend> HifiganTrainer<B> {
         generator: HifiganGenerator<B>,
         device: &B::Device,
         loss_weights: VocoderLossWeights,
-        disc_update_interval: u64,
+        adversarial_schedule: VocoderAdversarialUpdateSchedule,
     ) -> Self {
         Self {
             mpd: MultiPeriodDiscriminator::new(device),
             msd: MultiScaleDiscriminator::new(device),
             generator,
-            disc_update_interval: disc_update_interval.max(1),
+            adversarial_schedule,
             loss_weights: VocoderLossWeightsHolder::new(&loss_weights),
         }
     }
 
     /// Construct a trainer with HiFi-GAN paper default loss weights.
     pub fn with_defaults(generator: HifiganGenerator<B>, device: &B::Device) -> Self {
-        Self::new(generator, device, VocoderLossWeights::default(), 1)
+        Self::new(
+            generator,
+            device,
+            VocoderLossWeights::default(),
+            VocoderAdversarialUpdateSchedule::EveryBatch,
+        )
     }
 
     /// Run the generator forward pass.
@@ -119,6 +128,7 @@ impl<B: Backend> HifiganTrainer<B> {
     fn generator_step(
         &self,
         batch: BurnVocoderTrainingBatch<B>,
+        progress: VocoderTrainingProgress,
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let target_waveform = batch.target_waveform;
         let predicted_waveform = self.generate(batch.conditioning_mel)?;
@@ -151,6 +161,7 @@ impl<B: Backend> HifiganTrainer<B> {
         let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_zero, recon_zero, &weights);
 
         Ok(BurnVocoderTrainingOutput {
+            progress,
             phase: VocoderTrainingPhase::Generator,
             predicted_waveform,
             discriminator_outputs: None,
@@ -162,6 +173,7 @@ impl<B: Backend> HifiganTrainer<B> {
     fn discriminator_step(
         &self,
         batch: BurnVocoderTrainingBatch<B>,
+        progress: VocoderTrainingProgress,
     ) -> Result<BurnVocoderTrainingOutput<B>> {
         let target_waveform = batch.target_waveform;
         // Generator output is detached so that discriminator gradients do not
@@ -181,6 +193,7 @@ impl<B: Backend> HifiganTrainer<B> {
         let disc_loss = adversarial_discriminator_loss(real_scores, fake_scores);
 
         Ok(BurnVocoderTrainingOutput {
+            progress,
             phase: VocoderTrainingPhase::Discriminator,
             predicted_waveform,
             discriminator_outputs: None,
@@ -188,19 +201,28 @@ impl<B: Backend> HifiganTrainer<B> {
             discriminator_loss: Some(disc_loss),
         })
     }
+
+    fn joint_step(
+        &self,
+        batch: BurnVocoderTrainingBatch<B>,
+        progress: VocoderTrainingProgress,
+    ) -> Result<BurnVocoderTrainingOutput<B>> {
+        let generator = self.generator_step(batch.clone(), progress)?;
+        let discriminator = self.discriminator_step(batch, progress)?;
+        Ok(BurnVocoderTrainingOutput {
+            progress,
+            phase: VocoderTrainingPhase::Joint,
+            predicted_waveform: generator.predicted_waveform,
+            discriminator_outputs: None,
+            generator_loss: generator.generator_loss,
+            discriminator_loss: discriminator.discriminator_loss,
+        })
+    }
 }
 
 impl<B: Backend> BurnVocoderTrainingHooks<B> for HifiganTrainer<B> {
-    /// Return the phase for a given global training step.
-    ///
-    /// The discriminator is updated every `disc_update_interval` steps.  On all
-    /// other steps the generator is updated.
     fn training_phase(&self, global_step: u64) -> VocoderTrainingPhase {
-        if global_step % self.disc_update_interval == 0 {
-            VocoderTrainingPhase::Discriminator
-        } else {
-            VocoderTrainingPhase::Generator
-        }
+        self.adversarial_schedule.training_phase(global_step)
     }
 
     fn training_forward(
@@ -208,13 +230,11 @@ impl<B: Backend> BurnVocoderTrainingHooks<B> for HifiganTrainer<B> {
         batch: BurnVocoderTrainingBatch<B>,
         global_step: u64,
     ) -> Result<BurnVocoderTrainingOutput<B>> {
-        match self.training_phase(global_step) {
-            VocoderTrainingPhase::Generator => self.generator_step(batch),
-            VocoderTrainingPhase::Discriminator => self.discriminator_step(batch),
-            VocoderTrainingPhase::Joint => {
-                // Not used by HiFi-GAN; fall back to generator step.
-                self.generator_step(batch)
-            }
+        let progress = self.adversarial_schedule.progress(global_step);
+        match progress.phase {
+            VocoderTrainingPhase::Generator => self.generator_step(batch, progress),
+            VocoderTrainingPhase::Discriminator => self.discriminator_step(batch, progress),
+            VocoderTrainingPhase::Joint => self.joint_step(batch, progress),
         }
     }
 }
@@ -261,24 +281,17 @@ mod tests {
     }
 
     #[test]
-    fn trainer_phase_alternates_correctly() {
+    fn trainer_default_schedule_updates_both_parameter_groups() {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 1);
         let gen = tiny_generator(&device);
         let trainer = HifiganTrainer::with_defaults(gen, &device);
-        // disc_update_interval = 1 → every step is discriminator step
-        assert_eq!(
-            trainer.training_phase(0),
-            VocoderTrainingPhase::Discriminator
-        );
-        assert_eq!(
-            trainer.training_phase(1),
-            VocoderTrainingPhase::Discriminator
-        );
+        assert_eq!(trainer.training_phase(0), VocoderTrainingPhase::Joint);
+        assert_eq!(trainer.training_phase(1), VocoderTrainingPhase::Joint);
     }
 
     #[test]
-    fn trainer_phase_skips_discriminator_with_interval() {
+    fn trainer_phase_respects_alternating_cycle() {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 2);
         let gen = tiny_generator(&device);
@@ -286,7 +299,10 @@ mod tests {
             gen,
             &device,
             VocoderLossWeights::default(),
-            2, // discriminator every 2 steps
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
         );
         assert_eq!(
             trainer.training_phase(0),
@@ -304,8 +320,15 @@ mod tests {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 3);
         let gen = tiny_generator(&device);
-        // Use interval 2 so step 1 is a generator step.
-        let trainer = HifiganTrainer::new(gen, &device, VocoderLossWeights::default(), 2);
+        let trainer = HifiganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::default(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
+        );
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 1).expect("forward");
         assert_eq!(output.phase, VocoderTrainingPhase::Generator);
@@ -331,7 +354,15 @@ mod tests {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 4);
         let gen = tiny_generator(&device);
-        let trainer = HifiganTrainer::with_defaults(gen, &device);
+        let trainer = HifiganTrainer::new(
+            gen,
+            &device,
+            VocoderLossWeights::default(),
+            VocoderAdversarialUpdateSchedule::Cycle {
+                discriminator_steps: 1,
+                generator_steps: 1,
+            },
+        );
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 0).expect("forward");
         assert_eq!(output.phase, VocoderTrainingPhase::Discriminator);
@@ -349,9 +380,24 @@ mod tests {
     }
 
     #[test]
-    fn predicted_waveform_has_correct_upsampled_shape() {
+    fn default_schedule_returns_both_losses() {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 5);
+        let gen = tiny_generator(&device);
+        let trainer = HifiganTrainer::with_defaults(gen, &device);
+        let batch = make_batch(1, 3, 4, 12, &device);
+        let output = trainer.training_forward(batch, 0).expect("forward");
+        assert_eq!(output.phase, VocoderTrainingPhase::Joint);
+        assert!(output.generator_loss.is_some());
+        assert!(output.discriminator_loss.is_some());
+        assert_eq!(output.progress.generator_updates, 1);
+        assert_eq!(output.progress.discriminator_updates, 1);
+    }
+
+    #[test]
+    fn predicted_waveform_has_correct_upsampled_shape() {
+        let device = NdArrayDevice::Cpu;
+        TestBackend::seed(&device, 6);
         let gen = tiny_generator(&device);
         let trainer = HifiganTrainer::with_defaults(gen, &device);
         // 3 frames × (2×2) upsample = 12 samples
