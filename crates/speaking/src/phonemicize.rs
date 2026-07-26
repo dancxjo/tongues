@@ -4942,7 +4942,7 @@ mod tests {
                 .into_iter()
                 .filter(|symbol| symbol != "|")
                 .collect::<Vec<_>>(),
-            ["ə", "m", "b", "ɹ", "e", "l", "ə", "s", "t", "æ", "n", "d"]
+            ["ə", "m", "b", "ɹ", "e", "l", "ə", "s", "t˭", "æ", "n", "d"]
         );
         assert!(
             before_vowel
