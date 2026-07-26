@@ -291,6 +291,10 @@ impl StyleTts2OnnxBackend {
         self.speed = speed;
         Ok(())
     }
+
+    pub fn set_seed(&mut self, seed: u64) {
+        self.diffusion_options.seed = seed;
+    }
 }
 
 impl StyleTts2Backend for StyleTts2OnnxBackend {

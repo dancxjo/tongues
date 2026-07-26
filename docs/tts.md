@@ -47,12 +47,16 @@ List the VITS speakers:
 just speak --backend vits --list-speakers
 ```
 
-The local server exposes the same model-declared catalog at
-`GET /api/speech/speakers?backend=vits`. The synthesis UI renders that response
-as a speaker selector, including the checkpoint embedding ID; it does not carry
-a separate hard-coded speaker list. Linguistic varieties are independently
-enumerated from the shared variety data registry at
-`GET /api/linguistic/varieties`.
+The local server exposes every registered model through
+`GET /api/speech/models`. Each entry includes backend/model identity, model
+family, varieties, named and numeric speakers, style and reference-audio
+support, speed/seed/device support, normalized output format, installation
+state, and provenance. The synthesis UI renders the VITS speaker selector from
+this contract, including the checkpoint embedding ID; it does not carry a
+separate hard-coded speaker list. The older
+`GET /api/speech/speakers?backend=vits` endpoint remains as a compatibility
+view. Linguistic varieties are independently enumerated from the shared
+variety data registry at `GET /api/linguistic/varieties`.
 
 Force CPU execution with the global CLI flag:
 
@@ -148,6 +152,27 @@ contains `ʰ`, while lowering the unsupported unaspirated-stop extension `˭` to
 the base stop. Unknown symbols without an explicit compatibility lowering still
 fail at the boundary.
 
+## Unified synthesis contract
+
+`tongues-tts::UnifiedSynthesisRequest` is the public orchestration boundary for
+native component pipelines, end-to-end models, imported ONNX voices,
+reference-conditioned models, and future voice-conversion backends. It carries
+text, pronunciation variety, named or numeric speaker selection, speaker/style
+and source reference audio, named or embedded style, speed, stochastic seed,
+device, and chunking/streaming intent.
+
+Every imported implementation exposes `BackendCapabilities` and implements
+`SynthesizerBackend`. Capability validation happens before inference and
+returns typed errors for unsupported features, unsupported catalog values,
+missing required selections, and malformed controls. The resident server keeps
+boxed implementations of that trait, so its synthesis path does not branch on
+VITS, SpeedySpeech + HiFi-GAN, StyleTTS2, or ONNX output shapes.
+
+Audio from every backend is normalized to interleaved `f32` chunks with sample
+rate, channel count, frame offset, chunk/final markers, and common completion
+metadata. Completion metadata reports backend/model identity, format, frame
+count, audio duration, streaming mode, and backend timing stages.
+
 ## Native Burn Components
 
 `crates/tongues-tts` contains:
@@ -235,6 +260,12 @@ Inspect loading, ready, and failed state at:
 
 ```text
 GET /api/speech/runtime
+```
+
+Inspect the backend-neutral model and capability contract at:
+
+```text
+GET /api/speech/models
 ```
 
 The response exposes explicit `idle`, `loading`, `ready`, `busy`, `reloading`,

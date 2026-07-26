@@ -1898,25 +1898,36 @@ async function initStyleTts2() {
         speakerSelect.disabled = true;
         speakerDetail.textContent = 'This backend does not require a named speaker.';
 
-        const res = await fetch(`/api/speech/speakers?backend=${encodeURIComponent(backend)}`);
-        const data = await res.json();
-        if (data.error) {
-            speakerDetail.textContent = data.error;
+        const res = await fetch('/api/speech/models');
+        if (!res.ok) throw new Error(await res.text());
+        const models = await res.json();
+        const model = models.find((candidate) => candidate.backend === backend);
+        if (!model) {
+            speakerDetail.textContent = `Backend ${backend} is not registered.`;
             return;
         }
-        if (!data.requires_selection) return;
+        if (model.error) {
+            speakerDetail.textContent = model.error;
+            return;
+        }
+        const speakerCapability = model.speakers || {};
+        const values = speakerCapability.values || {};
+        if (values.support !== 'listed') return;
+        const speakers = values.values || [];
 
-        (data.speakers || []).forEach((speaker) => {
+        speakers.forEach((speaker) => {
             const option = document.createElement('option');
-            option.value = speaker.name;
-            option.textContent = `${speaker.label} · embedding ${speaker.id}`;
+            option.value = speaker.id;
+            option.textContent = speaker.numeric_id == null
+                ? speaker.label
+                : `${speaker.label} · embedding ${speaker.numeric_id}`;
             speakerSelect.appendChild(option);
         });
         speakerSelect.disabled = false;
-        if ((data.speakers || []).some((speaker) => speaker.name === 'p225')) {
+        if (speakers.some((speaker) => speaker.id === 'p225')) {
             speakerSelect.value = 'p225';
         }
-        speakerDetail.textContent = `${data.speakers.length} speakers from ${data.model}`;
+        speakerDetail.textContent = `${speakers.length} speakers from ${model.model}`;
     };
 
     const loadVarieties = async () => {

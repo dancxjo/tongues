@@ -251,9 +251,9 @@ fn onnx_synthesis_options(options: &SpeechSynthesisOptions) -> Result<speech::Sy
     Ok(speech::SynthesisOptions {
         speaker_id: options.speaker_id,
         split_sentences: true,
-        length_scale: None,
-        noise_scale: None,
-        noise_w: None,
+        length_scale: Some((1.0 / options.speed) as f32),
+        noise_scale: options.noise_scale,
+        noise_w: options.duration_noise_scale,
         seed: None,
     })
 }
@@ -315,6 +315,62 @@ impl From<&SpeakCommand> for SpeechSynthesisOptions {
     }
 }
 
+fn unified_cli_request(
+    text: &str,
+    command: &SpeakCommand,
+    options: &SpeechSynthesisOptions,
+    device: DeviceArg,
+) -> speech::UnifiedSynthesisRequest {
+    let style_requested = matches!(command.backend, SpeakBackend::Styletts2)
+        || options.style_wav.is_some()
+        || options.emotion.is_some()
+        || options.emotion_signatures.is_some();
+    speech::UnifiedSynthesisRequest {
+        text: text.to_string(),
+        variety: command.variety.clone(),
+        speaker: options
+            .speaker
+            .clone()
+            .map(speech::SpeakerSelection::Named)
+            .or_else(|| options.speaker_id.map(speech::SpeakerSelection::Numeric)),
+        reference_audio: speech::ReferenceAudioRequest {
+            speaker: options
+                .voice_wav
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            style: options
+                .style_wav
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            source: None,
+        },
+        style: style_requested.then(|| speech::StyleSelection {
+            name: options.emotion.clone(),
+            embedding: None,
+            embedding_is_delta: false,
+            strength: options.emotion_strength,
+            speaker_blend: Some(options.style_alpha),
+            style_blend: Some(options.style_beta),
+            diffusion_steps: Some(options.diffusion_steps),
+            embedding_scale: Some(options.embedding_scale),
+        }),
+        speed: options.speed as f32,
+        seed: options.seed.or_else(|| {
+            matches!(command.backend, SpeakBackend::Styletts2).then_some(options.style_seed)
+        }),
+        noise_scale: options.noise_scale,
+        duration_noise_scale: options.duration_noise_scale,
+        device: match device {
+            DeviceArg::Cpu => speech::SpeechDeviceRequest::Cpu,
+            DeviceArg::Cuda { index } => speech::SpeechDeviceRequest::Cuda { index },
+        },
+        streaming: command.output.is_none(),
+        profile: command.timings,
+        max_chunk_symbols: Some(options.max_tts_symbols),
+        chunking: !options.no_tts_chunking,
+    }
+}
+
 type CpuBurnBackend = speech::BurnSpeedySpeechPipeline<NdArray<f32>>;
 type CudaBurnBackend = speech::BurnSpeedySpeechPipeline<Cuda<f32, i32>>;
 type CpuVitsBackend = speech::BurnVitsSpeech<NdArray<f32>>;
@@ -356,6 +412,124 @@ impl BackendInstance {
             Self::Mock(_) => "mock",
             Self::StyleTts2 { .. } => "styletts2",
             Self::Onnx { .. } => "onnx",
+        }
+    }
+
+    fn capabilities(&self, device: DeviceArg) -> speech::BackendCapabilities {
+        let output = |sample_rate_hz| speech::OutputAudioContract {
+            sample_rate_hz,
+            channels: 1,
+            streaming: true,
+        };
+        let varieties = speech::variety_capabilities_for_language("en");
+        let devices = vec![match device {
+            DeviceArg::Cpu => speech::SpeechDeviceRequest::Cpu,
+            DeviceArg::Cuda { index } => speech::SpeechDeviceRequest::Cuda { index },
+        }];
+        let base = |backend: &str,
+                    model: &str,
+                    family: speech::SpeechModelFamily,
+                    sample_rate_hz| speech::BackendCapabilities {
+            backend: backend.into(),
+            model: model.into(),
+            family,
+            varieties: varieties.clone(),
+            speakers: speech::SpeakerCapabilities::unsupported(),
+            styles: speech::StyleCapabilities::unsupported(),
+            reference_audio: Default::default(),
+            speed: true,
+            seed: true,
+            devices: devices.clone(),
+            output: output(sample_rate_hz),
+            provenance: Vec::new(),
+        };
+        match self {
+            Self::BurnCpu(_) | Self::BurnCuda(_) => {
+                let mut capabilities = base(
+                    "burn",
+                    "speedyspeech-ljspeech+hifigan-v2",
+                    speech::SpeechModelFamily::AcousticModel,
+                    22_050,
+                );
+                capabilities.provenance = vec!["Published Coqui release artifacts".into()];
+                capabilities
+            }
+            Self::VitsCpu(engine) => {
+                vits_cli_capabilities(engine.speaker_catalog(), devices, varieties)
+            }
+            Self::VitsCuda(engine) => {
+                vits_cli_capabilities(engine.speaker_catalog(), devices, varieties)
+            }
+            Self::Mock(_) => {
+                let mut capabilities = base(
+                    "mock",
+                    "deterministic-mock",
+                    speech::SpeechModelFamily::EndToEndSpeech,
+                    24_000,
+                );
+                capabilities.varieties = speech::CapabilityValue::Any;
+                capabilities.speed = false;
+                capabilities.seed = false;
+                capabilities
+            }
+            #[cfg(feature = "styletts2-onnx")]
+            Self::StyleTts2(_) => speech::BackendCapabilities {
+                backend: "styletts2".into(),
+                model: "styletts2-en-us".into(),
+                family: speech::SpeechModelFamily::CrossLingualVoiceClone,
+                varieties,
+                speakers: speech::SpeakerCapabilities::unsupported(),
+                styles: speech::StyleCapabilities {
+                    names: speech::CapabilityValue::Any,
+                    reference_audio: true,
+                    embedding_dimensions: Some(256),
+                },
+                reference_audio: speech::ReferenceAudioCapabilities {
+                    speaker: true,
+                    style: true,
+                    source: false,
+                },
+                speed: true,
+                seed: true,
+                devices,
+                output: output(24_000),
+                provenance: Vec::new(),
+            },
+            #[cfg(not(feature = "styletts2-onnx"))]
+            Self::StyleTts2 => unreachable!("StyleTTS2 feature is disabled"),
+            #[cfg(feature = "onnx-tts")]
+            Self::Onnx(engine) => {
+                let config = engine.voice_config();
+                let values = config
+                    .speaker_id_map
+                    .iter()
+                    .map(|(name, id)| speech::NamedCapability::new(name, name).with_numeric_id(*id))
+                    .collect::<Vec<_>>();
+                speech::BackendCapabilities {
+                    backend: "onnx".into(),
+                    model: "onnx-compatibility-voice".into(),
+                    family: speech::SpeechModelFamily::EndToEndSpeech,
+                    varieties,
+                    speakers: speech::SpeakerCapabilities {
+                        values: if values.is_empty() {
+                            speech::CapabilityValue::Unsupported
+                        } else {
+                            speech::CapabilityValue::Listed(values)
+                        },
+                        required: config.is_multi_speaker(),
+                        numeric_ids: config.speaker_count() > 1,
+                    },
+                    styles: speech::StyleCapabilities::unsupported(),
+                    reference_audio: Default::default(),
+                    speed: true,
+                    seed: false,
+                    devices,
+                    output: output(config.sample_rate_hz),
+                    provenance: vec!["Piper-compatible ONNX import".into()],
+                }
+            }
+            #[cfg(not(feature = "onnx-tts"))]
+            Self::Onnx => unreachable!("ONNX feature is disabled"),
         }
     }
 
@@ -557,6 +731,43 @@ impl BackendInstance {
             )),
             Self::Mock(_) | Self::StyleTts2 { .. } | Self::Onnx { .. } => Ok(None),
         }
+    }
+}
+
+fn vits_cli_capabilities(
+    catalog: &speech::SpeakerCatalog,
+    devices: Vec<speech::SpeechDeviceRequest>,
+    varieties: speech::CapabilityValue,
+) -> speech::BackendCapabilities {
+    speech::BackendCapabilities {
+        backend: "vits".into(),
+        model: "vits-vctk".into(),
+        family: speech::SpeechModelFamily::EndToEndSpeech,
+        varieties,
+        speakers: speech::SpeakerCapabilities {
+            values: speech::CapabilityValue::Listed(
+                catalog
+                    .entries()
+                    .into_iter()
+                    .map(|(name, id)| {
+                        speech::NamedCapability::new(name, name.trim()).with_numeric_id(id)
+                    })
+                    .collect(),
+            ),
+            required: true,
+            numeric_ids: true,
+        },
+        styles: speech::StyleCapabilities::unsupported(),
+        reference_audio: Default::default(),
+        speed: true,
+        seed: true,
+        devices,
+        output: speech::OutputAudioContract {
+            sample_rate_hz: 22_050,
+            channels: 1,
+            streaming: true,
+        },
+        provenance: vec!["Published Coqui release artifact".into()],
     }
 }
 
@@ -885,6 +1096,15 @@ fn run_speak_with_backend(
         if text_chunk.trim().is_empty() {
             return Ok(());
         }
+        backend
+            .capabilities(startup.device)
+            .validate(&unified_cli_request(
+                text_chunk,
+                &command,
+                &options,
+                startup.device,
+            ))
+            .context("speech request is not supported by the selected backend")?;
 
         let planning_started = Instant::now();
         let variety = VarietyId(command.variety.clone());
@@ -1890,5 +2110,53 @@ mod tests {
             Some(output_dir.join("vits-p226.wav").as_path())
         );
         assert_eq!(cases[4].command.quality, SpeakQuality::Fast);
+    }
+
+    #[test]
+    fn cli_projects_common_controls_into_the_unified_contract() {
+        let command = SpeakCommand {
+            backend: SpeakBackend::Styletts2,
+            variety: "en-US".into(),
+            speaker_reference_strength: Some(0.8),
+            style_reference_strength: Some(0.7),
+            emotion: Some("amused".into()),
+            emotion_strength: 0.65,
+            speed: 1.1,
+            style_seed: 27,
+            max_tts_symbols: 96,
+            no_tts_chunking: true,
+            voice_wav: Some(PathBuf::from("/tmp/voice.wav")),
+            style_wav: Some(PathBuf::from("/tmp/style.wav")),
+            ..SpeakCommand::default()
+        };
+        let options = SpeechSynthesisOptions::from(&command);
+
+        let request = unified_cli_request(
+            "A styled request.",
+            &command,
+            &options,
+            DeviceArg::Cuda { index: 2 },
+        );
+
+        assert_eq!(request.variety, "en-US");
+        assert_eq!(request.seed, Some(27));
+        assert_eq!(
+            request.device,
+            speech::SpeechDeviceRequest::Cuda { index: 2 }
+        );
+        assert_eq!(
+            request.reference_audio.speaker.as_deref(),
+            Some("/tmp/voice.wav")
+        );
+        assert_eq!(
+            request.reference_audio.style.as_deref(),
+            Some("/tmp/style.wav")
+        );
+        assert_eq!(request.max_chunk_symbols, Some(96));
+        assert!(!request.chunking);
+        let style = request.style.expect("style controls");
+        assert_eq!(style.name.as_deref(), Some("amused"));
+        assert!((style.speaker_blend.unwrap() - 0.2).abs() < f32::EPSILON);
+        assert!((style.style_blend.unwrap() - 0.3).abs() < f32::EPSILON);
     }
 }

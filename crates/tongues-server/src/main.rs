@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
-    Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
@@ -22,12 +22,12 @@ use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, Semaphore};
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio::sync::{Semaphore, broadcast};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::services::ServeDir;
 
 const STYLE_VECTOR_DIMS: usize = 256;
@@ -207,6 +207,7 @@ fn build_app(state: AppState) -> Router {
         .route("/api/pronunciation-demo/infer", post(pronunciation_infer))
         .route("/api/linguistic/varieties", get(get_linguistic_varieties))
         .route("/api/styletts2-samples", get(get_styletts2_samples))
+        .route("/api/speech/models", get(get_speech_models))
         .route("/api/speech/speakers", get(get_speech_speakers))
         .route("/api/speech/runtime", get(get_speech_runtime))
         .route("/api/speech/runtime/reload", post(reload_speech_runtime))
@@ -361,6 +362,14 @@ struct SpeechSpeakersResponse {
     installed: bool,
     requires_selection: bool,
     speakers: Vec<SpeechSpeakerOption>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SpeechModelDiscovery {
+    #[serde(flatten)]
+    capabilities: tongues_tts::BackendCapabilities,
+    installed: bool,
     error: Option<String>,
 }
 
@@ -1687,85 +1696,96 @@ fn job_path_to_relative(workspace_root: &FsPath, value: &str) -> Option<PathBuf>
     safe_relative_path(value).ok()
 }
 
-type CpuBurnSpeech = tongues_tts::BurnSpeedySpeechPipeline<NdArray<f32>>;
-type CudaBurnSpeech = tongues_tts::BurnSpeedySpeechPipeline<Cuda<f32, i32>>;
-type CpuVitsSpeech = tongues_tts::BurnVitsSpeech<NdArray<f32>>;
-type CudaVitsSpeech = tongues_tts::BurnVitsSpeech<Cuda<f32, i32>>;
+type ResidentSpeechBackend = Box<dyn tongues_tts::SynthesizerBackend>;
 
-enum ResidentSpeechBackend {
-    BurnCpu(Box<CpuBurnSpeech>),
-    BurnCuda(Box<CudaBurnSpeech>),
-    VitsCpu(Box<CpuVitsSpeech>),
-    VitsCuda(Box<CudaVitsSpeech>),
-    Onnx(Box<tongues_tts::OnnxSpeechBackend>),
-    StyleTts2(Box<styletts2::StyleTts2OnnxBackend>),
-    Mock(styletts2::MockStyleTts2Backend),
+struct MockSynthesizer {
+    capabilities: tongues_tts::BackendCapabilities,
+    backend: styletts2::MockStyleTts2Backend,
 }
 
-impl ResidentSpeechBackend {
-    fn sample_rate_hz(&self) -> u32 {
-        use tongues_tts::SpeechSynthesisEngine;
-        match self {
-            Self::BurnCpu(engine) => engine.sample_rate_hz(),
-            Self::BurnCuda(engine) => engine.sample_rate_hz(),
-            Self::VitsCpu(engine) => engine.sample_rate_hz(),
-            Self::VitsCuda(engine) => engine.sample_rate_hz(),
-            Self::Onnx(engine) => engine.sample_rate_hz(),
-            Self::StyleTts2(_) => 24_000,
-            Self::Mock(_) => unreachable!("mock sample rate comes from synthesis output"),
-        }
+impl tongues_tts::SynthesizerBackend for MockSynthesizer {
+    fn capabilities(&self) -> tongues_tts::BackendCapabilities {
+        self.capabilities.clone()
     }
 
-    fn synthesize_speech(
+    fn synthesize(
         &mut self,
-        request: &tongues_tts::SpeechSynthesisRequest,
-        profile: bool,
-    ) -> anyhow::Result<(Vec<f32>, Vec<tongues_tts::SynthesisProfileEvent>)> {
-        use tongues_tts::SpeechSynthesisEngine;
-
-        let mut pcm = Vec::new();
-        let mut events = Vec::new();
-        let mut sink = |chunk: tongues_tts::AudioChunk| {
-            pcm.extend(chunk.pcm_mono_f32);
-            Ok(())
-        };
-        macro_rules! run {
-            ($engine:expr) => {
-                if profile {
-                    $engine.synthesize_plan_streaming_profiled(request, &mut sink, &mut |event| {
-                        events.push(event)
-                    })
-                } else {
-                    $engine.synthesize_plan_streaming(request, &mut sink)
+        request: &tongues_tts::UnifiedSynthesisRequest,
+        sink: &mut dyn tongues_tts::NormalizedAudioSink,
+    ) -> Result<tongues_tts::UnifiedSynthesisOutput, tongues_tts::SynthesisContractError> {
+        use styletts2::StyleTts2Backend;
+        self.capabilities.validate(request)?;
+        let plan = tongues_tts::utterance_plan_from_text(tongues_tts::SpeechRequest {
+            text: request.text.clone(),
+            variety: request.variety.clone(),
+        })
+        .map_err(|error| tongues_tts::SynthesisContractError::Backend {
+            message: format!("{error:#}"),
+        })?;
+        let backend_plan = styletts2::prepare_styletts2_plan(
+            &plan,
+            &styletts2::styletts2_en_us_symbol_set(),
+            styletts2::StyleTts2PlanOptions::default(),
+        )
+        .map_err(|error| tongues_tts::SynthesisContractError::Backend {
+            message: error.to_string(),
+        })?;
+        let backend_request = styletts2::StyleTts2SynthesisRequest::from_backend_plan(
+            backend_plan,
+            plan.speaker,
+            plan.style,
+            plan.target_prosody,
+        );
+        let mut frames = 0_u64;
+        let mut frame_offset = 0_u64;
+        let mut sink_failure = None;
+        let synthesis_result = self.backend.synthesize_streaming(
+            &backend_request,
+            &mut |chunk: styletts2::StyleTts2AudioChunk| {
+                let chunk_frames = chunk.pcm_mono_f32.len() as u64;
+                if let Err(error) = sink.emit(tongues_tts::NormalizedAudioChunk {
+                    chunk_index: chunk.chunk_index,
+                    is_final: chunk.is_final,
+                    frame_offset,
+                    sample_rate_hz: chunk.sample_rate_hz,
+                    channels: 1,
+                    pcm_f32: chunk.pcm_mono_f32,
+                }) {
+                    let message = error.to_string();
+                    sink_failure = Some(error);
+                    return Err(styletts2::StyleTts2Error::Backend { message });
                 }
-            };
+                frames += chunk_frames;
+                frame_offset += chunk_frames;
+                Ok(())
+            },
+        );
+        if let Some(error) = sink_failure {
+            return Err(error);
         }
-        match self {
-            Self::BurnCpu(engine) => run!(engine),
-            Self::BurnCuda(engine) => run!(engine),
-            Self::VitsCpu(engine) => run!(engine),
-            Self::VitsCuda(engine) => run!(engine),
-            Self::Onnx(engine) => {
-                if profile {
-                    tongues_tts::SpeechSynthesisEngine::synthesize_plan_streaming_profiled(
-                        engine.as_mut(),
-                        request,
-                        &mut sink,
-                        &mut |event| events.push(event),
-                    )
-                } else {
-                    tongues_tts::SpeechSynthesisEngine::synthesize_plan_streaming(
-                        engine.as_mut(),
-                        request,
-                        &mut sink,
-                    )
-                }
-            }
-            Self::StyleTts2(_) | Self::Mock(_) => {
-                unreachable!("StyleTTS2-family backends use their own synthesis contract")
-            }
-        }?;
-        Ok((pcm, events))
+        let output =
+            synthesis_result.map_err(|error| tongues_tts::SynthesisContractError::Backend {
+                message: error.to_string(),
+            })?;
+        Ok(tongues_tts::UnifiedSynthesisOutput {
+            metadata: tongues_tts::SynthesisMetadata {
+                backend: self.capabilities.backend.clone(),
+                model: self.capabilities.model.clone(),
+                sample_rate_hz: output.sample_rate_hz,
+                channels: 1,
+                frames,
+                audio_seconds: frames as f64 / f64::from(output.sample_rate_hz),
+                streaming: request.streaming,
+                timings: output
+                    .timings
+                    .into_iter()
+                    .map(|timing| tongues_tts::SynthesisTiming {
+                        stage: timing.stage,
+                        elapsed_ms: timing.elapsed_ms,
+                    })
+                    .collect(),
+            },
+        })
     }
 }
 
@@ -1804,7 +1824,7 @@ struct ResidentSynthesisOutput {
     synthesis_ms: f64,
     audio_seconds: f64,
     real_time_factor: f64,
-    profile: Vec<tongues_tts::SynthesisProfileEvent>,
+    profile: Vec<tongues_tts::SynthesisTiming>,
     device: tongues_tts::ResolvedSpeechDevice,
 }
 
@@ -1868,48 +1888,21 @@ impl ResidentSpeechService {
         let load_ms = load_started.elapsed().as_secs_f64() * 1_000.0;
         phase.store(SPEECH_PHASE_SYNTHESIZING, Ordering::Release);
 
-        let mut plan = tongues_tts::utterance_plan_from_text(tongues_tts::SpeechRequest {
-            text: payload.text.clone(),
-            variety: payload
-                .variety
-                .clone()
-                .unwrap_or_else(|| "en-US".to_string()),
-        })?;
-        plan.speaker = payload.speaker.clone().map(speaking::SpeakerId);
-        let request = tongues_tts::SpeechSynthesisRequest {
-            plan: plan.clone(),
-            options: tongues_tts::SynthesisOptions {
-                speaker_id: payload.speaker_id,
-                split_sentences: true,
-                length_scale: payload.speed.map(|speed| (1.0 / speed) as f32),
-                noise_scale: payload.noise_scale,
-                noise_w: payload.duration_noise_scale,
-                seed: payload.seed,
-            },
-        };
+        let request = unified_synthesis_request(payload, context, device);
 
         let engine = self
             .engines
             .get_mut(&engine_key)
             .expect("resident engine inserted before synthesis");
         let synthesis_started = std::time::Instant::now();
-        let (sample_rate_hz, pcm, profile) = match engine {
-            ResidentSpeechBackend::StyleTts2(engine) => {
-                let (sample_rate_hz, pcm) =
-                    synthesize_resident_styletts2(engine, &plan, payload, context)?;
-                (sample_rate_hz, pcm, Vec::new())
-            }
-            ResidentSpeechBackend::Mock(engine) => {
-                let (sample_rate_hz, pcm) = synthesize_resident_mock(engine, &plan, payload)?;
-                (sample_rate_hz, pcm, Vec::new())
-            }
-            engine => {
-                let sample_rate_hz = engine.sample_rate_hz();
-                let (pcm, profile) =
-                    engine.synthesize_speech(&request, payload.timings.unwrap_or(false))?;
-                (sample_rate_hz, pcm, profile)
-            }
-        };
+        let mut pcm = Vec::new();
+        let output =
+            engine.synthesize(&request, &mut |chunk: tongues_tts::NormalizedAudioChunk| {
+                pcm.extend(chunk.pcm_f32);
+                Ok(())
+            })?;
+        let sample_rate_hz = output.metadata.sample_rate_hz;
+        let profile = output.metadata.timings;
         let synthesis_ms = synthesis_started.elapsed().as_secs_f64() * 1_000.0;
         let audio_seconds = pcm.len() as f64 / sample_rate_hz as f64;
         let real_time_factor = if audio_seconds > 0.0 {
@@ -1929,6 +1922,88 @@ impl ResidentSpeechService {
             profile,
             device,
         })
+    }
+}
+
+fn unified_synthesis_request(
+    payload: &SpeakRequest,
+    context: &ResidentSynthesisContext,
+    device: tongues_tts::ResolvedSpeechDevice,
+) -> tongues_tts::UnifiedSynthesisRequest {
+    let backend = payload.backend.as_deref().unwrap_or("burn");
+    let speaker = payload
+        .speaker
+        .clone()
+        .filter(|speaker| !speaker.is_empty())
+        .map(tongues_tts::SpeakerSelection::Named)
+        .or_else(|| {
+            payload
+                .speaker_id
+                .map(tongues_tts::SpeakerSelection::Numeric)
+        });
+    let style = (backend == "styletts2").then(|| tongues_tts::StyleSelection {
+        name: payload
+            .emotion
+            .clone()
+            .filter(|emotion| !emotion.is_empty()),
+        embedding: context.emotion_vector.clone(),
+        embedding_is_delta: context.emotion_vector.is_some(),
+        strength: payload.emotion_strength.unwrap_or(1.0),
+        speaker_blend: Some(
+            payload
+                .speaker_reference_strength
+                .map(|strength| 1.0 - strength)
+                .or(payload.style_alpha)
+                .unwrap_or(0.3),
+        ),
+        style_blend: Some(
+            payload
+                .style_reference_strength
+                .map(|strength| 1.0 - strength)
+                .or(payload.style_beta)
+                .unwrap_or(0.1),
+        ),
+        diffusion_steps: Some(payload.diffusion_steps.unwrap_or_else(|| {
+            if payload.quality.as_deref() == Some("fast") {
+                2
+            } else {
+                5
+            }
+        })),
+        embedding_scale: Some(payload.embedding_scale.unwrap_or(1.0)),
+    });
+    tongues_tts::UnifiedSynthesisRequest {
+        text: payload.text.clone(),
+        variety: payload.variety.clone().unwrap_or_else(|| "en-US".into()),
+        speaker,
+        reference_audio: tongues_tts::ReferenceAudioRequest {
+            speaker: context
+                .voice_reference
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            style: context
+                .style_reference
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            source: None,
+        },
+        style,
+        speed: payload.speed.unwrap_or(1.0) as f32,
+        seed: payload
+            .seed
+            .or_else(|| (backend == "styletts2").then_some(payload.style_seed.unwrap_or(0))),
+        noise_scale: payload.noise_scale,
+        duration_noise_scale: payload.duration_noise_scale,
+        device: match device {
+            tongues_tts::ResolvedSpeechDevice::Cpu => tongues_tts::SpeechDeviceRequest::Cpu,
+            tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+                tongues_tts::SpeechDeviceRequest::Cuda { index }
+            }
+        },
+        streaming: false,
+        profile: payload.timings.unwrap_or(false),
+        max_chunk_symbols: payload.max_tts_symbols,
+        chunking: !payload.no_tts_chunking.unwrap_or(false),
     }
 }
 
@@ -2027,51 +2102,152 @@ fn load_resident_speech_backend(
     payload: &SpeakRequest,
 ) -> anyhow::Result<ResidentSpeechBackend> {
     let home = resolve_mortar_home();
-    match (backend, device) {
-        ("burn", tongues_tts::ResolvedSpeechDevice::Cpu) => Ok(ResidentSpeechBackend::BurnCpu(
-            Box::new(load_resident_burn(&home, NdArrayDevice::Cpu)?),
-        )),
-        ("burn", tongues_tts::ResolvedSpeechDevice::Cuda { index }) => {
-            Ok(ResidentSpeechBackend::BurnCuda(Box::new(
-                load_resident_burn(&home, CudaDevice::new(index))?,
+    let provider = RESIDENT_BACKEND_PROVIDERS
+        .iter()
+        .find(|provider| provider.id == backend)
+        .with_context(|| format!("resident speech backend `{backend}` is not registered"))?;
+    let capabilities = speech_backend_capabilities(
+        &home,
+        backend,
+        device,
+        payload.sample_rate_hz.unwrap_or(24_000),
+    )?;
+    (provider.load)(&home, device, payload, capabilities)
+}
+
+struct ResidentBackendProvider {
+    id: &'static str,
+    load: fn(
+        &FsPath,
+        tongues_tts::ResolvedSpeechDevice,
+        &SpeakRequest,
+        tongues_tts::BackendCapabilities,
+    ) -> anyhow::Result<ResidentSpeechBackend>,
+}
+
+const RESIDENT_BACKEND_PROVIDERS: &[ResidentBackendProvider] = &[
+    ResidentBackendProvider {
+        id: "burn",
+        load: load_burn_provider,
+    },
+    ResidentBackendProvider {
+        id: "vits",
+        load: load_vits_provider,
+    },
+    ResidentBackendProvider {
+        id: "onnx",
+        load: load_onnx_provider,
+    },
+    ResidentBackendProvider {
+        id: "styletts2",
+        load: load_styletts2_provider,
+    },
+    ResidentBackendProvider {
+        id: "mock",
+        load: load_mock_provider,
+    },
+];
+
+fn load_burn_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_burn::<NdArray<f32>>(home, NdArrayDevice::Cpu)?,
             )))
         }
-        ("vits", tongues_tts::ResolvedSpeechDevice::Cpu) => Ok(ResidentSpeechBackend::VitsCpu(
-            Box::new(load_resident_vits(&home, NdArrayDevice::Cpu)?),
-        )),
-        ("vits", tongues_tts::ResolvedSpeechDevice::Cuda { index }) => {
-            Ok(ResidentSpeechBackend::VitsCuda(Box::new(
-                load_resident_vits(&home, CudaDevice::new(index))?,
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_burn::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
             )))
         }
-        ("onnx", _) => {
-            let model_id = selected_onnx_voice_model()?;
-            let model_path = onnx_voice_model_path(&home, &model_id)?;
-            let config = tongues_tts::VoiceConfig::from_json_file(
-                &tongues_tts::voice_config_path(&model_path),
-            )?;
-            let engine = if matches!(device, tongues_tts::ResolvedSpeechDevice::Cpu) {
-                tongues_tts::OnnxSpeechBackend::load_cpu(&model_path, config)?
-            } else {
-                tongues_tts::OnnxSpeechBackend::load(&model_path, config)?
-            };
-            Ok(ResidentSpeechBackend::Onnx(Box::new(engine)))
-        }
-        ("styletts2", _) => Ok(ResidentSpeechBackend::StyleTts2(Box::new(
-            styletts2::StyleTts2OnnxBackend::from_model_dir(home.join("models/styletts2/en-us"))?,
-        ))),
-        ("mock", _) => Ok(ResidentSpeechBackend::Mock(
-            styletts2::MockStyleTts2Backend::new(payload.sample_rate_hz.unwrap_or(24_000)),
-        )),
-        _ => anyhow::bail!(
-            "resident speech does not support backend `{backend}` on `{}`",
-            device.display_name()
-        ),
     }
 }
 
+fn load_vits_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    match device {
+        tongues_tts::ResolvedSpeechDevice::Cpu => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_vits::<NdArray<f32>>(home, NdArrayDevice::Cpu)?,
+            )))
+        }
+        tongues_tts::ResolvedSpeechDevice::Cuda { index } => {
+            Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+                capabilities,
+                device,
+                load_resident_vits::<Cuda<f32, i32>>(home, CudaDevice::new(index))?,
+            )))
+        }
+    }
+}
+
+fn load_onnx_provider(
+    home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    let model_id = selected_onnx_voice_model_at(home)?;
+    let model_path = onnx_voice_model_path(home, &model_id)?;
+    let config =
+        tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(&model_path))?;
+    let engine = if matches!(device, tongues_tts::ResolvedSpeechDevice::Cpu) {
+        tongues_tts::OnnxSpeechBackend::load_cpu(&model_path, config)?
+    } else {
+        tongues_tts::OnnxSpeechBackend::load(&model_path, config)?
+    };
+    Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+        capabilities,
+        device,
+        engine,
+    )))
+}
+
+fn load_styletts2_provider(
+    home: &FsPath,
+    _device: tongues_tts::ResolvedSpeechDevice,
+    _payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    Ok(Box::new(styletts2::StyleTts2Synthesizer::new(
+        capabilities,
+        styletts2::StyleTts2OnnxBackend::from_model_dir(home.join("models/styletts2/en-us"))?,
+    )))
+}
+
+fn load_mock_provider(
+    _home: &FsPath,
+    _device: tongues_tts::ResolvedSpeechDevice,
+    payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    Ok(Box::new(MockSynthesizer {
+        capabilities,
+        backend: styletts2::MockStyleTts2Backend::new(payload.sample_rate_hz.unwrap_or(24_000)),
+    }))
+}
+
 fn selected_onnx_voice_model() -> anyhow::Result<String> {
-    let selection_path = resolve_mortar_home().join("model-selection.json");
+    selected_onnx_voice_model_at(&resolve_mortar_home())
+}
+
+fn selected_onnx_voice_model_at(home: &FsPath) -> anyhow::Result<String> {
+    let selection_path = home.join("model-selection.json");
     let selected = match std::fs::read_to_string(&selection_path) {
         Ok(content) => serde_json::from_str::<serde_json::Value>(&content)
             .with_context(|| format!("failed to parse {}", selection_path.display()))?
@@ -2102,127 +2278,175 @@ fn onnx_voice_model_path(home: &FsPath, model_id: &str) -> anyhow::Result<PathBu
     Ok(home.join(ONNX_VOICE_RELATIVE_DIR).join(filename))
 }
 
-fn synthesize_resident_styletts2(
-    engine: &mut styletts2::StyleTts2OnnxBackend,
-    plan: &speaking::UtterancePlan,
-    payload: &SpeakRequest,
-    context: &ResidentSynthesisContext,
-) -> anyhow::Result<(u32, Vec<f32>)> {
-    use styletts2::StyleTts2Backend;
-
-    let options = styletts2::StyleTts2PlanOptions {
-        max_symbols_per_chunk: payload
-            .max_tts_symbols
-            .unwrap_or(styletts2::DEFAULT_MAX_TTS_SYMBOLS),
-        chunking_enabled: !payload.no_tts_chunking.unwrap_or(false),
+fn speech_backend_capabilities(
+    home: &FsPath,
+    backend: &str,
+    device: tongues_tts::ResolvedSpeechDevice,
+    mock_sample_rate_hz: u32,
+) -> anyhow::Result<tongues_tts::BackendCapabilities> {
+    let fixed_english = || tongues_tts::variety_capabilities_for_language("en");
+    let output = |sample_rate_hz| tongues_tts::OutputAudioContract {
+        sample_rate_hz,
+        channels: 1,
+        streaming: true,
     };
-    let backend_plan =
-        styletts2::prepare_styletts2_plan(plan, &styletts2::styletts2_en_us_symbol_set(), options)?;
-    styletts2::validate_styletts2_plan(&backend_plan)?;
-
-    let alpha = payload
-        .speaker_reference_strength
-        .map(|strength| 1.0 - strength)
-        .or(payload.style_alpha)
-        .unwrap_or(0.3);
-    let beta = payload
-        .style_reference_strength
-        .map(|strength| 1.0 - strength)
-        .or(payload.style_beta)
-        .unwrap_or(0.1);
-    let diffusion_steps = payload.diffusion_steps.unwrap_or_else(|| {
-        if payload.quality.as_deref() == Some("fast") {
-            2
-        } else {
-            5
-        }
-    });
-    engine.set_diffusion_options(styletts2::StyleTts2DiffusionOptions {
-        diffusion_steps,
-        alpha,
-        beta,
-        embedding_scale: payload.embedding_scale.unwrap_or(1.0),
-        seed: payload.style_seed.unwrap_or(0),
-    })?;
-    engine.set_speed(payload.speed.unwrap_or(1.0))?;
-
-    let voice_reference = context
-        .voice_reference
-        .as_ref()
-        .context("StyleTTS2 voice reference was not resolved")?;
-    let style_reference = context
-        .style_reference
-        .as_ref()
-        .context("StyleTTS2 style reference was not resolved")?;
-    let style_uri = style_reference.display().to_string();
-    let style = if let Some(delta) = context.emotion_vector.as_ref() {
-        let mut values = engine.reference_style_vector(&style_uri)?;
-        anyhow::ensure!(
-            values.len() == STYLE_VECTOR_DIMS && delta.len() == STYLE_VECTOR_DIMS,
-            "StyleTTS2 emotion vectors must have {STYLE_VECTOR_DIMS} values"
-        );
-        let strength = payload.emotion_strength.unwrap_or(1.0);
-        for (value, delta) in values.iter_mut().zip(delta) {
-            *value += delta * strength;
-        }
-        Some(speaking::StyleRef {
-            description: payload.emotion.clone(),
-            source: speaking::StyleSource::Embedding {
-                kind: "styletts2.emotion.v1".into(),
-                values,
-            },
-        })
-    } else {
-        plan.style.clone()
-    };
-    let request = styletts2::StyleTts2SynthesisRequest::from_backend_plan(
-        backend_plan,
-        plan.speaker.clone(),
-        style,
-        plan.target_prosody.clone(),
-    )
-    .with_speaker_reference_audio_uri(voice_reference.display().to_string())
-    .with_style_reference_audio_uri(style_uri);
-
-    let mut pcm = Vec::new();
-    let output =
-        engine.synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
-            pcm.extend(chunk.pcm_mono_f32);
-            Ok(())
-        })?;
-    Ok((output.sample_rate_hz, pcm))
-}
-
-fn synthesize_resident_mock(
-    engine: &mut styletts2::MockStyleTts2Backend,
-    plan: &speaking::UtterancePlan,
-    payload: &SpeakRequest,
-) -> anyhow::Result<(u32, Vec<f32>)> {
-    use styletts2::StyleTts2Backend;
-
-    let backend_plan = styletts2::prepare_styletts2_plan(
-        plan,
-        &styletts2::styletts2_en_us_symbol_set(),
-        styletts2::StyleTts2PlanOptions {
-            max_symbols_per_chunk: payload
-                .max_tts_symbols
-                .unwrap_or(styletts2::DEFAULT_MAX_TTS_SYMBOLS),
-            chunking_enabled: !payload.no_tts_chunking.unwrap_or(false),
+    let devices = vec![
+        tongues_tts::SpeechDeviceRequest::Cpu,
+        tongues_tts::SpeechDeviceRequest::Cuda {
+            index: device.index().unwrap_or(0),
         },
-    )?;
-    let request = styletts2::StyleTts2SynthesisRequest::from_backend_plan(
-        backend_plan,
-        plan.speaker.clone(),
-        plan.style.clone(),
-        plan.target_prosody.clone(),
-    );
-    let mut pcm = Vec::new();
-    let output =
-        engine.synthesize_streaming(&request, &mut |chunk: styletts2::StyleTts2AudioChunk| {
-            pcm.extend(chunk.pcm_mono_f32);
-            Ok(())
-        })?;
-    Ok((output.sample_rate_hz, pcm))
+    ];
+    let unsupported_speakers = || tongues_tts::SpeakerCapabilities {
+        values: tongues_tts::CapabilityValue::Unsupported,
+        required: false,
+        numeric_ids: false,
+    };
+    let unsupported_styles = tongues_tts::StyleCapabilities::unsupported;
+    Ok(match backend {
+        "burn" => tongues_tts::BackendCapabilities {
+            backend: "burn".into(),
+            model: "speedyspeech-ljspeech+hifigan-v2".into(),
+            family: tongues_tts::SpeechModelFamily::AcousticModel,
+            varieties: fixed_english(),
+            speakers: unsupported_speakers(),
+            styles: unsupported_styles(),
+            reference_audio: Default::default(),
+            speed: true,
+            seed: true,
+            devices,
+            output: output(22_050),
+            provenance: vec!["Published Coqui release artifacts".into()],
+        },
+        "vits" => {
+            let catalog = tongues_tts::SpeakerCatalog::from_file(
+                home.join(VITS_SPEAKER_RELATIVE_PATH),
+                VITS_SPEAKER_COUNT,
+            )
+            .ok();
+            let speaker_values = catalog
+                .as_ref()
+                .map(|catalog| {
+                    catalog
+                        .entries()
+                        .into_iter()
+                        .map(|(name, id)| {
+                            tongues_tts::NamedCapability::new(name, name.trim()).with_numeric_id(id)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            tongues_tts::BackendCapabilities {
+                backend: "vits".into(),
+                model: "vits-vctk".into(),
+                family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+                varieties: fixed_english(),
+                speakers: tongues_tts::SpeakerCapabilities {
+                    values: if catalog.is_some() {
+                        tongues_tts::CapabilityValue::Listed(speaker_values)
+                    } else {
+                        tongues_tts::CapabilityValue::Any
+                    },
+                    required: true,
+                    numeric_ids: true,
+                },
+                styles: unsupported_styles(),
+                reference_audio: Default::default(),
+                speed: true,
+                seed: true,
+                devices,
+                output: output(22_050),
+                provenance: vec!["Published Coqui release artifact".into()],
+            }
+        }
+        "onnx" => {
+            let model = selected_onnx_voice_model_at(home)?;
+            let model_path = onnx_voice_model_path(home, &model)?;
+            let config = tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(
+                &model_path,
+            ))
+            .ok();
+            let speaker_values = config
+                .as_ref()
+                .map(|config| {
+                    config
+                        .speaker_id_map
+                        .iter()
+                        .map(|(name, id)| {
+                            tongues_tts::NamedCapability::new(name, name).with_numeric_id(*id)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            tongues_tts::BackendCapabilities {
+                backend: "onnx".into(),
+                model,
+                family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+                varieties: fixed_english(),
+                speakers: tongues_tts::SpeakerCapabilities {
+                    values: if speaker_values.is_empty() {
+                        tongues_tts::CapabilityValue::Unsupported
+                    } else {
+                        tongues_tts::CapabilityValue::Listed(speaker_values)
+                    },
+                    required: config
+                        .as_ref()
+                        .is_some_and(|config| config.is_multi_speaker()),
+                    numeric_ids: config
+                        .as_ref()
+                        .is_some_and(|config| config.speaker_count() > 1),
+                },
+                styles: unsupported_styles(),
+                reference_audio: Default::default(),
+                speed: true,
+                seed: false,
+                devices,
+                output: output(
+                    config
+                        .as_ref()
+                        .map(|config| config.sample_rate_hz)
+                        .unwrap_or(22_050),
+                ),
+                provenance: vec!["Piper-compatible ONNX import".into()],
+            }
+        }
+        "styletts2" => tongues_tts::BackendCapabilities {
+            backend: "styletts2".into(),
+            model: "styletts2-en-us".into(),
+            family: tongues_tts::SpeechModelFamily::CrossLingualVoiceClone,
+            varieties: fixed_english(),
+            speakers: unsupported_speakers(),
+            styles: tongues_tts::StyleCapabilities {
+                names: tongues_tts::CapabilityValue::Any,
+                reference_audio: true,
+                embedding_dimensions: Some(STYLE_VECTOR_DIMS),
+            },
+            reference_audio: tongues_tts::ReferenceAudioCapabilities {
+                speaker: true,
+                style: true,
+                source: false,
+            },
+            speed: true,
+            seed: true,
+            devices,
+            output: output(24_000),
+            provenance: Vec::new(),
+        },
+        "mock" => tongues_tts::BackendCapabilities {
+            backend: "mock".into(),
+            model: "deterministic-mock".into(),
+            family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+            varieties: tongues_tts::CapabilityValue::Any,
+            speakers: unsupported_speakers(),
+            styles: unsupported_styles(),
+            reference_audio: Default::default(),
+            speed: false,
+            seed: false,
+            devices,
+            output: output(mock_sample_rate_hz),
+            provenance: vec!["Tongues deterministic test backend".into()],
+        },
+        _ => anyhow::bail!("unknown speech backend `{backend}`"),
+    })
 }
 
 fn load_resident_burn<B: burn::tensor::backend::Backend>(
@@ -2332,6 +2556,22 @@ async fn speak(
         Ok(device) => device,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
+    let capabilities = match speech_backend_capabilities(
+        &resolve_mortar_home(),
+        payload.backend.as_deref().unwrap_or("burn"),
+        speech_device,
+        payload.sample_rate_hz.unwrap_or(24_000),
+    ) {
+        Ok(capabilities) => capabilities,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = capabilities.validate(&unified_synthesis_request(
+        &payload,
+        &context,
+        speech_device,
+    )) {
+        return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+    }
     let permit = match state.speech_admission.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
@@ -2513,6 +2753,109 @@ async fn get_styletts2_samples(State(state): State<AppState>) -> impl IntoRespon
     Json(response)
 }
 
+async fn get_speech_models(State(state): State<AppState>) -> impl IntoResponse {
+    let home = resolve_mortar_home();
+    let models = RESIDENT_BACKEND_PROVIDERS
+        .iter()
+        .map(|provider| {
+            let backend = provider.id;
+            let capabilities =
+                speech_backend_capabilities(&home, backend, state.speech_device, 24_000)
+                    .unwrap_or_else(|error| tongues_tts::BackendCapabilities {
+                        backend: backend.into(),
+                        model: "unavailable".into(),
+                        family: tongues_tts::SpeechModelFamily::Unknown(error.to_string()),
+                        varieties: tongues_tts::CapabilityValue::Unsupported,
+                        speakers: tongues_tts::SpeakerCapabilities::unsupported(),
+                        styles: tongues_tts::StyleCapabilities::unsupported(),
+                        reference_audio: Default::default(),
+                        speed: false,
+                        seed: false,
+                        devices: Vec::new(),
+                        output: tongues_tts::OutputAudioContract {
+                            sample_rate_hz: 0,
+                            channels: 1,
+                            streaming: false,
+                        },
+                        provenance: Vec::new(),
+                    });
+            let error = speech_backend_installation_error(&home, backend);
+            SpeechModelDiscovery {
+                capabilities,
+                installed: error.is_none(),
+                error,
+            }
+        })
+        .collect::<Vec<_>>();
+    Json(models)
+}
+
+fn speech_backend_installation_error(home: &FsPath, backend: &str) -> Option<String> {
+    let required = match backend {
+        "burn" => vec![
+            home.join(SPEEDY_RELATIVE_DIR).join("config.json"),
+            home.join(SPEEDY_RELATIVE_DIR).join("model_file.pth"),
+            home.join(HIFIGAN_RELATIVE_DIR).join("config.json"),
+            home.join(HIFIGAN_RELATIVE_DIR).join("model_file.pth"),
+        ],
+        "vits" => vec![
+            home.join(VITS_RELATIVE_DIR).join("config.json"),
+            home.join(VITS_RELATIVE_DIR).join("model_file.pth"),
+            home.join(VITS_RELATIVE_DIR).join("speaker_ids.json"),
+        ],
+        "onnx" => {
+            let model = match selected_onnx_voice_model_at(home) {
+                Ok(model) => model,
+                Err(error) => return Some(error.to_string()),
+            };
+            let model_path = match onnx_voice_model_path(home, &model) {
+                Ok(path) => path,
+                Err(error) => return Some(error.to_string()),
+            };
+            vec![
+                model_path.clone(),
+                tongues_tts::voice_config_path(&model_path),
+            ]
+        }
+        "styletts2" => {
+            let paths =
+                styletts2::StyleTts2OnnxPaths::from_model_dir(home.join("models/styletts2/en-us"));
+            vec![
+                paths.diffusion,
+                paths.style_encoder,
+                paths.text_encoder,
+                paths.decoder,
+            ]
+        }
+        "mock" => Vec::new(),
+        _ => return Some(format!("unknown speech backend `{backend}`")),
+    };
+    let missing = required
+        .into_iter()
+        .filter(|path| !path.is_file() && !path.is_dir())
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Some(format!("missing model artifacts: {}", missing.join(", ")));
+    }
+    match backend {
+        "vits" => tongues_tts::SpeakerCatalog::from_file(
+            home.join(VITS_SPEAKER_RELATIVE_PATH),
+            VITS_SPEAKER_COUNT,
+        )
+        .err()
+        .map(|error| error.to_string()),
+        "onnx" => {
+            let model = selected_onnx_voice_model_at(home).ok()?;
+            let model_path = onnx_voice_model_path(home, &model).ok()?;
+            tongues_tts::VoiceConfig::from_json_file(tongues_tts::voice_config_path(&model_path))
+                .err()
+                .map(|error| error.to_string())
+        }
+        _ => None,
+    }
+}
+
 async fn get_speech_speakers(Query(query): Query<SpeechSpeakersQuery>) -> impl IntoResponse {
     let backend = query.backend.as_deref().unwrap_or("vits").trim();
     Json(speech_speakers_response(&resolve_mortar_home(), backend))
@@ -2675,9 +3018,18 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     }
     if let Some(backend) = payload.backend.as_deref() {
         if !backend.is_empty()
-            && !matches!(backend, "burn" | "vits" | "mock" | "styletts2" | "onnx")
+            && !RESIDENT_BACKEND_PROVIDERS
+                .iter()
+                .any(|provider| provider.id == backend)
         {
-            return Err("backend must be `burn`, `vits`, `mock`, `styletts2`, or `onnx`".into());
+            return Err(format!(
+                "backend must be one of: {}",
+                RESIDENT_BACKEND_PROVIDERS
+                    .iter()
+                    .map(|provider| provider.id)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
     }
     if payload
@@ -3263,6 +3615,187 @@ mod tests {
             assert!(response.speakers.is_empty());
             assert!(response.error.is_none());
         }
+    }
+
+    #[test]
+    fn backend_neutral_discovery_covers_native_component_end_to_end_style_and_onnx_paths() {
+        let mortar_home =
+            std::env::temp_dir().join(format!("tongues-server-contract-{}", uuid::Uuid::new_v4()));
+        let speaker_path = mortar_home.join(VITS_SPEAKER_RELATIVE_PATH);
+        std::fs::create_dir_all(speaker_path.parent().expect("speaker parent"))
+            .expect("create VITS directory");
+        std::fs::write(&speaker_path, r#"{"p225":0,"p330":90}"#).expect("write speakers");
+        let onnx_model = onnx_voice_model_path(&mortar_home, DEFAULT_ONNX_VOICE_MODEL)
+            .expect("default ONNX model path");
+        std::fs::create_dir_all(onnx_model.parent().expect("ONNX parent"))
+            .expect("create ONNX directory");
+        std::fs::write(
+            tongues_tts::voice_config_path(&onnx_model),
+            r#"{
+                "audio":{"sample_rate":22050},
+                "phoneme_id_map":{"_":[0],"^":[1],"$":[2]," ":[3]},
+                "num_speakers":1
+            }"#,
+        )
+        .expect("write ONNX config");
+
+        let discovered = ["burn", "vits", "styletts2", "onnx"]
+            .into_iter()
+            .map(|backend| {
+                speech_backend_capabilities(
+                    &mortar_home,
+                    backend,
+                    tongues_tts::ResolvedSpeechDevice::Cpu,
+                    24_000,
+                )
+                .expect("backend capabilities")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            discovered
+                .iter()
+                .map(|model| model.backend.as_str())
+                .collect::<Vec<_>>(),
+            ["burn", "vits", "styletts2", "onnx"]
+        );
+        assert_eq!(discovered[0].model, "speedyspeech-ljspeech+hifigan-v2");
+        assert_eq!(
+            discovered[1].speakers.values,
+            tongues_tts::CapabilityValue::Listed(vec![
+                tongues_tts::NamedCapability::new("p225", "p225").with_numeric_id(0),
+                tongues_tts::NamedCapability::new("p330", "p330").with_numeric_id(90),
+            ])
+        );
+        assert!(discovered[2].reference_audio.speaker);
+        assert!(discovered[2].reference_audio.style);
+        assert_eq!(discovered[2].styles.embedding_dimensions, Some(256));
+        assert_eq!(discovered[3].output.sample_rate_hz, 22_050);
+        let json = serde_json::to_value(SpeechModelDiscovery {
+            capabilities: discovered[1].clone(),
+            installed: true,
+            error: None,
+        })
+        .expect("serialize discovery response");
+        assert_eq!(json["backend"], "vits");
+        assert_eq!(json["speakers"]["values"]["support"], "listed");
+        assert_eq!(json["speakers"]["values"]["values"][1]["id"], "p330");
+        assert_eq!(json["speakers"]["values"]["values"][1]["numeric_id"], 90);
+
+        std::fs::remove_dir_all(&mortar_home).expect("remove capability fixture");
+    }
+
+    #[test]
+    fn unified_server_request_preserves_style_reference_seed_speed_and_device_controls() {
+        let payload: SpeakRequest = serde_json::from_value(json!({
+            "text": "A styled request.",
+            "backend": "styletts2",
+            "variety": "en-US",
+            "emotion": "amused",
+            "emotion_strength": 0.65,
+            "speaker_reference_strength": 0.8,
+            "style_reference_strength": 0.7,
+            "diffusion_steps": 2,
+            "embedding_scale": 1.2,
+            "style_seed": 27,
+            "speed": 1.1,
+            "max_tts_symbols": 96,
+            "no_tts_chunking": true
+        }))
+        .expect("style request");
+        let context = ResidentSynthesisContext {
+            voice_reference: Some(PathBuf::from("/tmp/voice.wav")),
+            style_reference: Some(PathBuf::from("/tmp/style.wav")),
+            emotion_vector: Some(vec![0.1; STYLE_VECTOR_DIMS]),
+        };
+
+        let request = unified_synthesis_request(
+            &payload,
+            &context,
+            tongues_tts::ResolvedSpeechDevice::Cuda { index: 2 },
+        );
+
+        assert_eq!(request.seed, Some(27));
+        assert_eq!(request.speed, 1.1);
+        assert_eq!(
+            request.device,
+            tongues_tts::SpeechDeviceRequest::Cuda { index: 2 }
+        );
+        assert_eq!(
+            request.reference_audio.speaker.as_deref(),
+            Some("/tmp/voice.wav")
+        );
+        assert_eq!(
+            request.reference_audio.style.as_deref(),
+            Some("/tmp/style.wav")
+        );
+        assert_eq!(request.max_chunk_symbols, Some(96));
+        assert!(!request.chunking);
+        let style = request.style.expect("style controls");
+        assert_eq!(style.name.as_deref(), Some("amused"));
+        assert!(style.embedding_is_delta);
+        assert!((style.speaker_blend.unwrap() - 0.2).abs() < f32::EPSILON);
+        assert!((style.style_blend.unwrap() - 0.3).abs() < f32::EPSILON);
+        assert_eq!(style.diffusion_steps, Some(2));
+    }
+
+    #[test]
+    fn discovered_capabilities_reject_language_style_and_speaker_mismatches_pre_inference() {
+        let mortar_home =
+            std::env::temp_dir().join(format!("tongues-server-preflight-{}", uuid::Uuid::new_v4()));
+        let speaker_path = mortar_home.join(VITS_SPEAKER_RELATIVE_PATH);
+        std::fs::create_dir_all(speaker_path.parent().expect("speaker parent"))
+            .expect("create VITS directory");
+        std::fs::write(&speaker_path, r#"{"p225":0,"p330":90}"#).expect("write speakers");
+        let capabilities = speech_backend_capabilities(
+            &mortar_home,
+            "vits",
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            24_000,
+        )
+        .expect("VITS capabilities");
+
+        let mut request = tongues_tts::UnifiedSynthesisRequest::new("Hello.", "fr-FR-Standard");
+        request.device = tongues_tts::SpeechDeviceRequest::Cpu;
+        request.speaker = Some(tongues_tts::SpeakerSelection::Named("p330".into()));
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(tongues_tts::SynthesisContractError::UnsupportedValue {
+                feature: "variety",
+                ..
+            })
+        ));
+
+        request.variety = "en-US".into();
+        request.speaker = Some(tongues_tts::SpeakerSelection::Named("not-a-speaker".into()));
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(tongues_tts::SynthesisContractError::UnsupportedValue {
+                feature: "speaker",
+                ..
+            })
+        ));
+
+        request.speaker = Some(tongues_tts::SpeakerSelection::Named("p330".into()));
+        request.style = Some(tongues_tts::StyleSelection {
+            name: Some("amused".into()),
+            embedding: None,
+            embedding_is_delta: false,
+            strength: 1.0,
+            speaker_blend: None,
+            style_blend: None,
+            diffusion_steps: None,
+            embedding_scale: None,
+        });
+        assert!(matches!(
+            capabilities.validate(&request),
+            Err(tongues_tts::SynthesisContractError::UnsupportedFeature {
+                feature: "style",
+                ..
+            })
+        ));
+
+        std::fs::remove_dir_all(&mortar_home).expect("remove preflight fixture");
     }
 
     #[test]

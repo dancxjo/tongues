@@ -26,6 +26,8 @@
 pub mod backend;
 pub mod config;
 pub mod mock;
+#[cfg(feature = "styletts2-onnx")]
+pub mod orchestration;
 pub mod plan;
 pub mod request;
 pub mod symbols;
@@ -55,3 +57,5 @@ pub use onnx::{
     STYLETTS2_ONNX_INTER_THREADS_ENV, STYLETTS2_ONNX_INTRA_THREADS_ENV, StyleTts2DiffusionOptions,
     StyleTts2OnnxBackend, StyleTts2OnnxOptimization, StyleTts2OnnxOptions, StyleTts2OnnxPaths,
 };
+#[cfg(feature = "styletts2-onnx")]
+pub use orchestration::StyleTts2Synthesizer;

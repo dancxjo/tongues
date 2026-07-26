@@ -11,6 +11,7 @@ use ort::ep::ExecutionProviderDispatch;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 #[cfg(feature = "onnx-tts")]
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(any(feature = "onnx-tts", test))]
 use speaking::SpeakerId;
@@ -37,6 +38,7 @@ pub mod burn_vocoder;
 pub mod components;
 pub mod device;
 pub mod model_config;
+pub mod orchestration;
 pub mod phoneme_projector;
 pub mod profiling;
 pub mod speakers;
@@ -78,6 +80,14 @@ pub use device::{
     SpeechDeviceSelectionError, SpeechDeviceSpecError, MAX_CUDA_DEVICE_INDEX,
 };
 pub use model_config::{AudioFeatureConfig, HifiganBundleConfig, HifiganGeneratorParams};
+pub use orchestration::{
+    variety_capabilities_for_language, BackendCapabilities, BackendRegistrationError,
+    CapabilityValue, NamedCapability, NormalizedAudioChunk, NormalizedAudioSink,
+    OutputAudioContract, PlanEngineBackend, ReferenceAudioCapabilities, ReferenceAudioRequest,
+    SpeakerCapabilities, SpeakerSelection, StyleCapabilities, StyleSelection,
+    SynthesisContractError, SynthesisMetadata, SynthesisTiming, SynthesizerBackend,
+    SynthesizerRegistry, UnifiedSynthesisOutput, UnifiedSynthesisRequest,
+};
 pub use phoneme_projector::{
     PhonemeCharactersConfig, PhonemeTokenIds, PhonemeTokenizerConfig, PhonemeVocabularyProjector,
 };
@@ -160,7 +170,8 @@ impl VoiceConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SpeechModelFamily {
     AcousticModel,
     NeuralVocoder,
