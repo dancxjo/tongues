@@ -318,6 +318,9 @@ TONGUES_OFFLINE=1 cargo run --bin tongues -- speak \
 ```
 
 Coqui's `tts_models/eng/fairseq/vits` name is retained as a catalog alias.
+Within the Tongues portfolio this backend is the **Tier B language-coverage
+renderer**: prioritize fast synthesis of short committed phrases and broad
+cross-script coverage.
 Script-qualified upstream ids remain separate entries, and language ids do not
 claim pronunciation-variety support that the source metadata does not
 establish. Models whose original config names a `.uroman` training input
@@ -325,6 +328,12 @@ require the same preprocessing at inference time. Point
 `TONGUES_UROMAN` at a local `uroman.pl` or compatible executable; if it is
 absent or fails, synthesis stops with an explicit preprocessing error instead
 of silently feeding the wrong alphabet.
+
+Fairseq MMS VITS remains a whole-utterance renderer. Capability metadata and
+runtime behavior do not claim revision-safe suffix replacement inside the
+model itself; when an unplayed phrase must be replaced around committed audio,
+that happens in the ledger/orchestration layer. FastPitch + HiFi-GAN remains
+the canonical fine-grained revision renderer.
 
 The server uses the same verified installation and model id:
 
