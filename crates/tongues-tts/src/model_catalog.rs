@@ -1615,6 +1615,7 @@ mod tests {
             "hifigan-v2-ljspeech",
             "vits-vctk",
             "styletts2-en-us",
+            "supertonic-3-multilingual",
             "voice-ljspeech-high",
             "voice-ryan-medium",
             "voice-amy-medium",
@@ -1818,9 +1819,35 @@ mod tests {
             coqui.iter().any(|entry| entry.id == "fairseq-mms-vits-eng"),
             "compatibility metadata should make Fairseq models discoverable by Coqui ancestry"
         );
-        assert_eq!(catalog.search("onnx").len(), 4);
+        assert_eq!(catalog.search("onnx").len(), 5);
         assert_eq!(catalog.search("109").len(), 0);
         assert!(!catalog.search("uroman").is_empty());
+    }
+
+    #[test]
+    fn embedded_supertonic_catalog_entry_preserves_pinned_multilingual_snapshot() {
+        let catalog = ModelCatalog::embedded().expect("embedded catalog");
+        let supertonic = catalog.find("supertonic-3-multilingual").unwrap();
+        assert_eq!(supertonic.display_name, "Supertonic 3 Multilingual ONNX");
+        assert_eq!(supertonic.sample_rate_hz, Some(44_100));
+        assert_eq!(supertonic.speakers.count, 10);
+        assert_eq!(supertonic.languages.len(), 32);
+        assert!(supertonic.languages.iter().any(|lang| lang == "na"));
+        assert_eq!(supertonic.artifacts.len(), 16);
+        assert!(supertonic
+            .compatible_with
+            .iter()
+            .any(|value| value == "upstream-archived-2026-07-23"));
+        assert!(supertonic
+            .provenance
+            .source
+            .contains("service-and-repository-notice-july-23-2026"));
+        let style_hashes = supertonic
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.install_path.contains("/voice_styles/"))
+            .count();
+        assert_eq!(style_hashes, 10);
     }
 
     #[test]
