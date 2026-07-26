@@ -76,35 +76,11 @@ const DEFAULT_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 32;
 const MAX_SPEECH_DISCOVERY_PAGE_LIMIT: usize = 100;
 const DEFAULT_STYLETTS2_VOICE_REFERENCE: &str = "1221-135767-0014.wav";
 const DEFAULT_STYLETTS2_STYLE_REFERENCE: &str = "amused.wav";
-const ONNX_VOICE_RELATIVE_DIR: &str = "models/voices";
 const DEFAULT_ONNX_VOICE_MODEL: &str = "voice-ljspeech-high";
-const ONNX_VOICE_MODELS: &[OnnxVoiceModel] = &[
-    OnnxVoiceModel {
-        id: "voice-ljspeech-high",
-        display_name: "LJSpeech High",
-        filename: "en_US-ljspeech-high.onnx",
-    },
-    OnnxVoiceModel {
-        id: "voice-ryan-medium",
-        display_name: "Ryan Medium",
-        filename: "en_US-ryan-medium.onnx",
-    },
-    OnnxVoiceModel {
-        id: "voice-amy-medium",
-        display_name: "Amy Medium",
-        filename: "en_US-amy-medium.onnx",
-    },
-];
 const SPEECH_PHASE_IDLE: u8 = 0;
 const SPEECH_PHASE_LOADING: u8 = 1;
 const SPEECH_PHASE_SYNTHESIZING: u8 = 2;
 const SPEECH_PHASE_RELOADING: u8 = 3;
-
-struct OnnxVoiceModel {
-    id: &'static str,
-    display_name: &'static str,
-    filename: &'static str,
-}
 
 #[derive(Clone)]
 struct AppState {
@@ -3918,13 +3894,16 @@ fn selected_onnx_voice_model_at(home: &FsPath) -> anyhow::Result<String> {
 }
 
 fn onnx_voice_model_path(home: &FsPath, model_id: &str) -> anyhow::Result<PathBuf> {
-    let model = ONNX_VOICE_MODELS
-        .iter()
-        .find(|model| model.id == model_id)
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )?;
+    let model = catalog
+        .find(model_id)
+        .filter(|entry| entry.backend.as_deref() == Some("onnx"))
         .with_context(|| {
             format!("selected ONNX voice model `{model_id}` is not supported by tongues-server")
         })?;
-    Ok(home.join(ONNX_VOICE_RELATIVE_DIR).join(model.filename))
+    Ok(home.join(&model.runtime_path))
 }
 
 fn registered_speech_compositions_at(
@@ -3945,19 +3924,30 @@ fn base_registered_speech_compositions_at(
     let mut compositions = tongues_tts::registered_speech_compositions();
     let selected =
         selected_onnx_voice_model_at(home).unwrap_or_else(|_| DEFAULT_ONNX_VOICE_MODEL.into());
-    compositions.extend(ONNX_VOICE_MODELS.iter().map(|voice| {
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )
+    .unwrap_or_else(|_| tongues_tts::ModelCatalog {
+        schema_version: tongues_tts::MODEL_CATALOG_SCHEMA_VERSION,
+        id: "unavailable".into(),
+        entries: Vec::new(),
+    });
+    compositions.extend(catalog.entries.iter().filter(|entry| {
+        entry.backend.as_deref() == Some("onnx")
+            && entry.kind == tongues_tts::CatalogModelKind::VoiceModel
+    }).map(|voice| {
         let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
             format!("projector/{}", voice.id),
-            voice.id,
+            voice.id.clone(),
             Vec::new(),
         );
         tongues_tts::RegisteredSpeechComposition {
             id: pipeline
                 .canonical_id()
                 .expect("registered ONNX pipeline must be valid"),
-            display_name: voice.display_name.into(),
+            display_name: voice.display_name.clone(),
             backend: "onnx".into(),
-            model: voice.id.into(),
+            model: voice.id.clone(),
             pipeline,
             recommended: voice.id == selected,
             capability_tier: tongues_tts::CapabilityTier::TierB,
@@ -4191,10 +4181,14 @@ fn speech_model_id(
         .map(str::to_string)
         .map(Ok)
         .unwrap_or_else(|| selected_onnx_voice_model_at(home))?;
-    if !ONNX_VOICE_MODELS
-        .iter()
-        .any(|candidate| candidate.id == model)
-    {
+    let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )?;
+    if !catalog.entries.iter().any(|candidate| {
+        candidate.id == model
+            && candidate.backend.as_deref() == Some("onnx")
+            && candidate.kind == tongues_tts::CatalogModelKind::VoiceModel
+    }) {
         anyhow::bail!("model `{model}` is not available for backend `onnx`");
     }
     Ok(model)
@@ -6011,12 +6005,15 @@ fn speech_studio_discovery_page(
             continue;
         }
         if provider.id == "onnx" {
-            for model in ONNX_VOICE_MODELS {
+            for model in scoped_catalog.entries.iter().filter(|entry| {
+                entry.backend.as_deref() == Some("onnx")
+                    && entry.kind == tongues_tts::CatalogModelKind::VoiceModel
+            }) {
                 paths.push(discover_speech_path(
                     home,
                     provider.id,
-                    model.id,
-                    model.display_name,
+                    &model.id,
+                    &model.display_name,
                     model.id == selected_onnx,
                     device,
                     &scoped_catalog,
@@ -7251,26 +7248,20 @@ fn speech_component_inventory(
 }
 
 fn catalog_component_id(entry: &tongues_tts::ModelCatalogEntry) -> String {
-    entry.id.clone()
+    entry
+        .component_id
+        .clone()
+        .unwrap_or_else(|| entry.id.clone())
 }
 
 fn catalog_component_kind(entry: &tongues_tts::ModelCatalogEntry) -> &'static str {
-    if entry
-        .capabilities
-        .iter()
-        .any(|value| value == "neural-vocoder")
-    {
-        "vocoder"
-    } else if entry
-        .capabilities
-        .iter()
-        .any(|value| value == "acoustic-model")
-    {
-        "acoustic"
-    } else if entry.id.starts_with("voice-") {
-        "voice"
-    } else {
-        "end_to_end"
+    match entry.kind {
+        tongues_tts::CatalogModelKind::AcousticModel => "acoustic",
+        tongues_tts::CatalogModelKind::NeuralVocoder => "vocoder",
+        tongues_tts::CatalogModelKind::VoiceModel => "voice",
+        tongues_tts::CatalogModelKind::VoiceConversion => "voice_conversion",
+        tongues_tts::CatalogModelKind::StyleTts2
+        | tongues_tts::CatalogModelKind::EndToEndSpeech => "end_to_end",
     }
 }
 

@@ -163,6 +163,7 @@ fn model_kind_name(kind: ModelKind) -> &'static str {
         ModelKind::AcousticModel => "acoustic model",
         ModelKind::NeuralVocoder => "neural vocoder",
         ModelKind::EndToEndSpeech => "end-to-end speech model",
+        ModelKind::VoiceConversion => "voice-conversion model",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

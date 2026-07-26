@@ -386,7 +386,16 @@ The server uses the same verified installation and model id:
 }
 ```
 
-Catalog maintenance is split into two deterministic stages. The source
+`crates/tongues-tts/catalog/models-v2.json` is the authoritative downloadable
+speech artifact catalog. Its stable model and component IDs, aliases, display
+metadata, licenses, checksums, member plans, providers, and runtime paths feed
+the CLI downloader, server discovery, and Speech Studio cards. The CLI's
+non-speech LLM, face, and ASR assets remain a separate inventory. A speech
+catalog entry with no provider/component stays visible as catalog-only; a
+native component with no artifact stays visible without fabricated download
+metadata.
+
+Fairseq catalog maintenance is split into two deterministic stages. The source
 snapshot records the upstream language/script inventory, license evidence, and
 all three artifact hashes; the Rust generator validates that metadata and
 writes the runtime catalog atomically:
@@ -399,7 +408,7 @@ scripts/generate-fairseq-mms-source.py \
 cargo run --bin tongues -- models generate-fairseq-catalog \
   --source crates/tongues-tts/catalog/fairseq-mms-source-v1.json \
   --language-index /path/to/all-tts-languages.html \
-  --out crates/tongues-tts/catalog/fairseq-mms-models-v1.json
+  --out crates/tongues-tts/catalog/fairseq-mms-models-v2.json
 ```
 
 Both stages detect additions, removals, and renamed language rows. Catalog

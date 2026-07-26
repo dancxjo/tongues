@@ -247,6 +247,10 @@ pub fn generate_fairseq_catalog(source: &FairseqCatalogSource) -> Result<ModelCa
                 display_name: format!("MMS VITS {} ({})", entry.language_name, entry.model_id),
                 aliases: vec![format!("tts_models/{}/fairseq/vits", entry.model_id)],
                 architecture: "vits".into(),
+                component_id: Some("vits".into()),
+                kind: crate::CatalogModelKind::EndToEndSpeech,
+                backend: Some("fairseq".into()),
+                runtime_path: format!("{directory}/{FAIRSEQ_MMS_CHECKPOINT}"),
                 compatible_with: vec!["fairseq-mms-vits".into(), "coqui-fairseq-vits".into()],
                 package_version: 1,
                 languages: vec![entry.language.clone()],
@@ -474,7 +478,7 @@ mod tests {
                 .expect("committed source snapshot");
         let generated = generate_fairseq_catalog(&source).expect("generated catalog");
         let committed =
-            ModelCatalog::from_json(include_str!("../catalog/fairseq-mms-models-v1.json"))
+            ModelCatalog::from_json(include_str!("../catalog/fairseq-mms-models-v2.json"))
                 .expect("committed generated catalog");
 
         assert_eq!(source.entries.len(), 1_143);

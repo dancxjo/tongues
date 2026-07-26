@@ -176,6 +176,22 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         explanation: "Native source-waveform voice conversion using WavLM content features and target-speaker reference audio.",
     },
     NativeSpeechComponent {
+        id: "styletts2-onnx",
+        display_name: "StyleTTS2 ONNX",
+        architecture: "styletts2",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "StyleTTS2 ONNX inference is supplied by the shared StyleTTS2 runtime crate and joined to distributable checkpoints by catalog component ID.",
+    },
+    NativeSpeechComponent {
+        id: "piper-onnx",
+        display_name: "Piper ONNX",
+        architecture: "vits",
+        kind: NativeSpeechComponentKind::Voice,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Piper-compatible ONNX voice inference; voice identities and installed paths come from the model catalog.",
+    },
+    NativeSpeechComponent {
         id: "hifigan",
         display_name: "HiFi-GAN",
         architecture: "hifigan",
@@ -319,6 +335,9 @@ pub const IMPLEMENTATION_MODULE_CLASSIFICATION: &[(&str, &[&str])] = &[
 pub const PLANNED_SPEECH_COMPONENT_IDS: &[&str] = &[
     // Causal append-only streaming renderer under evaluation; no source module yet.
     "pocket-tts-causal",
+    // Implemented in sibling runtime crates and joined here for catalog discovery.
+    "styletts2-onnx",
+    "piper-onnx",
 ];
 
 /// Runtime used for neural inference.

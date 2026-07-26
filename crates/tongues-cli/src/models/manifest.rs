@@ -8,6 +8,7 @@ pub enum ModelKind {
     AcousticModel,
     NeuralVocoder,
     EndToEndSpeech,
+    VoiceConversion,
     Lexicon,
     Phonemicizer,
 }
@@ -61,7 +62,7 @@ pub const MULTIBAND_MELGAN_VOCODER_ID: &str = "multiband-melgan-ljspeech";
 pub const DEFAULT_END_TO_END_SPEECH_MODEL_ID: &str = "vits-vctk";
 pub const YOURTTS_MODEL_ID: &str = "yourtts-multilingual";
 
-pub const MODEL_ASSETS: &[ModelAsset] = &[
+pub const NON_SPEECH_MODEL_ASSETS: &[ModelAsset] = &[
     ModelAsset {
         id: "gemma-4-e4b-it-q4-k-m",
         filename: "gemma-4-E4B-it-Q4_K_M.gguf",
@@ -194,348 +195,11 @@ pub const MODEL_ASSETS: &[ModelAsset] = &[
         source: Some("https://github.com/cmusphinx/cmudict"),
         notes: Some("CMU US English Pronouncing Dictionary Verbal Pronunciations."),
     },
-    ModelAsset {
-        id: "styletts2-en-us-onnx-14b6dd",
-        filename: "14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc.onnx",
-        relative_path: "models/styletts2/en-us/14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc.onnx",
-        url: "https://huggingface.co/hexgrad/styletts2/resolve/main/14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc.onnx",
-        sha256: Some("14b6dd78237d223f172f8af702ed8aeb4a2c51fd0ff7e3ca03a4967d33fa13bc"),
-        size_bytes: Some(102_000_000),
-        license: Some("MIT"),
-        source: Some("https://huggingface.co/hexgrad/styletts2"),
-        notes: Some(
-            "Public ONNX conversion of StyleTTS2-LibriTTS; native inference uses the token encoder and decoder path.",
-        ),
-    },
-    ModelAsset {
-        id: "styletts2-en-us-onnx-4612a9",
-        filename: "4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d.onnx",
-        relative_path: "models/styletts2/en-us/4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d.onnx",
-        url: "https://huggingface.co/hexgrad/styletts2/resolve/main/4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d.onnx",
-        sha256: Some("4612a9dc0c0e142468f361e8e901bdccfdca45a2ae1145e5452bc98c7915302d"),
-        size_bytes: Some(238_000_000),
-        license: Some("MIT"),
-        source: Some("https://huggingface.co/hexgrad/styletts2"),
-        notes: Some(
-            "Public ONNX conversion of StyleTTS2-LibriTTS; reserved for style/diffusion wiring.",
-        ),
-    },
-    ModelAsset {
-        id: "styletts2-en-us-onnx-91473d",
-        filename: "91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6.onnx",
-        relative_path: "models/styletts2/en-us/91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6.onnx",
-        url: "https://huggingface.co/hexgrad/styletts2/resolve/main/91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6.onnx",
-        sha256: Some("91473db52725b0c3b8387537979a2f42f0da82836e50902503a877c610864ad6"),
-        size_bytes: Some(23_100_000),
-        license: Some("MIT"),
-        source: Some("https://huggingface.co/hexgrad/styletts2"),
-        notes: Some("Public ONNX conversion of StyleTTS2-LibriTTS token encoder."),
-    },
-    ModelAsset {
-        id: "styletts2-en-us-onnx-99e40b",
-        filename: "99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457.onnx",
-        relative_path: "models/styletts2/en-us/99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457.onnx",
-        url: "https://huggingface.co/hexgrad/styletts2/resolve/main/99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457.onnx",
-        sha256: Some("99e40b35027e96a247c8e1f359d2f99d3cd6e93afec2e0f4a15f72dd7b79d457"),
-        size_bytes: Some(307_000_000),
-        license: Some("MIT"),
-        source: Some("https://huggingface.co/hexgrad/styletts2"),
-        notes: Some("Public ONNX conversion of StyleTTS2-LibriTTS waveform decoder."),
-    },
-    ModelAsset {
-        id: "styletts2-libritts-reference-audio",
-        filename: "reference_audio.zip",
-        relative_path: "models/styletts2/en-us/reference_audio.zip",
-        url: "https://huggingface.co/yl4579/StyleTTS2-LibriTTS/resolve/main/reference_audio.zip",
-        sha256: Some("d25b4950ec39cec5a00f5061491ad0b3606edc6618a54adc59663bfd6e6ab55e"),
-        size_bytes: Some(2_918_087),
-        license: Some("CC-BY-4.0"),
-        source: Some("https://huggingface.co/yl4579/StyleTTS2-LibriTTS"),
-        notes: Some(
-            "Short LibriTTS-derived StyleTTS2 reference WAVs used for default voice and intonation references.",
-        ),
-    },
-    ModelAsset {
-        id: "voice-ryan-medium-onnx",
-        filename: "en_US-ryan-medium.onnx",
-        relative_path: "models/voices/en_US-ryan-medium.onnx",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC-BY-4.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("ONNX voice model; Mortar runs it directly without the source runtime."),
-    },
-    ModelAsset {
-        id: "voice-ryan-medium-config",
-        filename: "en_US-ryan-medium.onnx.json",
-        relative_path: "models/voices/en_US-ryan-medium.onnx.json",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC-BY-4.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("Voice model phoneme map and inference defaults."),
-    },
-    ModelAsset {
-        id: "voice-amy-medium-onnx",
-        filename: "en_US-amy-medium.onnx",
-        relative_path: "models/voices/en_US-amy-medium.onnx",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC-BY-4.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("ONNX voice model; Mortar runs it directly without the source runtime."),
-    },
-    ModelAsset {
-        id: "voice-amy-medium-config",
-        filename: "en_US-amy-medium.onnx.json",
-        relative_path: "models/voices/en_US-amy-medium.onnx.json",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC-BY-4.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("Voice model phoneme map and inference defaults."),
-    },
-    ModelAsset {
-        id: "voice-ljspeech-high-onnx",
-        filename: "en_US-ljspeech-high.onnx",
-        relative_path: "models/voices/en_US-ljspeech-high.onnx",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC0-1.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("Closest runnable ONNX voice to Coqui's default LJSpeech English model; Mortar runs it directly without the source runtime."),
-    },
-    ModelAsset {
-        id: "voice-ljspeech-high-config",
-        filename: "en_US-ljspeech-high.onnx.json",
-        relative_path: "models/voices/en_US-ljspeech-high.onnx.json",
-        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json",
-        sha256: None,
-        size_bytes: None,
-        license: Some("CC0-1.0"),
-        source: Some("https://huggingface.co/rhasspy/piper-voices"),
-        notes: Some("Voice model phoneme map and inference defaults."),
-    },
-    ModelAsset {
-        id: "coqui-speedy-speech-ljspeech-release",
-        filename: "tts_models--en--ljspeech--speedy-speech.zip",
-        relative_path:
-            "models/speech/coqui/en/ljspeech/speedy-speech/tts_models--en--ljspeech--speedy-speech.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--speedy-speech.zip",
-        sha256: Some("ae772bc84c6b4d8fe97234f4d2a1282b925bf325659f319f03610edc4eb8023a"),
-        size_bytes: Some(53_437_190),
-        license: Some("NOASSERTION"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
-        notes: Some("Published Coqui SpeedySpeech acoustic-model release archive."),
-    },
-    ModelAsset {
-        id: "coqui-fastpitch-ljspeech-release",
-        filename: "tts_models--en--ljspeech--fast_pitch.zip",
-        relative_path:
-            "models/speech/coqui/en/ljspeech/fast-pitch/tts_models--en--ljspeech--fast_pitch.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--ljspeech--fast_pitch.zip",
-        sha256: Some("4629d701f25db0573014174a4a508430138c16358313e84b3dfacdd7a65fe89e"),
-        size_bytes: Some(458_071_694),
-        license: Some("NOASSERTION"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
-        notes: Some("Published Coqui FastPitch LJSpeech acoustic-model release archive."),
-    },
-    ModelAsset {
-        id: "coqui-hifigan-v2-ljspeech-release",
-        filename: "vocoder_models--en--ljspeech--hifigan_v2.zip",
-        relative_path:
-            "models/speech/coqui/en/ljspeech/hifigan-v2/vocoder_models--en--ljspeech--hifigan_v2.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--hifigan_v2.zip",
-        sha256: Some("4378dc0afb12ae3f50c1614cb143c4084d066b28fde35b58f45fc6b56b1c75f3"),
-        size_bytes: Some(3_802_006),
-        license: Some("NOASSERTION"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
-        notes: Some("Published Coqui HiFi-GAN v2 neural-vocoder release archive."),
-    },
-    ModelAsset {
-        id: "coqui-glow-tts-ljspeech-release",
-        filename: "tts_models--en--ljspeech--glow-tts.zip",
-        relative_path:
-            "models/speech/coqui/en/ljspeech/glow-tts/tts_models--en--ljspeech--glow-tts.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.0.9/tts_models--en--ljspeech--glow-tts.zip",
-        sha256: Some("3d772a62c35be04ea763d96d99be786f0753a6883e60adc98793a011b79f18a5"),
-        size_bytes: Some(315_065_867),
-        license: Some("MPL-2.0"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.0.9"),
-        notes: Some("Published Coqui Glow-TTS LJSpeech acoustic-model release archive."),
-    },
-    ModelAsset {
-        id: "coqui-multiband-melgan-ljspeech-release",
-        filename: "vocoder_models--en--ljspeech--multiband-melgan.zip",
-        relative_path:
-            "models/speech/coqui/en/ljspeech/multiband-melgan/vocoder_models--en--ljspeech--multiband-melgan.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/vocoder_models--en--ljspeech--multiband-melgan.zip",
-        sha256: Some("fc5c4222be98751ee55f07bcdbad9fa3fe2635ca542e340b70fbe62fe9ba1b4f"),
-        size_bytes: Some(82_847_752),
-        license: Some("MPL-2.0"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
-        notes: Some(
-            "Published Coqui MultiBand-MelGAN release with four-band PQMF synthesis.",
-        ),
-    },
-    ModelAsset {
-        id: "coqui-vits-vctk-release",
-        filename: "tts_models--en--vctk--vits.zip",
-        relative_path: "models/speech/coqui/en/vctk/vits/tts_models--en--vctk--vits.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.1_models/tts_models--en--vctk--vits.zip",
-        sha256: Some("ad753e5200614907627495b6177a08d755df1dbbde30eb6e31264caa2a3f3eaa"),
-        size_bytes: Some(147_691_678),
-        license: Some("NOASSERTION"),
-        source: Some("https://github.com/coqui-ai/TTS/releases/tag/v0.6.1_models"),
-        notes: Some("Published Coqui VCTK VITS release with 109 learned speaker embeddings."),
-    },
-    ModelAsset {
-        id: "coqui-yourtts-multilingual-release",
-        filename: "tts_models--multilingual--multi-dataset--your_tts.zip",
-        relative_path:
-            "models/speech/coqui/multilingual/yourtts/tts_models--multilingual--multi-dataset--your_tts.zip",
-        url: "https://coqui.gateway.scarf.sh/v0.6.0_models/tts_models--multilingual--multi-dataset--your_tts.zip",
-        sha256: Some("b355a135b0252e619e5fb10ea4a28ba879e4bdb68c6e374815b9abbd7a14ad68"),
-        size_bytes: Some(394_100_490),
-        license: Some("CC-BY-NC-ND-4.0"),
-        source: Some("https://github.com/coqui-ai/TTS/blob/v0.6.1/TTS/.models.json"),
-        notes: Some(
-            "Published Coqui YourTTS multilingual voice-cloning release; non-commercial and no-derivatives.",
-        ),
-    },
 ];
 
-pub const MODEL_ARCHIVES: &[ModelArchive] = &[
-    ModelArchive {
-        asset_id: "coqui-fastpitch-ljspeech-release",
-        primary_member_path: "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth",
-        members: &[
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--fast_pitch/model_file.pth",
-                relative_path: "models/speech/coqui/en/ljspeech/fast-pitch/model_file.pth",
-            },
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--fast_pitch/config.json",
-                relative_path: "models/speech/coqui/en/ljspeech/fast-pitch/config.json",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-speedy-speech-ljspeech-release",
-        primary_member_path: "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth",
-        members: &[
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--speedy-speech/model_file.pth",
-                relative_path: "models/speech/coqui/en/ljspeech/speedy-speech/model_file.pth",
-            },
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--speedy-speech/config.json",
-                relative_path: "models/speech/coqui/en/ljspeech/speedy-speech/config.json",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-hifigan-v2-ljspeech-release",
-        primary_member_path: "models/speech/coqui/en/ljspeech/hifigan-v2/model_file.pth",
-        members: &[
-            ArchiveMember {
-                member_path: "vocoder_models--en--ljspeech--hifigan_v2/model_file.pth",
-                relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/model_file.pth",
-            },
-            ArchiveMember {
-                member_path: "vocoder_models--en--ljspeech--hifigan_v2/config.json",
-                relative_path: "models/speech/coqui/en/ljspeech/hifigan-v2/config.json",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-glow-tts-ljspeech-release",
-        primary_member_path: "models/speech/coqui/en/ljspeech/glow-tts/model_file.pth.tar",
-        members: &[
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--glow-tts/model_file.pth.tar",
-                relative_path: "models/speech/coqui/en/ljspeech/glow-tts/model_file.pth.tar",
-            },
-            ArchiveMember {
-                member_path: "tts_models--en--ljspeech--glow-tts/config.json",
-                relative_path: "models/speech/coqui/en/ljspeech/glow-tts/config.json",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-multiband-melgan-ljspeech-release",
-        primary_member_path: "models/speech/coqui/en/ljspeech/multiband-melgan/model_file.pth",
-        members: &[
-            ArchiveMember {
-                member_path: "vocoder_models--en--ljspeech--multiband-melgan/model_file.pth",
-                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/model_file.pth",
-            },
-            ArchiveMember {
-                member_path: "vocoder_models--en--ljspeech--multiband-melgan/config.json",
-                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/config.json",
-            },
-            ArchiveMember {
-                member_path: "vocoder_models--en--ljspeech--multiband-melgan/scale_stats.npy",
-                relative_path: "models/speech/coqui/en/ljspeech/multiband-melgan/scale_stats.npy",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-vits-vctk-release",
-        primary_member_path: "models/speech/coqui/en/vctk/vits/model_file.pth",
-        members: &[
-            ArchiveMember {
-                member_path: "tts_models--en--vctk--vits/model_file.pth",
-                relative_path: "models/speech/coqui/en/vctk/vits/model_file.pth",
-            },
-            ArchiveMember {
-                member_path: "tts_models--en--vctk--vits/config.json",
-                relative_path: "models/speech/coqui/en/vctk/vits/config.json",
-            },
-            ArchiveMember {
-                member_path: "tts_models--en--vctk--vits/speaker_ids.json",
-                relative_path: "models/speech/coqui/en/vctk/vits/speaker_ids.json",
-            },
-        ],
-    },
-    ModelArchive {
-        asset_id: "coqui-yourtts-multilingual-release",
-        primary_member_path: "models/speech/coqui/multilingual/yourtts/model_file.pth.tar",
-        members: &[
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/model_file.pth.tar",
-                relative_path: "models/speech/coqui/multilingual/yourtts/model_file.pth.tar",
-            },
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/config.json",
-                relative_path: "models/speech/coqui/multilingual/yourtts/config.json",
-            },
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/speakers.json",
-                relative_path: "models/speech/coqui/multilingual/yourtts/speakers.json",
-            },
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/language_ids.json",
-                relative_path: "models/speech/coqui/multilingual/yourtts/language_ids.json",
-            },
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/model_se.pth.tar",
-                relative_path: "models/speech/coqui/multilingual/yourtts/model_se.pth.tar",
-            },
-            ArchiveMember {
-                member_path: "tts_models--multilingual--multi-dataset--your_tts/config_se.json",
-                relative_path: "models/speech/coqui/multilingual/yourtts/config_se.json",
-            },
-        ],
-    },
-];
+pub const NON_SPEECH_MODEL_ARCHIVES: &[ModelArchive] = &[];
 
-pub const MODEL_BUNDLES: &[ModelBundle] = &[
+pub const NON_SPEECH_MODEL_BUNDLES: &[ModelBundle] = &[
     ModelBundle {
         id: "gemma-4-e4b-it-q4-k-m",
         display_name: "Gemma 4 E4B IT Q4_K_M",
@@ -602,130 +266,32 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         required_asset_ids: &["lexicon-en-us-builtin"],
         aliases: &["lexicon", "en-us-lexicon"],
     },
-    ModelBundle {
-        id: DEFAULT_STYLETTS2_MODEL_ID,
-        display_name: "StyleTTS2 en-US ONNX",
-        kind: ModelKind::StyleTts2,
-        primary_asset_id: "styletts2-en-us-onnx-14b6dd",
-        required_asset_ids: &[
-            "phonemicizer-en-us-builtin",
-            "lexicon-en-us-builtin",
-            "styletts2-en-us-onnx-14b6dd",
-            "styletts2-en-us-onnx-4612a9",
-            "styletts2-en-us-onnx-91473d",
-            "styletts2-en-us-onnx-99e40b",
-            "styletts2-libritts-reference-audio",
-            "cmudict-base",
-            "cmudict-vp",
-        ],
-        aliases: &["styletts2", "styletts2-en", "tts", "speech"],
-    },
-    ModelBundle {
-        id: "voice-ryan-medium",
-        display_name: "Ryan Medium Voice",
-        kind: ModelKind::VoiceModel,
-        primary_asset_id: "voice-ryan-medium-onnx",
-        required_asset_ids: &["voice-ryan-medium-onnx", "voice-ryan-medium-config"],
-        aliases: &["ryan", "voice-ryan"],
-    },
-    ModelBundle {
-        id: "voice-amy-medium",
-        display_name: "Amy Medium Voice",
-        kind: ModelKind::VoiceModel,
-        primary_asset_id: "voice-amy-medium-onnx",
-        required_asset_ids: &["voice-amy-medium-onnx", "voice-amy-medium-config"],
-        aliases: &["amy", "voice-amy"],
-    },
-    ModelBundle {
-        id: DEFAULT_VOICE_MODEL_ID,
-        display_name: "LJSpeech High Voice",
-        kind: ModelKind::VoiceModel,
-        primary_asset_id: "voice-ljspeech-high-onnx",
-        required_asset_ids: &["voice-ljspeech-high-onnx", "voice-ljspeech-high-config"],
-        aliases: &["ljspeech", "lj", "voice", "voice-ljspeech", "coqui-default"],
-    },
-    ModelBundle {
-        id: DEFAULT_ACOUSTIC_MODEL_ID,
-        display_name: "SpeedySpeech LJSpeech",
-        kind: ModelKind::AcousticModel,
-        primary_asset_id: "coqui-speedy-speech-ljspeech-release",
-        required_asset_ids: &["coqui-speedy-speech-ljspeech-release"],
-        aliases: &[
-            "speedy-speech",
-            "speedyspeech",
-            "coqui-speedy-speech",
-            "coqui-speedy-speech-ljspeech",
-        ],
-    },
-    ModelBundle {
-        id: FASTPITCH_ACOUSTIC_MODEL_ID,
-        display_name: "FastPitch LJSpeech",
-        kind: ModelKind::AcousticModel,
-        primary_asset_id: "coqui-fastpitch-ljspeech-release",
-        required_asset_ids: &["coqui-fastpitch-ljspeech-release"],
-        aliases: &[
-            "fast-pitch",
-            "fastpitch",
-            "coqui-fastpitch",
-            "coqui-fastpitch-ljspeech",
-        ],
-    },
-    ModelBundle {
-        id: DEFAULT_NEURAL_VOCODER_ID,
-        display_name: "HiFi-GAN v2 LJSpeech",
-        kind: ModelKind::NeuralVocoder,
-        primary_asset_id: "coqui-hifigan-v2-ljspeech-release",
-        required_asset_ids: &["coqui-hifigan-v2-ljspeech-release"],
-        aliases: &[
-            "hifigan-v2",
-            "hifigan",
-            "coqui-hifigan",
-            "coqui-hifigan-v2-ljspeech",
-        ],
-    },
-    ModelBundle {
-        id: GLOW_TTS_ACOUSTIC_MODEL_ID,
-        display_name: "Glow-TTS LJSpeech",
-        kind: ModelKind::AcousticModel,
-        primary_asset_id: "coqui-glow-tts-ljspeech-release",
-        required_asset_ids: &["coqui-glow-tts-ljspeech-release"],
-        aliases: &[
-            "glow-tts",
-            "glowtts",
-            "coqui-glow-tts",
-            "coqui-glow-tts-ljspeech",
-        ],
-    },
-    ModelBundle {
-        id: MULTIBAND_MELGAN_VOCODER_ID,
-        display_name: "MultiBand-MelGAN LJSpeech",
-        kind: ModelKind::NeuralVocoder,
-        primary_asset_id: "coqui-multiband-melgan-ljspeech-release",
-        required_asset_ids: &["coqui-multiband-melgan-ljspeech-release"],
-        aliases: &[
-            "multiband-melgan",
-            "mb-melgan",
-            "coqui-multiband-melgan",
-            "coqui-multiband-melgan-ljspeech",
-        ],
-    },
-    ModelBundle {
-        id: DEFAULT_END_TO_END_SPEECH_MODEL_ID,
-        display_name: "VITS VCTK",
-        kind: ModelKind::EndToEndSpeech,
-        primary_asset_id: "coqui-vits-vctk-release",
-        required_asset_ids: &["coqui-vits-vctk-release"],
-        aliases: &["vctk-vits", "coqui-vctk", "coqui-vits-vctk"],
-    },
-    ModelBundle {
-        id: YOURTTS_MODEL_ID,
-        display_name: "YourTTS Multilingual",
-        kind: ModelKind::EndToEndSpeech,
-        primary_asset_id: "coqui-yourtts-multilingual-release",
-        required_asset_ids: &["coqui-yourtts-multilingual-release"],
-        aliases: &["yourtts", "your-tts", "coqui-yourtts"],
-    },
 ];
+
+include!(concat!(env!("OUT_DIR"), "/speech-model-catalog.rs"));
+
+pub static MODEL_ASSETS: std::sync::LazyLock<Vec<ModelAsset>> = std::sync::LazyLock::new(|| {
+    NON_SPEECH_MODEL_ASSETS
+        .iter()
+        .chain(GENERATED_SPEECH_MODEL_ASSETS)
+        .copied()
+        .collect()
+});
+pub static MODEL_ARCHIVES: std::sync::LazyLock<Vec<ModelArchive>> =
+    std::sync::LazyLock::new(|| {
+        NON_SPEECH_MODEL_ARCHIVES
+            .iter()
+            .chain(GENERATED_SPEECH_MODEL_ARCHIVES)
+            .copied()
+            .collect()
+    });
+pub static MODEL_BUNDLES: std::sync::LazyLock<Vec<ModelBundle>> = std::sync::LazyLock::new(|| {
+    NON_SPEECH_MODEL_BUNDLES
+        .iter()
+        .chain(GENERATED_SPEECH_MODEL_BUNDLES)
+        .copied()
+        .collect()
+});
 
 pub fn find_bundle(name: &str) -> Option<&'static ModelBundle> {
     let normalized = normalize_model_name(name);
@@ -866,6 +432,35 @@ mod tests {
             find_bundle("vctk-vits").unwrap().kind,
             ModelKind::EndToEndSpeech
         );
+    }
+
+    #[test]
+    fn generated_speech_projection_matches_authoritative_catalog() {
+        let catalog = tongues_tts::ModelCatalog::from_json(
+            tongues_tts::model_catalog::EMBEDDED_MODEL_CATALOG,
+        )
+        .expect("embedded speech catalog");
+        let generated_ids = GENERATED_SPEECH_MODEL_BUNDLES
+            .iter()
+            .map(|bundle| bundle.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let catalog_ids = catalog
+            .entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(generated_ids, catalog_ids);
+        for entry in catalog.entries {
+            let bundle = find_bundle(&entry.id).expect("generated bundle");
+            assert_eq!(bundle.display_name, entry.display_name);
+            assert_eq!(
+                bundle_entrypoint_relative_path(bundle).expect("entrypoint"),
+                entry.runtime_path
+            );
+            for alias in entry.aliases {
+                assert_eq!(find_bundle(&alias).map(|bundle| bundle.id), Some(bundle.id));
+            }
+        }
     }
 
     #[test]

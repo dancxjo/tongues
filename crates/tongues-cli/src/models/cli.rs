@@ -798,7 +798,7 @@ fn print_paths(model: Option<&str>) -> Result<()> {
             println!("{}={}", asset.id.cyan(), asset_path(&home, asset).display());
         }
     } else {
-        for asset in MODEL_ASSETS {
+        for asset in MODEL_ASSETS.iter() {
             println!("{}={}", asset.id.cyan(), asset_path(&home, asset).display());
         }
     }
@@ -874,6 +874,7 @@ fn print_status() -> Result<()> {
                 | ModelKind::AcousticModel
                 | ModelKind::NeuralVocoder
                 | ModelKind::EndToEndSpeech
+                | ModelKind::VoiceConversion
                 | ModelKind::Lexicon
                 | ModelKind::Phonemicizer
         )
@@ -944,6 +945,7 @@ fn model_kind_label(kind: ModelKind) -> &'static str {
         ModelKind::AcousticModel => "acoustic-model",
         ModelKind::NeuralVocoder => "neural-vocoder",
         ModelKind::EndToEndSpeech => "end-to-end-speech",
+        ModelKind::VoiceConversion => "voice-conversion",
         ModelKind::Lexicon => "lexicon",
         ModelKind::Phonemicizer => "phonemicizer",
     }

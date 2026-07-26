@@ -17,14 +17,14 @@ use zip::ZipArchive;
 
 use crate::open_model_package;
 
-pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 2;
 pub const INSTALLED_MODEL_SCHEMA_VERSION: u32 = 1;
 pub const MODEL_VERIFICATION_CACHE_SCHEMA_VERSION: u32 = 1;
 pub const MODEL_VERIFIER_VERSION: u32 = 1;
 pub const MODEL_RUNTIME_COMPATIBILITY_VERSION: u32 = 1;
-pub const EMBEDDED_MODEL_CATALOG: &str = include_str!("../catalog/models-v1.json");
+pub const EMBEDDED_MODEL_CATALOG: &str = include_str!("../catalog/models-v2.json");
 pub const EMBEDDED_FAIRSEQ_MODEL_CATALOG: &str =
-    include_str!("../catalog/fairseq-mms-models-v1.json");
+    include_str!("../catalog/fairseq-mms-models-v2.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalog {
@@ -42,6 +42,20 @@ pub struct ModelCatalogEntry {
     /// A provider-neutral neural architecture identifier. Serialization and
     /// distribution ancestry belong in `provenance` and `compatible_with`.
     pub architecture: String,
+    /// Stable join from this distributable artifact to the implementation
+    /// inventory. `None` means the artifact is intentionally catalog-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_id: Option<String>,
+    /// User-facing/runtime classification projected by CLI and server
+    /// consumers instead of repeated in their own registries.
+    pub kind: CatalogModelKind,
+    /// Runtime provider that can load this artifact. `None` keeps an entry
+    /// visible and installable without claiming that it can run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    /// Canonical installed file used to open the model. This may identify an
+    /// extracted archive member.
+    pub runtime_path: String,
     /// External checkpoint, configuration, or runtime contracts accepted by
     /// this entry. Values are searchable compatibility labels, not Tongues
     /// architecture identities.
@@ -66,6 +80,17 @@ pub struct ModelCatalogEntry {
     pub provenance: CatalogProvenance,
     #[serde(default)]
     pub artifacts: Vec<CatalogArtifact>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogModelKind {
+    AcousticModel,
+    NeuralVocoder,
+    EndToEndSpeech,
+    VoiceConversion,
+    StyleTts2,
+    VoiceModel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -256,6 +281,15 @@ impl ModelCatalog {
         let mut install_paths = BTreeMap::<&str, &str>::new();
         for entry in &self.entries {
             entry.validate()?;
+            if let Some(component_id) = &entry.component_id {
+                ensure!(
+                    crate::native_speech_components()
+                        .iter()
+                        .any(|component| component.id == component_id),
+                    "catalog model `{}` references unknown speech component `{component_id}`",
+                    entry.id
+                );
+            }
             register_catalog_name(&mut ids, &entry.id, &entry.id)?;
             for alias in &entry.aliases {
                 register_catalog_name(&mut ids, alias, &entry.id)?;
@@ -342,6 +376,13 @@ impl ModelCatalogEntry {
             "catalog model `{}` has no architecture",
             self.id
         );
+        if let Some(component_id) = &self.component_id {
+            ensure_safe_id(component_id)?;
+        }
+        if let Some(backend) = &self.backend {
+            ensure_safe_id(backend)?;
+        }
+        ensure_relative_path(&self.runtime_path)?;
         ensure!(
             self.compatible_with
                 .iter()
@@ -402,6 +443,18 @@ impl ModelCatalogEntry {
                 ensure_relative_path(&member.install_path)?;
             }
         }
+        ensure!(
+            self.artifacts.iter().any(|artifact| {
+                artifact.install_path == self.runtime_path
+                    || artifact
+                        .members
+                        .iter()
+                        .any(|member| member.install_path == self.runtime_path)
+            }),
+            "catalog model `{}` runtime path `{}` is not declared by an artifact or member",
+            self.id,
+            self.runtime_path
+        );
         if let Some(path) = &self.speakers.names_file {
             ensure_relative_path(path)?;
         }
@@ -570,6 +623,14 @@ impl ModelStore {
             display_name: id.into(),
             aliases: Vec::new(),
             architecture: package.manifest.architecture.as_str().into(),
+            component_id: None,
+            kind: CatalogModelKind::EndToEndSpeech,
+            backend: None,
+            runtime_path: destination
+                .strip_prefix(&self.root)
+                .context("local package escaped model home")?
+                .to_string_lossy()
+                .into_owned(),
             compatible_with: Vec::new(),
             package_version: version,
             languages: package
@@ -1645,6 +1706,34 @@ mod tests {
     }
 
     #[test]
+    fn catalog_rejects_duplicate_aliases_mismatched_paths_and_dangling_components() {
+        let mut catalog = ModelCatalog::embedded().expect("embedded catalog");
+        let duplicate_alias = catalog.entries[0].id.clone();
+        catalog.entries[1].aliases.push(duplicate_alias);
+        assert!(catalog
+            .validate()
+            .expect_err("duplicate alias")
+            .to_string()
+            .contains("is shared"));
+
+        let mut catalog = ModelCatalog::embedded().expect("embedded catalog");
+        catalog.entries[0].runtime_path = "models/not-declared.bin".into();
+        assert!(catalog
+            .validate()
+            .expect_err("mismatched runtime path")
+            .to_string()
+            .contains("is not declared"));
+
+        let mut catalog = ModelCatalog::embedded().expect("embedded catalog");
+        catalog.entries[0].component_id = Some("missing-speech-component".into());
+        assert!(catalog
+            .validate()
+            .expect_err("dangling component")
+            .to_string()
+            .contains("unknown speech component"));
+    }
+
+    #[test]
     fn private_catalog_cannot_replace_an_official_entry() {
         let mut catalog = ModelCatalog::embedded().expect("embedded catalog");
         let other = ModelCatalog {
@@ -1672,6 +1761,10 @@ mod tests {
             display_name: "Fixture".into(),
             aliases: Vec::new(),
             architecture: "fixture".into(),
+            component_id: None,
+            kind: CatalogModelKind::EndToEndSpeech,
+            backend: None,
+            runtime_path: "models/test/model.bin".into(),
             compatible_with: Vec::new(),
             package_version: 1,
             languages: Vec::new(),
@@ -1760,6 +1853,10 @@ mod tests {
             display_name: "Local Fixture".into(),
             aliases: Vec::new(),
             architecture: "fairseq".into(),
+            component_id: None,
+            kind: CatalogModelKind::EndToEndSpeech,
+            backend: None,
+            runtime_path: "models/private/model.bin".into(),
             compatible_with: Vec::new(),
             package_version: 1,
             languages: vec!["en".into()],

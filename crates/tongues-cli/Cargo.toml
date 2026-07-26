@@ -43,6 +43,9 @@ walkdir = { workspace = true }
 open-english-pronouncing-dictionary = "0.1.0"
 seams = "0.1.2"
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 [features]
 default = ["styletts2-onnx", "onnx-tts"]
 styletts2-onnx = ["styletts2/styletts2-onnx"]

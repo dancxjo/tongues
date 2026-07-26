@@ -9,11 +9,10 @@ use owo_colors::OwoColorize;
 use sha2::{Digest, Sha256};
 
 use crate::models::manifest::{
-    DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
+    bundle_archive_members, bundle_entrypoint_relative_path, bundle_primary_asset,
+    bundle_required_assets, find_archive, find_asset, find_bundle, ModelArchive, ModelAsset,
+    ModelBundle, ModelKind, DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
     DEFAULT_NEURAL_VOCODER_ID, DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID, MODEL_BUNDLES,
-    ModelArchive, ModelAsset, ModelBundle, ModelKind, bundle_archive_members,
-    bundle_entrypoint_relative_path, bundle_primary_asset, bundle_required_assets, find_archive,
-    find_asset, find_bundle,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_mortar_home, selected_bundle, selected_llm_model_path,
@@ -121,8 +120,20 @@ pub fn ensure_styletts2_default_reference_audio_available() -> Result<StyleTts2R
 
 pub fn styletts2_default_reference_audio_paths() -> Result<StyleTts2ReferenceAudioPaths> {
     let home = resolve_mortar_home()?;
-    let archive = find_asset("styletts2-libritts-reference-audio")
-        .context("StyleTTS2 reference audio asset is not registered")?;
+    let bundle = find_bundle(DEFAULT_STYLETTS2_MODEL_ID)
+        .context("StyleTTS2 model bundle is not registered")?;
+    let archive = bundle_required_assets(bundle)?
+        .into_iter()
+        .find(|asset| {
+            find_archive(asset.id).is_some_and(|archive| {
+                archive.members.iter().any(|member| {
+                    member
+                        .relative_path
+                        .ends_with(DEFAULT_STYLETTS2_VOICE_REFERENCE)
+                })
+            })
+        })
+        .context("StyleTTS2 reference audio artifact is not registered")?;
     let reference_dir = asset_path(&home, archive)
         .parent()
         .context("StyleTTS2 reference audio archive path has no parent")?
