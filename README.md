@@ -75,6 +75,7 @@ Inspect the same backend-neutral speaking plan without synthesizing it:
 ```sh
 cargo run --bin tongues -- speaking "Hello, world?"
 cargo run --bin tongues -- speaking --json "Hello, world?"
+cargo run --bin tongues -- speaking --variety ckt --json "Ԓыгъоравэтԓьэн йиԓыйиԓ."
 ```
 
 `--json` emits the complete typed `speaking::UtterancePlan`, which is the
@@ -154,7 +155,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 
 | Command | Purpose |
 |---|---|
-| `just fetch` | Fetch pronunciation lexicons and every registered model/voice bundle. |
+| `just fetch` | Fetch pronunciation lexicons and every registered model/voice bundle, including English and Chukchi MMS. |
 | `just prepare` | Prepare default OpenEPD G2P2G data. |
 | `just run ...` | Forward directly to `cargo run --bin tongues -- ...`. |
 | `just train` | Train the default `g2p2g` model. |
@@ -174,6 +175,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just speak --backend burn "hello world"` | Synthesize with native Burn SpeedySpeech + HiFi-GAN. |
 | `just speak --backend fastpitch "hello world"` | Synthesize with native Burn FastPitch + HiFi-GAN. |
 | `just speak --backend vits --speaker p225 "hello world"` | Synthesize with native Burn multi-speaker VITS. |
+| `just speak --backend fairseq --variety ckt "Ԓыгъоравэтԓьэн йиԓыйиԓ."` | Synthesize Chukchi with the default MMS Chukchi checkpoint. |
 | `just speech-demo` | Run a shuffled sentence through every built-in speech backend. |
 | `just race --cpu` | Run a compact smoke test across the active model families. |
 | `just be [--mechanical]` | Stream Ollama text through sentence detection, pronunciation, ONNX speech playback, and the local audio queue. |

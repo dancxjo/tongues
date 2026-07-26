@@ -12,6 +12,7 @@ use axum::{
     routing::{get, post},
 };
 use axum_server::tls_rustls::RustlsConfig;
+use base64::Engine as _;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn_cuda::{Cuda, CudaDevice};
 use serde::{Deserialize, Serialize};
@@ -351,11 +352,18 @@ async fn get_live_providers() -> impl IntoResponse {
     }))
 }
 
+#[derive(Deserialize)]
+struct LiveTurnStartRequest {
+    #[serde(flatten)]
+    turn: live::ChatTurnRequest,
+    synthesis: SpeakRequest,
+}
+
 async fn start_live_turn(
     State(state): State<AppState>,
-    Json(request): Json<live::ChatTurnRequest>,
+    Json(mut request): Json<LiveTurnStartRequest>,
 ) -> Response {
-    let turn_id = request.turn_id.trim().to_string();
+    let turn_id = request.turn.turn_id.trim().to_string();
     if turn_id.is_empty()
         || turn_id.len() > 96
         || !turn_id
@@ -368,11 +376,12 @@ async fn start_live_turn(
         )
             .into_response();
     }
-    if request.model.trim().is_empty() {
+    if request.turn.model.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "model is required").into_response();
     }
-    if request.messages.is_empty()
+    if request.turn.messages.is_empty()
         || !request
+            .turn
             .messages
             .iter()
             .any(|message| message.role == "user" && !message.content.trim().is_empty())
@@ -383,7 +392,7 @@ async fn start_live_turn(
         )
             .into_response();
     }
-    if request.messages.iter().any(|message| {
+    if request.turn.messages.iter().any(|message| {
         !matches!(message.role.as_str(), "user" | "assistant" | "system")
             || message.content.len() > 64 * 1024
     }) {
@@ -392,6 +401,14 @@ async fn start_live_turn(
             "messages must use user, assistant, or system roles and remain under 64 KiB",
         )
             .into_response();
+    }
+    request.synthesis.text = "Live speech validation probe.".into();
+    let synthesis = match normalize_speak_request(request.synthesis) {
+        Ok(synthesis) => synthesis,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    if let Err(error) = validate_speak_request(&synthesis) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
     }
 
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -412,19 +429,173 @@ async fn start_live_turn(
         turns.insert(turn_id.clone(), Arc::clone(&cancelled));
     }
 
-    let source = live::spawn_turn(request, cancelled);
+    let source = live::spawn_turn(request.turn, Arc::clone(&cancelled));
     let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<String>(64);
     let registry = Arc::clone(&state.live_turns);
+    let coordinator_state = state.clone();
+    let coordinator_turn_id = turn_id.clone();
     tokio::spawn(async move {
         let mut source = source;
-        while let Some(event) = source.recv().await {
-            let line = match serde_json::to_string(&event) {
-                Ok(line) => format!("{line}\n"),
-                Err(_) => continue,
-            };
-            if stream_tx.send(line).await.is_err() {
-                break;
+        let (synthesis_tx, mut synthesis_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(usize, String)>();
+        let mut synthesis_tx = Some(synthesis_tx);
+        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<live::TurnEvent>(16);
+        let synthesis_state = coordinator_state.clone();
+        let synthesis_cancelled = Arc::clone(&cancelled);
+        let synthesis_turn_id = coordinator_turn_id.clone();
+        let synthesis_worker = tokio::spawn(async move {
+            while let Some((segment_id, text)) = synthesis_rx.recv().await {
+                if synthesis_cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                if audio_tx
+                    .send(live::TurnEvent::SynthesisStarted {
+                        turn_id: synthesis_turn_id.clone(),
+                        segment_id,
+                        text: text.clone(),
+                        started_at_ms: live_event_time_ms(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                let mut segment_request = synthesis.clone();
+                segment_request.text = text.clone();
+                match synthesize_live_speech(&synthesis_state, segment_request).await {
+                    Ok(output) if !synthesis_cancelled.load(Ordering::Acquire) => {
+                        let metadata = json!({
+                            "engine": output.engine_key,
+                            "device": output.device.kind(),
+                            "device_index": output.device.index(),
+                            "sample_rate_hz": output.sample_rate_hz,
+                            "channels": output.channels,
+                            "sample_count": output.sample_count,
+                            "duration_seconds": output.audio_seconds,
+                            "queue_ms": output.queue_ms,
+                            "model_load_ms": output.load_ms,
+                            "synthesis_ms": output.synthesis_ms,
+                            "real_time_factor": output.real_time_factor,
+                            "resident_model_reused": !output.loaded_now,
+                            "pronunciation_warnings": output.pronunciation_warnings,
+                        });
+                        let event = live::TurnEvent::AudioSegmentReady {
+                            turn_id: synthesis_turn_id.clone(),
+                            segment_id,
+                            text,
+                            audio_base64: base64::engine::general_purpose::STANDARD
+                                .encode(output.wav),
+                            content_type: "audio/wav",
+                            sample_rate_hz: output.sample_rate_hz,
+                            duration_seconds: output.audio_seconds,
+                            synthesis_ms: output.synthesis_ms,
+                            speech_metadata: metadata,
+                            ready_at_ms: live_event_time_ms(),
+                        };
+                        if audio_tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => break,
+                    Err(message) => {
+                        let _ = audio_tx
+                            .send(live::TurnEvent::TurnFailed {
+                                turn_id: synthesis_turn_id.clone(),
+                                message,
+                                failed_at_ms: live_event_time_ms(),
+                            })
+                            .await;
+                        synthesis_cancelled.store(true, Ordering::Release);
+                        break;
+                    }
+                }
             }
+        });
+        let mut generation_done: Option<(String, String)> = None;
+        let mut source_open = true;
+        let mut audio_open = true;
+        let mut audio_segments = 0;
+        while source_open || audio_open {
+            tokio::select! {
+                event = source.recv(), if source_open => match event {
+                    Some(ref event @ live::TurnEvent::SegmentCommitted {
+                        segment_id,
+                        ref text,
+                        ..
+                    }) => {
+                        if send_live_event(&stream_tx, &event).await.is_err() {
+                            cancelled.store(true, Ordering::Release);
+                            break;
+                        }
+                        if synthesis_tx
+                            .as_ref()
+                            .expect("synthesis queue is open while generation is open")
+                            .send((segment_id, text.clone()))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some(ref event @ live::TurnEvent::GenerationCompleted {
+                        ref generated_text,
+                        ref committed_text,
+                        ..
+                    }) => {
+                        generation_done = Some((generated_text.clone(), committed_text.clone()));
+                        let _ = send_live_event(&stream_tx, &event).await;
+                        source_open = false;
+                        synthesis_tx.take();
+                    }
+                    Some(event) => {
+                        if send_live_event(&stream_tx, &event).await.is_err() {
+                            cancelled.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                    None => {
+                        source_open = false;
+                        synthesis_tx.take();
+                    }
+                },
+                event = audio_rx.recv(), if audio_open => match event {
+                    Some(event) => {
+                        if matches!(event, live::TurnEvent::AudioSegmentReady { .. }) {
+                            audio_segments += 1;
+                        }
+                        if send_live_event(&stream_tx, &event).await.is_err() {
+                            cancelled.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                    None => audio_open = false,
+                },
+            }
+            if !source_open && synthesis_worker.is_finished() && audio_rx.is_empty() {
+                audio_open = false;
+            }
+        }
+        synthesis_tx.take();
+        let _ = synthesis_worker.await;
+        while let Ok(event) = audio_rx.try_recv() {
+            if matches!(event, live::TurnEvent::AudioSegmentReady { .. }) {
+                audio_segments += 1;
+            }
+            let _ = send_live_event(&stream_tx, &event).await;
+        }
+        if !cancelled.load(Ordering::Acquire)
+            && let Some((generated_text, committed_text)) = generation_done
+        {
+            let _ = send_live_event(
+                &stream_tx,
+                &live::TurnEvent::TurnCompleted {
+                    turn_id: coordinator_turn_id,
+                    generated_text,
+                    committed_text,
+                    audio_segments,
+                    completed_at_ms: live_event_time_ms(),
+                },
+            )
+            .await;
         }
         if let Ok(mut turns) = registry.lock() {
             turns.remove(&turn_id);
@@ -441,6 +612,105 @@ async fn start_live_turn(
         .header("X-Accel-Buffering", "no")
         .body(body)
         .unwrap()
+}
+
+async fn send_live_event(
+    sink: &tokio::sync::mpsc::Sender<String>,
+    event: &live::TurnEvent,
+) -> Result<(), tokio::sync::mpsc::error::SendError<String>> {
+    let line = serde_json::to_string(event).unwrap_or_else(|error| {
+        serde_json::to_string(&json!({
+            "type": "turn_failed",
+            "message": format!("serializing live event failed: {error}"),
+        }))
+        .unwrap()
+    });
+    sink.send(format!("{line}\n")).await
+}
+
+fn live_event_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".into())
+}
+
+async fn synthesize_live_speech(
+    state: &AppState,
+    payload: SpeakRequest,
+) -> Result<ResidentSynthesisOutput, String> {
+    validate_speak_request(&payload)?;
+    let context = resident_synthesis_context(state, &payload)?;
+    let speech_device = resident_speech_device_for(&payload, state.speech_device)
+        .map_err(|error| error.to_string())?;
+    let capabilities = speech_backend_capabilities(
+        &resolve_mortar_home(),
+        payload.backend.as_deref().unwrap_or("burn"),
+        payload.model.as_deref(),
+        speech_device,
+        payload.sample_rate_hz.unwrap_or(24_000),
+    )
+    .map_err(|error| error.to_string())?;
+    validate_declared_speech_controls(
+        &payload,
+        &speech_control_discovery(
+            payload.backend.as_deref().unwrap_or("burn"),
+            &capabilities,
+            speech_device,
+        ),
+    )?;
+    capabilities
+        .validate(&unified_synthesis_request(
+            &payload,
+            &context,
+            speech_device,
+        ))
+        .map_err(|error| error.to_string())?;
+    let backend = payload.backend.as_deref().unwrap_or("burn");
+    if let Some(error) =
+        speech_backend_installation_error(&resolve_mortar_home(), backend, payload.model.as_deref())
+    {
+        return Err(format!("selected synthesis path is unavailable: {error}"));
+    }
+    verify_catalog_backend(&resolve_mortar_home(), backend, payload.model.as_deref())
+        .map_err(|error| format!("selected synthesis path is not verified: {error:#}"))?;
+    let queued_at = std::time::Instant::now();
+    let permit = Arc::clone(&state.speech_admission.permits)
+        .acquire_owned()
+        .await
+        .map_err(|_| "speech runtime admission is closed".to_string())?;
+    let registry = Arc::clone(&state.speech);
+    let phase = Arc::clone(&state.speech_phase);
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _phase_reset = SpeechPhaseReset(Arc::clone(&phase));
+        let mut service = registry
+            .lock()
+            .map_err(|_| "resident speech registry lock is poisoned".to_string())?;
+        let queue_ms = queued_at.elapsed().as_secs_f64() * 1_000.0;
+        let mut output = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            service.synthesize(&payload, &context, &phase, speech_device)
+        }))
+        .map_err(|panic_payload| {
+            format!(
+                "resident synthesis panicked: {}",
+                panic_message(panic_payload.as_ref())
+            )
+        })?
+        .map_err(|error| format!("{error:#}"))?;
+        output.queue_ms = queue_ms;
+        Ok::<_, String>(output)
+    })
+    .await
+    .map_err(|error| format!("resident synthesis task failed: {error}"))?
 }
 
 async fn cancel_live_turn(State(state): State<AppState>, Path(turn_id): Path<String>) -> Response {

@@ -8,7 +8,7 @@ pub use varieties::{
     builtin_languages, builtin_varieties, canonical_variety_id, language_tag_for_variety,
     variety_by_code, wiktionary_language_for_variety,
 };
-pub use varieties::{english, esperanto, french, german, greek, latin, sanskrit, spanish};
+pub use varieties::{chukchi, english, esperanto, french, german, greek, latin, sanskrit, spanish};
 
 #[cfg(test)]
 mod tests {
@@ -28,6 +28,8 @@ mod tests {
         assert_eq!(canonical_variety_id("rp").unwrap().0, "en-GB-RP");
         assert!(variety_by_code("en-US").is_some());
         assert!(variety_by_code("eo").is_some());
+        assert_eq!(canonical_variety_id("chukchi").unwrap().0, "ckt");
+        assert_eq!(canonical_variety_id("ckt-Cyrl").unwrap().0, "ckt");
         assert_eq!(canonical_variety_id("fra").unwrap().0, "fr-FR-Standard");
         assert_eq!(canonical_variety_id("Fr-fr").unwrap().0, "fr-FR-Standard");
         assert_eq!(canonical_variety_id("deu").unwrap().0, "de-DE-Standard");
@@ -138,7 +140,7 @@ mod tests {
                 .iter()
                 .map(|language| language.id.0.as_str())
                 .collect::<Vec<_>>(),
-            ["en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
+            ["ckt", "en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
         );
         let published_language_ids = published_languages
             .iter()

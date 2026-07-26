@@ -8,17 +8,17 @@ use std::time::Instant;
 
 use crate::DeviceArg;
 use speaking::{
-    phoneme_default_phone_display_symbol, phonemicizer_for_variety, EvidenceProvenance,
-    EvidenceSource, PhonemicizeOutput, PhonemicizeRequest, PronunciationWarning,
-    PronunciationWarningKind, ProsodyTrack, SpeakerId, SpeakerReference, SpeakerReferenceSource,
-    Spec, StyleRef, StyleSource, UtteranceId, UtterancePlan, VarietyId,
+    EvidenceProvenance, EvidenceSource, PhonemicizeOutput, PhonemicizeRequest,
+    PronunciationWarning, PronunciationWarningKind, ProsodyTrack, SpeakerId, SpeakerReference,
+    SpeakerReferenceSource, Spec, StyleRef, StyleSource, UtteranceId, UtterancePlan, VarietyId,
+    phoneme_default_phone_display_symbol, phonemicizer_for_variety,
 };
 use speech::LinguisticProjector as _;
 use speech::SpeechSynthesisEngine as _;
 use styletts2::{
-    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
-    validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
-    StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
+    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan, styletts2_en_us_symbol_set,
+    styletts2_text_for_symbols, validate_styletts2_plan,
 };
 use tongues_tts as speech;
 
@@ -29,6 +29,7 @@ const DEFAULT_STYLE_ALPHA: f32 = 0.3;
 const DEFAULT_STYLE_BETA: f32 = 0.1;
 const DEFAULT_SPEED: f64 = 1.0;
 const DEFAULT_FAIRSEQ_MMS_MODEL: &str = "fairseq-mms-vits-eng";
+const DEFAULT_CHUKCHI_FAIRSEQ_MMS_MODEL: &str = "fairseq-mms-vits-ckt";
 
 #[derive(Debug, Args, Clone)]
 pub struct SpeakCommand {
@@ -1495,7 +1496,7 @@ fn load_backend(
             let requested = command
                 .model
                 .as_deref()
-                .unwrap_or(DEFAULT_FAIRSEQ_MMS_MODEL);
+                .unwrap_or_else(|| default_fairseq_mms_model(&command.variety));
             let catalog = speech::ModelCatalog::embedded()?;
             let entry = catalog
                 .find(requested)
@@ -1701,7 +1702,7 @@ fn load_backend(
         SpeakBackend::Onnx => {
             #[cfg(feature = "onnx-tts")]
             {
-                use speech::{voice_config_path, OnnxSpeechBackend, VoiceConfig};
+                use speech::{OnnxSpeechBackend, VoiceConfig, voice_config_path};
                 let selected_model = crate::models::selected_voice_model_bundle()?.id.to_string();
                 let primary_model = crate::models::ensure_voice_model_available()?;
                 let config_path = voice_config_path(&primary_model);
@@ -1732,6 +1733,18 @@ fn load_backend(
             cold_start_ms,
         },
     ))
+}
+
+fn default_fairseq_mms_model(variety: &str) -> &'static str {
+    if speaking::canonical_variety_id(variety)
+        .as_ref()
+        .map(|id| id.0.as_str())
+        == Some("ckt")
+    {
+        DEFAULT_CHUKCHI_FAIRSEQ_MMS_MODEL
+    } else {
+        DEFAULT_FAIRSEQ_MMS_MODEL
+    }
 }
 
 pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
@@ -2532,7 +2545,7 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     );
     #[cfg(feature = "onnx-tts")]
     {
-        use speech::{voice_config_path, VoiceConfig};
+        use speech::{VoiceConfig, voice_config_path};
         let primary_model = crate::models::ensure_voice_model_available()?;
         let config_path = voice_config_path(&primary_model);
         let config = VoiceConfig::from_json_file(&config_path)?;
@@ -2748,8 +2761,8 @@ impl AudioStreamPlayer {
     pub(crate) fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         use std::sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
         };
 
         let host = cpal::default_host();
@@ -2931,6 +2944,20 @@ impl AudioStreamPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fairseq_defaults_follow_the_pronunciation_variety() {
+        assert_eq!(
+            default_fairseq_mms_model("en-US"),
+            "fairseq-mms-vits-eng"
+        );
+        for variety in ["ckt", "chukchi", "ckt-Cyrl"] {
+            assert_eq!(
+                default_fairseq_mms_model(variety),
+                "fairseq-mms-vits-ckt"
+            );
+        }
+    }
 
     fn demo_command(output_dir: Option<PathBuf>) -> SpeechDemoCommand {
         SpeechDemoCommand {

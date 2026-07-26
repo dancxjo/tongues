@@ -9,15 +9,18 @@ use owo_colors::OwoColorize;
 use sha2::{Digest, Sha256};
 
 use crate::models::manifest::{
-    bundle_archive_members, bundle_entrypoint_relative_path, bundle_primary_asset,
-    bundle_required_assets, find_archive, find_asset, find_bundle, ModelArchive, ModelAsset,
-    ModelBundle, ModelKind, DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
+    DEFAULT_ACOUSTIC_MODEL_ID, DEFAULT_ASR_MODEL_ID, DEFAULT_FACE_MODEL_ID,
     DEFAULT_NEURAL_VOCODER_ID, DEFAULT_STYLETTS2_MODEL_ID, DEFAULT_VOICE_MODEL_ID, MODEL_BUNDLES,
+    ModelArchive, ModelAsset, ModelBundle, ModelKind, bundle_archive_members,
+    bundle_entrypoint_relative_path, bundle_primary_asset, bundle_required_assets, find_archive,
+    find_asset, find_bundle,
 };
 use crate::models::selection::{
     asset_path, is_non_empty_file, resolve_mortar_home, selected_bundle, selected_llm_model_path,
     selected_llm_projector_path, selected_voice_model_bundle, write_selected_model,
 };
+
+const DEFAULT_MMS_SPEECH_MODEL_IDS: &[&str] = &["fairseq-mms-vits-eng", "fairseq-mms-vits-ckt"];
 
 #[derive(Debug, Clone)]
 pub struct FaceModelPaths {
@@ -216,7 +219,7 @@ fn fetch_all_runtime_bundles(force: bool) -> Result<()> {
 }
 
 fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
-    Ok(vec![
+    let mut bundles = vec![
         selected_bundle()?,
         find_bundle(DEFAULT_FACE_MODEL_ID)
             .context("default face model bundle is not registered")?,
@@ -227,7 +230,14 @@ fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
             .context("default neural vocoder bundle is not registered")?,
         find_bundle(DEFAULT_VOICE_MODEL_ID)
             .context("default voice model bundle is not registered")?,
-    ])
+    ];
+    for id in DEFAULT_MMS_SPEECH_MODEL_IDS {
+        bundles.push(
+            find_bundle(id)
+                .with_context(|| format!("default MMS model `{id}` is not registered"))?,
+        );
+    }
+    Ok(bundles)
 }
 
 fn fetch_bundle(bundle: &ModelBundle, force: bool) -> Result<()> {
@@ -636,6 +646,8 @@ mod tests {
         assert!(ids.contains(&DEFAULT_ACOUSTIC_MODEL_ID));
         assert!(ids.contains(&DEFAULT_NEURAL_VOCODER_ID));
         assert!(ids.contains(&DEFAULT_VOICE_MODEL_ID));
+        assert!(ids.contains(&"fairseq-mms-vits-eng"));
+        assert!(ids.contains(&"fairseq-mms-vits-ckt"));
     }
 
     #[test]

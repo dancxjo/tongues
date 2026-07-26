@@ -1,6 +1,7 @@
 dataset_id = "all-gutenberg-v0"
 varieties = [
   "en-US",
+  "ckt",
   "fr-FR-Standard",
   "de-DE-Standard",
   "es-ES-Castilian",

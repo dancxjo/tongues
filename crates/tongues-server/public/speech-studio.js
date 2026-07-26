@@ -481,7 +481,7 @@
                         <div>
                             <p class="eyebrow">Streaming conversation</p>
                             <h2 id="live-heading">Hear the answer while it is written</h2>
-                            <p>Generated text appears immediately. Stable phrases enter speech, then one Web Audio timeline.</p>
+                            <p>The server streams generated text and synthesized phrase audio together; the browser keeps those audio segments on one Web Audio timeline.</p>
                         </div>
                         <span id="live-state" class="runtime-badge" data-state="ready">Ready</span>
                     </div>
@@ -2435,7 +2435,13 @@
 
     function appendLiveJournal(event) {
         const journal = byId('live-journal');
-        const line = JSON.stringify(event);
+        const printable = event.audio_base64
+            ? {
+                ...event,
+                audio_base64: `[${event.audio_base64.length} base64 characters; included in turn stream]`,
+            }
+            : event;
+        const line = JSON.stringify(printable);
         journal.textContent = journal.textContent === 'No turn events yet.'
             ? line
             : `${journal.textContent}\n${line}`;
@@ -2539,37 +2545,18 @@
         renderLiveAssistant();
     }
 
-    async function synthesizeLiveSegment(event, generation, signal) {
+    async function scheduleLiveAudioSegment(event, generation, signal) {
         if (generation !== state.liveGeneration || signal.aborted) return;
-        appendLiveJournal({
-            type: 'synthesis_started',
-            turn_id: state.liveTurn?.id,
-            segment_id: event.segment_id,
-            text: event.text,
-            at_ms: Date.now(),
-        });
-        const path = selectedPath();
-        const result = await requestSynthesis(
-            path,
-            state.values,
-            currentSynthesisContext(event.text, path),
-            { signal, waitForCapacity: true },
-        );
-        if (generation !== state.liveGeneration || signal.aborted) return;
+        const binary = window.atob(event.audio_base64);
+        const encoded = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+            encoded[index] = binary.charCodeAt(index);
+        }
         const context = liveAudioContext();
         await context.resume();
-        const audioBuffer = await context.decodeAudioData(await result.blob.arrayBuffer());
+        const audioBuffer = await context.decodeAudioData(encoded.buffer);
         if (generation !== state.liveGeneration || signal.aborted) return;
         state.liveAudioBuffers.push(audioBuffer);
-        appendLiveJournal({
-            type: 'audio_segment_ready',
-            turn_id: state.liveTurn?.id,
-            segment_id: event.segment_id,
-            duration_seconds: audioBuffer.duration,
-            speech_request: result.payload,
-            speech_metadata: result.metadata,
-            at_ms: Date.now(),
-        });
         const source = context.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(context.destination);
@@ -2610,17 +2597,20 @@
         state.liveSegments.set(event.segment_id, { ...event, playback: 'planned' });
         state.liveCommitted += event.text;
         renderLiveAssistant();
+    }
+
+    function enqueueLiveAudio(event, generation, signal) {
         state.liveSynthesisTail = state.liveSynthesisTail
-            .then(() => synthesizeLiveSegment(event, generation, signal))
+            .then(() => scheduleLiveAudioSegment(event, generation, signal))
             .catch((error) => {
                 if (error.name !== 'AbortError' && generation === state.liveGeneration) {
                     appendLiveJournal({
-                        type: 'synthesis_failed',
+                        type: 'audio_decode_failed',
                         segment_id: event.segment_id,
                         message: error.message,
                         at_ms: Date.now(),
                     });
-                    showError(`Live synthesis failed: ${error.message}`, byId('live-error'));
+                    showError(`Live audio decoding failed: ${error.message}`, byId('live-error'));
                     markLiveSegment(event.segment_id, 'failed');
                 }
             });
@@ -2700,6 +2690,7 @@
     async function startLiveTurn(userText) {
         const path = selectedPath();
         if (!path?.runnable) throw new Error('Choose a ready speech recipe first.');
+        await liveAudioContext().resume();
         const provider = byId('live-provider').value;
         const model = byId('live-model').value;
         if (!provider || !model) throw new Error('Choose an available text provider and model.');
@@ -2716,6 +2707,12 @@
         byId('live-stop').disabled = false;
         byId('live-send').disabled = true;
         state.liveMessages.push({ role: 'user', content: userText });
+        const synthesis = buildPayload(
+            path,
+            state.values,
+            currentSynthesisContext(userText, path),
+        );
+        for (const field of ['pitch', 'energy', 'durations']) delete synthesis[field];
         const response = await fetch('/api/live/turn', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2727,6 +2724,7 @@
                 messages: state.liveMessages,
                 response_instructions: byId('live-instructions').value.trim(),
                 speech: speechInstructionForPath(path, selectedVariety(path)),
+                synthesis,
             }),
         });
         if (!response.ok) throw new Error(await response.text());
@@ -2739,8 +2737,11 @@
                 renderLiveAssistant();
             } else if (event.type === 'segment_committed') {
                 enqueueLiveSegment(event, generation, controller.signal);
-            } else if (event.type === 'turn_completed') {
+            } else if (event.type === 'audio_segment_ready') {
+                enqueueLiveAudio(event, generation, controller.signal);
+            } else if (event.type === 'generation_completed') {
                 state.liveFinalTokenAt = performance.now();
+            } else if (event.type === 'turn_completed') {
                 completedEvent = event;
             } else if (event.type === 'turn_failed') {
                 throw new Error(event.message);

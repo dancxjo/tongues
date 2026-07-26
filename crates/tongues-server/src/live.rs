@@ -159,6 +159,13 @@ impl OllamaProvider {
         #[derive(Deserialize)]
         struct Tag {
             model: String,
+            #[serde(default)]
+            details: TagDetails,
+        }
+        #[derive(Default, Deserialize)]
+        struct TagDetails {
+            #[serde(default)]
+            family: String,
         }
         let response = self
             .client
@@ -172,6 +179,10 @@ impl OllamaProvider {
             .await?
             .models
             .into_iter()
+            .filter(|model| {
+                !model.model.to_ascii_lowercase().contains("embed")
+                    && !model.details.family.to_ascii_lowercase().contains("embed")
+            })
             .map(|model| model.model)
             .collect::<Vec<_>>();
         models.sort();
@@ -674,10 +685,7 @@ mod tests {
         );
         assert_eq!(
             segmenter.push("0.\" Then she left. "),
-            [
-                "Dr. Ada said, \"Use 3.14, not 3.0.\" ",
-                "Then she left. "
-            ]
+            ["Dr. Ada said, \"Use 3.14, not 3.0.\" ", "Then she left. "]
         );
         assert!(segmenter.finish().is_empty());
     }
@@ -714,5 +722,71 @@ mod tests {
         output.extend(segmenter.finish());
         assert_eq!(output.concat(), input);
         assert_eq!(output.iter().collect::<BTreeSet<_>>().len(), output.len());
+    }
+
+    #[tokio::test]
+    async fn deterministic_turn_streams_text_before_generation_finishes() {
+        let request = ChatTurnRequest {
+            turn_id: "turn-stream-order".into(),
+            provider: "deterministic".into(),
+            model: "fixture-live-v1".into(),
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "streaming speech".into(),
+            }],
+            response_instructions: String::new(),
+            speech: None,
+        };
+        let mut events = spawn_turn(request, Arc::new(AtomicBool::new(false)));
+        let mut generated = String::new();
+        let mut committed = String::new();
+        let mut saw_delta = false;
+        let mut saw_segment_before_done = false;
+        while let Some(event) = events.recv().await {
+            match event {
+                TurnEvent::TextDelta { delta, .. } => {
+                    saw_delta = true;
+                    generated.push_str(&delta);
+                }
+                TurnEvent::SegmentCommitted { text, .. } => {
+                    assert!(saw_delta);
+                    saw_segment_before_done = true;
+                    committed.push_str(&text);
+                }
+                TurnEvent::GenerationCompleted {
+                    generated_text,
+                    committed_text,
+                    ..
+                } => {
+                    assert!(saw_segment_before_done);
+                    assert_eq!(generated_text, generated);
+                    assert_eq!(committed_text, generated);
+                    assert_eq!(committed, generated);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        panic!("deterministic turn ended without generation_completed");
+    }
+
+    #[test]
+    fn audio_event_serializes_as_a_typed_stream_record() {
+        let event = TurnEvent::AudioSegmentReady {
+            turn_id: "turn-audio".into(),
+            segment_id: 2,
+            text: "Hello.".into(),
+            audio_base64: "UklGRg==".into(),
+            content_type: "audio/wav",
+            sample_rate_hz: 24_000,
+            duration_seconds: 0.5,
+            synthesis_ms: 20.0,
+            speech_metadata: serde_json::json!({ "resident_model_reused": true }),
+            ready_at_ms: 42,
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["type"], "audio_segment_ready");
+        assert_eq!(value["segment_id"], 2);
+        assert_eq!(value["content_type"], "audio/wav");
     }
 }

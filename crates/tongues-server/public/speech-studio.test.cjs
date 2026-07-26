@@ -251,9 +251,12 @@ test('live generation inherits language script and normalization from the speech
     });
 });
 
-test('live workflow uses streamed NDJSON, one Web Audio clock, and unified cancellation', () => {
+test('live workflow consumes server-produced audio on one Web Audio clock with unified cancellation', () => {
     assert.match(studioSource, /fetch\('\/api\/live\/turn'/);
     assert.match(studioSource, /response\.body\.getReader\(\)/);
+    assert.match(studioSource, /window\.atob\(event\.audio_base64\)/);
+    assert.match(studioSource, /event\.type === 'audio_segment_ready'/);
+    assert.match(studioSource, /synthesis,\s*\}\),/);
     assert.match(studioSource, /context\.createBufferSource\(\)/);
     assert.match(studioSource, /Math\.max\(context\.currentTime \+ 0\.035, state\.liveNextAudioTime\)/);
     assert.match(studioSource, /turn\.controller\.abort\(\)/);

@@ -163,7 +163,7 @@ fn default_gutenberg_urls() -> Vec<String> {
 }
 
 fn default_varieties() -> Vec<String> {
-    vec!["en-US".to_string()]
+    vec!["en-US".to_string(), "ckt".to_string()]
 }
 
 fn default_include_synthetic() -> bool {
@@ -4500,6 +4500,12 @@ mod tests {
             config_fingerprint(&base).expect("base fingerprint"),
             config_fingerprint(&changed).expect("changed fingerprint")
         );
+    }
+
+    #[test]
+    fn default_varieties_keep_chukchi_beside_english() {
+        assert_eq!(default_varieties(), ["en-US", "ckt"]);
+        assert_eq!(Head2PhonesConfig::default().varieties, ["en-US", "ckt"]);
     }
 
     #[test]

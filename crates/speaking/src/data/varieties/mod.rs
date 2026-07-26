@@ -1,3 +1,4 @@
+pub mod chukchi;
 pub mod english;
 pub mod esperanto;
 pub mod french;
@@ -22,6 +23,7 @@ pub const DEFAULT_SPEAKING_VARIETY: &str = "en-US";
 pub const PRONUNCIATION_PIPELINE_VARIETY_DATA: &str = "variety_data";
 
 pub const SYNTAX_PROFILE_ENGLISH: &str = "english";
+pub const SYNTAX_PROFILE_CHUKCHI: &str = "chukchi";
 pub const SYNTAX_PROFILE_ESPERANTO: &str = "esperanto";
 pub const SYNTAX_PROFILE_FRENCH: &str = "french";
 pub const SYNTAX_PROFILE_GERMAN: &str = "german";
@@ -31,6 +33,7 @@ pub const SYNTAX_PROFILE_SANSKRIT: &str = "sanskrit";
 pub const SYNTAX_PROFILE_SPANISH: &str = "spanish";
 
 pub const ORTHOGRAPHY_PROFILE_ALIAS: &str = "alias";
+pub const ORTHOGRAPHY_PROFILE_CHUKCHI: &str = "chukchi_cyrillic";
 pub const ORTHOGRAPHY_PROFILE_ESPERANTO: &str = "esperanto";
 pub const ORTHOGRAPHY_PROFILE_FRENCH: &str = "french";
 pub const ORTHOGRAPHY_PROFILE_GERMAN: &str = "german";
@@ -518,6 +521,7 @@ fn find_variety_registration(code: &str) -> Option<&'static VarietyRegistration>
 
 fn builtin_variety_registrations() -> impl Iterator<Item = &'static VarietyRegistration> {
     [
+        chukchi::REGISTRATIONS,
         english::REGISTRATIONS,
         esperanto::REGISTRATIONS,
         french::REGISTRATIONS,
