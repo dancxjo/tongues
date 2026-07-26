@@ -343,8 +343,13 @@ fn print_timeline(
                     .join(" ")
             ),
             SimulatorEventKind::VerificationEvaluated { result } => println!(
-                "[verification] #{:02} status={} score={:.3}: {}",
-                event.sequence, result.status, result.score, result.reason
+                "[verification] #{:02} {:?}: evidence={} phone_error_rate={:.3} morpheme_agreement={:.3} latency_ms={:.1}",
+                event.sequence,
+                result.decision,
+                result.evidence.len(),
+                result.metrics.phone_error_rate,
+                result.metrics.morpheme_agreement,
+                result.metrics.verification_latency_ms,
             ),
         }
     }
