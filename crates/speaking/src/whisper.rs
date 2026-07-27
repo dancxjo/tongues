@@ -1,5 +1,7 @@
 #[cfg(feature = "asr-whisper")]
 mod imp {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
     use whisper_cpp_plus::whisper_cpp_plus_sys as whisper_ffi;
@@ -7,8 +9,9 @@ mod imp {
 
     use crate::LanguageId;
     use crate::asr::{
-        AudioFrame, SpeechRecognizer, StreamingPartialKind, StreamingRecognition,
-        StreamingRecognizerBackend, StreamingSpeechRecognizer,
+        AsrDecodingControl, AsrProvider, AsrProviderCapabilities, AsrSession, AsrSessionConfig,
+        AsrStreamingCapability, AudioFrame, SpeechRecognizer, StreamingPartialKind,
+        StreamingRecognition, StreamingRecognizerBackend, StreamingSpeechRecognizer,
     };
     use crate::event::StreamEvent;
     use crate::language_routing::{
@@ -29,6 +32,7 @@ mod imp {
         sample_rate_hz: u32,
         input_silence_padding_ms: u64,
         candidate_tracker: TranscriptCandidateTracker,
+        language: Option<String>,
     }
 
     pub struct WhisperLanguageIdentifier {
@@ -154,7 +158,13 @@ mod imp {
                 sample_rate_hz: 16_000,
                 input_silence_padding_ms,
                 candidate_tracker: TranscriptCandidateTracker::new(),
+                language: None,
             })
+        }
+
+        pub fn with_language(mut self, language: impl Into<String>) -> Self {
+            self.language = Some(language.into());
+            self
         }
 
         fn accept_frame(&mut self, frame: &AudioFrame) -> anyhow::Result<()> {
@@ -181,9 +191,12 @@ mod imp {
             let padding_ms = self.input_silence_padding_ms;
             let audio = pad_samples_with_silence(audio, self.sample_rate_hz, padding_ms);
             let mut state = WhisperState::new(&self.ctx)?;
-            let params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
                 .token_timestamps(true)
                 .split_on_word(true);
+            if let Some(language) = self.language.as_deref() {
+                params = params.language(language);
+            }
             state.full(params, &audio)?;
             let transcript = transcript_from_whisper_state(&state, padding_ms)?;
             let text = transcript.text.trim();
@@ -337,6 +350,124 @@ mod imp {
 
         fn backend(&self) -> StreamingRecognizerBackend {
             WHISPER_ROLLING_WINDOW_BACKEND
+        }
+    }
+
+    pub struct WhisperAsrProvider {
+        model_path: PathBuf,
+        model_id: String,
+        languages: Vec<LanguageId>,
+        model_license: Option<String>,
+        model_checksum: Option<String>,
+        loaded: bool,
+    }
+
+    impl WhisperAsrProvider {
+        pub fn new(
+            model_path: impl Into<PathBuf>,
+            model_id: impl Into<String>,
+            languages: Vec<LanguageId>,
+        ) -> anyhow::Result<Self> {
+            let model_id = model_id.into();
+            anyhow::ensure!(!model_id.is_empty(), "Whisper ASR model ID is empty");
+            anyhow::ensure!(
+                !languages.is_empty(),
+                "Whisper ASR provider supports no languages"
+            );
+            Ok(Self {
+                model_path: model_path.into(),
+                model_id,
+                languages,
+                model_license: None,
+                model_checksum: None,
+                loaded: false,
+            })
+        }
+
+        pub fn with_model_metadata(
+            mut self,
+            license: Option<String>,
+            checksum: Option<String>,
+        ) -> Self {
+            self.model_license = license;
+            self.model_checksum = checksum;
+            self
+        }
+
+        pub fn model_path(&self) -> &Path {
+            &self.model_path
+        }
+    }
+
+    impl AsrProvider for WhisperAsrProvider {
+        fn capabilities(&self) -> AsrProviderCapabilities {
+            AsrProviderCapabilities {
+                provider_id: "whisper.cpp".into(),
+                model_id: self.model_id.clone(),
+                installed: self.model_path.is_file(),
+                languages: self.languages.clone(),
+                streaming: AsrStreamingCapability::OfflineOnly,
+                decoding_controls: BTreeSet::from([AsrDecodingControl::Timestamps]),
+                maximum_concurrent_sessions: 1,
+                estimated_memory_mb_per_session: 2_048,
+                model_license: self.model_license.clone(),
+                model_checksum: self.model_checksum.clone(),
+            }
+        }
+
+        fn is_loaded(&self) -> bool {
+            self.loaded
+        }
+
+        fn load(&mut self) -> anyhow::Result<()> {
+            anyhow::ensure!(
+                self.model_path.is_file(),
+                "Whisper model is not installed at {}",
+                self.model_path.display()
+            );
+            let _recognizer = WhisperSpeechRecognizer::new_quiet(&self.model_path)?;
+            self.loaded = true;
+            Ok(())
+        }
+
+        fn unload(&mut self) -> anyhow::Result<()> {
+            self.loaded = false;
+            Ok(())
+        }
+
+        fn start_session(
+            &mut self,
+            config: &AsrSessionConfig,
+        ) -> anyhow::Result<Box<dyn AsrSession>> {
+            anyhow::ensure!(self.loaded, "Whisper ASR provider is not loaded");
+            let mut recognizer = WhisperSpeechRecognizer::new_quiet(&self.model_path)?;
+            if let Some(language) = &config.language {
+                recognizer = recognizer.with_language(language.0.clone());
+            }
+            Ok(Box::new(WhisperAsrSession { recognizer }))
+        }
+    }
+
+    struct WhisperAsrSession {
+        recognizer: WhisperSpeechRecognizer,
+    }
+
+    impl AsrSession for WhisperAsrSession {
+        fn push_audio(&mut self, frame: &AudioFrame) -> anyhow::Result<Vec<StreamEvent>> {
+            self.recognizer.push_frame(frame)?;
+            Ok(Vec::new())
+        }
+
+        fn finish(&mut self) -> anyhow::Result<Vec<StreamEvent>> {
+            let mut events = self.recognizer.flush()?.events;
+            events.push(StreamEvent::Completed);
+            Ok(events)
+        }
+
+        fn cancel(&mut self, reason: &str) -> anyhow::Result<Vec<StreamEvent>> {
+            Ok(vec![StreamEvent::Cancelled {
+                reason: reason.into(),
+            }])
         }
     }
 
