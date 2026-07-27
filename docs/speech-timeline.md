@@ -5,12 +5,23 @@ distinct sibling view. The node graph configures execution; WaveDeck inspects
 and corrects session evidence. Both live ASR and saved files use
 `SpeechTimelineSession` schema version 1.
 
+Sessions may carry immutable typed attachments. A
+`phonetic_segmentation` attachment retains the complete versioned artifact,
+including untimed unknown/weak/missing rows, while accepted intervals project
+to distinct `phone` and `phoneme` evidence modalities. Alignment edges connect
+those spans to source audio, parent words/transcripts, and diarization spans.
+
 The baseline `evidence` array is immutable. Transcript replacement, boundary
 movement, annotation, segmentation, and audio-region edits append
 `TimelineOperation` records containing a stable operation ID, actor, origin,
 time, source span/event IDs, and optional reason. Undo and redo are themselves
 serialized control operations. Replaying the log against the baseline produces
 the edited projection deterministically.
+
+Phone/phoneme symbol proposals use `phonetic_symbol_replace`; boundary proposals
+reuse `alignment_move_boundary`. The edited span records the operation ID,
+actor, time, correction kind, and `boundary_origin = corrected` when timing was
+changed. The source span and attached segmentation artifact remain unchanged.
 
 The workbench presents original and edited projections side by side. It can
 export raw evidence, corrected transcript/timing, the edit log, or a complete
@@ -28,6 +39,11 @@ The reduced fixture
 `fixtures/timeline/listenbury_user_interrupts_v1.json` records the Listenbury
 playback → overlap → interruption → yield ordering. It replaces the much larger
 viewer payload while retaining the acceptance-relevant spans and provenance.
+
+`fixtures/timeline/phonetic-segmentation-inspection-v1.json` is the v1
+segmentation inspection/correction corpus. Run
+`scripts/phonetic-segmentation-v1-journey.sh` with `just serve` active to load
+it into the durable session API and print exact Tracks/WaveDeck deep links.
 
 WaveDeck's durable `/sessions/{session-id}/correct` route, graph/run return
 context, recovery behavior, and cross-workspace authority boundaries are
