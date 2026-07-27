@@ -14,6 +14,7 @@
         samples: [],
         emotions: [],
         audioInputCapabilities: null,
+        languageRoutingCapabilities: null,
         audioUrl: null,
         runtimeTimer: null,
         runtimePollController: null,
@@ -1368,6 +1369,7 @@
                     )).join(', ')
                     : (audioInput.device_discovery_error || 'No local microphone devices reported.')
             )}</p>
+            ${renderLanguageRoutingControls()}
             <div class="browser-mic-probe">
                 <label>VAD
                     <select id="browser-mic-vad">
@@ -1435,6 +1437,44 @@
                 stopBrowserMicProbe();
             });
         }
+    }
+
+    function renderLanguageRoutingControls() {
+        const capabilities = state.languageRoutingCapabilities;
+        if (!capabilities) return '<p>Language routing capabilities unavailable.</p>';
+        const languages = [...new Set(
+            (capabilities.asr_providers || []).flatMap((provider) => provider.languages || []),
+        )].sort();
+        const detectorReady = (capabilities.detectors || []).some((detector) => detector.installed);
+        const policy = capabilities.default_switch_policy || {};
+        return `
+            <div class="language-routing-controls">
+                <h4>Recognition language routing</h4>
+                <label>Mode
+                    <select id="recognition-language-mode">
+                        <option value="fixed">Fixed language</option>
+                        <option value="detect" ${detectorReady ? '' : 'disabled'}>Auto-detect${detectorReady ? '' : ' (detector model not installed)'}</option>
+                    </select>
+                </label>
+                <label>Language
+                    <select id="recognition-language-fixed">
+                        ${languages.map((language) => `<option value="${escapeAttribute(language)}">${escapeHtml(language)}</option>`).join('')}
+                    </select>
+                </label>
+                <label>Minimum confidence
+                    <input id="recognition-language-confidence" type="number" min="0" max="1" step="0.05" value="${escapeAttribute(policy.minimum_confidence ?? 0.65)}">
+                </label>
+                <label>Minimum evidence (ms)
+                    <input id="recognition-language-evidence" type="number" min="0" step="50" value="${escapeAttribute(policy.minimum_evidence_ms ?? 300)}">
+                </label>
+                <label>Switch margin
+                    <input id="recognition-language-margin" type="number" min="0" max="1" step="0.05" value="${escapeAttribute(policy.switch_margin ?? 0.15)}">
+                </label>
+                <p>${detectorReady
+                    ? 'Detection evidence remains visible if ASR routing falls back.'
+                    : 'Auto-detect fails closed until the advertised detector model is installed; fixed-language routing remains available.'}</p>
+            </div>
+        `;
     }
 
     function setBrowserMicStatus(message, failed = false) {
@@ -2426,10 +2466,15 @@
     }
 
     async function loadAuxiliaryDiscovery() {
-        const [sampleResponse, emotionResponse, audioInputResponse] = await Promise.allSettled([
+        const [sampleResponse, emotionResponse, audioInputResponse, languageRoutingResponse] = await Promise.allSettled([
             fetch('/api/styletts2-samples').then((response) => response.json()),
             fetch('/api/emotions').then((response) => response.json()),
             fetch('/api/audio-input/capabilities', { cache: 'no-store' })
+                .then((response) => {
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                }),
+            fetch('/api/language-routing/capabilities', { cache: 'no-store' })
                 .then((response) => {
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return response.json();
@@ -2443,6 +2488,9 @@
             : [];
         state.audioInputCapabilities = audioInputResponse.status === 'fulfilled'
             ? audioInputResponse.value
+            : null;
+        state.languageRoutingCapabilities = languageRoutingResponse.status === 'fulfilled'
+            ? languageRoutingResponse.value
             : null;
     }
 

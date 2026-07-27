@@ -652,6 +652,10 @@ test('browser microphone capture crosses the shared bounded server input', () =>
     assert.match(studioSource, /message\.type === 'cleanup_compared'/);
     assert.match(studioSource, /Raw RMS/);
     assert.match(studioSource, /Browser-native echo cancellation/);
+    assert.match(studioSource, /\/api\/language-routing\/capabilities/);
+    assert.match(studioSource, /Recognition language routing/);
+    assert.match(studioSource, /Auto-detect fails closed/);
+    assert.match(studioSource, /minimum_confidence/);
     assert.match(stylesSource, /\.browser-mic-probe/);
 });
 
