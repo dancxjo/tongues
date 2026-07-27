@@ -1,4 +1,5 @@
 import {
+  catalogEntryForNode,
   connectionCompatibility,
   connectPorts,
   portsFor,
@@ -10,6 +11,8 @@ const NODE_WIDTH = 228;
 const NODE_HEIGHT = 126;
 const PORT_SPACING = 22;
 const AUTO_PAN_MARGIN = 44;
+const CARD_RENDER_THROTTLE_MS = 90;
+const CARD_COLLAPSED_HEIGHT = "3.2rem";
 
 export function signalFamily(valueType) {
   if (String(valueType).startsWith("audio")) return "audio";
@@ -43,6 +46,12 @@ function editableTarget(target) {
   return Boolean(target?.closest?.("input, textarea, select, [contenteditable=true]"));
 }
 
+function valueText(value) {
+  return value === null || value === undefined ? "" : Array.isArray(value) || typeof value === "object"
+    ? JSON.stringify(value)
+    : String(value);
+}
+
 function injectStyles(document) {
   if (document.querySelector("style[data-speech-patch-canvas]")) return;
   const style = document.createElement("style");
@@ -57,10 +66,48 @@ function injectStyles(document) {
     .patch-cable.signal-control{stroke:#ffca70;stroke-dasharray:3 5}
     .patch-cable.signal-error{stroke:#ff8c91;stroke-dasharray:2 4}
     .patch-cable.signal-artifact{stroke:#72b7ff;stroke-dasharray:14 4 3 4}
+    .patch-cable.edge-state-active{filter:drop-shadow(0 0 7px #76e2ce);stroke-width:5}
+    .patch-cable.edge-state-failed{stroke:#ff8c91;opacity:.88}
+    .patch-cable.edge-state-ready{opacity:1}
     .patch-cable.signal-data{stroke:#a6b7ca}
     .patch-cable.selected{stroke:#f7fffd;stroke-width:7;filter:drop-shadow(0 0 5px #76e2ce)}
     .patch-cable.invalid{stroke:#ffc86b}
     .patch-cable-preview{fill:none;stroke:#f7fffd;stroke-width:4;stroke-dasharray:8 5;pointer-events:none}
+    .patch-node-cards{position:absolute;inset:0;z-index:1;pointer-events:none}
+    .patch-node-card{position:absolute;transform:translate(-50%,-50%);width:${NODE_WIDTH}px;box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
+    .patch-node-card[data-state=collapsed]{height:${CARD_COLLAPSED_HEIGHT};max-height:${CARD_COLLAPSED_HEIGHT}}
+    .patch-node-card[data-state=expanded]{max-height:22rem}
+    .patch-node-card .patch-node-card-title{display:flex;align-items:start;justify-content:space-between;gap:.35rem}
+    .patch-node-card .patch-node-card-title strong{font-size:.76rem;line-height:1.15}
+    .patch-node-card .patch-node-card-title small{display:block;color:#9bb2c9;font-size:.68rem;line-height:1.2}
+    .patch-node-card .patch-node-card-meta{margin-top:.15rem;color:#9bb2c9;font-size:.66rem;display:grid;gap:.16rem}
+    .patch-node-card .patch-node-card-status{display:inline-flex;align-items:center;gap:.3rem;font-size:.66rem;padding:.1rem .33rem;border-radius:999px;border:1px solid #435a73}
+    .patch-node-card .patch-node-card-status.ready{border-color:#76e2ce;color:#76e2ce}
+    .patch-node-card .patch-node-card-status.loading{border-color:#dca3ff;color:#dca3ff}
+    .patch-node-card .patch-node-card-status.active{border-color:#ffca70;color:#ffca70}
+    .patch-node-card .patch-node-card-status.failed{border-color:#ff8c91;color:#ff8c91}
+    .patch-node-card .patch-node-card-status.inactive{border-color:#9caec6;color:#9caec6}
+    .patch-node-card .patch-node-card-status.bypassed{border-color:#ffc86b;color:#ffc86b}
+    .patch-node-card .patch-node-card-jacks{display:grid;gap:.1rem;font-size:.66rem;color:#95aac0}
+    .patch-node-card .patch-node-card-jacks ul{margin:.08rem 0 0;padding-left:1rem}
+    .patch-node-card .patch-node-card-runtime{margin-top:.2rem;padding:.14rem .3rem;background:#0f1823;border-radius:.3rem;font-size:.64rem;color:#dceaff;white-space:nowrap}
+    .patch-node-card .patch-node-card-actions{display:flex;gap:.28rem;flex-wrap:wrap;margin-top:.25rem}
+    .patch-node-card .patch-node-card-control{display:grid;gap:.18rem}
+    .patch-node-card .patch-node-card-control>span{display:block;color:#9cb2c9;font-size:.64rem}
+    .patch-node-card .patch-node-card-control select,
+    .patch-node-card .patch-node-card-control input{font-size:.7rem;padding:.22rem .3rem;border-radius:.32rem}
+    .patch-node-card .patch-node-card-control input[type=range]{padding:0}
+    .patch-node-card .patch-node-card-preview{margin-top:.2rem;color:#b8cce0;font-size:.62rem;line-height:1.2}
+    .patch-node-card button{font-size:.66rem;padding:.22rem .45rem}
+    .patch-node-card .patch-node-card-controls{display:grid;gap:.2rem}
+    .patch-node-card .patch-node-card-meter{margin-top:.16rem;height:.2rem;border-radius:999px;background:#0a1321;overflow:hidden;border:1px solid #40536a}
+    .patch-node-card .patch-node-card-meter span{display:block;height:100%;background:#70d6a4;width:0}
+    .patch-node-card .patch-node-card-badge{font-size:.62rem;padding:.1rem .3rem;border-radius:999px;background:#0a1321;border:1px solid #2c435e;display:inline-flex}
+    .patch-node-card .patch-node-card-toggle{white-space:nowrap}
+    .patch-node-card .patch-node-card-controls:focus-within{outline:2px solid #76e2ce;outline-offset:2px}
+    .patch-node-card button,.patch-node-card input,.patch-node-card select,.patch-node-card textarea{pointer-events:auto}
+    .patch-node-card[data-readonly=true]{opacity:.86}
+    .patch-node-card[data-node-bypassed=true],.patch-node-card[data-node-disabled=true]{opacity:.72}
     .patch-jack-wrap{position:absolute;display:flex;align-items:center;gap:.28rem;pointer-events:none;transform:translateY(-50%)}
     .patch-jack-wrap.input{flex-direction:row}.patch-jack-wrap.output{flex-direction:row-reverse;transform:translate(-100%,-50%)}
     .patch-jack-label{max-width:5.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:.08rem .25rem;border-radius:.25rem;background:#101923dc;color:#edf5ff;font-size:.68rem;line-height:1.25}
@@ -91,15 +138,25 @@ export function createPatchCanvas(options) {
     getDiscovery,
     getCatalog,
     nodeLabel,
-    getSelectedEdgeId,
-    isEdgeSelected = id => getSelectedEdgeId() === id,
-    onSelectNode,
-    onSelectEdge,
-    onGraphEdit,
-    onDropEmpty,
-    onDropCatalogOnEdge,
-    onDropCatalogOnJack,
-    onAnnounce,
+  getSelectedEdgeId,
+  isEdgeSelected = id => getSelectedEdgeId() === id,
+  onSelectNode,
+  onSelectEdge,
+  onGraphEdit,
+  onDropEmpty,
+  onDropCatalogOnEdge,
+  onDropCatalogOnJack,
+  getNodeRuntimeState = () => null,
+  getEdgeRuntimeState = () => null,
+  getNodeControlState = () => ({}),
+  isNodeCollapsed = () => false,
+  onSetNodeCollapsed = () => {},
+  onNodeConfigChange = () => {},
+  canBypassNode = () => false,
+  onBypassNode = () => {},
+  onDisableNode = () => {},
+  isRunLocked = () => false,
+  onAnnounce,
   } = options;
   const document = container.ownerDocument;
   const window = document.defaultView;
@@ -111,23 +168,287 @@ export function createPatchCanvas(options) {
   });
   const jackLayer = document.createElement("div");
   jackLayer.className = "patch-jacks";
+  const cardLayer = document.createElement("div");
+  cardLayer.className = "patch-node-cards";
   const connectionList = document.createElement("ol");
   connectionList.className = "patch-connection-list";
   connectionList.setAttribute("aria-label", "Graph connections");
-  container.parentElement.append(svg, jackLayer, connectionList);
+  container.parentElement.append(svg, jackLayer, cardLayer, connectionList);
 
   let gesture = null;
   let previewPoint = null;
   let pointerId = null;
   let destroyed = false;
+  let cardRenderAt = 0;
+  let cardFrameRequested = false;
 
   const pipeline = () => getPipeline();
   const discovery = () => getDiscovery();
   const catalog = () => getCatalog();
   const label = nodeId => nodeLabel(pipeline().nodes.find(node => node.id === nodeId), catalog());
+  const cardRuntime = nodeId => getNodeRuntimeState(nodeId);
+  const cardControlState = nodeId => getNodeControlState(nodeId);
+  const edgeRuntime = edgeId => getEdgeRuntimeState(edgeId);
 
   function nodePorts(node, direction) {
     return portsFor(node, direction, discovery());
+  }
+
+  function nodeCardSchema(node) {
+    const item = catalogEntryForNode(node, catalog());
+    return item?.schema?.properties ?? {};
+  }
+
+  function controlUiHint(fieldSpec) {
+    return fieldSpec?.["x-ui-widget"] || (fieldSpec?.enum?.length ? "menu" : null)
+      || (fieldSpec?.type === "boolean" ? "toggle" : fieldSpec?.type === "number" || fieldSpec?.type === "integer" ? "number" : "short_text");
+  }
+
+  function controlPriority(fieldSpec) {
+    const value = Number(fieldSpec?.["x-ui-priority"]);
+    if (Number.isFinite(value)) return value;
+    return 50;
+  }
+
+  function controlOptions(fieldSpec) {
+    if (!Array.isArray(fieldSpec?.enum) || !fieldSpec.enum.length) return [];
+    return fieldSpec.enum.map(value => ({value, label: String(value)}));
+  }
+
+  function formatNodeRole(node, item) {
+    const fallback = node.kind;
+    return item?.provider
+      ? `${item.provider} / ${item.model}`
+      : discovery()?.node_kinds?.[node.kind]?.label ?? fallback;
+  }
+
+  function buildControlLabel(node, field, fieldSpec, value) {
+    const nodeName = node?.kind ?? node?.id ?? "module";
+    const unit = fieldSpec?.["x-ui-unit"] ? ` (${fieldSpec["x-ui-unit"]})` : "";
+    const range = [fieldSpec?.minimum, fieldSpec?.maximum].some(value => value != null)
+      ? `, ${fieldSpec.minimum ?? "unbounded"} to ${fieldSpec.maximum ?? "unbounded"}`
+      : "";
+    return `${nodeName} ${field}: ${valueText(value)}${unit}${range}`;
+  }
+
+  function parseNodeControlValue(spec, raw) {
+    if (spec?.type === "boolean") return Boolean(raw === true || raw === "true" || raw === "on");
+    if (spec?.type === "number" || spec?.type === "integer") {
+      const number = Number(raw);
+      if (!Number.isFinite(number)) throw new Error("Enter a numeric value.");
+      if (spec.type === "integer" && !Number.isInteger(number)) throw new Error("Enter an integer.");
+      return number;
+    }
+    if (spec?.type === "array" || spec?.type === "object") {
+      if (raw === "" || raw == null) return raw;
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    }
+    return raw;
+  }
+
+  function renderControl(node, field, fieldSpec, containerNode) {
+    const value = node.config?.[field];
+    const state = cardControlState(node.id);
+    const control = controlUiHint(fieldSpec);
+    const options = controlOptions(fieldSpec);
+    const wrapper = document.createElement("label");
+    wrapper.className = "patch-node-card-control";
+    const label = document.createElement("span");
+    label.textContent = `${fieldSpec?.title ?? field} ${fieldSpec?.["x-ui-unit"] ? `(${fieldSpec["x-ui-unit"]})` : ""}`;
+    const applyConfig = () => {
+      let parsed = input.value;
+      try {
+        parsed = parseNodeControlValue(fieldSpec, input.value);
+      } catch (error) {
+        if (error?.message) onAnnounce(`${error.message}`, true);
+        return;
+      }
+      if (parsed === value) return;
+      try {
+        onNodeConfigChange({nodeId: node.id, field, value: parsed});
+      } catch (error) {
+        if (error?.message) onAnnounce(`${error.message}`, true);
+        if (state?.invalid) onAnnounce(`Update for ${node.id} ${field} was rejected.`, true);
+      }
+    };
+    let input;
+    if (control === "toggle") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(value);
+      input.onchange = () => onNodeConfigChange({nodeId: node.id, field, value: input.checked});
+    } else if (control === "menu") {
+      input = document.createElement("select");
+      options.forEach(item => input.append(new Option(String(item.label), String(item.value))));
+      input.value = value == null ? "" : String(value);
+      if (!options.some(item => String(item.value) === input.value)) {
+        input.value = options[0]?.value ? String(options[0].value) : "";
+      }
+      input.onchange = applyConfig;
+    } else if (control === "slider" && Number.isFinite(fieldSpec.minimum) && Number.isFinite(fieldSpec.maximum)) {
+      input = document.createElement("input");
+      input.type = "range";
+      input.min = String(fieldSpec.minimum);
+      input.max = String(fieldSpec.maximum);
+      if (fieldSpec.step != null) input.step = String(fieldSpec.step);
+      input.value = Number.isFinite(Number(value)) ? String(value) : String((fieldSpec.minimum + fieldSpec.maximum) / 2);
+      input.oninput = applyConfig;
+      input.onchange = applyConfig;
+    } else {
+      input = document.createElement("input");
+      input.type = fieldSpec?.type === "number" || fieldSpec?.type === "integer" ? "number" : "text";
+      if (Number.isFinite(fieldSpec.minimum)) input.min = String(fieldSpec.minimum);
+      if (Number.isFinite(fieldSpec.maximum)) input.max = String(fieldSpec.maximum);
+      input.value = value == null ? "" : valueText(value);
+      input.onchange = applyConfig;
+    }
+    input.dataset.nodeId = node.id;
+    input.dataset.configField = field;
+    input.id = `node-card-${node.id}-${field}`;
+    wrapper.setAttribute("for", input.id);
+    input.setAttribute("aria-label", buildControlLabel(node, field, fieldSpec, input.value));
+    input.setAttribute("title", fieldSpec?.description ?? "");
+    wrapper.append(label, input);
+    containerNode.append(wrapper);
+  }
+
+  function renderNodeCard(node) {
+    const cyNode = cy.getElementById(node.id);
+    if (!cyNode?.length) return null;
+    const entry = catalogEntryForNode(node, catalog());
+    const schemaProperties = nodeCardSchema(node);
+    const runtime = cardRuntime(node.id) ?? {};
+    const collapsed = Boolean(isNodeCollapsed(node.id));
+    const ports = discovery()?.node_kinds?.[node.kind]?.ports ?? [];
+    const inputs = ports.filter(port => port.direction === "input");
+    const outputs = ports.filter(port => port.direction === "output");
+    const nodeTitle = formatNodeRole(node, entry);
+    const status = runtime?.status ?? (node.disabled ? "inactive" : node.bypassed ? "bypassed" : "ready");
+    const card = document.createElement("article");
+    card.dataset.nodeCard = node.id;
+    card.className = "patch-node-card";
+    card.dataset.nodeId = node.id;
+    card.dataset.nodeCollapsed = String(collapsed);
+    card.dataset.state = collapsed ? "collapsed" : "expanded";
+    card.dataset.nodeBypassed = String(Boolean(node.bypassed));
+    card.dataset.nodeDisabled = String(Boolean(node.disabled));
+    card.style.left = `${cyNode.renderedPosition().x}px`;
+    card.style.top = `${cyNode.renderedPosition().y}px`;
+    const position = nodeTitle ? nodeTitle : "";
+    const title = document.createElement("div");
+    title.className = "patch-node-card-title";
+    const name = document.createElement("strong");
+    name.textContent = entry?.label ? entry.label.split(" · ")[0] : node.kind;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "patch-node-card-toggle";
+    toggle.textContent = collapsed ? "Expand" : "Collapse";
+    toggle.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${node.kind} faceplate`);
+    toggle.onclick = () => onSetNodeCollapsed(node.id, !collapsed);
+    title.append(name);
+    title.append(toggle);
+    card.append(title);
+
+    const meta = document.createElement("div");
+    meta.className = "patch-node-card-meta";
+    const role = document.createElement("small");
+    role.textContent = position;
+    const state = document.createElement("span");
+    state.className = `patch-node-card-status ${status}`;
+    const latency = runtime?.lastElapsedMs != null ? ` · ${runtime.lastElapsedMs} ms` : "";
+    state.textContent = node.disabled
+      ? "disabled"
+      : node.bypassed
+      ? "bypassed"
+      : runtime?.status
+      ? `${runtime.status}${latency}`
+      : "ready";
+    meta.append(role, state);
+    card.append(meta);
+
+    const controlsPanel = document.createElement("section");
+    controlsPanel.className = "patch-node-card-controls";
+    const jacks = document.createElement("section");
+    jacks.className = "patch-node-card-jacks";
+    jacks.innerHTML = `<span>IO</span><ul><li>in: ${inputs.slice(0, 2).map(port => port.label ?? port.id).join(", ") || "none"}${
+      inputs.length > 2 ? ` +${inputs.length - 2}` : ""
+    }</li><li>out: ${outputs.slice(0, 2).map(port => port.label ?? port.id).join(", ") || "none"}${
+      outputs.length > 2 ? ` +${outputs.length - 2}` : ""
+    }</li></ul>`;
+    controlsPanel.append(jacks);
+
+    const actions = document.createElement("div");
+    actions.className = "patch-node-card-actions";
+    const disableLabel = node.disabled ? "Enable" : "Disable";
+    const disable = document.createElement("button");
+    disable.type = "button";
+    disable.textContent = disableLabel;
+    disable.setAttribute("aria-label", `${disableLabel} ${node.kind}`);
+    disable.onclick = () => onDisableNode(node.id, !node.disabled);
+    actions.append(disable);
+    if (canBypassNode(node.id)) {
+      const bypass = document.createElement("button");
+      bypass.type = "button";
+      bypass.textContent = node.bypassed ? "Unbypass" : "Bypass";
+      bypass.setAttribute("aria-label", `${node.bypassed ? "Unbypass" : "Bypass"} ${node.kind}`);
+      bypass.onclick = () => onBypassNode(node.id);
+      actions.append(bypass);
+    }
+    const preview = document.createElement("p");
+    preview.className = "patch-node-card-preview";
+    if (runtime?.error) preview.textContent = runtime.error;
+    else if (runtime?.preview) preview.textContent = runtime.preview;
+    controlsPanel.append(preview);
+    if (!collapsed) {
+      const fields = Object.entries(schemaProperties).map(([field, spec]) => ({
+        field,
+        spec,
+        priority: controlPriority(spec),
+        kind: controlUiHint(spec),
+      })).filter(item => item.spec && ["toggle", "menu", "slider", "number", "short_text"].includes(item.kind))
+        .sort((left, right) => left.priority - right.priority || left.field.localeCompare(right.field))
+        .slice(0, 3);
+      fields.forEach(item => renderControl(node, item.field, item.spec, controlsPanel));
+      card.append(controlsPanel);
+      card.append(actions);
+      if (status === "active" && Number.isFinite(runtime.meter) && runtime.kind === "audio") {
+        const meter = document.createElement("div");
+        meter.className = "patch-node-card-meter";
+        const bar = document.createElement("span");
+        bar.style.width = `${Math.max(0, Math.min(100, runtime.meter * 100))}%`;
+        meter.append(bar);
+        card.append(meter);
+      }
+    }
+    if (!collapsed && runtime?.kind === "control") {
+      const badge = document.createElement("span");
+      badge.className = "patch-node-card-badge";
+      badge.textContent = `events ${runtime.pulse ?? 0}`;
+      controlsPanel.append(badge);
+    }
+
+    if (collapsed) card.append(actions);
+    return card;
+  }
+
+  function renderNodeCards() {
+    const now = window.performance.now();
+    if (now - cardRenderAt < CARD_RENDER_THROTTLE_MS) {
+      if (!cardFrameRequested) {
+        cardFrameRequested = true;
+        window.requestAnimationFrame(() => {
+          cardFrameRequested = false;
+          renderNodeCards();
+        });
+      }
+      return;
+    }
+    cardRenderAt = now;
+    cardLayer.replaceChildren();
+    for (const node of pipeline().nodes) {
+      const card = renderNodeCard(node);
+      if (card) cardLayer.append(card);
+    }
   }
 
   function anchor(endpoint, direction) {
@@ -156,12 +477,14 @@ export function createPatchCanvas(options) {
       if (!from || !to) continue;
       const source = pipeline().nodes.find(node => node.id === edge.from.node_id);
       const output = nodePorts(source, "output").find(port => port.id === edge.from.port_id);
+      const runtime = edgeRuntime(edge.id);
+      const edgeState = runtime?.status ?? "ready";
       const path = cablePath(from, to);
       const hit = svgElement(document, "path", {d: path, class: "patch-cable-hit", "data-edge-id": edge.id});
       const visible = svgElement(document, "path", {
         d: path,
         "data-edge-id": edge.id,
-        class: `patch-cable signal-${signalFamily(output?.value_type)}${isEdgeSelected(edge.id) ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
+        class: `patch-cable signal-${signalFamily(output?.value_type)}${edgeState ? ` edge-state-${edgeState}` : ""}${isEdgeSelected(edge.id) ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
       });
       hit.addEventListener("pointerdown", event => {
         event.stopPropagation();
@@ -272,6 +595,7 @@ export function createPatchCanvas(options) {
     if (destroyed) return;
     renderConnections();
     renderJacks();
+    renderNodeCards();
   }
 
   function selectedEdgeForJack(node, port) {
@@ -282,6 +606,10 @@ export function createPatchCanvas(options) {
   }
 
   function startGesture(node, port) {
+    if (isRunLocked()) {
+      onAnnounce("Stop transport before rewiring cables.", true);
+      return false;
+    }
     const selected = selectedEdgeForJack(node, port);
     if (selected) {
       const moving = port.direction === "output" ? "from" : "to";
@@ -304,6 +632,7 @@ export function createPatchCanvas(options) {
     updateTargetStates();
     const action = gesture.edge_id ? "Reconnect the selected cable" : "Patch a new cable";
     onAnnounce(`${action}: choose a compatible ${gesture.moving === "to" ? "input" : "output"} jack. Escape cancels.`);
+    return true;
   }
 
   function endpointsFor(node, port) {
@@ -414,7 +743,7 @@ export function createPatchCanvas(options) {
 
   function activateJack(node, port) {
     if (!gesture) {
-      startGesture(node, port);
+      if (!startGesture(node, port)) return;
       renderPreview();
       return;
     }
@@ -458,7 +787,23 @@ export function createPatchCanvas(options) {
     }
     const node = pipeline().nodes.find(item => item.id === target.dataset.nodeId);
     const port = nodePorts(node, target.dataset.direction).find(item => item.id === target.dataset.portId);
-    if (!node || !port || !commitTarget(node, port)) {
+    if (!node || !port) {
+      const current=gesture,origin=current.origin;
+      if(!current.edge_id&&onDropEmpty){
+        gesture=null;previewPoint=null;pointerId=null;delete container.dataset.patching;render();
+        onDropEmpty({
+          kind:current.moving==="to"?"from_output":"to_input",anchor:structuredClone(current.fixed),
+          clientX:event.clientX,clientY:event.clientY,
+        });
+        onAnnounce(`Choose a compatible module for ${origin.node_id}.${origin.port_id}.`);
+        return;
+      }
+      pointerId = null;
+      previewPoint = null;
+      renderPreview();
+      return;
+    }
+    if (!commitTarget(node, port)) {
       pointerId = null;
       previewPoint = null;
       renderPreview();
@@ -467,6 +812,11 @@ export function createPatchCanvas(options) {
 
   function beginPointerGesture(event, node, port) {
     if (event.button !== 0) return;
+    if (isRunLocked()) {
+      event.preventDefault();
+      onAnnounce("Stop transport before patching cables.");
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     pointerId = event.pointerId;
@@ -483,6 +833,11 @@ export function createPatchCanvas(options) {
       return;
     }
     if (!["Delete", "Backspace"].includes(event.key) || editableTarget(event.target)) return;
+    if (isRunLocked()) {
+      event.preventDefault();
+      onAnnounce("Stop transport before removing cables.");
+      return;
+    }
     const edgeId = getSelectedEdgeId();
     if (!edgeId || !pipeline().edges.some(edge => edge.id === edgeId)) return;
     event.preventDefault();
@@ -502,6 +857,7 @@ export function createPatchCanvas(options) {
   return {
     render,
     cancel,
+    renderNodeCards,
     hasGesture: () => Boolean(gesture),
     destroy() {
       destroyed = true;
@@ -511,6 +867,7 @@ export function createPatchCanvas(options) {
       cy.off("pan zoom resize position", render);
       svg.remove();
       jackLayer.remove();
+      cardLayer.remove();
       connectionList.remove();
     },
   };

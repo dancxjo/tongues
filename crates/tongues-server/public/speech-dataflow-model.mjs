@@ -1,5 +1,6 @@
 export const PIPELINE_SCHEMA_VERSION = 2;
 const LAYOUT_LABEL = "studio.layout.v1";
+const NODE_FACEPLATE_LABEL = "studio.node-faceplate.v1";
 
 export function buildCatalog(discovery) {
   const kinds = discovery.node_kinds ?? {};
@@ -66,6 +67,23 @@ export function createPipeline(name="Untitled pipeline") {
     revision:1,metadata:{name,description:"",allow_unsafe_execution:false,labels:{}},
     nodes:[],edges:[],selected_sinks:[],
   };
+}
+
+function readNodeFaceplateMetadata(pipeline) {
+  try{return JSON.parse(pipeline?.metadata?.labels?.[NODE_FACEPLATE_LABEL]??"{}");}catch{return{};}
+}
+function writeNodeFaceplateMetadata(pipeline,metadata) {
+  pipeline.metadata.labels??={};pipeline.metadata.labels[NODE_FACEPLATE_LABEL]=JSON.stringify(metadata);
+}
+export function isNodeFaceplateCollapsed(pipeline,nodeId){
+  return Boolean(readNodeFaceplateMetadata(pipeline)?.collapsed?.[nodeId]);
+}
+export function setNodeFaceplateCollapsed(pipeline,nodeId,collapsed){
+  const metadata=readNodeFaceplateMetadata(pipeline);
+  metadata.collapsed=metadata.collapsed??{};
+  if(collapsed)metadata.collapsed[nodeId]=true;
+  else delete metadata.collapsed[nodeId];
+  writeNodeFaceplateMetadata(pipeline,metadata);
 }
 
 function cryptoId() {
@@ -417,7 +435,7 @@ export function adapterPaths(fromType,toType,discovery) {
 export function connectionIntentCandidates(catalog,direction,valueType) {
   const wanted=direction==="from_output"?"input":"output";
   return catalog.map(candidate=>{
-    const ports=candidate.ports.filter(port=>port.direction===wanted&&port.value_type===valueType);
+    const ports=(candidate.ports??[]).filter(port=>port.direction===wanted&&port.value_type===valueType);
     return{candidate,ports,compatible:ports.length===1,ambiguous:ports.length>1,
       reason:ports.length===1?`${ports[0].label??ports[0].id} accepts ${valueType}.`
         :ports.length>1?`${ports.length} ${valueType} ${wanted} ports require a deliberate choice.`

@@ -54,14 +54,14 @@
     <button id="copy-selection" aria-keyshortcuts="Control+C Meta+C">Copy</button><button id="cut-selection" aria-keyshortcuts="Control+X Meta+X">Cut</button><button id="paste-selection" aria-keyshortcuts="Control+V Meta+V">Paste</button><button id="duplicate-selection" aria-keyshortcuts="Control+D Meta+D">Duplicate</button>
     <button id="delete-selection" aria-keyshortcuts="Delete Backspace">Delete selection</button>
     <button id="align-horizontal" title="Align selected modules along their top edge">Align top</button><button id="distribute-horizontal" title="Distribute selected modules from left to right">Distribute</button><button id="tidy-selection">Tidy</button>
-    <button id="snap-grid" aria-pressed="false">Snap off</button><button id="fit-selection">Fit selection</button><button id="fit">Fit graph</button><button id="run">Run</button><button id="cancel" disabled>Cancel</button>
+    <button id="snap-grid" aria-pressed="false">Snap off</button><button id="fit-selection">Fit selection</button><button id="fit">Fit graph</button><button id="run">Run</button><button id="stop" disabled>Stop</button><button id="panic" disabled>Panic</button>
     <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
   </div>
   <p id="validation" role="status">Loading backend discovery…</p>
   <aside id="route-recovery" class="section" role="alert" hidden></aside>
   <aside id="run-context" class="section" hidden>
-    <strong>Execution run recorded.</strong>
-    <a id="run-tracks-link" href="/runs">Observe durable run tracks</a>
+    <p><strong id="run-state">Idle</strong><span id="run-id">no run yet</span><span id="run-elapsed"></span></p>
+    <p><a id="run-tracks-link" href="/runs">Open execution tracks</a></p>
   </aside>
   <main class="workspace">
     <aside class="sidebar left" id="palette-panel" aria-labelledby="palette-heading">

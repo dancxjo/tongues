@@ -38,7 +38,7 @@ use std::sync::{
     atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::{broadcast, watch, Semaphore};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tongues_duplex::{
     DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
@@ -102,6 +102,8 @@ struct AppState {
     speech_admission: SpeechAdmission,
     speech_phase: Arc<AtomicU8>,
     speech_device: tongues_tts::ResolvedSpeechDevice,
+    pipeline_run_controls: PipelineRunControlRegistry,
+    active_pipeline_run: Arc<tokio::sync::Mutex<Option<String>>>,
     live_turns: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
     asr: asr_api::AsrApiState,
 }
@@ -109,6 +111,17 @@ struct AppState {
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
 type ResidentSpeechRegistry = Arc<Mutex<ResidentSpeechService>>;
 type SpeechVerification = BTreeMap<String, tongues_tts::ModelVerificationState>;
+type PipelineRunCommandTx = tokio::sync::watch::Sender<PipelineRunCommand>;
+type PipelineRunControlRegistry = Arc<tokio::sync::Mutex<HashMap<String, PipelineRunCommandTx>>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PipelineRunCommand {
+    Continue,
+    Stop,
+    Panic,
+}
+
+const PIPELINE_RUN_ACTIVE_STATUSES: &[&str] = &["preparing", "loading", "running", "stopping", "monitoring"];
 
 #[derive(Clone)]
 struct SpeechAdmission {
@@ -206,6 +219,8 @@ async fn run_server() -> Result<(), StartupError> {
         speech_admission: SpeechAdmission::new(speech_max_in_flight),
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
         speech_device,
+        pipeline_run_controls: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        active_pipeline_run: Arc::new(tokio::sync::Mutex::new(None)),
         live_turns: Arc::new(Mutex::new(HashMap::new())),
         asr: asr_api::AsrApiState::new()
             .map_err(|error| StartupError::new("initializing ASR APIs", error.to_string()))?,
@@ -337,6 +352,8 @@ fn build_app(state: AppState) -> Router {
         .route("/api/pipeline/run", post(run_pipeline_graph))
         .route("/api/pipeline/runs", get(list_pipeline_runs))
         .route("/api/pipeline/runs/{run_id}", get(get_pipeline_run))
+        .route("/api/pipeline/runs/{run_id}/stop", post(stop_pipeline_run))
+        .route("/api/pipeline/runs/{run_id}/panic", post(panic_pipeline_run))
         .route(
             "/api/timeline/sessions/{session_id}",
             get(get_timeline_session).put(save_timeline_session),
@@ -580,15 +597,48 @@ fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Va
                 "checkbox" | "boolean" => "boolean",
                 _ => "string",
             };
-            (
-                control.field.to_string(),
-                json!({
-                    "type": kind,
-                    "minimum": control.min,
-                    "maximum": control.max,
-                    "description": control.help
-                }),
-            )
+            let mut spec = serde_json::Map::new();
+            spec.insert("title".to_string(), serde_json::Value::String(control.label.to_string()));
+            spec.insert("type".to_string(), serde_json::Value::String(kind.to_string()));
+            spec.insert("description".to_string(), serde_json::Value::String(control.help.to_string()));
+            let ui_hint = match control.kind {
+                "checkbox" | "boolean" => "toggle",
+                "select" => "menu",
+                "number" | "range" if control.min.is_some() && control.max.is_some() => "slider",
+                "number" | "range" => "number",
+                "number_array" | "positive_integer_array" => "short_text",
+                _ => "short_text",
+            };
+            spec.insert("x-ui-widget".to_string(), serde_json::Value::String(ui_hint.to_string()));
+            spec.insert("x-ui-priority".to_string(), serde_json::Value::Number(serde_json::Number::from(0)));
+            if !control.group.is_empty() {
+                spec.insert(
+                    "x-ui-group".to_string(),
+                    serde_json::Value::String(control.group.to_string()),
+                );
+            }
+            if let Some(value) = control.min {
+                spec.insert("minimum".to_string(), serde_json::Value::from(value));
+            }
+            if let Some(value) = control.max {
+                spec.insert("maximum".to_string(), serde_json::Value::from(value));
+            }
+            if let Some(value) = control.unit {
+                spec.insert("x-ui-unit".to_string(), serde_json::Value::String(value.to_string()));
+            }
+            if !control.options.is_empty() {
+                spec.insert(
+                    "enum".to_string(),
+                    serde_json::Value::Array(
+                        control
+                            .options
+                            .iter()
+                            .map(|option| serde_json::Value::String(option.value.to_string()))
+                            .collect(),
+                    ),
+                );
+            }
+            (control.field.to_string(), serde_json::Value::Object(spec))
         })
         .collect::<serde_json::Map<_, _>>();
     json!({"type":"object","properties":properties})
@@ -833,6 +883,129 @@ struct PipelineRunRecord {
     events: Vec<serde_json::Value>,
 }
 
+fn is_pipeline_run_status_active(status: &str) -> bool {
+    PIPELINE_RUN_ACTIVE_STATUSES.contains(&status)
+}
+
+fn mark_pipeline_run_status(run_path: &FsPath, run: &mut PipelineRunRecord, status: &str) {
+    run.status = status.into();
+    run.updated_at_ms = unix_time_ms();
+    let _ = write_durable_json(run_path, run);
+}
+
+fn mark_pipeline_run_cancelled(run_path: &FsPath, run: &mut PipelineRunRecord) {
+    mark_pipeline_run_status(run_path, run, "cancelled");
+}
+
+async fn cleanup_active_pipeline_run(
+    active_pipeline_run: Arc<tokio::sync::Mutex<Option<String>>>,
+    pipeline_run_controls: PipelineRunControlRegistry,
+    run_id: &str,
+) {
+    let mut active = active_pipeline_run.lock().await;
+    if active.as_deref() == Some(run_id) {
+        active.take();
+    }
+    pipeline_run_controls
+        .lock()
+        .await
+        .remove(run_id);
+}
+
+fn pipeline_run_status_message(command: PipelineRunCommand) -> &'static str {
+    match command {
+        PipelineRunCommand::Continue => "continue",
+        PipelineRunCommand::Stop => "stop requested",
+        PipelineRunCommand::Panic => "panic requested",
+    }
+}
+
+async fn control_pipeline_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    command: PipelineRunCommand,
+) -> Response {
+    let path = match pipeline_run_file(&state.workspace_root, &run_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    if read_pipeline_run(&path).is_err() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "execution run was not found"})),
+        )
+            .into_response();
+    }
+
+    let is_active = {
+        state
+            .active_pipeline_run
+            .lock()
+            .await
+            .as_deref()
+            .is_some_and(|active| active == run_id)
+    };
+    if !is_active {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "execution run is not currently active"})),
+        )
+        .into_response();
+    }
+
+    let sender = {
+        let mut controls = state.pipeline_run_controls.lock().await;
+        controls.get(&run_id).cloned()
+    };
+    let Some(sender) = sender else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "execution run control channel is unavailable"})),
+        )
+            .into_response();
+    };
+
+    if sender.send(command).is_err() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "execution run stream is no longer accepting controls"})),
+        )
+            .into_response();
+    }
+
+    let message = json!({
+        "run_id": run_id,
+        "command": pipeline_run_status_message(command),
+    });
+    (StatusCode::ACCEPTED, Json(message)).into_response()
+}
+
+async fn stop_pipeline_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Response {
+    control_pipeline_run(
+        State(state),
+        Path(run_id),
+        PipelineRunCommand::Stop,
+    )
+    .await
+}
+
+async fn panic_pipeline_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Response {
+    control_pipeline_run(
+        State(state),
+        Path(run_id),
+        PipelineRunCommand::Panic,
+    )
+    .await
+}
+
 #[derive(Debug, Serialize)]
 struct PipelineRunSummary {
     run_id: String,
@@ -962,32 +1135,95 @@ async fn run_pipeline_graph(
         plan_id: plan.plan_id.clone(),
         graph_id: plan.graph_id.clone(),
         graph_revision: plan.graph_revision,
-        status: "running".into(),
+        status: "preparing".into(),
         started_at_ms: now,
         updated_at_ms: now,
         session_id: None,
         events: Vec::new(),
     };
+    {
+        let mut active_run = state.active_pipeline_run.lock().await;
+        if let Some(active_run_id) = active_run.as_deref() {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"error": format!("another execution run is active: {active_run_id}")})),
+            )
+                .into_response();
+        }
+        *active_run = Some(run_id.clone());
+    }
     if let Err(error) = write_durable_json(&run_path, &run) {
+        cleanup_active_pipeline_run(
+            state.active_pipeline_run,
+            state.pipeline_run_controls,
+            &run_id,
+        )
+        .await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("could not start durable run: {error}")})),
         )
             .into_response();
     }
+    let (command_sender, mut command_receiver) =
+        tokio::sync::watch::channel(PipelineRunCommand::Continue);
+    state
+        .pipeline_run_controls
+        .lock()
+        .await
+        .insert(run_id.clone(), command_sender);
+
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let active_pipeline_run = state.active_pipeline_run.clone();
+    let pipeline_run_controls = state.pipeline_run_controls.clone();
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         for step in &plan.steps {
+            if *command_receiver.borrow() == PipelineRunCommand::Stop {
+                let stop = pipeline_run_event(
+                    &run_id,
+                    &plan,
+                    step,
+                    "cancelled",
+                    started,
+                    None,
+                    Some("Stop requested by operator.".to_string()),
+                    "cancelled",
+                );
+                let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, stop).await;
+                mark_pipeline_run_status(&run_path, &mut run, "cancelled");
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                return;
+            }
+            if *command_receiver.borrow() == PipelineRunCommand::Panic {
+                let failed = pipeline_run_event(
+                    &run_id,
+                    &plan,
+                    step,
+                    "failed",
+                    started,
+                    None,
+                    Some("Panic requested by operator.".to_string()),
+                    "failed",
+                );
+                let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
+                mark_pipeline_run_status(&run_path, &mut run, "failed");
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                return;
+            }
+
+            mark_pipeline_run_status(&run_path, &mut run, "loading");
             let started_event =
-                pipeline_run_event(&run_id, &plan, step, "started", started, None, None);
+                pipeline_run_event(&run_id, &plan, step, "started", started, None, None, "loading");
             if emit_pipeline_run_event(&sender, &run_path, &mut run, started_event)
                 .await
                 .is_err()
             {
                 mark_pipeline_run_cancelled(&run_path, &mut run);
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
                 return;
             }
+            mark_pipeline_run_status(&run_path, &mut run, "running");
 
             let source = match pipeline_step_output_stream(step, &state.workspace_root).await {
                 Ok(source) => source,
@@ -1000,52 +1236,125 @@ async fn run_pipeline_graph(
                         started,
                         None,
                         Some(detail),
+                        &run.status,
                     );
                     let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
-                    run.status = "failed".into();
-                    run.updated_at_ms = unix_time_ms();
-                    let _ = write_durable_json(&run_path, &run);
+                    mark_pipeline_run_status(&run_path, &mut run, "failed");
+                    cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
                     return;
                 }
             };
 
             if let Some(mut outputs) = source {
-                while let Some(result) = futures_util::StreamExt::next(&mut outputs).await {
-                    let output = match result {
-                        Ok(output) => output,
-                        Err(detail) => {
-                            let failed = pipeline_run_event(
+                loop {
+                    tokio::select! {
+                        _ = command_receiver.changed() => {
+                            match *command_receiver.borrow_and_update() {
+                                PipelineRunCommand::Stop => {
+                                    let event = pipeline_run_event(
+                                        &run_id,
+                                        &plan,
+                                        step,
+                                        "cancelled",
+                                        started,
+                                        None,
+                                        Some("Stop requested by operator.".to_string()),
+                                        "stopping",
+                                    );
+                                    let _ =
+                                        emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                                            .await;
+                                    mark_pipeline_run_status(&run_path, &mut run, "cancelled");
+                                    cleanup_active_pipeline_run(
+                                        active_pipeline_run,
+                                        pipeline_run_controls,
+                                        &run_id,
+                                    )
+                                    .await;
+                                    return;
+                                }
+                                PipelineRunCommand::Panic => {
+                                    let event = pipeline_run_event(
+                                        &run_id,
+                                        &plan,
+                                        step,
+                                        "failed",
+                                        started,
+                                        None,
+                                        Some("Panic requested by operator.".to_string()),
+                                        "failed",
+                                    );
+                                    let _ =
+                                        emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                                            .await;
+                                    mark_pipeline_run_status(&run_path, &mut run, "failed");
+                                    cleanup_active_pipeline_run(
+                                        active_pipeline_run,
+                                        pipeline_run_controls,
+                                        &run_id,
+                                    )
+                                    .await;
+                                    return;
+                                }
+                                PipelineRunCommand::Continue => {}
+                            }
+                        }
+                        result = outputs.next() => {
+                            let output = match result {
+                                Some(Ok(output)) => output,
+                                Some(Err(detail)) => {
+                                    let failed = pipeline_run_event(
+                                        &run_id,
+                                        &plan,
+                                        step,
+                                        "failed",
+                                        started,
+                                        None,
+                                        Some(detail),
+                                        &run.status,
+                                    );
+                                    let _ = emit_pipeline_run_event(
+                                        &sender,
+                                        &run_path,
+                                        &mut run,
+                                        failed,
+                                    )
+                                    .await;
+                                    mark_pipeline_run_status(&run_path, &mut run, "failed");
+                                    cleanup_active_pipeline_run(
+                                        active_pipeline_run,
+                                        pipeline_run_controls,
+                                        &run_id,
+                                    )
+                                    .await;
+                                    return;
+                                }
+                                None => break,
+                            };
+                            let event = pipeline_run_event(
                                 &run_id,
                                 &plan,
                                 step,
-                                "failed",
+                                "output",
                                 started,
+                                Some(output),
                                 None,
-                                Some(detail),
+                                "running",
                             );
-                            let _ =
-                                emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
-                            run.status = "failed".into();
-                            run.updated_at_ms = unix_time_ms();
-                            let _ = write_durable_json(&run_path, &run);
-                            return;
+                            if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                                .await
+                                .is_err()
+                            {
+                                mark_pipeline_run_status(&run_path, &mut run, "cancelled");
+                                cleanup_active_pipeline_run(
+                                    active_pipeline_run,
+                                    pipeline_run_controls,
+                                    &run_id,
+                                )
+                                .await;
+                                return;
+                            }
                         }
-                    };
-                    let event = pipeline_run_event(
-                        &run_id,
-                        &plan,
-                        step,
-                        "output",
-                        started,
-                        Some(output),
-                        None,
-                    );
-                    if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
-                        .await
-                        .is_err()
-                    {
-                        mark_pipeline_run_cancelled(&run_path, &mut run);
-                        return;
                     }
                 }
             } else {
@@ -1054,29 +1363,31 @@ async fn run_pipeline_graph(
                     step.component_id.as_deref().unwrap_or(&step.node_kind)
                 );
                 let event =
-                    pipeline_run_event(&run_id, &plan, step, "output", started, None, Some(detail));
+                    pipeline_run_event(&run_id, &plan, step, "output", started, None, Some(detail), "running");
                 if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
                     .await
                     .is_err()
                 {
                     mark_pipeline_run_cancelled(&run_path, &mut run);
+                    cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
                     return;
                 }
             }
 
             let completed =
-                pipeline_run_event(&run_id, &plan, step, "completed", started, None, None);
+                pipeline_run_event(&run_id, &plan, step, "completed", started, None, None, "running");
             if emit_pipeline_run_event(&sender, &run_path, &mut run, completed)
                 .await
                 .is_err()
             {
                 mark_pipeline_run_cancelled(&run_path, &mut run);
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
                 return;
             }
         }
-        run.status = "completed".into();
-        run.updated_at_ms = unix_time_ms();
-        let _ = write_durable_json(&run_path, &run);
+        mark_pipeline_run_status(&run_path, &mut run, "monitoring");
+        mark_pipeline_run_status(&run_path, &mut run, "completed");
+        cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
     });
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-ndjson")
@@ -1103,6 +1414,7 @@ fn pipeline_run_event(
     started: std::time::Instant,
     output: Option<tongues_pipeline::RuntimeOutput>,
     detail: Option<String>,
+    status: &str,
 ) -> serde_json::Value {
     json!({
         "run_id": run_id,
@@ -1111,6 +1423,7 @@ fn pipeline_run_event(
         "graph_revision": plan.graph_revision,
         "node_id": step.node_id,
         "component_id": step.component_id,
+        "status": status,
         "kind": kind,
         "elapsed_ms": started.elapsed().as_millis() as u64,
         "output": output,
@@ -1131,12 +1444,6 @@ async fn emit_pipeline_run_event(
         .send(Ok(Bytes::from(event.to_string() + "\n")))
         .await
         .map_err(|_| "pipeline event receiver closed".to_string())
-}
-
-fn mark_pipeline_run_cancelled(run_path: &FsPath, run: &mut PipelineRunRecord) {
-    run.status = "cancelled".into();
-    run.updated_at_ms = unix_time_ms();
-    let _ = write_durable_json(run_path, run);
 }
 
 async fn pipeline_step_output_stream(

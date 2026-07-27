@@ -402,8 +402,12 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
   assert.match(browserHtml,/id="graph-outline".*aria-label="Keyboard graph outline"/);
   assert.match(browserSource,/\/api\/pipeline\/graphs\/\$\{encodeURIComponent/);
   assert.match(browserSource,/fetch\("\/api\/pipeline\/run"/);
-  assert.match(browserSource,/new AbortController\(\)/);
-  assert.match(browserSource,/runController\?\.abort\(\)/);
+  assert.match(browserSource,/id="run-state"/);
+  assert.match(browserSource,/id="run-id"/);
+  assert.match(browserSource,/request\(`\/api\/pipeline\/runs\/\$\{encodeURIComponent\(runState\.runId\)\}\/stop`/);
+  assert.match(browserSource,/\/api\/pipeline\/runs\/\$\{encodeURIComponent\(runState\.runId\)\}\/panic/);
+  assert.match(browserSource,/byId\("stop"\)\.disabled/);
+  assert.match(browserSource,/byId\("panic"\)\.disabled/);
   assert.match(browserSource,/item\.suggestions/);
   assert.match(browserSource,/spec\.format==="multiline".*"textarea"/);
   assert.match(browserSource,/input\.checkValidity\(\)/);

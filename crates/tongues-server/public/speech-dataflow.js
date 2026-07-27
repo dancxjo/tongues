@@ -1,7 +1,9 @@
 import {
-  addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,connectPorts,connectionIntentCandidates,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
-  catalogEntryForNode,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,moveGraphSelection,nodeLabel,nodePosition,
-  pasteGraphSelection,planNodeReplacement,portsFor,recordEdit,redoEdit,removeEdge,replacementCandidates,setNodePosition,tidyGraphSelection,touch,undoEdit,
+  addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,isNodeFaceplateCollapsed,nodeLabel,nodePosition,
+  catalogEntryForNode,copyGraphSelection,createEditHistory,createPipeline,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,moveGraphSelection,
+  pasteGraphSelection,planNodeReplacement,portsFor,recordEdit,redoEdit,removeEdge,replacementCandidates,setNodePosition,
+  connectionIntentCandidates,tidyGraphSelection,touch,undoEdit,validateSchemaValue,consumeNdjson,
+  setNodeFaceplateCollapsed,
 } from "./speech-dataflow-model.mjs";
 import {createPatchCanvas} from "./speech-patch-canvas.mjs";
 
@@ -9,7 +11,24 @@ const byId=id=>document.getElementById(id);
 let discovery=null,catalog=[],starters=[],pipeline=null,cy=null,patchCanvas=null;
 let selectedNode=null,selectedEdge=null,connecting=null,validation={valid:false,diagnostics:[]};
 let selectedNodes=new Set(),selectedEdges=new Set(),graphClipboard=null,pasteGeneration=0,snapToGrid=false;
-let validationGeneration=0,validationTimer=null,runController=null;
+let validationGeneration=0,validationTimer=null;
+const PIPELINE_RUN_ACTIVE_STATUSES=new Set(["preparing","loading","running","stopping","monitoring"]);
+const PIPELINE_RUN_STATUS_LABELS={
+  idle:"Idle",
+  preparing:"Preparing",
+  loading:"Loading",
+  running:"Running",
+  monitoring:"Monitoring",
+  stopping:"Stopping",
+  completed:"Completed",
+  failed:"Failed",
+  cancelled:"Cancelled",
+};
+let runState={status:"idle",runId:null,startedAt:0,elapsedMs:0};
+let runStatusTimer=null;
+let runTransportRefreshInFlight=false;
+let nodeRuntimeState={};
+let edgeRuntimeState={};
 let editHistory=createEditHistory(),replacementOptions=[],replacementSelected=null,replacementPlan=null;
 let replacementPreviewGeneration=0,replacementRenderLimit=100,replacementReturnFocus=null,replacementOverrides={};
 let quickAddContext=null,quickAddOptions=[],quickAddReturnFocus=null;
@@ -29,6 +48,81 @@ const NODE_THEMES={
 const FALLBACK_NODE_THEME={accent:"#8ba5bf",surface:"#202c3b"};
 
 function announce(text,error=false){byId("status").textContent=text;byId("status").classList.toggle("error",error);}
+
+function isRunActive(status=runState.status) {
+  return PIPELINE_RUN_ACTIVE_STATUSES.has(status);
+}
+
+function isRunLocked() {
+  return isRunActive();
+}
+
+function setRunState(nextState) {
+  runState = {...runState, ...nextState};
+  byId("run-state").textContent = PIPELINE_RUN_STATUS_LABELS[runState.status] ?? runState.status;
+  byId("run-id").textContent = runState.runId ? `run ${runState.runId}` : "no run yet";
+  byId("run-elapsed").textContent = runState.startedAt
+    ? ` · ${(runState.elapsedMs / 1000).toFixed(1)}s`
+    : "";
+  const active = isRunActive(runState.status);
+  byId("run").disabled = active;
+  byId("stop").disabled = !active || !runState.runId;
+  byId("panic").disabled = !active || !runState.runId;
+  byId("run-context").hidden = runState.status === "idle" && !runState.runId;
+  if (runState.runId) byId("run-tracks-link").href = `/runs/${encodeURIComponent(runState.runId)}/tracks`;
+}
+
+function refreshRunTransportClock() {
+  if (runState.status !== "idle" && runState.startedAt) {
+    runState.elapsedMs = Math.max(0, Date.now() - runState.startedAt);
+  }
+}
+
+async function refreshRunStateFromServer(runId = runState.runId) {
+  if (!runId) return;
+  if (runTransportRefreshInFlight) return;
+  runTransportRefreshInFlight = true;
+  try {
+    const run = await request(`/api/pipeline/runs/${encodeURIComponent(runId)}`);
+    const next = {runId};
+    if (run.started_at_ms) next.startedAt = run.started_at_ms;
+    if (run.status) next.status = run.status;
+    setRunState(next);
+  } finally {
+    runTransportRefreshInFlight = false;
+  }
+}
+
+function startRunTransportClock() {
+  stopRunTransportClock();
+  runStatusTimer = setInterval(() => {
+    refreshRunTransportClock();
+    if (runState.status !== "idle") byId("run-elapsed").textContent = ` · ${(runState.elapsedMs / 1000).toFixed(1)}s`;
+    refreshRunStateFromServer().catch(() => {});
+  }, 500);
+}
+
+function stopRunTransportClock() {
+  if (runStatusTimer) clearInterval(runStatusTimer);
+  runStatusTimer = null;
+}
+
+function resetRunState() {
+  setRunState({
+    status: "idle",
+    runId: null,
+    startedAt: 0,
+    elapsedMs: 0,
+  });
+  stopRunTransportClock();
+}
+
+function clearRuntimeActivity() {
+  nodeRuntimeState = {};
+  edgeRuntimeState = {};
+  patchCanvas?.render();
+}
+
 function updateEditControls(){byId("undo").disabled=!editHistory.undo.length;byId("redo").disabled=!editHistory.redo.length;}
 function selectionState(){return{node_id:selectedNode,edge_id:selectedEdge,node_ids:[...selectedNodes],edge_ids:[...selectedEdges]};}
 function replaceNodeSelection(id){
@@ -59,6 +153,10 @@ function restoreFocus(focus){
   requestAnimationFrame(()=>byId(focus.id)?.focus());
 }
 function performGraphEdit(label,mutate,after=()=>{}){
+  if (isRunLocked()) {
+    announce("Stop transport before editing the graph structure.", true);
+    return;
+  }
   const before=structuredClone(pipeline),selectionBefore=selectionState(),focusBefore=focusState();
   const result=mutate();after(result);
   recordEdit(editHistory,before,pipeline,{
@@ -122,6 +220,166 @@ function graphRoute(graphId,nodeId=""){
 function showRouteRecovery(message){
   const target=byId("route-recovery");target.hidden=false;
   target.innerHTML=`${escapeHtml(message)} <a href="/studio/graphs/new">Start a new graph</a> or <a href="/runs">open recent runs</a>.`;
+}
+
+function findNode(nodeId) {
+  return pipeline?.nodes.find(node => node.id === nodeId) ?? null;
+}
+
+function signalFamily(valueType) {
+  const value=String(valueType ?? "").toLowerCase();
+  if (value.includes("audio")) return "audio";
+  if (value.includes("transcript") || value === "text") return "text";
+  if (["utterance_plan", "control", "cancellation"].includes(value)) return "control";
+  if (value === "error") return "error";
+  return "other";
+}
+
+function canBypassNode(nodeId) {
+  const node = findNode(nodeId);
+  if (!node || node.bypassed || node.disabled) return false;
+  const incoming = pipeline.edges.filter(edge => edge.to.node_id === nodeId);
+  const outgoing = pipeline.edges.filter(edge => edge.from.node_id === nodeId);
+  if (incoming.length !== 1 || outgoing.length < 1) return false;
+  const upstream = pipeline.nodes.find(item => item.id === incoming[0].from.node_id);
+  const upstreamPort = portsFor(upstream, "output", discovery).find(port => port.id === incoming[0].from.port_id);
+  if (!upstreamPort) return false;
+  for (const edge of outgoing) {
+    const target = pipeline.nodes.find(item => item.id === edge.to.node_id);
+    const targetInput = portsFor(target, "input", discovery).find(port => port.id === edge.to.port_id);
+    if (!targetInput || targetInput.value_type !== upstreamPort.value_type) return false;
+  }
+  return true;
+}
+
+function updateInlineNodeConfig({nodeId, field, value}) {
+  const node = findNode(nodeId);
+  if (!node) throw new Error("Node selection changed; choose this node again.");
+  const item = catalogEntryForNode(node, catalog);
+  const spec = item?.schema?.properties?.[field];
+  if (!spec) throw new Error(`Unknown configuration field: ${field}.`);
+  const errors = validateSchemaValue(value, spec);
+  if (errors.length) throw new Error(errors.join(" "));
+  performGraphEdit("Update node control", () => applyNodeConfig(pipeline, nodeId, {[field]: value}));
+  renderGraph();scheduleValidation();
+}
+
+function updateNodeDisabledState(nodeId, disabled) {
+  const node = findNode(nodeId);
+  if (!node) return;
+  performGraphEdit(disabled ? "Disable node" : "Enable node", () => {
+    if (disabled) {
+      pipeline.edges = pipeline.edges.filter(edge => edge.from.node_id !== nodeId && edge.to.node_id !== nodeId);
+      pipeline.selected_sinks = pipeline.selected_sinks.filter(sink => sink.node_id !== nodeId);
+      node.disabled = true;
+    } else node.disabled = false;
+    touch(pipeline);
+  });
+  announce(disabled
+    ? "Node disabled and removed from execution; its connections were removed explicitly."
+    : "Node enabled; reconnect any required relationships.");
+  renderGraph();scheduleValidation();
+}
+
+function toggleNodeBypass(nodeId) {
+  const node = findNode(nodeId);
+  if (!node) throw new Error("Node no longer exists.");
+  if (node.bypassed) throw new Error("Undoing bypass is not yet implemented.");
+  if (!canBypassNode(nodeId)) throw new Error("This node cannot be bypassed in its current wiring.");
+  performGraphEdit("Bypass node", () => bypassNode(pipeline, nodeId, discovery));
+  renderGraph();scheduleValidation();
+  announce("Node bypassed by explicit compatible rewiring.");
+}
+
+function toggleNodeFaceplateCollapsed(nodeId, collapsed) {
+  if (!findNode(nodeId)) return;
+  performGraphEdit(collapsed ? "Collapse node faceplate" : "Expand node faceplate", () => {
+    setNodeFaceplateCollapsed(pipeline, nodeId, collapsed);
+  });
+  patchCanvas?.renderNodeCards();
+}
+
+function updateNodeRuntimeState(event) {
+  if (!event?.node_id) return;
+  const node = pipeline.nodes.find(item => item.id === event.node_id);
+  if (!node) return;
+  const entry = nodeRuntimeState[event.node_id] ??= {
+    status: "ready",active:0,lastActivityAt:0,lastElapsedMs:0,updatedAt:0,outputCount:0,
+  };
+  entry.updatedAt = performance.now();
+  entry.lastActivityAt = performance.now();
+  if (typeof event.elapsed_ms === "number") entry.lastElapsedMs = event.elapsed_ms;
+  if (event.kind === "started") {
+    entry.status = "loading";
+    entry.active += 1;
+  } else if (event.kind === "failed" || event.kind === "cancelled") {
+    entry.status = "failed";
+    entry.error = event.detail ?? "node reported a failure";
+  } else if (event.kind === "completed") {
+    entry.status = "ready";
+    entry.error = null;
+  }
+  if (event.output) {
+    const outputPort = (discovery.node_kinds?.[node.kind]?.ports ?? []).find(port => port.id === event.output?.port_id && port.direction === "output");
+    const kind = signalFamily(outputPort?.value_type);
+    const preview = computeRuntimePreview(event.output.value, kind);
+    entry.preview = preview.text;
+    entry.kind = kind;
+    if (kind === "audio") entry.meter = preview.meter;
+    if (kind === "control") entry.pulse = (entry.pulse ?? 0) + 1;
+    entry.status = "active";
+    entry.lastEventKind = event.kind;
+    entry.outputCount = (entry.outputCount ?? 0) + 1;
+  }
+  patchCanvas?.renderNodeCards();
+}
+
+function updateEdgeRuntimeState(event) {
+  if (!event?.node_id || !event.kind) return;
+  const node = pipeline.nodes.find(item => item.id === event.node_id);
+  if (!node) return;
+  const portId = event.output?.port_id;
+
+  const apply = (edgeId, status, details={}) => {
+    const entry = edgeRuntimeState[edgeId] ??= {status:"ready"};
+    entry.status = status;
+    entry.updatedAt = performance.now();
+    if (event.elapsed_ms != null) entry.lastElapsedMs = event.elapsed_ms;
+    Object.assign(entry, details);
+  };
+
+  const outgoing = pipeline.edges.filter(edge => edge.from.node_id === event.node_id);
+  const incident = pipeline.edges.filter(edge => edge.from.node_id === event.node_id || edge.to.node_id === event.node_id);
+
+  if (event.kind === "started") {
+    outgoing.forEach(edge => apply(edge.id, "loading"));
+  } else if (event.kind === "output") {
+    if (portId) {
+      outgoing
+        .filter(edge => edge.from.port_id === portId)
+        .forEach(edge => apply(edge.id, "active", {lastPortId: portId}));
+    }
+  } else if (event.kind === "completed") {
+    outgoing.forEach(edge => apply(edge.id, "ready"));
+  } else if (event.kind === "failed" || event.kind === "cancelled") {
+    incident.forEach(edge => apply(edge.id, "failed", {detail: event.detail}));
+  }
+}
+function computeRuntimePreview(value, kind) {
+  const textValue = (raw) => {
+    const rendered = typeof raw === "string" ? raw : JSON.stringify(raw);
+    return rendered.length > 140 ? `${rendered.slice(0, 137)}…` : rendered;
+  };
+  if (kind === "audio") {
+    const number = Array.isArray(value) ? value[0] : typeof value === "number" ? value : null;
+    const meter = number == null ? 0 : Math.max(0, Math.min(1, Math.abs(number)));
+    const text = number == null ? "audio activity" : `${meter.toFixed(2)} peak`;
+    return {kind:"audio",meter,text};
+  }
+  if (kind === "control") return {kind:"control",text:textValue(value)};
+  if (kind === "text") return {kind:"text",text:textValue(value)};
+  if (kind === "error") return {kind:"error",text:textValue(value)};
+  return {kind:"other",text:textValue(value)};
 }
 
 async function discover(){
@@ -316,6 +574,8 @@ function dropCatalogOnJack(intent){
 function loadGraph(graph,{preserveHistory=false}={}){
   const previousSelection=selectionState();
   pipeline=structuredClone(graph);pipeline.metadata.labels??={};ensureLayout(pipeline);
+  nodeRuntimeState={};
+  edgeRuntimeState={};
   if(!preserveHistory)editHistory=createEditHistory();
   if(preserveHistory)applySelectionState(previousSelection);
   else replaceNodeSelection(pipeline.nodes[0]?.id??null);
@@ -340,6 +600,16 @@ function ensurePatchCanvas(){
     onGraphEdit:recordCompletedGraphEdit,
     onDropEmpty:intent=>openQuickAdd({...intent,position:canvasPoint(intent.clientX,intent.clientY)}),
     onDropCatalogOnEdge:dropCatalogOnEdge,onDropCatalogOnJack:dropCatalogOnJack,
+    getNodeRuntimeState:nodeId=>nodeRuntimeState[nodeId],
+    getEdgeRuntimeState:edgeId=>edgeRuntimeState[edgeId],
+    getNodeControlState:nodeId=>(diagnosticsByTarget(validation).nodes[nodeId] ?? {}),
+    isNodeCollapsed:nodeId=>isNodeFaceplateCollapsed(pipeline,nodeId),
+    onSetNodeCollapsed:toggleNodeFaceplateCollapsed,
+    onNodeConfigChange:updateInlineNodeConfig,
+    canBypassNode,
+    onBypassNode:toggleNodeBypass,
+    onDisableNode:updateNodeDisabledState,
+    isRunLocked,
     onAnnounce:announce,
   });
 }
@@ -350,9 +620,7 @@ function graphElements(){
     const item=catalogEntryForNode(node,catalog);
     const ports=discovery.node_kinds?.[node.kind]?.ports??[];
     const kind=discovery.node_kinds?.[node.kind],theme=NODE_THEMES[item?.group]??FALLBACK_NODE_THEME;
-    const inputs=nodePortSummary(node,ports.filter(port=>port.direction==="input"),"input");
-    const outputs=nodePortSummary(node,ports.filter(port=>port.direction==="output"),"output");
-    const label=[kind?.label??nodeLabel(node,catalog),"",inputs&&`IN   ${inputs}`,outputs&&`OUT  ${outputs}`].filter(line=>line!==false).join("\n");
+    const label=kind?.label??nodeLabel(node,catalog);
     const classes=[item?.readiness&&item.readiness!=="ready"?"unavailable":"",grouped.nodes[node.id]?.length?"invalid":"",node.disabled||node.bypassed?"inactive":""].filter(Boolean).join(" ");
     return{group:"nodes",data:{id:node.id,label,accent:theme.accent,surface:theme.surface},position:nodePosition(pipeline,node.id),classes};
   });
@@ -695,23 +963,111 @@ async function shareGraph(){
   byId("share-url").value=url;byId("share-json").value=JSON.stringify(pipeline,null,2);byId("share-dialog").showModal();
 }
 
-async function runGraph(){
-  if(runController)return;syncName();runController=new AbortController();byId("run").disabled=true;byId("cancel").disabled=false;byId("run-events").replaceChildren();
-  try{
-    const response=await fetch("/api/pipeline/run",{...jsonOptions("POST",pipeline),signal:runController.signal});
-    if(!response.ok){const value=await response.json();throw new Error(value.validation?.diagnostics?.map(item=>item.message).join(" ")??value.error??"Run rejected");}
-    await consumeNdjson(response.body.getReader(),event=>{
-      renderRunEvent(event);
-      if(event.run_id){
-        byId("run-context").hidden=false;
-        byId("run-tracks-link").href=`/runs/${encodeURIComponent(event.run_id)}/tracks`;
-      }
-    });
-    announce("Graph run completed with streamed lifecycle evidence.");
-  }catch(error){if(error.name==="AbortError"){renderRunEvent({kind:"cancelled",node_id:"graph",detail:"Cancelled by operator"});announce("Graph run cancelled.");}else announce(error.message,true);}
-  finally{runController=null;byId("run").disabled=false;byId("cancel").disabled=true;}
+function updateRuntimeStateFromEvent(event) {
+  if (event?.status) setRunState({status: event.status});
+  if (event?.run_id) {
+    if (runState.runId !== event.run_id) setRunState({runId: event.run_id, startedAt: Date.now(), status: event.status ?? runState.status, elapsedMs: 0});
+    byId("run-context").hidden = false;
+    byId("run-tracks-link").href = `/runs/${encodeURIComponent(event.run_id)}/tracks`;
+  }
+  updateNodeRuntimeState(event);
+  updateEdgeRuntimeState(event);
 }
-function renderRunEvent(event){const item=document.createElement("li");item.className=event.kind;const output=event.output?` · ${event.output.port_id}=${JSON.stringify(event.output.value)}`:"";item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${output}${event.detail?` · ${event.detail}`:""}`;byId("run-events").append(item);item.scrollIntoView({block:"nearest"});if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}}
+
+async function runGraph() {
+  if (isRunActive()) {
+    announce("A transport is already active. Stop it before starting again.", true);
+    return;
+  }
+  syncName();
+  byId("run-events").replaceChildren();
+  clearRuntimeActivity();
+  setRunState({
+    status: "preparing",
+    runId: null,
+    startedAt: Date.now(),
+    elapsedMs: 0,
+  });
+  startRunTransportClock();
+  try {
+    const response = await fetch("/api/pipeline/run", jsonOptions("POST", pipeline));
+    if (!response.ok) {
+      let value = {};
+      try { value = await response.json(); } catch {
+        const raw = await response.text();
+        if (raw) value = {error: raw};
+      }
+      throw new Error(value.validation?.diagnostics?.map(item => item.message).join(" ") ?? value.error ?? "Run rejected");
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Run stream was not returned by the server.");
+    await consumeNdjson(reader, event => {
+      updateRuntimeStateFromEvent(event);
+      renderRunEvent(event);
+    });
+    if (runState.runId) {
+      try {
+        await refreshRunStateFromServer(runState.runId);
+      } catch {}
+      if (runState.status === "completed") announce("Graph run completed with streamed lifecycle evidence.");
+      else announce("Run finished; monitor the track record for final status.");
+    } else {
+      setRunState({status: "completed"});
+      announce("Graph run completed.");
+    }
+  } catch (error) {
+    announce(error.message, true);
+    if (runState.runId) await refreshRunStateFromServer().catch(() => {});
+    setRunState({status: "failed"});
+  } finally {
+    stopRunTransportClock();
+  }
+}
+
+async function stopRunGraph() {
+  if (!isRunActive() || !runState.runId) {
+    announce("No active transport to stop.", true);
+    return;
+  }
+  setRunState({status: "stopping"});
+  try {
+    await request(`/api/pipeline/runs/${encodeURIComponent(runState.runId)}/stop`, {method: "POST"});
+    announce("Stop requested; runtime is cancelling.");
+    refreshRunStateFromServer().catch(() => {});
+  } catch (error) {
+    announce(`Stop request failed: ${error.message}`, true);
+    await refreshRunStateFromServer();
+  }
+}
+
+async function panicRunGraph() {
+  if (!isRunActive() || !runState.runId) {
+    announce("No active transport to panic.", true);
+    return;
+  }
+  setRunState({status: "stopping"});
+  try {
+    await request(`/api/pipeline/runs/${encodeURIComponent(runState.runId)}/panic`, {method: "POST"});
+    announce("Panic requested; runtime is aborting immediately.");
+    refreshRunStateFromServer().catch(() => {});
+  } catch (error) {
+    announce(`Panic request failed: ${error.message}`, true);
+    await refreshRunStateFromServer();
+  }
+}
+
+function renderRunEvent(event){
+  if (event.kind === "cancelled" && event.status === "stopping") {
+    setRunState({status: "stopping", runId: runState.runId ?? event.run_id ?? null});
+  }
+  const item=document.createElement("li");
+  item.className=event.kind;
+  const output=event.output?` · ${event.output.port_id}=${JSON.stringify(event.output.value)}`:"";
+  item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${output}${event.detail?` · ${event.detail}`:""}`;
+  byId("run-events").append(item);
+  item.scrollIntoView({block:"nearest"});
+  if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}
+}
 
 function selectedNodeIds(){return selectedNodes.size?[...selectedNodes]:(selectedNode?[selectedNode]:[]);}
 function selectedEdgeIds(){return selectedEdges.size?[...selectedEdges]:(selectedEdge?[selectedEdge]:[]);}
@@ -760,17 +1116,11 @@ function fitSelectedObjects(){
 function deleteSelectedNode(){deleteSelectedObjects();}
 function disableSelectedNode(){
   const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;
-  const disabling=!node.disabled;
-  performGraphEdit(disabling?"Disable node":"Enable node",()=>{
-    if(node.disabled)node.disabled=false;
-    else{
-      pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==selectedNode&&edge.to.node_id!==selectedNode);
-      pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==selectedNode);node.disabled=true;
-    }
-    touch(pipeline);
-  });
-  announce(disabling?"Node disabled and removed from execution; its connections were removed explicitly.":"Node enabled; reconnect any relationships it needs.");
-  renderGraph();scheduleValidation();
+  try{
+    updateNodeDisabledState(node.id,!node.disabled);
+  }catch(error){
+    announce(error.message,true);
+  }
 }
 
 byId("palette-search").oninput=renderPalette;
@@ -778,7 +1128,7 @@ byId("template").onchange=event=>{const starter=starters.find(graph=>graph.graph
 byId("new").onclick=()=>loadGraph(createPipeline());byId("save").onclick=()=>saveGraph().catch(error=>announce(error.message,true));byId("open").onclick=()=>showOpen().catch(error=>announce(error.message,true));
 byId("duplicate-graph").onclick=()=>{syncName();const copy=structuredClone(pipeline);copy.graph_id=`pipeline:${globalThis.crypto?.randomUUID?.()??Date.now()}`;copy.revision=1;copy.metadata.name+= " copy";loadGraph(copy);announce("Created an independent graph copy. Save to persist it.");};
 byId("share").onclick=()=>shareGraph().catch(error=>announce(error.message,true));byId("copy-share").onclick=()=>navigator.clipboard.writeText(byId("share-url").value).then(()=>announce("Share URL copied."));
-byId("fit").onclick=()=>cy.fit(undefined,40);byId("run").onclick=runGraph;byId("cancel").onclick=()=>runController?.abort();
+byId("fit").onclick=()=>cy.fit(undefined,40);byId("run").onclick=runGraph;byId("stop").onclick=()=>stopRunGraph().catch(error=>announce(error.message,true));byId("panic").onclick=()=>panicRunGraph().catch(error=>announce(error.message,true));
 byId("undo").onclick=undoGraphEdit;byId("redo").onclick=redoGraphEdit;
 byId("copy-selection").onclick=()=>copySelectedObjects();byId("cut-selection").onclick=()=>cutSelectedObjects();byId("paste-selection").onclick=pasteSelectedObjects;byId("duplicate-selection").onclick=duplicateSelectedObjects;
 byId("delete-selection").onclick=()=>deleteSelectedObjects();
@@ -790,7 +1140,7 @@ byId("fit-selection").onclick=fitSelectedObjects;
 byId("pipeline-name").onchange=()=>{syncName();scheduleValidation();};
 byId("duplicate").onclick=duplicateSelectedObjects;
 byId("delete").onclick=deleteSelectedNode;byId("disable").onclick=disableSelectedNode;
-byId("bypass").onclick=()=>{try{performGraphEdit("Bypass node",()=>bypassNode(pipeline,selectedNode,discovery));renderGraph();scheduleValidation();announce("Node bypassed by explicit compatible rewiring.");}catch(error){announce(error.message,true);}};
+byId("bypass").onclick=()=>{try{toggleNodeBypass(selectedNode);}catch(error){announce(error.message,true);}};
 byId("replace").onclick=openReplacementPicker;
 byId("apply-config").onclick=applyConfig;byId("cancel-connect").onclick=()=>{connecting=null;cy.nodes().removeClass("compatible");renderInspector();announce("Connection cancelled.");};
 byId("apply-edge").onclick=()=>{
@@ -840,4 +1190,5 @@ document.onkeydown=event=>{
   }
 };
 
+setRunState(runState);
 discover().catch(error=>{byId("validation").textContent=`Discovery failed: ${error.message}`;byId("validation").dataset.state="invalid";announce(error.message,true);});
