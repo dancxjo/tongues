@@ -170,7 +170,7 @@ function renderRoute() {
     }
     if (!page) {
         if (workbenchRoute) {
-            activePage = cliCommands[0] || null;
+            activePage = defaultWorkbenchCommand();
             setHeader('Command Workbench', 'Commands', 'Browser-safe commands from the current Clap schema.', 'tongues');
             renderWorkbench(activePage);
             return;
@@ -189,7 +189,7 @@ function renderRoute() {
     } else {
         setHeader(page.group, page.title, page.summary, `tongues ${(page.command || []).join(' ')}`);
     }
-    if (commandRoute) renderWorkbench(page.page === 'command' ? page : cliCommands[0]);
+    if (commandRoute) renderWorkbench(page.page === 'command' ? page : defaultWorkbenchCommand());
 }
 
 function setHeader(kicker, title, summary, command) {
@@ -217,9 +217,19 @@ function renderWorkbench(page) {
         byId('command-search').value = capabilityQuery;
         commandLevel = 'all';
     }
+    if (page && commandLevel !== 'all' && page.presentation !== commandLevel) {
+        commandLevel = page.presentation;
+    }
+    document.querySelectorAll('[data-command-level]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.commandLevel === commandLevel);
+    });
     renderCommandResults();
     renderRecentCommands();
     if (page) renderCommandPage(page);
+}
+
+function defaultWorkbenchCommand() {
+    return cliCommands.find((page) => page.presentation === 'workflow') || cliCommands[0] || null;
 }
 
 function renderCommandResults() {
