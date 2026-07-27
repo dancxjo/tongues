@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "cases": [
+    {
+      "name": "normal_playback",
+      "target": {
+        "duration_ms": 1000, "rms": 0.2, "peak": 0.5,
+        "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+        "signature": [0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1]
+      },
+      "evidence": {
+        "observation_id": "obs:normal", "playback_session_id": "playback:fixture",
+        "occurred_at_ms": 100, "device_reported_playing": true,
+        "external_speech_probability": 0.05, "dropout_detected": false,
+        "features": {
+          "duration_ms": 990, "rms": 0.18, "peak": 0.48,
+          "zero_crossing_rate": 0.11, "clipped_fraction": 0.0,
+          "signature": [0.1, 0.19, 0.29, 0.39, 0.39, 0.29, 0.19, 0.1]
+        }
+      },
+      "expected": "likely_self_speech"
+    },
+    {
+      "name": "user_interruption",
+      "target": {
+        "duration_ms": 1000, "rms": 0.2, "peak": 0.5,
+        "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+        "signature": [0.5, 0.1, 0.5, 0.1, 0.5, 0.1, 0.5, 0.1]
+      },
+      "evidence": {
+        "observation_id": "obs:external", "playback_session_id": "playback:fixture",
+        "occurred_at_ms": 200, "device_reported_playing": true,
+        "external_speech_probability": 0.95, "dropout_detected": false,
+        "features": {
+          "duration_ms": 900, "rms": 0.25, "peak": 0.6,
+          "zero_crossing_rate": 0.3, "clipped_fraction": 0.0,
+          "signature": [0.01, 0.6, 0.01, 0.6, 0.01, 0.6, 0.01, 0.6]
+        }
+      },
+      "expected": "likely_external_speech"
+    },
+    {
+      "name": "echo_overlap",
+      "target": {
+        "duration_ms": 1000, "rms": 0.2, "peak": 0.5,
+        "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+        "signature": [0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1]
+      },
+      "evidence": {
+        "observation_id": "obs:overlap", "playback_session_id": "playback:fixture",
+        "occurred_at_ms": 300, "device_reported_playing": true,
+        "external_speech_probability": 0.8, "dropout_detected": false,
+        "features": {
+          "duration_ms": 1000, "rms": 0.3, "peak": 0.7,
+          "zero_crossing_rate": 0.2, "clipped_fraction": 0.0,
+          "signature": [0.11, 0.21, 0.31, 0.41, 0.41, 0.31, 0.21, 0.11]
+        }
+      },
+      "expected": "overlap"
+    },
+    {
+      "name": "missing_output",
+      "target": {
+        "duration_ms": 1000, "rms": 0.2, "peak": 0.5,
+        "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+        "signature": [0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1]
+      },
+      "evidence": {
+        "observation_id": "obs:missing", "playback_session_id": "playback:fixture",
+        "occurred_at_ms": 400, "device_reported_playing": true,
+        "external_speech_probability": 0.0, "dropout_detected": false
+      },
+      "expected": "missing_output"
+    },
+    {
+      "name": "partial_output",
+      "target": {
+        "duration_ms": 1000, "rms": 0.2, "peak": 0.5,
+        "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+        "signature": [0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1]
+      },
+      "evidence": {
+        "observation_id": "obs:partial", "playback_session_id": "playback:fixture",
+        "occurred_at_ms": 500, "device_reported_playing": true,
+        "external_speech_probability": 0.1, "dropout_detected": false,
+        "features": {
+          "duration_ms": 400, "rms": 0.2, "peak": 0.5,
+          "zero_crossing_rate": 0.1, "clipped_fraction": 0.0,
+          "signature": [0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1]
+        }
+      },
+      "expected": "partial_output"
+    }
+  ]
+}
