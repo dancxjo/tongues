@@ -14,45 +14,45 @@ const NODE_FACEPLATE_GEOMETRY_LIMITS = {
 };
 
 const NODE_KIND_ICON = {
-  microphone: "🎤",
-  control_source: "🎛️",
-  audio_file: "🎵",
-  audio_source: "🎵",
-  text_source: "📝",
-  text_file: "📄",
-  text_url: "🔗",
-  asr: "🎙️",
-  tts: "🔊",
-  transcript_sink: "📤",
-  audio_sink: "📢",
-  audio_output: "🔊",
-  transcript_source: "📝",
-  adaptation: "🧩",
-  adapter: "🔀",
+  microphone: "◉",
+  control_source: "⌘",
+  audio_file: "♪",
+  audio_source: "◖",
+  text_source: "▤",
+  text_file: "▥",
+  text_url: "↗",
+  asr: "◉",
+  tts: "◒",
+  transcript_sink: "⇥",
+  audio_sink: "◒",
+  audio_output: "◒",
+  transcript_source: "▤",
+  adaptation: "◇",
+  adapter: "⇄",
 };
 
 const NODE_GROUP_ICON = {
-  "Sources": "📥",
-  "Audio processing": "🎚️",
-  "Audio & linguistic processing": "🎚️",
-  "Recognition": "🎙️",
-  "Language & speaker analysis": "👥",
-  "Linguistic processing": "🧠",
-  "Response generation": "🧾",
-  "Synthesis": "🗣️",
-  "Inspection & control": "🧩",
+  "Sources": "⇥",
+  "Audio processing": "◒",
+  "Audio & linguistic processing": "◒",
+  "Recognition": "◉",
+  "Language & speaker analysis": "◎",
+  "Linguistic processing": "✦",
+  "Response generation": "▤",
+  "Synthesis": "◒",
+  "Inspection & control": "◇",
 };
 
 function iconForKind(kind = "") {
   const normalized = String(kind);
   return NODE_KIND_ICON[normalized]
-    || (normalized.includes("microphone") ? "🎤" : null)
-    || (normalized.includes("tts") || normalized.includes("speak") ? "🔊" : null)
-    || (normalized.includes("asr") || normalized.includes("speech") ? "🎙️" : null)
-    || (normalized.includes("diarization") || normalized.includes("speaker") ? "👥" : null)
-    || (normalized.includes("transcript") || normalized.endsWith("_sink") || normalized.includes("output") ? "📝" : null)
-    || (normalized.includes("text") ? "🧾" : null)
-    || (normalized.includes("control") || normalized.includes("merge") || normalized.includes("adapter") ? "🧩" : null);
+    || (normalized.includes("microphone") ? "◉" : null)
+    || (normalized.includes("tts") || normalized.includes("speak") ? "◒" : null)
+    || (normalized.includes("asr") || normalized.includes("speech") ? "◉" : null)
+    || (normalized.includes("diarization") || normalized.includes("speaker") ? "◎" : null)
+    || (normalized.includes("transcript") || normalized.endsWith("_sink") || normalized.includes("output") ? "▤" : null)
+    || (normalized.includes("text") ? "▥" : null)
+    || (normalized.includes("control") || normalized.includes("merge") || normalized.includes("adapter") ? "◇" : null);
 }
 
 function iconForEntry(entry = {}) {
@@ -60,7 +60,7 @@ function iconForEntry(entry = {}) {
   const direct = iconForKind(kind);
   if (direct) return direct;
   const group = entry.group ?? "";
-  return NODE_GROUP_ICON[group] ?? "🧱";
+  return NODE_GROUP_ICON[group] ?? "▦";
 }
 
 function itemForNode(node, catalog) {
