@@ -31,6 +31,7 @@
         jobStreams: new Map(),
         liveProviders: [],
         liveMessages: [],
+        liveJournal: [],
         liveTurn: null,
         liveGeneration: 0,
         liveSynthesisTail: Promise.resolve(),
@@ -556,6 +557,8 @@
                             <button id="live-replay" type="button" class="secondary-button" disabled>Replay turn</button>
                             <a id="live-download" class="secondary-button hidden"
                                 download="tongues-live-turn.wav">Download turn</a>
+                            <a href="/studio/graphs/starter%3Alive_conversation">Open conversation graph</a>
+                            <a id="live-session-link" class="hidden" href="/sessions/new/correct">Inspect durable session evidence</a>
                         </div>
                     </form>
                     <details class="advanced-section">
@@ -2856,6 +2859,7 @@
     }
 
     function appendLiveJournal(event) {
+        state.liveJournal.push(structuredClone(event));
         const journal = byId('live-journal');
         const printable = structuredClone(event);
         const audio = printable?.event?.data?.audio_base64;
@@ -2880,12 +2884,14 @@
         state.liveFinalTokenAt = 0;
         state.liveFirstAudioAt = 0;
         state.liveContract = createStreamContractState();
+        state.liveJournal = [];
         byId('live-journal').textContent = 'No turn events yet.';
         for (const id of ['live-generated-count', 'live-planned-count', 'live-spoken-count']) {
             byId(id).textContent = '0';
         }
         byId('live-replay').disabled = true;
         byId('live-download').classList.add('hidden');
+        byId('live-session-link').classList.add('hidden');
         const conversation = byId('live-conversation');
         conversation.querySelector('.live-empty')?.remove();
         const message = (role, text, className) => {
@@ -3276,6 +3282,33 @@
             committed_chars: [...state.liveCommitted].length,
             at_ms: Date.now(),
         });
+        const { sessionFromEvents } = await import('/wavedeck-model.mjs');
+        const durableEvents = state.liveJournal.filter((item) => (
+            item?.event?.data?.type === 'committed_segment'
+        ));
+        const sessionId = `conversation:${turnId}`;
+        const session = sessionFromEvents(sessionId, durableEvents);
+        const sessionResponse = await fetch(
+            `/api/timeline/sessions/${encodeURIComponent(sessionId)}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: 1,
+                    session,
+                    context: {
+                        graph_id: 'starter:live_conversation',
+                        source: `conversation turn ${turnId}`,
+                    },
+                }),
+            },
+        );
+        if (!sessionResponse.ok) {
+            throw new Error(`Conversation completed but its session could not be saved: ${await sessionResponse.text()}`);
+        }
+        const sessionLink = byId('live-session-link');
+        sessionLink.href = `/sessions/${encodeURIComponent(sessionId)}/correct`;
+        sessionLink.classList.remove('hidden');
         const wav = wavBlobFromBuffers(state.liveAudioBuffers);
         if (wav) {
             const download = byId('live-download');

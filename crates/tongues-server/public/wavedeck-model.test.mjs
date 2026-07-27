@@ -42,3 +42,10 @@ test("live shared events become the same session schema", () => {
 test("unknown schema produces an actionable migration error", () => {
   assert.throws(() => projectSession({...base(),schema_version:99}), /unsupported; expected 1/);
 });
+
+test("Run Tracks handoff has a stable evidence interval to select", () => {
+  const session = base();
+  const selected = projectSession(session).edited.find(span =>
+    span.id.endsWith(":1") || (span.start_ms < 40 && span.end_ms > 10));
+  assert.equal(selected.id, "word:1");
+});

@@ -18,17 +18,40 @@ async function request(path,options={}){
   return value;
 }
 function jsonOptions(method,value){return{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(value)};}
+function graphIdFromRoute(pathname=location.pathname){
+  const match=pathname.match(/^\/studio\/graphs\/([^/]+)\/?$/);
+  if(!match||match[1]==="new")return null;
+  try{return decodeURIComponent(match[1]);}catch{return null;}
+}
+function graphRoute(graphId,nodeId=""){
+  const route=`/studio/graphs/${encodeURIComponent(graphId)}`;
+  return nodeId?`${route}?node=${encodeURIComponent(nodeId)}`:route;
+}
+function showRouteRecovery(message){
+  const target=byId("route-recovery");target.hidden=false;
+  target.innerHTML=`${escapeHtml(message)} <a href="/studio/graphs/new">Start a new graph</a> or <a href="/runs">open recent runs</a>.`;
+}
 
 async function discover(){
   [discovery,{graphs:starters}]=await Promise.all([request("/api/pipeline/catalog"),request("/api/pipeline/starters")]);
   catalog=buildCatalog(discovery);renderPalette();renderTemplates();
   byId("template").replaceChildren(...starters.map(graph=>new Option(graph.metadata.name,graph.graph_id)));
-  const requestedStarter=new URLSearchParams(location.search).get("starter");
-  const selectedStarter=starters.find(graph=>graph.graph_id===`starter:${requestedStarter}`)
-    ??starters.find(graph=>graph.graph_id===requestedStarter)
-    ??starters[0];
-  initCanvas();loadGraph(selectedStarter??createPipeline());
-  announce(`Loaded ${catalog.length} backend-discovered choices and ${starters.length} starter graphs.`);
+  const params=new URLSearchParams(location.search),routeGraphId=graphIdFromRoute();
+  const requestedStarter=params.get("starter");
+  const starterId=routeGraphId?.startsWith("starter:")?routeGraphId:requestedStarter;
+  const selectedStarter=starters.find(graph=>graph.graph_id===`starter:${starterId}`)
+    ??starters.find(graph=>graph.graph_id===starterId);
+  initCanvas();
+  let graph=selectedStarter;
+  if(routeGraphId&&!selectedStarter){
+    try{const value=await request(`/api/pipeline/graphs/${encodeURIComponent(routeGraphId)}`);graph=value.document??value;}
+    catch(error){showRouteRecovery(`Graph ${routeGraphId} could not be restored: ${error.message}`);}
+  }
+  loadGraph(graph??starters[0]??createPipeline());
+  const requestedNode=params.get("node");
+  if(requestedNode&&pipeline.nodes.some(node=>node.id===requestedNode))selectNode(requestedNode);
+  else if(requestedNode)showRouteRecovery(`Node ${requestedNode} is not present in graph ${pipeline.graph_id}.`);
+  announce(`Loaded ${pipeline.metadata.name} as an editable graph configuration.`);
 }
 
 function initCanvas(){
@@ -83,7 +106,12 @@ function addCatalogNode(item){
 function loadGraph(graph){
   pipeline=structuredClone(graph);pipeline.metadata.labels??={};ensureLayout(pipeline);
   selectedNode=pipeline.nodes[0]?.id??null;selectedEdge=null;connecting=null;
-  byId("pipeline-name").value=pipeline.metadata.name;renderGraph();scheduleValidation(0);
+  byId("pipeline-name").value=pipeline.metadata.name;
+  byId("graph-identity").textContent=pipeline.graph_id.startsWith("starter:")
+    ?"Editing a configuration draft seeded from a backend template"
+    :`Editing saved graph ${pipeline.graph_id}, revision ${pipeline.revision}`;
+  document.title=`${pipeline.metadata.name} · Graph Studio · Tongues`;
+  renderGraph();scheduleValidation(0);
 }
 
 function graphElements(){
@@ -213,13 +241,20 @@ async function validateRemote(){
 
 function syncName(){const name=byId("pipeline-name").value.trim()||"Untitled pipeline";if(name!==pipeline.metadata.name){pipeline.metadata.name=name;touch(pipeline);}}
 async function saveGraph(){
-  syncName();const saved=await request(`/api/pipeline/graphs/${encodeURIComponent(pipeline.graph_id)}`,jsonOptions("PUT",pipeline));pipeline=saved.document??saved;renderGraph();announce(`Saved ${pipeline.metadata.name} revision ${pipeline.revision} through the backend.`);
+  syncName();
+  if(pipeline.graph_id.startsWith("starter:")){
+    pipeline.graph_id=`pipeline:${globalThis.crypto?.randomUUID?.()??Date.now()}`;
+    pipeline.revision=1;
+  }
+  const saved=await request(`/api/pipeline/graphs/${encodeURIComponent(pipeline.graph_id)}`,jsonOptions("PUT",pipeline));pipeline=saved.document??saved;
+  history.replaceState({graph_id:pipeline.graph_id},"",graphRoute(pipeline.graph_id));
+  loadGraph(pipeline);announce(`Saved ${pipeline.metadata.name} revision ${pipeline.revision} through the backend.`);
 }
 async function showOpen(){
   const {graphs}=await request("/api/pipeline/graphs");byId("saved-graphs").replaceChildren(...graphs.map(summary=>{const button=document.createElement("button");button.textContent=`${summary.name} · revision ${summary.revision}`;button.onclick=async()=>{const value=await request(`/api/pipeline/graphs/${encodeURIComponent(summary.graph_id)}`);loadGraph(value.document??value);byId("open-dialog").close();announce(`Opened ${summary.name}.`);};return button;}));byId("open-dialog").showModal();
 }
 async function shareGraph(){
-  await saveGraph();const url=new URL(`/api/pipeline/graphs/${encodeURIComponent(pipeline.graph_id)}`,location.href).href;
+  await saveGraph();const url=new URL(graphRoute(pipeline.graph_id),location.href).href;
   byId("share-url").value=url;byId("share-json").value=JSON.stringify(pipeline,null,2);byId("share-dialog").showModal();
 }
 
@@ -228,7 +263,13 @@ async function runGraph(){
   try{
     const response=await fetch("/api/pipeline/run",{...jsonOptions("POST",pipeline),signal:runController.signal});
     if(!response.ok){const value=await response.json();throw new Error(value.validation?.diagnostics?.map(item=>item.message).join(" ")??value.error??"Run rejected");}
-    await consumeNdjson(response.body.getReader(),renderRunEvent);
+    await consumeNdjson(response.body.getReader(),event=>{
+      renderRunEvent(event);
+      if(event.run_id){
+        byId("run-context").hidden=false;
+        byId("run-tracks-link").href=`/runs/${encodeURIComponent(event.run_id)}/tracks`;
+      }
+    });
     announce("Graph run completed with streamed lifecycle evidence.");
   }catch(error){if(error.name==="AbortError"){renderRunEvent({kind:"cancelled",node_id:"graph",detail:"Cancelled by operator"});announce("Graph run cancelled.");}else announce(error.message,true);}
   finally{runController=null;byId("run").disabled=false;byId("cancel").disabled=true;}

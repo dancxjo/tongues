@@ -20,12 +20,20 @@
 <body>
   <header>
     <a href="/speech/compose">← Speech Studio</a>
-    <div><h1>WaveDeck</h1><p>Inspect → correct → align → annotate → edit → replay → export</p></div>
+    <div><p><strong>Correcting an editable projection</strong></p><h1 id="page-title" tabindex="-1">WaveDeck</h1><p>Inspect → correct → align → annotate → edit → replay → export</p></div>
+    <a href="/runs">Execution tracks</a>
+    <a href="/studio/graphs/new">Graph Studio</a>
   </header>
   <main>
     <section aria-labelledby="session-heading">
       <h2 id="session-heading"><span id="session-name">No session</span></h2>
       <p id="operation-count">0 replayable operations</p>
+      <p id="session-context">Original evidence remains immutable. Edits are a separate replayable interpretation.</p>
+      <p id="recovery" role="alert"></p>
+      <nav class="toolbar" aria-label="Durable session context">
+        <a id="context-run" hidden href="/runs">Return to execution run</a>
+        <a id="context-graph" hidden href="/studio/graphs/new">Open source graph</a>
+      </nav>
       <div class="toolbar">
         <label class="file">Open session JSON <input id="open-file" type="file" accept="application/json"></label>
         <button id="start-live">Start live microphone</button><button id="stop-live" disabled>Stop live</button>

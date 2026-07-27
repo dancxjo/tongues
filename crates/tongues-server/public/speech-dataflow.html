@@ -29,7 +29,13 @@
   </style>
 </head>
 <body>
-  <header><a href="/speech/compose">← Studio</a><h1>Patch canvas</h1><p>Backend-typed speech graphs with explicit branches, adapters, and merges</p></header>
+  <header>
+    <a href="/speech/compose">← Speech Studio</a>
+    <h1 id="page-title" tabindex="-1">Graph Studio</h1>
+    <p><strong id="graph-identity">Editing a configuration draft</strong> · backend-typed graphs with explicit branches, adapters, and merges</p>
+    <a href="/runs">Execution tracks</a>
+    <a href="/sessions/new/correct">WaveDeck</a>
+  </header>
   <div class="toolbar">
     <button class="mobile-palette" hidden id="toggle-palette">Nodes</button>
     <label>Starter <select id="template"></select></label>
@@ -39,6 +45,11 @@
     <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
   </div>
   <p id="validation" role="status">Loading backend discovery…</p>
+  <aside id="route-recovery" class="section" role="alert" hidden></aside>
+  <aside id="run-context" class="section" hidden>
+    <strong>Execution run recorded.</strong>
+    <a id="run-tracks-link" href="/runs">Observe durable run tracks</a>
+  </aside>
   <main class="workspace">
     <aside class="sidebar left" id="palette-panel" aria-labelledby="palette-heading">
       <h2 id="palette-heading">Node palette</h2>

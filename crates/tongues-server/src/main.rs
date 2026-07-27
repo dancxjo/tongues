@@ -21,6 +21,7 @@ use serde_json::json;
 use speaking::{
     AudioDirection, AudioEncoding, AudioFormat, ChannelLayout, ClockOrigin, EventRef, EventTime,
     Provenance, SegmentId, StreamEvent, StreamEventSequencer, TextRole, UtteranceEventId,
+    timeline::SpeechTimelineSession,
 };
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -33,7 +34,7 @@ use std::path::{Component, Path as FsPath, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Semaphore, broadcast};
@@ -332,6 +333,12 @@ fn build_app(state: AppState) -> Router {
             get(get_pipeline_graph).put(save_pipeline_graph),
         )
         .route("/api/pipeline/run", post(run_pipeline_graph))
+        .route("/api/pipeline/runs", get(list_pipeline_runs))
+        .route("/api/pipeline/runs/{run_id}", get(get_pipeline_run))
+        .route(
+            "/api/timeline/sessions/{session_id}",
+            get(get_timeline_session).put(save_timeline_session),
+        )
         .route("/api/live/providers", get(get_live_providers))
         .route("/api/live/turn", post(start_live_turn))
         .route("/api/live/turn/{turn_id}/cancel", post(cancel_live_turn))
@@ -346,6 +353,12 @@ fn build_app(state: AppState) -> Router {
         .route("/speech", get(serve_app_index))
         .route("/speech/", get(serve_app_index))
         .route("/speech/{*path}", get(serve_app_index))
+        .route("/studio/graphs/new", get(serve_speech_dataflow))
+        .route("/studio/graphs/{graph_id}", get(serve_speech_dataflow))
+        .route("/runs", get(serve_run_tracks))
+        .route("/runs/{run_id}/tracks", get(serve_run_tracks))
+        .route("/sessions/new/correct", get(serve_wavedeck))
+        .route("/sessions/{session_id}/correct", get(serve_wavedeck))
         .route("/commands", get(serve_app_index))
         .route("/commands/", get(serve_app_index))
         .route("/commands/{*path}", get(serve_app_index))
@@ -640,6 +653,9 @@ async fn migrate_pipeline_graph(Json(value): Json<serde_json::Value>) -> Respons
 }
 
 const PIPELINE_GRAPH_DIR: &str = "data/speech-graphs";
+const PIPELINE_RUN_DIR: &str = "data/speech-runs";
+const TIMELINE_SESSION_DIR: &str = "data/speech-sessions";
+static PIPELINE_RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize)]
 struct PipelineGraphSummary {
@@ -651,24 +667,44 @@ struct PipelineGraphSummary {
 }
 
 fn pipeline_graph_file(root: &FsPath, graph_id: &str) -> Result<PathBuf, String> {
-    if graph_id.is_empty()
-        || graph_id.len() > 160
-        || !graph_id.chars().all(|character| {
+    durable_record_file(root, PIPELINE_GRAPH_DIR, graph_id, "graph")
+}
+
+fn durable_record_file(
+    root: &FsPath,
+    directory: &str,
+    record_id: &str,
+    label: &str,
+) -> Result<PathBuf, String> {
+    if record_id.is_empty()
+        || record_id.len() > 160
+        || !record_id.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')
         })
     {
-        return Err(
-            "graph ID must contain only letters, numbers, dash, underscore, colon, or dot".into(),
-        );
+        return Err(format!(
+            "{label} ID must contain only letters, numbers, dash, underscore, colon, or dot"
+        ));
     }
     let mut hash = 0xcbf29ce484222325u64;
-    for byte in graph_id.bytes() {
+    for byte in record_id.bytes() {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    Ok(root
-        .join(PIPELINE_GRAPH_DIR)
-        .join(format!("{hash:016x}.json")))
+    Ok(root.join(directory).join(format!("{hash:016x}.json")))
+}
+
+fn write_durable_json<T: Serialize>(path: &FsPath, value: &T) -> Result<(), String> {
+    let Some(directory) = path.parent() else {
+        return Err("durable record path has no parent".into());
+    };
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let part = path.with_extension("json.part");
+    let mut file = std::fs::File::create(&part).map_err(|error| error.to_string())?;
+    serde_json::to_writer_pretty(&mut file, value).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    std::fs::rename(part, path).map_err(|error| error.to_string())
 }
 
 fn read_pipeline_graph(path: &FsPath) -> Result<tongues_pipeline::GraphDocument, String> {
@@ -764,33 +800,121 @@ async fn save_pipeline_graph(
                 .into_response();
         }
     }
-    let Some(directory) = path.parent() else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "invalid graph store path"})),
-        )
-            .into_response();
-    };
-    if let Err(error) = std::fs::create_dir_all(directory) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": error.to_string()})),
-        )
-            .into_response();
-    }
-    let part = path.with_extension("json.part");
-    let result = (|| -> Result<(), String> {
-        let mut file = std::fs::File::create(&part).map_err(|error| error.to_string())?;
-        serde_json::to_writer_pretty(&mut file, &graph).map_err(|error| error.to_string())?;
-        file.write_all(b"\n").map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        std::fs::rename(&part, &path).map_err(|error| error.to_string())
-    })();
-    match result {
+    match write_durable_json(&path, &graph) {
         Ok(()) => Json(json!({"document": graph})).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("could not save graph: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PipelineRunRecord {
+    schema_version: u16,
+    run_id: String,
+    plan_id: String,
+    graph_id: String,
+    graph_revision: u64,
+    status: String,
+    started_at_ms: u64,
+    updated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    events: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct PipelineRunSummary {
+    run_id: String,
+    plan_id: String,
+    graph_id: String,
+    graph_revision: u64,
+    status: String,
+    started_at_ms: u64,
+    updated_at_ms: u64,
+    session_id: Option<String>,
+    event_count: usize,
+}
+
+impl From<&PipelineRunRecord> for PipelineRunSummary {
+    fn from(run: &PipelineRunRecord) -> Self {
+        Self {
+            run_id: run.run_id.clone(),
+            plan_id: run.plan_id.clone(),
+            graph_id: run.graph_id.clone(),
+            graph_revision: run.graph_revision,
+            status: run.status.clone(),
+            started_at_ms: run.started_at_ms,
+            updated_at_ms: run.updated_at_ms,
+            session_id: run.session_id.clone(),
+            event_count: run.events.len(),
+        }
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn new_pipeline_run_id() -> String {
+    format!(
+        "run:{}:{}",
+        unix_time_ms(),
+        PIPELINE_RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn pipeline_run_file(root: &FsPath, run_id: &str) -> Result<PathBuf, String> {
+    durable_record_file(root, PIPELINE_RUN_DIR, run_id, "run")
+}
+
+fn read_pipeline_run(path: &FsPath) -> Result<PipelineRunRecord, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+}
+
+async fn list_pipeline_runs(State(state): State<AppState>) -> impl IntoResponse {
+    let directory = state.workspace_root.join(PIPELINE_RUN_DIR);
+    let mut runs = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| read_pipeline_run(&entry.path()).ok())
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|run| std::cmp::Reverse(run.started_at_ms));
+    runs.truncate(50);
+    let runs = runs
+        .iter()
+        .map(PipelineRunSummary::from)
+        .collect::<Vec<_>>();
+    Json(json!({"schema_version": 1, "runs": runs}))
+}
+
+async fn get_pipeline_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
+    let path = match pipeline_run_file(&state.workspace_root, &run_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    match read_pipeline_run(&path) {
+        Ok(run) if run.run_id == run_id => Json(run).into_response(),
+        Ok(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "stored run identity does not match the requested run"})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "execution run was not found",
+                "recovery": "/runs"
+            })),
         )
             .into_response(),
     }
@@ -812,6 +936,37 @@ async fn run_pipeline_graph(
             return (StatusCode::UNPROCESSABLE_ENTITY, Json(failure)).into_response();
         }
     };
+    let run_id = new_pipeline_run_id();
+    let run_path = match pipeline_run_file(&state.workspace_root, &run_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+    let now = unix_time_ms();
+    let mut run = PipelineRunRecord {
+        schema_version: 1,
+        run_id: run_id.clone(),
+        plan_id: plan.plan_id.clone(),
+        graph_id: plan.graph_id.clone(),
+        graph_revision: plan.graph_revision,
+        status: "running".into(),
+        started_at_ms: now,
+        updated_at_ms: now,
+        session_id: None,
+        events: Vec::new(),
+    };
+    if let Err(error) = write_durable_json(&run_path, &run) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("could not start durable run: {error}")})),
+        )
+            .into_response();
+    }
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
     tokio::spawn(async move {
         let started = std::time::Instant::now();
@@ -824,7 +979,8 @@ async fn run_pipeline_graph(
                     )),
                     _ => None,
                 };
-                let line = json!({
+                let event = json!({
+                    "run_id": run_id,
                     "plan_id": plan.plan_id,
                     "graph_id": plan.graph_id,
                     "graph_revision": plan.graph_revision,
@@ -833,15 +989,25 @@ async fn run_pipeline_graph(
                     "kind": kind,
                     "elapsed_ms": started.elapsed().as_millis() as u64,
                     "detail": detail,
-                })
-                .to_string()
-                    + "\n";
+                });
+                run.events.push(event.clone());
+                run.updated_at_ms = unix_time_ms();
+                if write_durable_json(&run_path, &run).is_err() {
+                    return;
+                }
+                let line = event.to_string() + "\n";
                 if sender.send(Ok(Bytes::from(line))).await.is_err() {
+                    run.status = "cancelled".into();
+                    run.updated_at_ms = unix_time_ms();
+                    let _ = write_durable_json(&run_path, &run);
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         }
+        run.status = "completed".into();
+        run.updated_at_ms = unix_time_ms();
+        let _ = write_durable_json(&run_path, &run);
     });
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-ndjson")
@@ -850,6 +1016,127 @@ async fn run_pipeline_graph(
             tokio_stream::wrappers::ReceiverStream::new(receiver),
         ))
         .unwrap()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TimelineSessionContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    graph_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TimelineSessionRecord {
+    #[serde(default)]
+    schema_version: u16,
+    session: SpeechTimelineSession,
+    #[serde(default)]
+    context: TimelineSessionContext,
+    #[serde(default)]
+    updated_at_ms: u64,
+}
+
+fn timeline_session_file(root: &FsPath, session_id: &str) -> Result<PathBuf, String> {
+    durable_record_file(root, TIMELINE_SESSION_DIR, session_id, "session")
+}
+
+async fn get_timeline_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let path = match timeline_session_file(&state.workspace_root, &session_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    match std::fs::read(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| {
+            serde_json::from_slice::<TimelineSessionRecord>(&bytes)
+                .map_err(|error| error.to_string())
+        }) {
+        Ok(record) if record.session.session_id == session_id => Json(record).into_response(),
+        Ok(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "stored session identity does not match the requested session"})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "speech session was not found or is no longer available",
+                "recovery": "/sessions/new/correct"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn save_timeline_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(mut record): Json<TimelineSessionRecord>,
+) -> Response {
+    if record.session.session_id != session_id {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "request session ID does not match the session document"})),
+        )
+            .into_response();
+    }
+    sanitize_timeline_session(&mut record.session);
+    if let Err(error) = record.session.validate() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response();
+    }
+    let path = match timeline_session_file(&state.workspace_root, &session_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    record.schema_version = 1;
+    record.updated_at_ms = unix_time_ms();
+    match write_durable_json(&path, &record) {
+        Ok(()) => Json(record).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("could not save session: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+fn sanitize_timeline_session(session: &mut SpeechTimelineSession) {
+    const SENSITIVE_METADATA: [&str; 5] = [
+        "audio_base64",
+        "biometric",
+        "speaker_embedding",
+        "voice_embedding",
+        "voiceprint",
+    ];
+    for span in &mut session.evidence {
+        span.metadata
+            .retain(|key, _| !SENSITIVE_METADATA.contains(&key.as_str()));
+    }
+    for event in &mut session.source_events {
+        if let StreamEvent::AudioChunk {
+            audio_base64,
+            metadata,
+            ..
+        } = event
+        {
+            *audio_base64 = None;
+            metadata.retain(|key, _| !SENSITIVE_METADATA.contains(&key.as_str()));
+        }
+    }
 }
 
 async fn get_audio_input_capabilities() -> impl IntoResponse {
@@ -1481,11 +1768,27 @@ fn ensure_self_signed_cert(cert_dir: &FsPath) -> Result<(), StartupError> {
 }
 
 async fn serve_app_index(State(state): State<AppState>) -> impl IntoResponse {
-    match tokio::fs::read_to_string(state.static_dir.join("index.html")).await {
+    serve_static_html(&state, "index.html", "web app index").await
+}
+
+async fn serve_speech_dataflow(State(state): State<AppState>) -> impl IntoResponse {
+    serve_static_html(&state, "speech-dataflow.html", "Speech Studio graph editor").await
+}
+
+async fn serve_run_tracks(State(state): State<AppState>) -> impl IntoResponse {
+    serve_static_html(&state, "run-tracks.html", "execution tracks workspace").await
+}
+
+async fn serve_wavedeck(State(state): State<AppState>) -> impl IntoResponse {
+    serve_static_html(&state, "wavedeck.html", "WaveDeck").await
+}
+
+async fn serve_static_html(state: &AppState, file: &str, label: &str) -> Response {
+    match tokio::fs::read_to_string(state.static_dir.join(file)).await {
         Ok(index) => Html(index).into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read web app index: {error}"),
+            format!("Failed to read {label}: {error}"),
         )
             .into_response(),
     }
@@ -9543,6 +9846,89 @@ mod tests {
         assert!(pipeline_graph_file(&root, "../escape").is_err());
 
         std::fs::remove_dir_all(&root).expect("remove isolated graph store fixture");
+    }
+
+    #[test]
+    fn durable_run_and_session_records_keep_identity_and_reject_unsafe_ids() {
+        let root =
+            std::env::temp_dir().join(format!("tongues-route-records-{}", uuid::Uuid::new_v4()));
+        let run = PipelineRunRecord {
+            schema_version: 1,
+            run_id: "run:fixture:1".into(),
+            plan_id: "plan:fixture".into(),
+            graph_id: "pipeline:fixture".into(),
+            graph_revision: 3,
+            status: "completed".into(),
+            started_at_ms: 10,
+            updated_at_ms: 20,
+            session_id: Some("session:fixture".into()),
+            events: vec![json!({"node_id": "asr", "kind": "completed"})],
+        };
+        let run_path = pipeline_run_file(&root, &run.run_id).expect("safe run ID");
+        write_durable_json(&run_path, &run).expect("persist run");
+        assert_eq!(
+            read_pipeline_run(&run_path).expect("restore run").graph_id,
+            run.graph_id
+        );
+        assert!(!run_path.with_extension("json.part").exists());
+        let summary = PipelineRunSummary::from(&run);
+        assert_eq!(summary.event_count, 1);
+        assert_eq!(summary.status, "completed");
+
+        let session =
+            SpeechTimelineSession::new("session:fixture", Vec::new(), Vec::new()).unwrap();
+        let record = TimelineSessionRecord {
+            schema_version: 1,
+            session,
+            context: TimelineSessionContext {
+                graph_id: Some(run.graph_id.clone()),
+                run_id: Some(run.run_id.clone()),
+                source: Some("fixture".into()),
+            },
+            updated_at_ms: 20,
+        };
+        let session_path =
+            timeline_session_file(&root, &record.session.session_id).expect("safe session ID");
+        write_durable_json(&session_path, &record).expect("persist session");
+        let restored: TimelineSessionRecord =
+            serde_json::from_slice(&std::fs::read(session_path).unwrap()).unwrap();
+        assert_eq!(restored.context.run_id, Some(run.run_id));
+        assert!(pipeline_run_file(&root, "../escape").is_err());
+        assert!(timeline_session_file(&root, "session/escape").is_err());
+
+        std::fs::remove_dir_all(&root).expect("remove isolated route records");
+    }
+
+    #[test]
+    fn durable_timeline_sanitizes_raw_audio_and_biometric_metadata() {
+        let mut session =
+            SpeechTimelineSession::new("session:test", Vec::new(), Vec::new()).expect("session");
+        session.source_events.push(StreamEvent::AudioChunk {
+            direction: AudioDirection::Input,
+            chunk_sequence: 0,
+            frame_count: 4,
+            segment_id: None,
+            format: None,
+            audio_base64: Some("raw-audio".into()),
+            metadata: BTreeMap::from([
+                ("speaker_embedding".into(), json!([0.1, 0.2])),
+                ("level_dbfs".into(), json!(-12)),
+            ]),
+        });
+
+        sanitize_timeline_session(&mut session);
+
+        let StreamEvent::AudioChunk {
+            audio_base64,
+            metadata,
+            ..
+        } = &session.source_events[0]
+        else {
+            panic!("audio chunk");
+        };
+        assert!(audio_base64.is_none());
+        assert!(!metadata.contains_key("speaker_embedding"));
+        assert_eq!(metadata["level_dbfs"], json!(-12));
     }
 
     #[test]

@@ -99,6 +99,10 @@ completed, cancelled, and failed events with elapsed timing and derivation
 data. Cancellation closes all remaining owners/channels and is covered by a
 mid-run fixture.
 
+Route-level graph identity, durable execution records, tracks handoffs, and
+the distinction between configuration drafts and execution evidence are
+documented in [speech-workspace-navigation.md](speech-workspace-navigation.md).
+
 ## Migration
 
 Schema 1 graphs migrate to schema 2 by renaming `id` to `graph_id`, moving

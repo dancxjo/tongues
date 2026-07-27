@@ -9,10 +9,86 @@ let audio = null;
 let media = null;
 let source = null;
 let processor = null;
+let context = {};
 const liveEvents = [];
 
 const byId = id => document.getElementById(id);
 const announce = text => { byId("status").textContent = text; };
+const sessionIdFromRoute = (pathname = location.pathname) => {
+  const match = pathname.match(/^\/sessions\/([^/]+)\/correct\/?$/);
+  if (!match || match[1] === "new") return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+};
+
+async function request(path, options = {}) {
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let value = {};
+  try { value = text ? JSON.parse(text) : {}; } catch { value = {error: text}; }
+  if (!response.ok) throw new Error(value.error || `Request failed (${response.status}).`);
+  return value;
+}
+
+function renderContext() {
+  byId("context-run").hidden = !context.run_id;
+  byId("context-graph").hidden = !context.graph_id;
+  if (context.run_id) byId("context-run").href = `/runs/${encodeURIComponent(context.run_id)}/tracks`;
+  if (context.graph_id) byId("context-graph").href = `/studio/graphs/${encodeURIComponent(context.graph_id)}`;
+  byId("session-context").textContent = context.source
+    ? `Source: ${context.source}. Original evidence is immutable; edits remain a replayable interpretation.`
+    : "Original evidence remains immutable. Edits are a separate replayable interpretation.";
+}
+
+async function persistSession() {
+  if (!session) return;
+  const record = await request(`/api/timeline/sessions/${encodeURIComponent(session.session_id)}`, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({schema_version: 1, session, context}),
+  });
+  context = record.context || context;
+  history.replaceState({session_id: session.session_id}, "", `/sessions/${encodeURIComponent(session.session_id)}/correct`);
+  renderContext();
+  announce(`Saved corrected projection for ${session.session_id}; original evidence remains unchanged.`);
+}
+
+async function loadDurableSession(sessionId) {
+  const record = await request(`/api/timeline/sessions/${encodeURIComponent(sessionId)}`);
+  session = validateSession(record.session);
+  context = record.context || {};
+  selected = null;
+  renderContext();
+  render();
+  restoreRouteSelection();
+  document.title = `${session.session_id} · WaveDeck · Tongues`;
+}
+
+function restoreRouteSelection(search = location.search) {
+  if (!session) return;
+  const params = new URLSearchParams(search);
+  const requested = params.get("span");
+  const start = Number(params.get("start_ms"));
+  const end = Number(params.get("end_ms"));
+  const projection = projectSession(session);
+  const span = projection.edited.find(candidate =>
+    candidate.id === requested
+    || candidate.id.endsWith(`:${requested}`)
+    || (Number.isFinite(start) && Number.isFinite(end)
+      && candidate.start_ms < end && candidate.end_ms > start));
+  if (!span) {
+    if (requested || Number.isFinite(start) || Number.isFinite(end)) {
+      byId("recovery").textContent = "The requested Run Tracks interval is no longer present; the full session is open.";
+    }
+    return;
+  }
+  selected = span.id;
+  render();
+  announce(`Opened ${formatInterval(span.start_ms, span.end_ms)} from Run Tracks; select an editing action when ready.`);
+}
+
+function formatInterval(start, end) {
+  return `${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} seconds`;
+}
 
 function render() {
   const empty = !session;
@@ -63,6 +139,7 @@ function replaceSelected() {
   if (text === null) return;
   appendOperation(session, "transcript_replace", {span_id: span.id, text, reason: "operator correction"});
   render();
+  persistSession().catch(error => announce(`Correction is only in this page: ${error.message}`));
 }
 
 function moveBoundary(boundary, amount) {
@@ -74,6 +151,7 @@ function moveBoundary(boundary, amount) {
     reason: "keyboard alignment adjustment",
   });
   render();
+  persistSession().catch(error => announce(`Alignment is only in this page: ${error.message}`));
 }
 
 function annotateSelected() {
@@ -83,14 +161,17 @@ function annotateSelected() {
   if (value === null) return;
   appendOperation(session, "annotate", {span_id: span.id, key: "note", value});
   render();
+  persistSession().catch(error => announce(`Annotation is only in this page: ${error.message}`));
 }
 
 async function openFile(file) {
   try {
     const document = JSON.parse(await file.text());
     session = validateSession(document.session ?? document);
+    context = document.context || {source: "imported file"};
     selected = null;
     render();
+    await persistSession();
   } catch (error) {
     announce(`Cannot open session: ${error.message}`);
   }
@@ -128,7 +209,9 @@ async function startLive() {
       liveEvents.push({event: message.event, received_at_ms: performance.now()});
       if (message.event.type === "committed_segment") {
         session = sessionFromEvents(`live:${Date.now()}`, liveEvents);
+        context = {source: "WaveDeck live recognition"};
         render();
+        persistSession().catch(error => announce(`Live session is only in this page: ${error.message}`));
       }
     }
     if (message.type === "error") announce(`${message.code}: ${message.message}`);
@@ -170,19 +253,32 @@ byId("start-earlier").onclick = () => moveBoundary("start", -10);
 byId("start-later").onclick = () => moveBoundary("start", 10);
 byId("end-earlier").onclick = () => moveBoundary("end", -10);
 byId("end-later").onclick = () => moveBoundary("end", 10);
-byId("undo").onclick = () => { if (undo(session)) render(); else announce("Nothing to undo."); };
-byId("redo").onclick = () => { if (redo(session)) render(); else announce("Nothing to redo."); };
+byId("undo").onclick = () => { if (undo(session)) { render(); persistSession().catch(error => announce(error.message)); } else announce("Nothing to undo."); };
+byId("redo").onclick = () => { if (redo(session)) { render(); persistSession().catch(error => announce(error.message)); } else announce("Nothing to redo."); };
 byId("start-live").onclick = () => startLive().catch(error => announce(`Microphone unavailable: ${error.message}`));
 byId("stop-live").onclick = stopLive;
 document.querySelectorAll("[data-export]").forEach(button => button.onclick = () => download(button.dataset.export));
 document.onkeydown = event => {
   if (!session || /INPUT|TEXTAREA/.test(event.target.tagName)) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
-    event.preventDefault(); (event.shiftKey ? redo(session) : undo(session)); render();
+    event.preventDefault(); (event.shiftKey ? redo(session) : undo(session)); render(); persistSession().catch(error => announce(error.message));
   } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
-    event.preventDefault(); redo(session); render();
+    event.preventDefault(); redo(session); render(); persistSession().catch(error => announce(error.message));
   } else if (event.key.toLowerCase() === "e") replaceSelected();
   else if (event.key === "[") moveBoundary("start", -10);
   else if (event.key === "]") moveBoundary("end", 10);
 };
-render();
+renderContext();
+const requestedSession = sessionIdFromRoute();
+if (requestedSession) {
+  loadDurableSession(requestedSession).catch(error => {
+    byId("recovery").innerHTML = `${escapeHtml(error.message)} <a href="/sessions/new/correct">Open a file or start live recognition</a> or <a href="/runs">return to execution tracks</a>.`;
+    announce("Session context could not be restored. Recovery links are available.");
+    byId("page-title").focus();
+    render();
+  });
+} else {
+  render();
+}
+
+export {restoreRouteSelection, sessionIdFromRoute};

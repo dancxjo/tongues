@@ -50,8 +50,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         commandPages = [...customPages];
     }
     renderNavigation();
-    renderRoute();
-    window.addEventListener('popstate', renderRoute);
+    renderRoute(false);
+    window.addEventListener('popstate', () => renderRoute(true));
     initJobs();
     await initPronunciationDemo();
     await window.SpeechStudio.init();
@@ -99,6 +99,9 @@ function renderNavigation() {
         <div class="nav-group">
             <div class="nav-heading">Workspaces</div>
             ${primaryPages.map(navLink).join('')}
+            <a href="/studio/graphs/new">Graph Studio</a>
+            <a href="/runs">Execution Tracks</a>
+            <a href="/sessions/new/correct">WaveDeck</a>
         </div>
         <div class="nav-group">
             <div class="nav-heading">Runtime</div>
@@ -131,10 +134,10 @@ function shouldHandleClientNavigation(event, link) {
 function navigateTo(path) {
     if (!path || `${window.location.pathname}${window.location.search}` === path) return;
     history.pushState({}, '', path);
-    renderRoute();
+    renderRoute(true);
 }
 
-function renderRoute() {
+function renderRoute(focus = false) {
     const path = normalizePath(window.location.pathname);
     const jobsRoute = path === '/jobs';
     const workbenchRoute = path === '/commands' || path.startsWith('/commands/');
@@ -166,6 +169,7 @@ function renderRoute() {
         activePage = null;
         setHeader('Runtime', 'Background Jobs', 'Check running commands, output, artifacts, or cancellation.', 'jobs');
         loadJobs();
+        completeRouteTransition(focus);
         return;
     }
     if (!page) {
@@ -173,23 +177,51 @@ function renderRoute() {
             activePage = defaultWorkbenchCommand();
             setHeader('Command Workbench', 'Commands', 'Browser-safe commands from the current Clap schema.', 'tongues');
             renderWorkbench(activePage);
+            completeRouteTransition(focus);
             return;
         }
         activePage = null;
-        setHeader('Command surface', 'Tongues Web', 'Pick a workflow backed by the current CLI schema.', 'tongues');
+        if (path !== '/') {
+            setHeader('Route unavailable', 'Workspace not found', `No Tongues workspace is registered at ${path}. Choose a recovery path below.`, 'not found');
+        } else {
+            setHeader('Command surface', 'Tongues Web', 'Pick a workflow backed by the current CLI schema.', 'tongues');
+        }
         renderDashboard();
+        completeRouteTransition(focus);
         return;
     }
     activePage = page;
     if (speechRoute) {
-        setHeader('Speech Studio', 'Speak', page.summary, 'tongues speak');
-        window.SpeechStudio?.setWorkflow(path, { focus: false });
+        const speechTitles = {
+            '/speech': 'Speak',
+            '/speech/live': 'Live conversation',
+            '/speech/compose': 'Compose',
+            '/speech/compare': 'Compare',
+            '/speech/catalog': 'Model catalog',
+            '/speech/operate': 'Operate',
+        };
+        const title = speechTitles[path] || 'Speak';
+        const identity = path === '/speech/live'
+            ? 'Executing a live conversation and recording evidence.'
+            : 'Configuring a speech workflow.';
+        setHeader('Speech Studio', title, `${identity} ${page.summary}`, 'tongues speak');
+        window.SpeechStudio?.setWorkflow(path, { focus });
     } else if (commandRoute) {
         setHeader('Command Workbench', page.title || 'Commands', page.summary || 'Browser-safe commands from Clap.', `tongues ${(page.command || []).join(' ')}`);
     } else {
         setHeader(page.group, page.title, page.summary, `tongues ${(page.command || []).join(' ')}`);
     }
     if (commandRoute) renderWorkbench(page.page === 'command' ? page : defaultWorkbenchCommand());
+    completeRouteTransition(focus && !speechRoute);
+}
+
+function completeRouteTransition(focus) {
+    document.title = `${byId('page-title').textContent} · Tongues`;
+    byId('route-status').textContent = `Opened ${byId('page-title').textContent}. ${byId('page-summary').textContent}`;
+    if (focus) {
+        byId('page-title').setAttribute('tabindex', '-1');
+        byId('page-title').focus();
+    }
 }
 
 function setHeader(kicker, title, summary, command) {
@@ -299,7 +331,7 @@ function renderCommandPage(page) {
     if (page.model_href) byId('command-model-link').href = page.model_href;
     byId('command-studio-link').classList.toggle('hidden', !page.studio_template);
     if (page.studio_template) {
-        byId('command-studio-link').href = `/speech-dataflow.html?starter=${encodeURIComponent(page.studio_template)}`;
+        byId('command-studio-link').href = `/studio/graphs/new?starter=${encodeURIComponent(page.studio_template)}`;
     }
     document.querySelectorAll('#command-workbench-page [data-control]').forEach((node) => {
         node.addEventListener('input', () => {

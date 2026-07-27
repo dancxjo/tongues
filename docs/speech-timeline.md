@@ -28,3 +28,7 @@ The reduced fixture
 `fixtures/timeline/listenbury_user_interrupts_v1.json` records the Listenbury
 playback → overlap → interruption → yield ordering. It replaces the much larger
 viewer payload while retaining the acceptance-relevant spans and provenance.
+
+WaveDeck's durable `/sessions/{session-id}/correct` route, graph/run return
+context, recovery behavior, and cross-workspace authority boundaries are
+documented in [speech-workspace-navigation.md](speech-workspace-navigation.md).

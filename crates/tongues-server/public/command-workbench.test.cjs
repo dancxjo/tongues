@@ -6,6 +6,9 @@ const app = fs.readFileSync(require.resolve('./app.js'), 'utf8');
 const html = fs.readFileSync(require.resolve('./index.html'), 'utf8');
 const studio = fs.readFileSync(require.resolve('./speech-studio.js'), 'utf8');
 const graph = fs.readFileSync(require.resolve('./speech-dataflow.js'), 'utf8');
+const tracks = fs.readFileSync(require.resolve('./run-tracks.js'), 'utf8');
+const wavedeck = fs.readFileSync(require.resolve('./wavedeck.js'), 'utf8');
+const navigationDoc = fs.readFileSync(require.resolve('../../../docs/speech-workspace-navigation.md'), 'utf8');
 const server = fs.readFileSync(require.resolve('../src/main.rs'), 'utf8');
 
 test('Command Workbench is a distinct deep-linkable schema-owned page', () => {
@@ -33,6 +36,43 @@ test('Command and graph navigation use server schema metadata and stable links',
     assert.match(app, /page\.capability_href/);
     assert.match(app, /page\.model_href/);
     assert.match(app, /page\.studio_template/);
-    assert.match(graph, /new URLSearchParams\(location\.search\)\.get\("starter"\)/);
+    assert.match(graph, /params\.get\("starter"\)/);
     assert.match(graph, /id="node-docs"|node-docs/);
+});
+
+test('speech workspaces expose durable multi-page routes and truthful identities', () => {
+    for (const route of [
+        '/studio/graphs/new',
+        '/studio/graphs/{graph_id}',
+        '/runs/{run_id}/tracks',
+        '/sessions/{session_id}/correct',
+    ]) {
+        assert.match(server, new RegExp(route.replace(/[{}]/g, '\\$&')));
+    }
+    assert.match(app, /Editing a live conversation|Executing a live conversation/);
+    assert.match(graph, /Editing a configuration draft/);
+    assert.match(wavedeck, /original evidence remains unchanged|Original evidence remains immutable/i);
+    assert.match(navigationDoc, /independently loadable browser workspaces/);
+});
+
+test('fresh loads restore durable graph, run, node, and session context with recovery', () => {
+    assert.match(graph, /\/api\/pipeline\/graphs\/\$\{encodeURIComponent\(routeGraphId\)\}/);
+    assert.match(graph, /params\.get\("node"\)/);
+    assert.match(graph, /Start a new graph.*open recent runs/);
+    assert.match(tracks, /\/api\/pipeline\/runs\/\$\{encodeURIComponent\(runId\)\}/);
+    assert.match(tracks, /graphRoute\(state\.projected\.graph_id, provenance\.graph_node_id\)/);
+    assert.match(tracks, /Run context could not be restored/);
+    assert.match(wavedeck, /\/api\/timeline\/sessions\/\$\{encodeURIComponent\(sessionId\)\}/);
+    assert.match(wavedeck, /Session context could not be restored/);
+});
+
+test('route transitions announce identity and move focus without hijacking modified clicks', () => {
+    assert.match(app, /byId\('route-status'\)\.textContent/);
+    assert.match(app, /byId\('page-title'\)\.focus\(\)/);
+    assert.match(app, /window\.addEventListener\('popstate'/);
+    for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+        assert.match(app, new RegExp(`event\\.${modifier}`));
+    }
+    assert.match(tracks, /selection-heading.*focus/);
+    assert.match(wavedeck, /page-title.*focus/);
 });
