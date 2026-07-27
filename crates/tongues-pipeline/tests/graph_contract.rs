@@ -132,6 +132,31 @@ fn phonetic_segmentation_is_typed_and_requires_an_alignment_component() {
 }
 
 #[test]
+fn phone_alignment_has_distinct_posterior_hypothesis_and_streaming_delta_ports() {
+    let catalog = GraphCatalog::builtin();
+    let node = catalog.node_kinds.get("phone_alignment").unwrap();
+    assert!(node.requires_component);
+    assert!(node.required_capabilities.contains("phone_alignment"));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "acoustic_posteriors"
+            && port.direction == PortDirection::Input
+            && port.value_type == ValueType::AcousticPosteriors
+            && port.cardinality == Cardinality::One
+    }));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "hypotheses"
+            && port.direction == PortDirection::Output
+            && port.value_type == ValueType::AlignmentHypotheses
+    }));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "deltas"
+            && port.direction == PortDirection::Output
+            && port.value_type == ValueType::AlignmentDeltas
+            && port.streaming
+    }));
+}
+
+#[test]
 fn file_and_url_text_sources_compile_as_text_stream_producers() {
     let catalog = fixture_catalog();
     for (kind, field, value) in [

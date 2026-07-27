@@ -71,6 +71,7 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 const FILE_LIST_LIMIT: usize = 500;
 const DEFAULT_SPEECH_MAX_IN_FLIGHT: usize = 2;
 const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
+const MAX_PHONE_ALIGNMENT_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PIPELINE_TEXT_SOURCE_BYTES: u64 = 1024 * 1024;
 const MAX_ACTIVE_JOBS: usize = 4;
@@ -335,6 +336,10 @@ fn build_app(state: AppState) -> Router {
             post(verify_speech_model),
         )
         .route("/api/duplex/project", post(project_duplex_request))
+        .route(
+            "/api/phone-align",
+            post(phone_align_api).layer(DefaultBodyLimit::max(MAX_PHONE_ALIGNMENT_BODY_BYTES)),
+        )
         .route("/api/speech/project", post(project_speech_request))
         .route("/api/speech/speakers", get(get_speech_speakers))
         .route("/api/speech/runtime", get(get_speech_runtime))
@@ -518,6 +523,44 @@ async fn pipeline_graph_catalog(
         detail: "Deterministic segmentation is available through `tongues phonetic-segment`; no model/runtime alignment adapter is registered for graph execution, so graph readiness fails closed.".into(),
         replacement: tongues_pipeline::ReplacementSpec::for_node_kind(
             "phonetic_segmentation",
+        ),
+    });
+    catalog.register_component(ComponentSpec {
+        id: "phone-alignment:ctc-lattice-v2".into(),
+        node_kind: "phone_alignment".into(),
+        provider: "tongues-audio".into(),
+        model: tongues_audio::PHONE_ALIGNMENT_ALGORITHM_VERSION.into(),
+        readiness: Readiness::Ready,
+        linguistic_coverage: Default::default(),
+        capabilities: std::collections::BTreeSet::from([
+            "phone_alignment".into(),
+            "ctc_forced_alignment".into(),
+            "alignment_alternatives".into(),
+            "boundary_uncertainty".into(),
+            "streaming_alignment".into(),
+        ]),
+        configuration_schema: json!({
+            "type": "object",
+            "properties": {
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 32},
+                "maximum_posterior_frames": {"type": "integer", "minimum": 1},
+                "maximum_lattice_cells": {"type": "integer", "minimum": 1},
+                "minimum_path_posterior": {"type": "number", "minimum": 0, "maximum": 1},
+                "minimum_selection_margin": {"type": "number", "minimum": 0, "maximum": 1},
+                "future_context_frames": {"type": "integer", "minimum": 0}
+            }
+        }),
+        default_config: json!({
+            "top_k": 5,
+            "maximum_posterior_frames": 120000,
+            "maximum_lattice_cells": 2000000,
+            "minimum_path_posterior": 0.5,
+            "minimum_selection_margin": 0.05,
+            "future_context_frames": 50
+        }),
+        detail: "Bounded backend-neutral CTC lattice over supplied acoustic posteriors; retains alternatives, boundary ranges, mismatch, abstention, and streaming deltas.".into(),
+        replacement: tongues_pipeline::ReplacementSpec::for_node_kind(
+            "phone_alignment",
         ),
     });
     catalog.register_component(ComponentSpec {
@@ -809,6 +852,32 @@ async fn migrate_pipeline_graph(Json(value): Json<serde_json::Value>) -> Respons
         Err(error) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PhoneAlignmentApiRequest {
+    audio: tongues_audio::AudioBuffer,
+    request: tongues_audio::PhoneAlignmentRequest,
+    posteriors: tongues_audio::CtcPosteriorMatrix,
+}
+
+async fn phone_align_api(Json(payload): Json<PhoneAlignmentApiRequest>) -> Response {
+    use tongues_audio::PhoneAlignmentBackend as _;
+    let backend = tongues_audio::CtcPosteriorBackend {
+        posteriors: payload.posteriors,
+    };
+    match backend.align(&payload.audio, &payload.request) {
+        Ok(artifact) => Json(artifact).into_response(),
+        Err(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": error.to_string(),
+                "readiness": "failed",
+                "backend": backend.identity(),
+            })),
         )
             .into_response(),
     }
@@ -11138,6 +11207,41 @@ mod tests {
                 .iter()
                 .all(|original| { projection.edited.iter().any(|edited| edited == original) })
         );
+    }
+
+    #[tokio::test]
+    async fn phone_alignment_api_runs_the_shared_bounded_ctc_contract() {
+        let suite: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/phone-alignment/multilingual-synthetic-v1.json"
+        ))
+        .expect("parse alignment suite");
+        let case = &suite["cases"][0];
+        let request: tongues_audio::PhoneAlignmentRequest =
+            serde_json::from_value(case["request"].clone()).expect("request");
+        let posteriors: tongues_audio::CtcPosteriorMatrix =
+            serde_json::from_value(case["posteriors"].clone()).expect("posteriors");
+        let audio = tongues_audio::AudioBuffer {
+            samples: vec![0.05; case["audio_frames"].as_u64().unwrap() as usize],
+            sample_rate_hz: 1_000,
+            channels: 1,
+        };
+        let response = phone_align_api(Json(PhoneAlignmentApiRequest {
+            audio: audio.clone(),
+            request: request.clone(),
+            posteriors: posteriors.clone(),
+        }))
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut incompatible = posteriors;
+        incompatible.sample_rate_hz = 16_000;
+        let response = phone_align_api(Json(PhoneAlignmentApiRequest {
+            audio,
+            request,
+            posteriors: incompatible,
+        }))
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]

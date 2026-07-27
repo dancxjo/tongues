@@ -1,5 +1,11 @@
 # Phonetic segmentation
 
+This document describes the retained schema-v1 foundation from issues #169 and
+#170. New acoustic alignment uses the compatible schema-v2 hypothesis contract
+documented in [Evidence-preserving phone alignment](phone-alignment.md). V1
+continues to support imported/hint segmentation and explicit migration; it is
+not the production acoustic aligner.
+
 Tongues exposes deterministic, evidence-bound phone and phoneme segmentation:
 
 ```text

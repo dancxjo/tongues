@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod cleanup;
+mod phone_alignment;
 mod phonetic_segmentation;
 mod segmentation;
 mod source;
@@ -26,6 +27,20 @@ mod vad;
 pub use cleanup::{
     CleanupAudioSource, CleanupCapability, CleanupPipeline, CleanupStage, CleanupStageConfig,
     CleanupStageTrace, ProcessedAudio,
+};
+pub use phone_alignment::{
+    check_alignment_conformance, evaluate_alignment, AlignedUnit, AlignmentBackendCapabilities,
+    AlignmentBackendConformanceReport, AlignmentCancellation, AlignmentCorrection, AlignmentDelta,
+    AlignmentDeltaKind, AlignmentDiagnostic, AlignmentEvaluationReference,
+    AlignmentEvaluationReport, AlignmentHypothesis, AlignmentLifecycle, AlignmentLimits,
+    AlignmentMode, AlignmentProjection, AlignmentReadiness, AlignmentScoreBreakdown,
+    AlignmentUnitRelation, AlignmentUnitSpec, AudioAlignmentInput, BoundaryEstimate, BoundaryHint,
+    CtcPosteriorBackend, CtcPosteriorMatrix, DurationPrior, PhoneAlignmentArtifact,
+    PhoneAlignmentBackend, PhoneAlignmentEngine, PhoneAlignmentRequest, ProjectionKind,
+    ProjectionLoss, PronunciationPath, ReferenceAlignmentUnit, ReferenceAlignmentWord,
+    StreamingAlignmentMetrics, StreamingAlignmentUpdate, StreamingPhoneAligner, TimingAuthority,
+    TranscriptLattice, TranscriptToken, PHONE_ALIGNMENT_ALGORITHM_VERSION,
+    PHONE_ALIGNMENT_SCHEMA_VERSION,
 };
 pub use phonetic_segmentation::{
     audio_sha256, AlignmentCandidate, AlignmentEvidence, AlignmentRecipe, AlignmentSourceIdentity,

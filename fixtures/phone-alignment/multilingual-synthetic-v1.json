@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "description": "Deterministic synthetic CTC evidence for alignment contract and metric regression; not natural-speech quality evidence.",
+  "cases": [
+    {
+      "id": "en-repeated-phone",
+      "audio_frames": 80,
+      "request": {
+        "schema_version": 2,
+        "mode": "pronunciation_constrained",
+        "audio": {"artifact_id": "synthetic://en-repeated.wav", "channel": 0},
+        "pronunciations": [{
+          "id": "en:path:primary",
+          "lexical_source": "fixture",
+          "language_tag": "en",
+          "inventory_id": "fixture-ipa",
+          "prior_probability": 1.0,
+          "units": [
+            {"id": "en:t:0", "symbol": "t", "kind": "phone", "language_tag": "en", "inventory_id": "fixture-ipa", "word_ids": ["word:en:0"]},
+            {"id": "en:t:1", "symbol": "t", "kind": "phone", "language_tag": "en", "inventory_id": "fixture-ipa", "word_ids": ["word:en:0"]},
+            {"id": "en:a:2", "symbol": "a", "kind": "phone", "language_tag": "en", "inventory_id": "fixture-ipa", "word_ids": ["word:en:0"]}
+          ]
+        }],
+        "context": {"graph_id": "fixture:alignment", "graph_revision": 1, "recipe_id": "en-repeated", "execution_record_id": "fixture:en", "runtime": "fixture", "runtime_version": "1"}
+      },
+      "posteriors": {
+        "schema_version": 1,
+        "source": {"provider": "fixture-common-phone", "model": "recorded-ctc", "version": "1"},
+        "language_tags": ["en"],
+        "inventory_id": "fixture-ipa",
+        "sample_rate_hz": 1000,
+        "frame_start": 0,
+        "frame_stride": 10,
+        "frame_width": 10,
+        "blank_index": 0,
+        "symbols": ["<blank>", "t", "a"],
+        "probabilities": [
+          [0.96, 0.02, 0.02], [0.03, 0.94, 0.03], [0.96, 0.02, 0.02],
+          [0.03, 0.94, 0.03], [0.80, 0.10, 0.10], [0.03, 0.03, 0.94],
+          [0.03, 0.03, 0.94], [0.96, 0.02, 0.02]
+        ]
+      },
+      "reference": {
+        "id": "reference:en-repeated",
+        "language_tag": "en",
+        "variety": "en-US",
+        "annotator_tolerance_frames": 20,
+        "words": [
+          {"id": "word:en:0", "interval": {"start_frame": 10, "end_frame": 70, "sample_rate_hz": 1000}}
+        ],
+        "units": [
+          {"symbol": "t", "interval": {"start_frame": 10, "end_frame": 20, "sample_rate_hz": 1000}},
+          {"symbol": "t", "interval": {"start_frame": 30, "end_frame": 40, "sample_rate_hz": 1000}},
+          {"symbol": "a", "interval": {"start_frame": 50, "end_frame": 70, "sample_rate_hz": 1000}}
+        ]
+      }
+    },
+    {
+      "id": "ja-no-whitespace-token-assumption",
+      "audio_frames": 100,
+      "request": {
+        "schema_version": 2,
+        "mode": "transcript_constrained",
+        "audio": {"artifact_id": "synthetic://ja-kana.wav", "channel": 0},
+        "transcript": {"id": "ja:transcript", "supplied_text": "かな", "paths": [[{"id": "ja:token:0", "text": "かな", "language_tag": "ja"}]]},
+        "pronunciations": [{
+          "id": "ja:path:kana",
+          "lexical_source": "fixture",
+          "language_tag": "ja",
+          "inventory_id": "fixture-ipa",
+          "prior_probability": 1.0,
+          "units": [
+            {"id": "ja:k", "symbol": "k", "kind": "phone", "language_tag": "ja", "inventory_id": "fixture-ipa", "transcript_token_ids": ["ja:token:0"]},
+            {"id": "ja:a0", "symbol": "a", "kind": "phone", "language_tag": "ja", "inventory_id": "fixture-ipa", "transcript_token_ids": ["ja:token:0"]},
+            {"id": "ja:n", "symbol": "n", "kind": "phone", "language_tag": "ja", "inventory_id": "fixture-ipa", "transcript_token_ids": ["ja:token:0"]},
+            {"id": "ja:a1", "symbol": "a", "kind": "phone", "language_tag": "ja", "inventory_id": "fixture-ipa", "transcript_token_ids": ["ja:token:0"]}
+          ]
+        }],
+        "context": {"graph_id": "fixture:alignment", "graph_revision": 1, "recipe_id": "ja-kana", "execution_record_id": "fixture:ja", "runtime": "fixture", "runtime_version": "1"}
+      },
+      "posteriors": {
+        "schema_version": 1,
+        "source": {"provider": "fixture-common-phone", "model": "recorded-ctc", "version": "1"},
+        "language_tags": ["ja"],
+        "inventory_id": "fixture-ipa",
+        "sample_rate_hz": 1000,
+        "frame_start": 0,
+        "frame_stride": 10,
+        "frame_width": 10,
+        "blank_index": 0,
+        "symbols": ["<blank>", "k", "a", "n"],
+        "probabilities": [
+          [0.94, 0.02, 0.02, 0.02], [0.02, 0.94, 0.02, 0.02],
+          [0.60, 0.10, 0.20, 0.10], [0.02, 0.02, 0.94, 0.02],
+          [0.80, 0.05, 0.10, 0.05], [0.02, 0.02, 0.02, 0.94],
+          [0.80, 0.05, 0.10, 0.05], [0.02, 0.02, 0.94, 0.02],
+          [0.02, 0.02, 0.94, 0.02], [0.94, 0.02, 0.02, 0.02]
+        ]
+      },
+      "reference": {
+        "id": "reference:ja-kana",
+        "language_tag": "ja",
+        "variety": "ja",
+        "annotator_tolerance_frames": 20,
+        "units": [
+          {"symbol": "k", "interval": {"start_frame": 10, "end_frame": 20, "sample_rate_hz": 1000}},
+          {"symbol": "a", "interval": {"start_frame": 30, "end_frame": 40, "sample_rate_hz": 1000}},
+          {"symbol": "n", "interval": {"start_frame": 50, "end_frame": 60, "sample_rate_hz": 1000}},
+          {"symbol": "a", "interval": {"start_frame": 70, "end_frame": 90, "sample_rate_hz": 1000}}
+        ]
+      }
+    },
+    {
+      "id": "multilingual-code-switch",
+      "audio_frames": 90,
+      "request": {
+        "schema_version": 2,
+        "mode": "hybrid",
+        "audio": {"artifact_id": "synthetic://code-switch.wav", "channel": 0},
+        "pronunciations": [{
+          "id": "mul:path:primary",
+          "lexical_source": "fixture",
+          "language_tag": "mul",
+          "inventory_id": "fixture-ipa",
+          "prior_probability": 0.75,
+          "units": [
+            {"id": "sw:sh", "symbol": "ʃ", "kind": "phone", "language_tag": "sw", "inventory_id": "fixture-ipa"},
+            {"id": "sw:a", "symbol": "a", "kind": "phone", "language_tag": "sw", "inventory_id": "fixture-ipa"},
+            {"id": "en:t", "symbol": "t", "kind": "phone", "language_tag": "en", "inventory_id": "fixture-ipa"}
+          ]
+        }, {
+          "id": "mul:path:alternative",
+          "lexical_source": "fixture",
+          "language_tag": "mul",
+          "inventory_id": "fixture-ipa",
+          "prior_probability": 0.25,
+          "units": [
+            {"id": "sw:s", "symbol": "s", "kind": "phone", "language_tag": "sw", "inventory_id": "fixture-ipa"},
+            {"id": "sw:a:alt", "symbol": "a", "kind": "phone", "language_tag": "sw", "inventory_id": "fixture-ipa"},
+            {"id": "en:t:alt", "symbol": "t", "kind": "phone", "language_tag": "en", "inventory_id": "fixture-ipa"}
+          ]
+        }],
+        "limits": {"top_k": 5, "max_pronunciation_paths": 64, "max_posterior_frames": 120000, "max_symbols": 4096, "max_lattice_states": 8193, "minimum_path_posterior": 0.5, "minimum_selection_margin": 0.05, "insertion_probability": 0.7},
+        "context": {"graph_id": "fixture:alignment", "graph_revision": 1, "recipe_id": "mul-code-switch", "execution_record_id": "fixture:mul", "runtime": "fixture", "runtime_version": "1"}
+      },
+      "posteriors": {
+        "schema_version": 1,
+        "source": {"provider": "fixture-common-phone", "model": "recorded-ctc", "version": "1"},
+        "language_tags": ["en", "sw", "mul"],
+        "inventory_id": "fixture-ipa",
+        "sample_rate_hz": 1000,
+        "frame_start": 0,
+        "frame_stride": 10,
+        "frame_width": 10,
+        "blank_index": 0,
+        "symbols": ["<blank>", "ʃ", "s", "a", "t"],
+        "probabilities": [
+          [0.92, 0.02, 0.02, 0.02, 0.02], [0.02, 0.90, 0.02, 0.03, 0.03],
+          [0.02, 0.90, 0.02, 0.03, 0.03], [0.80, 0.05, 0.05, 0.05, 0.05],
+          [0.02, 0.03, 0.03, 0.90, 0.02], [0.02, 0.03, 0.03, 0.90, 0.02],
+          [0.80, 0.05, 0.05, 0.05, 0.05], [0.02, 0.02, 0.02, 0.02, 0.92],
+          [0.92, 0.02, 0.02, 0.02, 0.02]
+        ]
+      },
+      "reference": {
+        "id": "reference:mul-code-switch",
+        "language_tag": "mul",
+        "variety": "sw+en",
+        "annotator_tolerance_frames": 20,
+        "units": [
+          {"symbol": "ʃ", "interval": {"start_frame": 10, "end_frame": 30, "sample_rate_hz": 1000}},
+          {"symbol": "a", "interval": {"start_frame": 40, "end_frame": 60, "sample_rate_hz": 1000}},
+          {"symbol": "t", "interval": {"start_frame": 70, "end_frame": 80, "sample_rate_hz": 1000}}
+        ]
+      }
+    }
+  ]
+}

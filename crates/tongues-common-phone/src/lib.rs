@@ -1042,6 +1042,7 @@ pub fn live_frame_stats(
 
 pub struct CommonPhoneLiveDecoder {
     task: CommonPhoneTask,
+    model_dir: PathBuf,
     model_config: ModelConfig,
     model: CommonPhoneModel<CpuInferBackend>,
     phone_vocab: Vocab,
@@ -1063,6 +1064,7 @@ impl CommonPhoneLiveDecoder {
         let model = load_model_cpu(&model_config, model_dir, &device)?;
         Ok(Self {
             task,
+            model_dir: model_dir.to_path_buf(),
             model_config,
             model,
             phone_vocab,
@@ -1113,6 +1115,102 @@ impl CommonPhoneLiveDecoder {
             feature_bundles,
             blank_ratio,
             stats,
+        })
+    }
+
+    /// Run the native Common Phone acoustic model without greedy CTC collapse.
+    ///
+    /// The returned matrix is consumed by `tongues-audio`'s bounded CTC
+    /// trellis. Keeping every frame/class probability prevents greedy spikes
+    /// from being misreported as precise phone boundaries.
+    pub fn phone_alignment_posteriors(
+        &self,
+        samples: &[f32],
+        source_rate: u32,
+        config: &CommonPhoneConfig,
+        language_tags: Vec<String>,
+    ) -> Result<tongues_audio::CtcPosteriorMatrix> {
+        anyhow::ensure!(
+            matches!(
+                self.task,
+                CommonPhoneTask::Frames2Phones | CommonPhoneTask::Multitask
+            ),
+            "phone alignment posteriors require frames2phones or multitask"
+        );
+        let prepared = normalize_amplitude(&resample_linear(
+            samples,
+            source_rate,
+            config.sample_rate_hz,
+        ));
+        let features = compact_audio_features(&prepared, config);
+        let device = NdArrayDevice::Cpu;
+        let frames = features.len().max(1);
+        let bins = self.model_config.input_feature_bins.max(1);
+        let model_bins = self.model_config.model_input_bins();
+        let mut values = Vec::with_capacity(frames * bins);
+        for frame in &features {
+            for bin in 0..bins {
+                values.push(frame.get(bin).copied().unwrap_or(0.0));
+            }
+        }
+        if values.is_empty() {
+            values.resize(bins, 0.0);
+        }
+        let values = expand_temporal_context(
+            &values,
+            features.len(),
+            bins,
+            frames,
+            bins,
+            self.model_config.temporal_context_radius,
+            self.model_config.position_feature_bins,
+        );
+        let input = Tensor::<CpuInferBackend, 3>::from_data(
+            TensorData::new(values, [1, frames, model_bins]),
+            &device,
+        );
+        let logits = self.model.forward(input).phone_logits;
+        let [batch, time, classes] = logits.dims();
+        anyhow::ensure!(batch == 1, "Common Phone alignment expects batch size one");
+        let values: Vec<f32> = logits.into_data().to_vec().unwrap_or_default();
+        let probabilities = (0..time.min(frames))
+            .map(|frame| {
+                let offset = frame * classes;
+                let row = &values[offset..offset + classes];
+                let maximum = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let denominator = row
+                    .iter()
+                    .map(|value| (*value - maximum).exp())
+                    .sum::<f32>()
+                    .max(f32::MIN_POSITIVE);
+                row.iter()
+                    .map(|value| f64::from((*value - maximum).exp() / denominator))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let frame_stride =
+            ((f64::from(source_rate) * f64::from(config.hop_ms)) / 1_000.0).round() as u64;
+        Ok(tongues_audio::CtcPosteriorMatrix {
+            schema_version: 1,
+            source: tongues_audio::AlignmentSourceIdentity {
+                provider: FAMILY.into(),
+                model: ARCHITECTURE.into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                artifact_id: Some(self.model_dir.display().to_string()),
+            },
+            language_tags,
+            inventory_id: "common-phone-v0".into(),
+            sample_rate_hz: source_rate,
+            frame_start: 0,
+            frame_stride: frame_stride.max(1),
+            // CTC cells advance by the feature hop. The wider acoustic
+            // analysis window is receptive context, not a claimed boundary
+            // span (especially for the padded final window).
+            frame_width: frame_stride.max(1),
+            blank_index: 0,
+            symbols: self.phone_vocab.tokens.clone(),
+            probabilities,
+            model_checksum: None,
         })
     }
 

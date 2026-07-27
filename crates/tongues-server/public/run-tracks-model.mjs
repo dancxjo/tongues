@@ -217,13 +217,21 @@ export function selectionProvenance(projected, span) {
     execution_record_id: span?.metadata?.execution_record_id ?? null,
     audio_artifact_id: span?.metadata?.audio_artifact_id ?? null,
     boundary_origin: span?.metadata?.boundary_origin ?? null,
+    timing_authority: span?.metadata?.timing_authority ?? null,
+    lifecycle: span?.metadata?.lifecycle ?? null,
+    relation: span?.metadata?.relation ?? null,
+    hypothesis_id: span?.metadata?.hypothesis_id ?? null,
+    path_posterior: span?.metadata?.path_posterior ?? null,
+    start_boundary: span?.metadata?.start_boundary ?? null,
+    end_boundary: span?.metadata?.end_boundary ?? null,
+    score_breakdown: span?.metadata?.score_breakdown ?? null,
     confidence: span?.metadata?.confidence ?? null,
     sources: provenance.sources ?? [],
     downstream_event_ids: span?.event_id ? projected.sourceConsumers.get(span.event_id) ?? [] : [],
     authority: span?.track === "speakers"
       ? "diarization label, not verified identity"
       : ["phones","phonemes"].includes(span?.track)
-        ? `${span.metadata?.boundary_origin ?? "unknown"} boundary · ${span.status ?? "unknown"}`
+        ? `${span.metadata?.timing_authority ?? span.metadata?.boundary_origin ?? "unknown"} timing · ${span.metadata?.lifecycle ?? span.status ?? "unknown"}`
         : provenance.kind ?? span?.metadata?.evidence_authority ?? "observed",
   };
 }
@@ -364,23 +372,45 @@ function segmentationState(attachments) {
       artifacts: [],
     };
   }
-  const artifacts = segmentations.map(attachment => ({
-    artifact_id: attachment.artifact_id,
-    readiness: attachment.payload?.readiness ?? "unsupported",
-    algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
-    recipe_id: attachment.payload?.graph?.recipe_id ?? null,
-    issues: attachment.payload?.issues ?? [],
-    missing_segments: (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
-  }));
-  const readiness = artifacts.some(artifact => artifact.readiness === "partial")
-    ? "partial"
-    : artifacts.every(artifact => artifact.readiness === "ready") ? "ready" : "unsupported";
+  const artifacts = segmentations.map(attachment => {
+    const hypotheses = attachment.payload?.hypotheses ?? [];
+    const selected = hypotheses.find(path =>
+      path.id === attachment.payload?.selected_hypothesis_id) ?? null;
+    return {
+      artifact_id: attachment.artifact_id,
+      schema_version: attachment.payload?.schema_version ?? attachment.schema_version ?? 1,
+      readiness: attachment.payload?.readiness ?? "unsupported",
+      mode: attachment.payload?.mode ?? null,
+      algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
+      recipe_id: attachment.payload?.context?.recipe_id ?? attachment.payload?.graph?.recipe_id ?? null,
+      issues: attachment.payload?.diagnostics ?? attachment.payload?.issues ?? [],
+      hypotheses,
+      selected_hypothesis: selected,
+      alternatives: hypotheses.filter(path => path !== selected),
+      missing_segments: selected
+        ? (selected.units ?? []).filter(unit => !unit.interval)
+        : (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
+      boundary_ranges: selected
+        ? (selected.units ?? []).filter(unit => unit.start_boundary || unit.end_boundary)
+        : [],
+    };
+  });
+  const alignmentV2 = artifacts.some(artifact => artifact.schema_version >= 2);
+  let readiness = "unsupported";
+  if (artifacts.some(artifact => artifact.readiness === "partial")) readiness = "partial";
+  else if (artifacts.some(artifact => artifact.readiness === "abstained")) readiness = "abstained";
+  else if (artifacts.some(artifact => artifact.readiness === "failed")) readiness = "failed";
+  else if (artifacts.every(artifact => artifact.readiness === "ready")) readiness = "ready";
   return {
     available: true,
     readiness,
     message: readiness === "ready"
-      ? "Phone/phoneme timing is backed by attached alignment evidence."
-      : `${readiness} segmentation: untimed or unsupported rows remain explicit and are not drawn as authoritative spans.`,
+      ? alignmentV2
+        ? "The selected phone path is backed by acoustic evidence; alternatives and boundary ranges remain inspectable."
+        : "Phone/phoneme timing is backed by attached alignment evidence."
+      : alignmentV2
+        ? `${readiness} alignment: alternatives, unaligned material, and abstention remain explicit.`
+        : `${readiness} segmentation: untimed or unsupported rows remain explicit and are not drawn as authoritative spans.`,
     artifacts,
   };
 }

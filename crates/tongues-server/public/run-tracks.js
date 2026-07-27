@@ -86,7 +86,9 @@ function renderSegmentation() {
   byId("segmentation-artifacts").replaceChildren(...segmentation.artifacts.map(artifact => {
     const detail = document.createElement("p");
     const missing = artifact.missing_segments.length;
-    detail.textContent = `${artifact.algorithm_version} · recipe ${artifact.recipe_id ?? "not linked"} · ${artifact.readiness}${missing ? ` · ${missing} untimed rows` : ""}`;
+    const alternatives = artifact.alternatives?.length ?? 0;
+    const ranges = artifact.boundary_ranges?.length ?? 0;
+    detail.textContent = `${artifact.algorithm_version} · recipe ${artifact.recipe_id ?? "not linked"} · ${artifact.readiness}${artifact.mode ? ` · ${artifact.mode}` : ""}${alternatives ? ` · ${alternatives} alternative paths` : ""}${ranges ? ` · ${ranges} ranged units` : ""}${missing ? ` · ${missing} untimed rows` : ""}`;
     return detail;
   }));
 }
@@ -192,6 +194,13 @@ function selectSpan(span, {updateUrl = true, focusHeading = true} = {}) {
     ["State", span.status], ["Speaker", span.speaker ?? "—"], ["Source event", provenance.event_id ?? "—"],
     ["Provider / model / version", [provenance.provider, provenance.model, provenance.version].filter(Boolean).join(" / ") || "Not declared"],
     ["Boundary origin", provenance.boundary_origin ?? "Not a phonetic boundary"],
+    ["Timing authority", provenance.timing_authority ?? "Not declared"],
+    ["Lifecycle / relation", [provenance.lifecycle, provenance.relation].filter(Boolean).join(" / ") || "Not declared"],
+    ["Hypothesis", provenance.hypothesis_id ?? "Not linked"],
+    ["Path posterior", Number.isFinite(provenance.path_posterior) ? provenance.path_posterior.toFixed(3) : "Not calibrated"],
+    ["Start boundary range", formatBoundary(provenance.start_boundary)],
+    ["End boundary range", formatBoundary(provenance.end_boundary)],
+    ["Score breakdown", provenance.score_breakdown ? JSON.stringify(provenance.score_breakdown) : "Not declared"],
     ["Confidence", Number.isFinite(provenance.confidence) ? provenance.confidence.toFixed(3) : "Not declared"],
     ["Algorithm", provenance.algorithm_version ?? "Not a segmentation span"],
     ["Artifact", provenance.artifact_id ?? "—"], ["Recipe", provenance.recipe_id ?? "—"],
@@ -219,6 +228,14 @@ function selectSpan(span, {updateUrl = true, focusHeading = true} = {}) {
   if (focusHeading) byId("selection-heading").focus();
   announce(`Selected ${span.label}; provenance and handoff controls are available.`);
   scheduleRender();
+}
+
+function formatBoundary(boundary) {
+  if (!boundary) return "Not declared";
+  const lower = boundary.lower_frame ?? boundary.lower_ms;
+  const estimate = boundary.estimate_frame ?? boundary.estimate_ms;
+  const upper = boundary.upper_frame ?? boundary.upper_ms;
+  return `${lower} ≤ ${estimate} ≤ ${upper} · ${boundary.method ?? "unknown method"}`;
 }
 
 async function load() {

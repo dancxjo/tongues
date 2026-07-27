@@ -110,6 +110,48 @@ test("segmentation correction journey preserves baseline and records who what an
   assert.match(edited.metadata.correction_operation_id, /^edit:/);
 });
 
+test("boundary-range and pronunciation corrections remain replayable evidence", () => {
+  const session = validateSession(structuredClone(phoneticFixture.session));
+  const phoneId = "phonetic-segmentation:phones-v1:3";
+  appendOperation(session, "alignment_set_boundary_range", {
+    span_id:phoneId,boundary:"start",lower_time_ms:360,estimate_time_ms:365,
+    upper_time_ms:372,coverage_probability:0.9,reason:"spectrogram review",
+  }, "fixture-reviewer");
+  appendOperation(session, "alignment_choose_pronunciation", {
+    span_id:phoneId,pronunciation_path_id:"sw:sha:alternative",reason:"lexical review",
+  }, "fixture-reviewer");
+  const edited = projectSession(session).edited.find(span => span.id === phoneId);
+  assert.equal(edited.start_ms, 365);
+  assert.deepEqual(edited.metadata.start_boundary, {
+    lower_ms:360,estimate_ms:365,upper_ms:372,
+    coverage_probability:0.9,method:"manual_correction_range",
+  });
+  assert.equal(edited.metadata.pronunciation_path_id, "sw:sha:alternative");
+  assert.equal(edited.metadata.correction_actor, "fixture-reviewer");
+});
+
+test("schema-v2 state retains alternatives and boundary ranges", () => {
+  const session = structuredClone(phoneticFixture.session);
+  session.attachments = [{
+    artifact_id:"phone-alignment:v2",kind:"phonetic_segmentation",schema_version:2,
+    payload:{
+      schema_version:2,algorithm_version:"tongues.phone-alignment.ctc-lattice-v2",
+      readiness:"ready",mode:"hybrid",context:{recipe_id:"recipe:v2"},
+      selected_hypothesis_id:"selected",
+      hypotheses:[
+        {id:"selected",normalized_path_posterior:0.75,units:[{id:"u",interval:{start_frame:1,end_frame:2},start_boundary:{lower_frame:0,estimate_frame:1,upper_frame:2}}]},
+        {id:"alternative",normalized_path_posterior:0.25,units:[]},
+      ],
+      diagnostics:[],
+    },
+  }];
+  const state = segmentationState(session);
+  assert.equal(state.artifacts[0].selected_hypothesis.id, "selected");
+  assert.equal(state.artifacts[0].alternatives.length, 1);
+  assert.equal(state.artifacts[0].boundary_ranges.length, 1);
+  assert.match(state.message, /boundary ranges|nearby paths/);
+});
+
 test("word and phone selections expose linked evidence in WaveDeck", () => {
   const session = validateSession(structuredClone(phoneticFixture.session));
   const phoneId = "phonetic-segmentation:phones-v1:1";

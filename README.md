@@ -129,6 +129,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Text to speech](docs/tts.md)
 - [Speech system provenance](docs/provenance.md)
 - [Phonetic segmentation inspection and correction](docs/phonetic-segmentation.md)
+- [Evidence-preserving phone alignment](docs/phone-alignment.md)
 - [Speech synthesis smoke measurements](docs/speech-smoke.md)
 - [StyleTTS2 emotion vectors](docs/styletts2-emotions.md)
 - [Refinement](docs/refinement.md)

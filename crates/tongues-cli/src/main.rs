@@ -11,6 +11,7 @@ mod duplex_cmd;
 mod fetch_corpora;
 pub mod language_routing_cmd;
 pub mod models;
+mod phone_align_cmd;
 mod phonetic_segment_cmd;
 mod recognition_cmd;
 mod speak;
@@ -188,6 +189,14 @@ enum Commands {
     /// Align an explicit multilingual phone/phoneme recipe to a WAV file
     #[command(name = "phonetic-segment")]
     PhoneticSegment(phonetic_segment_cmd::PhoneticSegmentCommand),
+
+    /// Align phone hypotheses with CTC evidence, alternatives, and uncertainty
+    #[command(name = "phone-align")]
+    PhoneAlign(phone_align_cmd::PhoneAlignCommand),
+
+    /// Evaluate the reproducible multilingual phone-alignment fixture suite
+    #[command(name = "phone-alignment-eval")]
+    PhoneAlignmentEval(phone_align_cmd::PhoneAlignmentEvalCommand),
 
     /// Simulate deterministic duplex completion beams and commit frontiers
     Duplex {
@@ -2066,6 +2075,8 @@ fn main() -> Result<()> {
         Commands::LanguageRouting(command) => language_routing_cmd::run(command),
         Commands::Vad(command) => vad_cmd::run(command),
         Commands::PhoneticSegment(command) => phonetic_segment_cmd::run(command),
+        Commands::PhoneAlign(command) => phone_align_cmd::run(command),
+        Commands::PhoneAlignmentEval(command) => phone_align_cmd::run_eval(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
@@ -13496,6 +13507,36 @@ mod tests {
         ])
         .expect("phonetic segmentation command should parse");
         assert!(matches!(cli.command, Some(Commands::PhoneticSegment(_))));
+    }
+
+    #[test]
+    fn phone_alignment_command_accepts_recorded_acoustic_evidence() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "phone-align",
+            "--wav",
+            "fixture.wav",
+            "--request",
+            "request.json",
+            "--posteriors",
+            "posteriors.json",
+            "--out",
+            "alignment.json",
+        ])
+        .expect("phone alignment command should parse");
+        assert!(matches!(cli.command, Some(Commands::PhoneAlign(_))));
+    }
+
+    #[test]
+    fn phone_alignment_evaluation_command_is_reproducible() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "phone-alignment-eval",
+            "--out",
+            "alignment-report.json",
+        ])
+        .expect("phone alignment evaluation command should parse");
+        assert!(matches!(cli.command, Some(Commands::PhoneAlignmentEval(_))));
     }
 
     #[test]

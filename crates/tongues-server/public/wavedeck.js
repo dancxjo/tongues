@@ -57,6 +57,12 @@ function renderSegmentation() {
     ["Artifact", selectedArtifact.artifact_id],
     ["Recipe", selectedArtifact.recipe_id ?? "Not linked"],
     ["Readiness", selectedArtifact.readiness],
+    ["Mode", selectedArtifact.mode ?? "Legacy segmentation"],
+    ["Selected path", selectedArtifact.selected_hypothesis?.id ?? "Abstained"],
+    ["Path posterior", Number.isFinite(selectedArtifact.selected_hypothesis?.normalized_path_posterior)
+      ? selectedArtifact.selected_hypothesis.normalized_path_posterior.toFixed(3) : "Not calibrated"],
+    ["Retained alternatives", String(selectedArtifact.alternatives?.length ?? 0)],
+    ["Units with boundary ranges", String(selectedArtifact.boundary_ranges?.length ?? 0)],
     ["Untimed rows", String(selectedArtifact.missing_segments.length)],
     ["Issues", String(selectedArtifact.issues.length)],
   ];
@@ -193,6 +199,49 @@ function moveBoundary(boundary, amount) {
   persistSession().catch(error => announce(`Alignment is only in this page: ${error.message}`));
 }
 
+function setBoundaryRange() {
+  const span = selectedSpan();
+  if (!span || !["phone", "phoneme"].includes(span.modality)) {
+    return announce("Select a phone or phoneme span first.");
+  }
+  const boundary = prompt("Boundary to range: start or end", "start");
+  if (!["start", "end"].includes(boundary)) return;
+  const current = boundary === "start" ? span.start_ms : span.end_ms;
+  const lower = Number(prompt("Lower supported time (ms)", String(Math.max(0, current - 10))));
+  const estimate = Number(prompt("Boundary estimate (ms)", String(current)));
+  const upper = Number(prompt("Upper supported time (ms)", String(current + 10)));
+  if (!(Number.isFinite(lower) && lower <= estimate && estimate <= upper)) {
+    return announce("Boundary range must satisfy lower ≤ estimate ≤ upper.");
+  }
+  appendOperation(session, "alignment_set_boundary_range", {
+    span_id: span.id, boundary, lower_time_ms: lower, estimate_time_ms: estimate,
+    upper_time_ms: upper, reason: "operator boundary-range correction",
+  });
+  render();
+  persistSession().catch(error => announce(`Boundary range is only in this page: ${error.message}`));
+}
+
+function choosePronunciationPath() {
+  const span = selectedSpan();
+  if (!span || !["phone", "phoneme", "word"].includes(span.modality)) {
+    return announce("Select a phone, phoneme, or word span first.");
+  }
+  const state = segmentationState(session);
+  const paths = state.artifacts.flatMap(artifact =>
+    (artifact.hypotheses ?? []).map(path => path.id)).filter(Boolean);
+  const choice = prompt(
+    paths.length ? `Pronunciation path ID:\n${paths.join("\n")}` : "Pronunciation path ID",
+    span.metadata?.pronunciation_path_id ?? paths[0] ?? "",
+  );
+  if (!choice?.trim()) return;
+  appendOperation(session, "alignment_choose_pronunciation", {
+    span_id: span.id, pronunciation_path_id: choice.trim(),
+    reason: "operator pronunciation-path correction",
+  });
+  render();
+  persistSession().catch(error => announce(`Pronunciation choice is only in this page: ${error.message}`));
+}
+
 function annotateSelected() {
   const span = selectedSpan();
   if (!span) return announce("Select a span first.");
@@ -292,6 +341,8 @@ byId("start-earlier").onclick = () => moveBoundary("start", -10);
 byId("start-later").onclick = () => moveBoundary("start", 10);
 byId("end-earlier").onclick = () => moveBoundary("end", -10);
 byId("end-later").onclick = () => moveBoundary("end", 10);
+byId("boundary-range").onclick = setBoundaryRange;
+byId("pronunciation-path").onclick = choosePronunciationPath;
 byId("undo").onclick = () => { if (undo(session)) { render(); persistSession().catch(error => announce(error.message)); } else announce("Nothing to undo."); };
 byId("redo").onclick = () => { if (redo(session)) { render(); persistSession().catch(error => announce(error.message)); } else announce("Nothing to redo."); };
 byId("start-live").onclick = () => startLive().catch(error => announce(`Microphone unavailable: ${error.message}`));

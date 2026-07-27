@@ -83,6 +83,48 @@ function applyOperation(spans, op, audioEdits) {
       else throw new Error("Boundary edit would create a zero-duration span.");
       markCorrected(span, op, "boundary");
       break;
+    case "alignment_set_boundary_range": {
+      if (!["phone", "phoneme"].includes(span.modality)) {
+        throw new Error("Boundary-range edits require phone or phoneme spans.");
+      }
+      const lower = Number(op.lower_time_ms);
+      const estimate = Number(op.estimate_time_ms);
+      const upper = Number(op.upper_time_ms);
+      if (!(Number.isFinite(lower) && lower <= estimate && estimate <= upper)) {
+        throw new Error("Boundary range must satisfy lower <= estimate <= upper.");
+      }
+      const key = op.boundary === "start" ? "start_boundary" : op.boundary === "end" ? "end_boundary" : null;
+      if (!key) throw new Error("Boundary range must target start or end.");
+      span.metadata = {
+        ...span.metadata,
+        [key]: {
+          lower_ms: lower,
+          estimate_ms: estimate,
+          upper_ms: upper,
+          coverage_probability: op.coverage_probability ?? null,
+          method: "manual_correction_range",
+        },
+      };
+      if (op.boundary === "start" && estimate < span.end_ms) span.start_ms = estimate;
+      else if (op.boundary === "end" && estimate > span.start_ms) span.end_ms = estimate;
+      else throw new Error("Boundary-range estimate would create a zero-duration span.");
+      markCorrected(span, op, "boundary_range");
+      break;
+    }
+    case "alignment_choose_pronunciation":
+      if (!["phone", "phoneme", "word"].includes(span.modality)) {
+        throw new Error("Pronunciation choices require a phone, phoneme, or word span.");
+      }
+      if (!String(op.pronunciation_path_id ?? "").trim()) {
+        throw new Error("A pronunciation path ID is required.");
+      }
+      span.metadata = {
+        ...span.metadata,
+        pronunciation_path_id: String(op.pronunciation_path_id),
+        alignment_lifecycle: "corrected",
+      };
+      markCorrected(span, op, "pronunciation");
+      break;
     case "annotate":
       span.metadata = {...span.metadata, [`annotation:${op.key}`]: op.value};
       break;
@@ -214,14 +256,29 @@ export function focusedSessionSpan(session, search = "") {
 export function segmentationState(session) {
   const artifacts = (session?.attachments ?? [])
     .filter(attachment => attachment.kind === "phonetic_segmentation")
-    .map(attachment => ({
-      artifact_id: attachment.artifact_id,
-      readiness: attachment.payload?.readiness ?? "unsupported",
-      algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
-      recipe_id: attachment.payload?.graph?.recipe_id ?? null,
-      issues: attachment.payload?.issues ?? [],
-      missing_segments: (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
-    }));
+    .map(attachment => {
+      const hypotheses = attachment.payload?.hypotheses ?? [];
+      const selected = hypotheses.find(path =>
+        path.id === attachment.payload?.selected_hypothesis_id) ?? null;
+      return {
+        artifact_id: attachment.artifact_id,
+        schema_version: attachment.payload?.schema_version ?? attachment.schema_version ?? 1,
+        readiness: attachment.payload?.readiness ?? "unsupported",
+        mode: attachment.payload?.mode ?? null,
+        algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
+        recipe_id: attachment.payload?.context?.recipe_id ?? attachment.payload?.graph?.recipe_id ?? null,
+        issues: attachment.payload?.diagnostics ?? attachment.payload?.issues ?? [],
+        hypotheses,
+        selected_hypothesis: selected,
+        alternatives: hypotheses.filter(path => path !== selected),
+        missing_segments: selected
+          ? (selected.units ?? []).filter(unit => !unit.interval)
+          : (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
+        boundary_ranges: selected
+          ? (selected.units ?? []).filter(unit => unit.start_boundary || unit.end_boundary)
+          : [],
+      };
+    });
   if (!artifacts.length) {
     return {
       available: false,
@@ -230,15 +287,22 @@ export function segmentationState(session) {
       artifacts,
     };
   }
-  const readiness = artifacts.some(artifact => artifact.readiness === "partial")
-    ? "partial"
-    : artifacts.every(artifact => artifact.readiness === "ready") ? "ready" : "unsupported";
+  let readiness = "unsupported";
+  if (artifacts.some(artifact => artifact.readiness === "partial")) readiness = "partial";
+  else if (artifacts.some(artifact => artifact.readiness === "abstained")) readiness = "abstained";
+  else if (artifacts.some(artifact => artifact.readiness === "failed")) readiness = "failed";
+  else if (artifacts.every(artifact => artifact.readiness === "ready")) readiness = "ready";
+  const alignmentV2 = artifacts.some(artifact => artifact.schema_version >= 2);
   return {
     available: true,
     readiness,
     message: readiness === "ready"
-      ? "Attached phone/phoneme timing is inspectable as immutable evidence."
-      : `${readiness} segmentation stays explicit; untimed rows are not rendered as authoritative boundaries.`,
+      ? alignmentV2
+        ? "Selected timing, nearby paths, boundary ranges, and score contributions are inspectable."
+        : "Attached phone/phoneme timing is inspectable as immutable evidence."
+      : alignmentV2
+        ? `${readiness} alignment stays explicit; alternatives and abstention are preserved.`
+        : `${readiness} segmentation stays explicit; untimed rows are not rendered as authoritative boundaries.`,
     artifacts,
   };
 }

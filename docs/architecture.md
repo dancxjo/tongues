@@ -17,6 +17,14 @@ audio
   -> text, phones, phonemes, boundaries, syntax, and emotion labels
 ```
 
+Phone alignment is a backend-neutral evidence lattice, not a flattened list of
+timestamps. The schema-v2 contract in
+[Evidence-preserving phone alignment](phone-alignment.md) consumes Common Phone
+or recorded CTC posteriors, retains pronunciation alternatives and boundary
+ranges, separates acoustic scores from linguistic priors, and projects only a
+justified selected path into the shared timeline. Schema-v1 phonetic
+segmentation remains a compatible imported/hint foundation.
+
 ## G2P2G Model
 
 The G2P2G family is a shared-vocabulary encoder-decoder Transformer:

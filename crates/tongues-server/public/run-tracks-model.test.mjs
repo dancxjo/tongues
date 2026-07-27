@@ -106,6 +106,38 @@ test("multilingual segmentation projects explicit phone and phoneme tracks with 
   );
 });
 
+test("schema-v2 alignment exposes selected path alternatives ranges and scores", () => {
+  const fixture = structuredClone(phoneticFixture);
+  fixture.session.attachments = [{
+    artifact_id: "phone-alignment:v2",
+    kind: "phonetic_segmentation",
+    schema_version: 2,
+    payload: {
+      schema_version: 2,
+      algorithm_version: "tongues.phone-alignment.ctc-lattice-v2",
+      readiness: "ready",
+      mode: "pronunciation_constrained",
+      context: {recipe_id:"recipe:v2"},
+      selected_hypothesis_id: "hypothesis:selected",
+      hypotheses: [
+        {
+          id:"hypothesis:selected", normalized_path_posterior:0.8,
+          scores:{acoustic_log_likelihood:-0.2,pronunciation_log_prior:-0.1},
+          units:[{id:"phone:k",interval:{start_frame:10,end_frame:20},start_boundary:{lower_frame:8,estimate_frame:10,upper_frame:12}}],
+        },
+        {id:"hypothesis:alternative",normalized_path_posterior:0.2,units:[]},
+      ],
+      diagnostics:[],
+    },
+  }];
+  const state = projectSessionTracks(fixture).segmentation;
+  assert.equal(state.readiness, "ready");
+  assert.match(state.message, /alternatives|boundary ranges/);
+  assert.equal(state.artifacts[0].selected_hypothesis.id, "hypothesis:selected");
+  assert.equal(state.artifacts[0].alternatives.length, 1);
+  assert.equal(state.artifacts[0].boundary_ranges.length, 1);
+});
+
 test("phone, word, transcript, speaker, and source audio remain linked in both directions", () => {
   const view = projectSessionTracks(phoneticFixture);
   const phone = view.tracks.find(track => track.id === "phones").spans.find(span => span.label === "t");
