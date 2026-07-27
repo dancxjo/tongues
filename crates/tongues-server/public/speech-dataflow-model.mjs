@@ -90,6 +90,13 @@ export function duplicateNode(pipeline,id,offset={x:36,y:36}) {
   touch(pipeline);return copy;
 }
 
+export function applyNodeConfig(pipeline,id,values) {
+  const node=pipeline.nodes.find(item=>item.id===id);
+  if(!node)throw new Error("The selected node is no longer present.");
+  Object.assign(node.config,structuredClone(values));
+  touch(pipeline);return node;
+}
+
 export function replaceNode(pipeline,id,catalogNode) {
   const node=pipeline.nodes.find(item=>item.id===id);
   if(!node||node.kind!==catalogNode?.kind)throw new Error("Replacement must have the same backend node kind.");

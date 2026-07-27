@@ -120,7 +120,7 @@ impl GraphCatalog {
     pub fn builtin() -> Self {
         let mut catalog = Self {
             schema_version: 1,
-            revision: "tongues-pipeline-catalog-v1".into(),
+            revision: "tongues-pipeline-catalog-v2".into(),
             node_kinds: BTreeMap::new(),
             components: BTreeMap::new(),
         };
@@ -180,6 +180,39 @@ fn node(kind: &str, label: &str, ports: Vec<PortSpec>) -> NodeKindSpec {
     }
 }
 
+fn configured_source(
+    kind: &str,
+    label: &str,
+    ports: Vec<PortSpec>,
+    field: ConfiguredStringField<'_>,
+) -> NodeKindSpec {
+    let mut spec = node(kind, label, ports);
+    let mut field_schema = serde_json::json!({
+        "type": "string",
+        "title": field.title,
+        "description": field.description,
+        "minLength": 1
+    });
+    if let Some(format) = field.format {
+        field_schema["format"] = serde_json::Value::String(format.into());
+    }
+    spec.configuration_schema = serde_json::json!({
+        "type": "object",
+        "properties": {field.name: field_schema},
+        "required": [field.name]
+    });
+    spec.default_config = serde_json::json!({field.name: field.default});
+    spec
+}
+
+struct ConfiguredStringField<'a> {
+    name: &'a str,
+    title: &'a str,
+    description: &'a str,
+    format: Option<&'a str>,
+    default: &'a str,
+}
+
 fn io(input: ValueType, output: ValueType) -> Vec<PortSpec> {
     vec![
         port("in", PortDirection::Input, input, Cardinality::One, false),
@@ -221,7 +254,7 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
                 port("error", Output, Error, Many, false),
             ],
         ),
-        node(
+        configured_source(
             "audio_file",
             "Audio file",
             vec![
@@ -229,6 +262,13 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
                 port("artifact", Output, Artifact, Many, false),
                 port("error", Output, Error, Many, false),
             ],
+            ConfiguredStringField {
+                name: "path",
+                title: "Audio file path",
+                description: "Path to the audio file the graph should read.",
+                format: None,
+                default: "",
+            },
         ),
         node(
             "vad",
@@ -268,10 +308,17 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
                 port("error", Output, Error, Many, false),
             ],
         ),
-        node(
+        configured_source(
             "text_source",
             "Text source",
             vec![port("out", Output, Text, Many, true)],
+            ConfiguredStringField {
+                name: "text",
+                title: "Text",
+                description: "Text emitted from out(text) when the graph runs.",
+                format: Some("multiline"),
+                default: "Hello from Tongues.",
+            },
         ),
         node(
             "linguistic",

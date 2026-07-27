@@ -673,6 +673,51 @@ test('compare preserves per-recipe results and permits partial failure', () => {
     assert.match(studioSource, /Blind listening mode/);
 });
 
+test('built-in recipes supply defaults for every reference-audio role', () => {
+    const defaults = {
+        voice: '1221-135767-0014.wav',
+        style: 'amused.wav',
+    };
+    assert.deepEqual(studio.defaultControlValues({
+        controls: [
+            { field: 'source_audio', kind: 'reference_audio' },
+            { field: 'target_audio', kind: 'reference_audio' },
+            { field: 'voice_sample', kind: 'reference_audio' },
+            { field: 'style_sample', kind: 'reference_audio' },
+            { field: 'noise_scale', kind: 'number', default: 0.8 },
+        ],
+    }, defaults), {
+        source_audio: 'amused.wav',
+        target_audio: '1221-135767-0014.wav',
+        voice_sample: '1221-135767-0014.wav',
+        style_sample: 'amused.wav',
+        noise_scale: 0.8,
+    });
+});
+
+test('voice conversion accepts its source audio without requiring unused text', () => {
+    const path = fixturePath({
+        backend: 'freevc',
+        model: 'freevc24-vctk',
+        family: 'voice_conversion',
+        controls: [
+            { field: 'source_audio', kind: 'reference_audio' },
+            { field: 'target_audio', kind: 'reference_audio' },
+        ],
+    });
+    assert.deepEqual(studio.buildPayload(path, new Map([
+        ['source_audio', 'amused.wav'],
+        ['target_audio', '1221-135767-0014.wav'],
+    ])), {
+        text: '',
+        variety: 'en-US-GA',
+        backend: 'freevc',
+        model: 'freevc24-vctk',
+        source_audio: 'amused.wav',
+        target_audio: '1221-135767-0014.wav',
+    });
+});
+
 test('recipes persist controls and navigation carries current state between workflows', () => {
     assert.match(studioSource, /tongues\.speech\.user-recipes\.v1/);
     assert.match(studioSource, /controls: controlSnapshot\(path\)/);

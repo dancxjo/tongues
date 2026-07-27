@@ -212,7 +212,14 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
             continue;
         };
         validate_component(graph, node, kind, catalog, &mut diagnostics);
-        validate_config(graph, node, &kind.configuration_schema, &mut diagnostics);
+        let configuration_schema = node
+            .component_id
+            .as_ref()
+            .and_then(|component_id| catalog.components.get(component_id))
+            .map_or(&kind.configuration_schema, |component| {
+                &component.configuration_schema
+            });
+        validate_config(graph, node, configuration_schema, &mut diagnostics);
         if kind.unsafe_execution && !graph.metadata.allow_unsafe_execution {
             diagnostics.push(error(
                 graph,
@@ -468,15 +475,75 @@ fn validate_config(
     schema: &serde_json::Value,
     diagnostics: &mut Vec<GraphDiagnostic>,
 ) {
-    let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) else {
-        return;
-    };
-    for field in required.iter().filter_map(serde_json::Value::as_str) {
-        if !node.config.contains_key(field) {
+    let required = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<BTreeSet<_>>();
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    for field in &required {
+        if !node.config.contains_key(*field) {
             diagnostics.push(error(
                 graph,
                 "config.required_field_missing",
                 format!("Node `{}` configuration requires `{field}`.", node.id),
+                Some(&node.id),
+                None,
+                None,
+            ));
+        }
+    }
+    let Some(properties) = properties else {
+        return;
+    };
+    for (field, field_schema) in properties {
+        let Some(value) = node.config.get(field) else {
+            continue;
+        };
+        let expected = field_schema.get("type").and_then(serde_json::Value::as_str);
+        let type_matches = match expected {
+            Some("string") => value.is_string(),
+            Some("number") => value.is_number(),
+            Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
+            Some("boolean") => value.is_boolean(),
+            Some("array") => value.is_array(),
+            Some("object") => value.is_object(),
+            _ => true,
+        };
+        if !type_matches {
+            diagnostics.push(error(
+                graph,
+                "config.invalid_type",
+                format!(
+                    "Node `{}` configuration field `{field}` must be {}.",
+                    node.id,
+                    expected.unwrap_or("a supported value")
+                ),
+                Some(&node.id),
+                None,
+                None,
+            ));
+            continue;
+        }
+        if let (Some(text), Some(min_length)) = (
+            value.as_str(),
+            field_schema
+                .get("minLength")
+                .and_then(serde_json::Value::as_u64),
+        ) && text.chars().count() < min_length as usize
+        {
+            diagnostics.push(error(
+                graph,
+                "config.string_too_short",
+                format!(
+                    "Node `{}` configuration field `{field}` must contain at least {min_length} character{}.",
+                    node.id,
+                    if min_length == 1 { "" } else { "s" }
+                ),
                 Some(&node.id),
                 None,
                 None,

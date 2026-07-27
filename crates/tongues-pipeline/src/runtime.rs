@@ -27,6 +27,26 @@ pub struct RuntimeOutput {
     pub derived_from: Vec<String>,
 }
 
+/// Returns the value produced directly by a saved, configuration-backed source.
+///
+/// Live sources such as microphones and control ingress deliberately return
+/// `None`: their values must come from a runtime adapter, not from graph JSON.
+pub fn configured_source_output(step: &PlanStep) -> Option<RuntimeOutput> {
+    match step.node_kind.as_str() {
+        "text_source" => step.config.get("text").cloned().map(|value| RuntimeOutput {
+            port_id: "out".into(),
+            value,
+            derived_from: vec![format!("config:{}:text", step.node_id)],
+        }),
+        "audio_file" => step.config.get("path").cloned().map(|value| RuntimeOutput {
+            port_id: "artifact".into(),
+            value,
+            derived_from: vec![format!("config:{}:path", step.node_id)],
+        }),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionEvent {
     pub sequence: u64,

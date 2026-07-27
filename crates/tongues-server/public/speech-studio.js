@@ -12,6 +12,7 @@
         presetId: '',
         values: new Map(),
         samples: [],
+        sampleDefaults: {},
         emotions: [],
         audioInputCapabilities: null,
         languageRoutingCapabilities: null,
@@ -163,6 +164,21 @@
         (discovery?.compositions || []).filter((composition) => (
             includeTest || composition.backend !== 'mock'
         ))
+    );
+    const referenceControlDefault = (field, defaults = {}) => ({
+        source_audio: defaults.style,
+        target_audio: defaults.voice,
+        voice_sample: defaults.voice,
+        style_sample: defaults.style,
+    }[field]);
+    const controlDefault = (control, defaults = {}) => (
+        control?.default ?? referenceControlDefault(control?.field, defaults)
+    );
+    const defaultControlValues = (path, defaults = {}) => Object.fromEntries(
+        (path?.controls || []).flatMap((control) => {
+            const value = controlDefault(control, defaults);
+            return value == null || value === '' ? [] : [[control.field, value]];
+        }),
     );
     const selectInitialComposition = (discovery) => {
         const compositions = availableCompositions(discovery);
@@ -370,7 +386,9 @@
             payload.backend = path.backend;
             payload.model = path.model;
         }
-        if (!payload.text.trim()) throw new Error('Enter text to synthesize.');
+        if (!payload.text.trim() && path.family !== 'voice_conversion') {
+            throw new Error('Enter text to synthesize.');
+        }
         if (path.speakers?.required && !context.speaker) {
             throw new Error('This model requires a speaker.');
         }
@@ -658,7 +676,7 @@
                         <div>
                             <p class="eyebrow">Listening test</p>
                             <h2 id="compare-heading">Compare complete recipes</h2>
-                            <p>Every candidate receives the same prompt and remains tied to its exact controls.</p>
+                            <p>Text-to-speech candidates receive the same prompt. Voice-conversion candidates use their configured source audio, and every result remains tied to its exact controls.</p>
                         </div>
                     </div>
                     <div id="compare-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
@@ -1093,7 +1111,7 @@
         input.id = id;
         input.name = control.field;
         const stored = state.values.get(control.field);
-        const initial = stored ?? control.default;
+        const initial = stored ?? controlDefault(control, state.sampleDefaults);
         const optionValues = input.options ? Array.from(input.options, (item) => item.value) : [];
         if (control.kind === 'boolean') {
             input.checked = Boolean(initial);
@@ -2550,6 +2568,9 @@
         state.samples = sampleResponse.status === 'fulfilled'
             ? (sampleResponse.value.samples || [])
             : [];
+        state.sampleDefaults = sampleResponse.status === 'fulfilled'
+            ? (sampleResponse.value.defaults || {})
+            : {};
         state.emotions = emotionResponse.status === 'fulfilled'
             ? (emotionResponse.value.emotions || [])
             : [];
@@ -3462,7 +3483,7 @@
                 name: composition.display_name,
                 compositionId: composition.id,
                 builtIn: true,
-                controls: {},
+                controls: defaultControlValues(composition, state.sampleDefaults),
             }));
         return [
             ...builtIns,
@@ -4290,8 +4311,10 @@
         buildDuplexRequest,
         compatibilityFor,
         compositionGenerator,
+        controlDefault,
         controlsForPath,
         createStreamContractState,
+        defaultControlValues,
         deleteUserRecipe,
         cliRepresentation,
         duplexLines,

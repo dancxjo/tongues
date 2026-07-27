@@ -17,6 +17,88 @@ fn starter_graphs_validate_and_compile_deterministically() {
 }
 
 #[test]
+fn text_source_configuration_round_trips_and_executes_verbatim() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    let source = graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == "text_source")
+        .unwrap();
+    source.config.insert(
+        "text".into(),
+        json!("First line.\nSecond line with punctuation: č, ə, ʃ."),
+    );
+    let serialized = serde_json::to_value(&graph).unwrap();
+    let reopened = migrate_graph_json(serialized).unwrap().document;
+    let plan = compile_graph(&reopened, &catalog).unwrap();
+    let source_step = plan
+        .steps
+        .iter()
+        .find(|step| step.node_kind == "text_source")
+        .unwrap();
+    let output = configured_source_output(source_step).unwrap();
+    assert_eq!(output.port_id, "out");
+    assert_eq!(
+        output.value,
+        json!("First line.\nSecond line with punctuation: č, ə, ʃ.")
+    );
+    assert!(plan.channels.iter().any(|channel| {
+        channel.from == Endpoint::new("text", "out") && channel.to == Endpoint::new("tts", "in")
+    }));
+}
+
+#[test]
+fn configured_sources_reject_empty_saved_values() {
+    let catalog = fixture_catalog();
+    for (starter, kind, field) in [
+        (StarterGraph::TextToSpeech, "text_source", "text"),
+        (StarterGraph::Transcription, "audio_file", "path"),
+    ] {
+        let mut graph = starter_graph(starter, &catalog).unwrap();
+        let node = graph
+            .nodes
+            .iter_mut()
+            .find(|node| {
+                if kind == "audio_file" {
+                    node.kind == "microphone"
+                } else {
+                    node.kind == kind
+                }
+            })
+            .unwrap();
+        node.kind = kind.into();
+        node.config.insert(field.into(), json!(""));
+        let report = validate_graph(&graph, &catalog);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.string_too_short"),
+            "{kind}: {:#?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
+fn component_configuration_schema_is_validated() {
+    let mut catalog = fixture_catalog();
+    let component = catalog.components.get_mut("fixture-tts").unwrap();
+    component.configuration_schema = json!({
+        "type": "object",
+        "properties": {"voice": {"type": "string", "minLength": 1}},
+        "required": ["voice"]
+    });
+    let graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    let report = validate_graph(&graph, &catalog);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "config.required_field_missing"
+            && diagnostic.target.node_id.as_deref() == Some("tts")
+    }));
+}
+
+#[test]
 fn meeting_graph_fans_out_and_has_explicit_join_semantics() {
     let catalog = fixture_catalog();
     let graph = starter_graph(StarterGraph::MeetingTranscription, &catalog).unwrap();

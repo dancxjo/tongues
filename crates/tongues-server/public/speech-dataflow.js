@@ -1,5 +1,5 @@
 import {
-  addNode,bypassNode,buildCatalog,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
+  addNode,applyNodeConfig,bypassNode,buildCatalog,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
   diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,nodeLabel,nodePosition,
   portsFor,removeEdge,removeNode,replaceNode,setNodePosition,touch,
 } from "./speech-dataflow-model.mjs";
@@ -210,13 +210,21 @@ function renderConfig(node,schema){
     else{input=document.createElement(spec.type==="string"&&spec.format==="multiline"?"textarea":"input");input.type=spec.type==="number"||spec.type==="integer"?"number":spec.type==="boolean"?"checkbox":"text";if(spec.minimum!=null)input.min=spec.minimum;if(spec.maximum!=null)input.max=spec.maximum;}
     input.dataset.config=name;const value=node.config?.[name]??spec.default;
     if(input.type==="checkbox")input.checked=Boolean(value);else if(value!=null)input.value=typeof value==="object"?JSON.stringify(value):String(value);
-    if(spec.description)input.title=spec.description;label.append(input);return label;
+    if(spec.description){input.title=spec.description;if(input.tagName==="TEXTAREA"||input.type==="text")input.placeholder=spec.description;}
+    if(required.has(name))input.required=true;
+    label.append(input);return label;
   }));
 }
 
 function applyConfig(){
   const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;
-  try{for(const input of byId("config-fields").querySelectorAll("[data-config]")){let value=input.type==="checkbox"?input.checked:input.value;if(input.type==="number")value=Number(value);node.config[input.dataset.config]=value;}touch(pipeline);renderGraph();scheduleValidation();announce("Configuration applied.");}catch(error){announce(error.message,true);}
+  try{
+    const fields=[...byId("config-fields").querySelectorAll("[data-config]")];
+    const invalid=fields.find(input=>!input.checkValidity());
+    if(invalid){invalid.reportValidity();return announce(`Enter a valid value for ${invalid.dataset.config}.`,true);}
+    const values=Object.fromEntries(fields.map(input=>{let value=input.type==="checkbox"?input.checked:input.value;if(input.type==="number")value=Number(value);return[input.dataset.config,value];}));
+    applyNodeConfig(pipeline,node.id,values);renderGraph();scheduleValidation();announce("Configuration applied.");
+  }catch(error){announce(error.message,true);}
 }
 
 function renderEdgeInspector(edge){
@@ -274,7 +282,7 @@ async function runGraph(){
   }catch(error){if(error.name==="AbortError"){renderRunEvent({kind:"cancelled",node_id:"graph",detail:"Cancelled by operator"});announce("Graph run cancelled.");}else announce(error.message,true);}
   finally{runController=null;byId("run").disabled=false;byId("cancel").disabled=true;}
 }
-function renderRunEvent(event){const item=document.createElement("li");item.className=event.kind;item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${event.detail?` · ${event.detail}`:""}`;byId("run-events").append(item);item.scrollIntoView({block:"nearest"});if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}}
+function renderRunEvent(event){const item=document.createElement("li");item.className=event.kind;const output=event.output?` · ${event.output.port_id}=${JSON.stringify(event.output.value)}`:"";item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${output}${event.detail?` · ${event.detail}`:""}`;byId("run-events").append(item);item.scrollIntoView({block:"nearest"});if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}}
 
 function deleteSelectedNode(){if(!selectedNode)return;removeNode(pipeline,selectedNode);selectedNode=null;renderGraph();scheduleValidation();announce("Node deleted.");}
 function disableSelectedNode(){const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;if(node.disabled){node.disabled=false;announce("Node enabled; reconnect any relationships it needs.");}else{pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==selectedNode&&edge.to.node_id!==selectedNode);pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==selectedNode);node.disabled=true;announce("Node disabled and removed from execution; its connections were removed explicitly.");}touch(pipeline);renderGraph();scheduleValidation();}

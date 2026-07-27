@@ -2,11 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  adapterPaths,addNode,buildCatalog,bypassNode,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
+  adapterPaths,addNode,applyNodeConfig,buildCatalog,bypassNode,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
   diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,requiredPortState,
 } from "./speech-dataflow-model.mjs";
 
 const discovery={node_kinds:{
+  text_source:{kind:"text_source",label:"Text source",requires_component:false,default_config:{text:"Hello from Tongues."},configuration_schema:{
+    type:"object",properties:{text:{type:"string",title:"Text",format:"multiline",minLength:1}},required:["text"]},ports:[
+    {id:"out",direction:"output",value_type:"text",cardinality:"many"}]},
   microphone:{kind:"microphone",label:"Microphone",requires_component:false,default_config:{},ports:[
     {id:"out",direction:"output",value_type:"audio_stream",cardinality:"many"}]},
   asr:{kind:"asr",label:"ASR",requires_component:true,required_capabilities:["asr"],ports:[
@@ -90,6 +93,28 @@ test("persisted reload preserves graph meaning and backend-owned identities",()=
   assert.equal(reopened.nodes[1].component_id,"fixture");
 });
 
+test("text source configuration survives duplication and JSON persistence",()=>{
+  const graph=createPipeline("Text"),catalog=buildCatalog(discovery);
+  const source=addNode(graph,catalog.find(node=>node.kind==="text_source"));
+  source.config.text="First line.\nSecond line.";
+  graph.edges.push({id:"edge:keep",from:{node_id:source.id,port_id:"out"},to:{node_id:"downstream",port_id:"in"},capacity:16});
+  const copy=duplicateNode(graph,source.id);
+  const reopened=JSON.parse(JSON.stringify(graph));
+  assert.equal(copy.config.text,"First line.\nSecond line.");
+  assert.equal(reopened.nodes[0].config.text,"First line.\nSecond line.");
+  assert.equal(reopened.edges[0].id,"edge:keep");
+  assert.notEqual(copy.config,source.config);
+});
+
+test("applying text source configuration preserves graph connections",()=>{
+  const graph=createPipeline("Text"),catalog=buildCatalog(discovery);
+  const source=addNode(graph,catalog.find(node=>node.kind==="text_source"));
+  graph.edges.push({id:"edge:keep",from:{node_id:source.id,port_id:"out"},to:{node_id:"downstream",port_id:"in"},capacity:16});
+  applyNodeConfig(graph,source.id,{text:"Updated\nmultiline text"});
+  assert.equal(source.config.text,"Updated\nmultiline text");
+  assert.deepEqual(graph.edges.map(edge=>edge.id),["edge:keep"]);
+});
+
 test("streamed run lifecycle survives arbitrary response chunk boundaries",async()=>{
   const encoder=new TextEncoder(),chunks=[
     encoder.encode('{"node_id":"mic","kind":"started"}\n{"node'),
@@ -110,5 +135,8 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
   assert.match(browserSource,/new AbortController\(\)/);
   assert.match(browserSource,/runController\?\.abort\(\)/);
   assert.match(browserSource,/item\.suggestions/);
+  assert.match(browserSource,/spec\.format==="multiline".*"textarea"/);
+  assert.match(browserSource,/input\.checkValidity\(\)/);
+  assert.match(browserSource,/event\.output.*event\.output\.port_id/);
   assert.doesNotMatch(browserSource,/Whisper|FastPitch|OpenAI|Anthropic/);
 });

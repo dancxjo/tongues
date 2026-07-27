@@ -549,6 +549,12 @@ fn pipeline_catalog_revision(catalog: &tongues_pipeline::GraphCatalog) -> String
     // Stable FNV-1a over the execution-relevant registry projection. This is a
     // revision identity, not a security checksum.
     let mut hash = 0xcbf29ce484222325u64;
+    for kind in catalog.node_kinds.values() {
+        for byte in serde_json::to_vec(kind).unwrap_or_default() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
     for component in catalog.components.values() {
         for byte in format!(
             "{}\0{}\0{}\0{:?}\0",
@@ -560,7 +566,7 @@ fn pipeline_catalog_revision(catalog: &tongues_pipeline::GraphCatalog) -> String
             hash = hash.wrapping_mul(0x100000001b3);
         }
     }
-    format!("tongues-pipeline-catalog-v1:{hash:016x}")
+    format!("tongues-pipeline-catalog-v2:{hash:016x}")
 }
 
 fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Value {
@@ -972,8 +978,11 @@ async fn run_pipeline_graph(
         let started = std::time::Instant::now();
         for step in &plan.steps {
             for kind in ["started", "output", "completed"] {
+                let output = (kind == "output")
+                    .then(|| tongues_pipeline::configured_source_output(step))
+                    .flatten();
                 let detail = match kind {
-                    "output" => Some(format!(
+                    "output" if output.is_none() => Some(format!(
                         "deterministic contract output from {}",
                         step.component_id.as_deref().unwrap_or(&step.node_kind)
                     )),
@@ -988,6 +997,7 @@ async fn run_pipeline_graph(
                     "component_id": step.component_id,
                     "kind": kind,
                     "elapsed_ms": started.elapsed().as_millis() as u64,
+                    "output": output,
                     "detail": detail,
                 });
                 run.events.push(event.clone());
@@ -6360,9 +6370,9 @@ fn resident_synthesis_context(
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "target_audio is required for FreeVC".to_string())?;
         return Ok(ResidentSynthesisContext {
-            voice_reference: Some(workspace_reference_wav(state, target)?),
+            voice_reference: Some(speech_reference_wav(state, target)?),
             style_reference: None,
-            source_reference: Some(workspace_reference_wav(state, source)?),
+            source_reference: Some(speech_reference_wav(state, source)?),
             emotion_vector: None,
         });
     }
@@ -6415,6 +6425,16 @@ fn workspace_reference_wav(state: &AppState, input: &str) -> Result<PathBuf, Str
         ));
     }
     Ok(resolved)
+}
+
+fn speech_reference_wav(state: &AppState, input: &str) -> Result<PathBuf, String> {
+    workspace_reference_wav(state, input).or_else(|workspace_error| {
+        styletts2_sample_path(state, input).map_err(|sample_error| {
+            format!(
+                "{workspace_error}; reference sample `{input}` is also unavailable: {sample_error}"
+            )
+        })
+    })
 }
 
 fn request_emotion_vector(
@@ -9817,7 +9837,14 @@ mod tests {
         let mut catalog = tongues_pipeline::fixture_catalog();
         let first = pipeline_catalog_revision(&catalog);
         assert_eq!(first, pipeline_catalog_revision(&catalog));
-        assert_eq!(first.len(), "tongues-pipeline-catalog-v1:".len() + 16);
+        assert_eq!(first.len(), "tongues-pipeline-catalog-v2:".len() + 16);
+
+        catalog
+            .node_kinds
+            .get_mut("text_source")
+            .expect("text source")
+            .default_config = json!({"text": "A different default."});
+        assert_ne!(first, pipeline_catalog_revision(&catalog));
 
         catalog
             .components

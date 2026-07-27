@@ -53,6 +53,15 @@ not change runtime routing. Disabled nodes and structurally bypassed nodes
 remain visible in the saved document but do not enter the execution plan;
 their old edges are removed explicitly rather than silently rerouted.
 
+Configuration-backed sources are catalog contracts too. `text_source` exposes
+a required multiline `text` value and the Text-to-speech starter supplies
+helpful sample text; its contract-run output event contains that exact saved
+value on `out`. `audio_file` likewise requires a non-empty `path`. Applying
+either configuration mutates only the node configuration, so saved edges,
+node duplication, graph duplication, and JSON persistence keep their existing
+relationships and values. Live microphone and control sources remain driven
+by runtime events rather than pretending that live input is saved config.
+
 The friendly CLI and browser are expected to call this library-owned contract;
 neither surface should reproduce routing rules.
 
@@ -77,11 +86,12 @@ merge orders equal-time values by source edge ID and source sequence.
 
 ## Validation and planning
 
-Validation rejects missing required inputs, unconsumed required outputs,
+Validation uses the component schema for component-backed nodes and the
+node-kind schema otherwise. It rejects missing required inputs, unconsumed required outputs,
 unknown nodes or ports, duplicate IDs, incompatible types, zero-capacity
 channels, implicit fan-in, unsafe nodes without graph approval, invalid cycles,
-missing capabilities, unavailable/unverified components, invalid required
-configuration, and disconnected selected sinks.
+missing capabilities, unavailable/unverified components, missing, empty, or
+mistyped required configuration, and disconnected selected sinks.
 
 Compilation topologically orders otherwise-independent nodes by stable node ID,
 sorts edge-derived channels by saved edge order, and records:
