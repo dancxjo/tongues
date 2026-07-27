@@ -17,6 +17,7 @@ mod speak;
 mod speech_corpus;
 mod styletts2_cmds;
 mod vits_cmds;
+mod vocoder_cmds;
 
 use std::fs;
 use std::io::{BufRead, Read, Write};
@@ -167,6 +168,12 @@ enum Commands {
     Vits {
         #[command(subcommand)]
         command: vits_cmds::VitsCommands,
+    },
+
+    /// Train, resume, evaluate, and export native neural vocoders
+    Vocoder {
+        #[command(subcommand)]
+        command: vocoder_cmds::VocoderCommands,
     },
 
     /// Train and run the lexical grapheme/phoneme seq2seq model family
@@ -1932,6 +1939,7 @@ fn main() -> Result<()> {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
         }
         Commands::Vits { command } => vits_cmds::run(command, device_arg),
+        Commands::Vocoder { command } => vocoder_cmds::run(command, device_arg),
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceParser { command } => run_sentence_parser_command(command, device_arg),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
@@ -2128,6 +2136,10 @@ fn command_needs_device(command: &Commands) -> bool {
         Commands::Vits { command } => !matches!(
             command,
             vits_cmds::VitsCommands::Initialize { .. }
+        ),
+        Commands::Vocoder { command } => !matches!(
+            command,
+            vocoder_cmds::VocoderCommands::Initialize { .. }
         ),
         Commands::SentenceParser { command } => matches!(
             command,
