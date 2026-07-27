@@ -5,9 +5,9 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tongues_audio::{
-    AudioSourceDescriptor, AudioSourceKind, PushedAudioChunk, SegmentationConfig,
-    SegmentationEvent, UtteranceSegmenter, VadBackendKind, VadPipelineEvent,
-    VadSegmentationPipeline, bounded_audio_input, create_vad_backend,
+    AudioSourceDescriptor, AudioSourceKind, CleanupPipeline, CleanupStageConfig, PushedAudioChunk,
+    SegmentationConfig, SegmentationEvent, UtteranceSegmenter, VadBackendKind, VadPipelineEvent,
+    VadSegmentationPipeline, bounded_audio_input, create_vad_backend, rms,
 };
 
 const BROWSER_AUDIO_SCHEMA_VERSION: u16 = 1;
@@ -26,6 +26,8 @@ enum ClientControl {
         vad_backend: VadBackendKind,
         #[serde(default)]
         segmentation: SegmentationConfig,
+        #[serde(default)]
+        cleanup: Vec<CleanupStageConfig>,
     },
     End,
 }
@@ -40,6 +42,16 @@ enum ProbeEvent {
         queue_capacity_chunks: usize,
         vad_backend: VadBackendKind,
         segmentation: SegmentationConfig,
+        cleanup: Vec<CleanupStageConfig>,
+    },
+    CleanupCompared {
+        chunk_sequence: u64,
+        raw_rms: f32,
+        processed_rms: f32,
+        raw_peak: f32,
+        processed_peak: f32,
+        algorithmic_latency_frames: usize,
+        stages: Vec<tongues_audio::CleanupStageTrace>,
     },
     Level {
         chunk_sequence: u64,
@@ -125,6 +137,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
         channels,
         vad_backend,
         segmentation,
+        cleanup,
     } = control
     else {
         let _ = send_error(
@@ -164,6 +177,13 @@ async fn browser_audio_session(mut socket: WebSocket) {
         .await;
         return;
     }
+    let mut cleanup_pipeline = match CleanupPipeline::new(&cleanup) {
+        Ok(pipeline) => pipeline,
+        Err(error) => {
+            let _ = send_error(&mut socket, "invalid_cleanup_config", error.to_string()).await;
+            return;
+        }
+    };
     let descriptor = match AudioSourceDescriptor::live_pcm(
         "browser-microphone",
         AudioSourceKind::Browser,
@@ -296,6 +316,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
             queue_capacity_chunks: BROWSER_AUDIO_QUEUE_CHUNKS,
             vad_backend,
             segmentation,
+            cleanup,
         },
     )
     .await
@@ -312,7 +333,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
         tokio::select! {
             message = socket_rx.next(), if input_open => match message {
                 Some(Ok(Message::Binary(bytes))) => {
-                    let chunk = match decode_chunk(&bytes, sample_rate_hz, channels) {
+                    let mut chunk = match decode_chunk(&bytes, sample_rate_hz, channels) {
                         Ok(chunk) => chunk,
                         Err(error) => {
                             if send_probe_sink(
@@ -327,6 +348,36 @@ async fn browser_audio_session(mut socket: WebSocket) {
                             continue;
                         }
                     };
+                    let raw_rms = rms(&chunk.audio.samples);
+                    let raw_peak = peak(&chunk.audio.samples);
+                    let processed = match cleanup_pipeline.process(&chunk.audio) {
+                        Ok(processed) => processed,
+                        Err(error) => {
+                            if send_probe_sink(
+                                &mut socket_tx,
+                                &ProbeEvent::Error {
+                                    code: "audio_cleanup_failed",
+                                    message: error.to_string(),
+                                },
+                            ).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    let compared = ProbeEvent::CleanupCompared {
+                        chunk_sequence: chunk.sequence,
+                        raw_rms,
+                        processed_rms: rms(&processed.audio.samples),
+                        raw_peak,
+                        processed_peak: peak(&processed.audio.samples),
+                        algorithmic_latency_frames: processed.algorithmic_latency_frames,
+                        stages: processed.stages,
+                    };
+                    chunk.audio = processed.audio;
+                    if send_probe_sink(&mut socket_tx, &compared).await.is_err() {
+                        break;
+                    }
                     if let Err(error) = source_tx.try_send(chunk)
                         && send_probe_sink(
                             &mut socket_tx,
@@ -423,6 +474,13 @@ fn decode_chunk(
             channels,
         },
     })
+}
+
+fn peak(samples: &[f32]) -> f32 {
+    samples
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0, f32::max)
 }
 
 async fn send_error(

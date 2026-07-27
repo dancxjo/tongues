@@ -89,7 +89,7 @@ pub struct ProcessedAudio {
     pub algorithmic_latency_frames: usize,
 }
 
-pub trait CleanupStage {
+pub trait CleanupStage: Send {
     fn kind(&self) -> &'static str;
     fn process(&mut self, audio: &mut AudioBuffer) -> Result<()>;
     fn algorithmic_latency_frames(&self) -> usize {
