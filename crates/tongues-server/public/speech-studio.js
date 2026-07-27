@@ -52,6 +52,14 @@
         browserMicGain: null,
         browserMicSequence: 0,
         browserMicStartFrame: 0,
+        conversationMicSocket: null,
+        conversationMicContext: null,
+        conversationMicStream: null,
+        conversationMicSource: null,
+        conversationMicNode: null,
+        conversationMicStartedAt: 0,
+        conversationFirstPartialAt: 0,
+        conversationCommittedAt: 0,
     };
     const VERIFICATION_CONCURRENCY = 1;
     const DEFAULT_COMPARISON_CONCURRENCY = 2;
@@ -528,6 +536,15 @@
                     <section id="live-conversation" class="live-conversation"
                         aria-label="Conversation" aria-live="polite">
                         <p class="live-empty">Start a turn to watch generation, planning, and playback move independently.</p>
+                    </section>
+                    <section class="browser-mic-probe" aria-labelledby="conversation-mic-heading">
+                        <h3 id="conversation-mic-heading">Live microphone recognition</h3>
+                        <p id="live-asr-text" class="live-generating">No recognition yet.</p>
+                        <button id="live-mic-start" type="button">Start microphone conversation</button>
+                        <button id="live-mic-stop" type="button" class="secondary-button" disabled>Stop microphone</button>
+                        <label><input id="live-barge-in" type="checkbox" checked> Committed external speech may interrupt playback</label>
+                        <p>Microphone activity and unstable text never become user turns. Target-like echo is ignored; a committed external segment cancels and restarts at a safe turn boundary.</p>
+                        <dl id="live-latencies" class="metadata-grid" aria-live="polite"></dl>
                     </section>
                     <form id="live-form" class="live-composer">
                         <label class="sr-only" for="live-message">Message</label>
@@ -3034,6 +3051,10 @@
         const startTimer = window.setTimeout(() => {
             if (generation !== state.liveGeneration) return;
             if (!state.liveFirstAudioAt) state.liveFirstAudioAt = performance.now();
+            if (state.liveTurn && !state.liveTurn.times.firstAudio) {
+                state.liveTurn.times.firstAudio = performance.now();
+                renderConversationLatencies(state.liveTurn.times);
+            }
             markLiveSegment(event.segment_id, 'speaking');
             appendLiveJournal({
                 type: 'playback_acknowledged',
@@ -3048,6 +3069,10 @@
             state.liveSources.delete(source);
             if (generation !== state.liveGeneration) return;
             state.liveSpoken += event.text;
+            if (state.liveTurn) {
+                state.liveTurn.times.playbackCompleted = performance.now();
+                renderConversationLatencies(state.liveTurn.times);
+            }
             markLiveSegment(event.segment_id, 'spoken');
             appendLiveJournal({
                 type: 'playback_acknowledged',
@@ -3063,6 +3088,10 @@
 
     function enqueueLiveSegment(event, generation, signal) {
         state.liveSegments.set(event.segment_id, { ...event, playback: 'planned' });
+        if (state.liveTurn && !state.liveTurn.times.firstPlanned) {
+            state.liveTurn.times.firstPlanned = performance.now();
+            renderConversationLatencies(state.liveTurn.times);
+        }
         state.liveCommitted += event.text;
         renderLiveAssistant();
     }
@@ -3166,7 +3195,16 @@
         state.liveGeneration = generation;
         const turnId = `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const controller = new AbortController();
-        state.liveTurn = { id: turnId, controller };
+        state.liveTurn = {
+            id: turnId,
+            controller,
+            times: {
+                captureStarted: state.conversationMicStartedAt,
+                speechStarted: state.conversationMicStartedAt,
+                firstPartial: state.conversationFirstPartialAt,
+                committed: state.conversationCommittedAt || performance.now(),
+            },
+        };
         state.liveSynthesisTail = Promise.resolve();
         resetLiveTurn(userText);
         clearError(byId('live-error'));
@@ -3202,6 +3240,10 @@
             appendLiveJournal(envelope);
             const event = applyStreamEnvelope(state.liveContract, envelope);
             if (event.type === 'partial_hypothesis' && event.role === 'generation') {
+                if (state.liveTurn && !state.liveTurn.times.firstGenerated) {
+                    state.liveTurn.times.firstGenerated = performance.now();
+                    renderConversationLatencies(state.liveTurn.times);
+                }
                 state.liveGenerated = event.text;
                 renderLiveAssistant();
             } else if (event.type === 'committed_segment' && event.role === 'generation') {
@@ -3247,6 +3289,136 @@
         byId('live-state').textContent = overlap ? 'Streamed' : 'Completed';
         byId('live-stop').disabled = true;
         byId('live-send').disabled = false;
+    }
+
+    function renderConversationLatencies(times = {}) {
+        const delta = (end, start) => end && start ? Math.max(0, end - start) : null;
+        const rows = [
+            ['Auditory detection', delta(times.speechStarted, times.captureStarted)],
+            ['Segmentation / final ASR', delta(times.committed, times.speechStarted)],
+            ['ASR first partial', delta(times.firstPartial, times.speechStarted)],
+            ['LLM first token', delta(times.firstGenerated, times.committed)],
+            ['Speech planning', delta(times.firstPlanned, times.firstGenerated)],
+            ['TTS first audio', delta(times.firstAudio, times.firstPlanned)],
+            ['Playback', delta(times.playbackCompleted, times.firstAudio)],
+        ];
+        const target = byId('live-latencies');
+        if (!target) return;
+        target.replaceChildren(...rows.flatMap(([label, value]) => {
+            const term = document.createElement('dt');
+            term.textContent = label;
+            const detail = document.createElement('dd');
+            detail.textContent = value == null ? 'pending' : `${value.toFixed(1)} ms`;
+            return [term, detail];
+        }));
+    }
+
+    async function handleConversationAsrEvent(event) {
+        if (event.type === 'partial_hypothesis' || event.type === 'revised_hypothesis') {
+            if (!state.conversationFirstPartialAt) state.conversationFirstPartialAt = performance.now();
+            byId('live-asr-text').className = 'live-generating';
+            byId('live-asr-text').textContent = `Provisional: ${event.data?.text || '…'}`;
+            renderConversationLatencies({
+                captureStarted: state.conversationMicStartedAt,
+                speechStarted: state.conversationMicStartedAt,
+                firstPartial: state.conversationFirstPartialAt,
+            });
+            return;
+        }
+        if (event.type !== 'committed_segment' || event.data?.role !== 'recognition') return;
+        state.conversationCommittedAt = performance.now();
+        byId('live-asr-text').className = 'committed';
+        byId('live-asr-text').textContent = `Committed: ${event.data.text}`;
+        const { committedTurnAction } = await import('/live-conversation-model.mjs');
+        const decision = committedTurnAction({
+            event,
+            playbackActive: state.liveSources.size > 0 || Boolean(state.liveTurn),
+            bargeIn: byId('live-barge-in').checked,
+            spokenText: `${state.liveSpoken} ${state.liveCommitted}`,
+        });
+        appendLiveJournal({
+            type: 'recognition_commit_decision',
+            decision: decision.action,
+            reason: decision.reason,
+            text: event.data.text,
+            at_ms: Date.now(),
+        });
+        if (decision.action === 'ignore_echo' || decision.action === 'wait') return;
+        if (decision.action === 'cancel_and_restart') await stopLiveTurn();
+        await startLiveTurn(event.data.text);
+    }
+
+    async function startConversationMicrophone() {
+        if (state.conversationMicSocket) return;
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+            },
+        });
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const context = new AudioContextClass();
+        const source = context.createMediaStreamSource(stream);
+        const node = context.createScriptProcessor(4096, 1, 1);
+        const socket = new WebSocket(
+            `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/asr/stream`,
+        );
+        socket.binaryType = 'arraybuffer';
+        state.conversationMicStream = stream;
+        state.conversationMicContext = context;
+        state.conversationMicSource = source;
+        state.conversationMicNode = node;
+        state.conversationMicSocket = socket;
+        state.conversationMicStartedAt = performance.now();
+        state.conversationFirstPartialAt = 0;
+        state.conversationCommittedAt = 0;
+        socket.addEventListener('open', () => socket.send(JSON.stringify({
+            type: 'open',
+            schema_version: 1,
+            provider: 'fixture',
+            sample_rate_hz: context.sampleRate,
+            channels: 1,
+            language: selectedVariety(selectedPath())?.split('-')[0] || 'en',
+        })));
+        socket.addEventListener('message', (message) => {
+            const payload = JSON.parse(message.data);
+            if (payload.type === 'recognition') {
+                handleConversationAsrEvent(payload.event).catch((error) => {
+                    showError(`Conversation recognition failed: ${error.message}`, byId('live-error'));
+                });
+            } else if (payload.type === 'error') {
+                showError(`${payload.code}: ${payload.message}`, byId('live-error'));
+            }
+        });
+        socket.addEventListener('close', stopConversationMicrophone);
+        node.onaudioprocess = (audioEvent) => {
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(audioEvent.inputBuffer.getChannelData(0).slice().buffer);
+            }
+        };
+        source.connect(node);
+        node.connect(context.destination);
+        byId('live-mic-start').disabled = true;
+        byId('live-mic-stop').disabled = false;
+        byId('live-asr-text').textContent = 'Listening; only committed recognition starts a turn.';
+    }
+
+    function stopConversationMicrophone() {
+        const socket = state.conversationMicSocket;
+        state.conversationMicSocket = null;
+        if (socket?.readyState === WebSocket.OPEN) socket.send('{"type":"end"}');
+        state.conversationMicNode?.disconnect();
+        state.conversationMicSource?.disconnect();
+        state.conversationMicStream?.getTracks().forEach((track) => track.stop());
+        state.conversationMicContext?.close();
+        state.conversationMicNode = null;
+        state.conversationMicSource = null;
+        state.conversationMicStream = null;
+        state.conversationMicContext = null;
+        byId('live-mic-start').disabled = false;
+        byId('live-mic-stop').disabled = true;
     }
 
     function comparisonRecipes() {
@@ -3744,6 +3916,12 @@
         byId('live-stop').addEventListener('click', () => {
             stopLiveTurn().catch(() => {});
         });
+        byId('live-mic-start').addEventListener('click', () => {
+            startConversationMicrophone().catch((error) => {
+                showError(`Microphone conversation failed: ${error.message}`, byId('live-error'));
+            });
+        });
+        byId('live-mic-stop').addEventListener('click', stopConversationMicrophone);
         byId('live-replay').addEventListener('click', () => {
             replayLiveAudio().catch((error) => {
                 showError(`Replay failed: ${error.message}`, byId('live-error'));
