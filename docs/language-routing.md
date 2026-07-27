@@ -24,12 +24,24 @@ tongues language-routing
 curl -s http://127.0.0.1:3000/api/language-routing/capabilities
 ```
 
+Run the installed detector directly against a WAV with:
+
+```sh
+tongues language-routing --detect-wav recording.wav
+```
+
 Speech Studio consumes the server representation. It allows fixed-language
 selection and exposes the shared hysteresis/minimum-evidence controls.
 Auto-detection is disabled with a clear explanation when the advertised
-detector model is not installed. Set `TONGUES_WHISPER_MODEL` to an existing
-compatible model file before server startup to advertise the Whisper detector
-and multilingual ASR route as installed.
+detector model is not installed. Tongues resolves the registered multilingual
+`whisper-large-v3-turbo` asset from the shared mortar-sea model home used by its
+existing model fetcher. `TONGUES_WHISPER_MODEL` can explicitly override that
+path; the older `MORTAR_ASR_WHISPER_MODEL` override remains accepted.
+
+Finalized browser segments are normalized to mono 16 kHz and passed to the real
+Whisper auto-language adapter. Speech Studio retains the ranked evidence,
+confidence, selected language, provider, exact model path, and any fallback
+reason as a lifecycle event.
 
 Focused fixtures cover fixed routing, stable English-to-Spanish switching,
 ambiguous speech without flapping, visible French evidence through an English
