@@ -11083,12 +11083,12 @@ mod tests {
                 && span.metadata["symbol"] == "ʃa"
         }));
         assert_eq!(projection.original.len(), projection.edited.len());
-        assert!(projection.original.iter().all(|original| {
+        assert!(
             projection
-                .edited
+                .original
                 .iter()
-                .any(|edited| edited == original)
-        }));
+                .all(|original| { projection.edited.iter().any(|edited| edited == original) })
+        );
     }
 
     #[test]
