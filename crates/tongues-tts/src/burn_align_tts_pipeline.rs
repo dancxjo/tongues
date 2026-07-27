@@ -135,7 +135,7 @@ mod tests {
         let acoustic = BurnAlignTtsAcoustic::<TestBackend>::load(
             fixture_path("config.json"),
             fixture_path("model_file.pth"),
-            device.clone(),
+            device,
         )
         .expect("Align-TTS fixture");
         let config = HifiganBundleConfig {

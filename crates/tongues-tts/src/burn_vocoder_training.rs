@@ -29,9 +29,7 @@ impl VocoderMelLossConfig {
             sample_rate: config.sample_rate,
             num_mels: config.num_mels,
             mel_fmin: config.mel_fmin,
-            mel_fmax: config
-                .mel_fmax
-                .unwrap_or(config.sample_rate as f32 / 2.0),
+            mel_fmax: config.mel_fmax.unwrap_or(config.sample_rate as f32 / 2.0),
         }
     }
 
@@ -72,9 +70,10 @@ pub enum VocoderTrainingPhase {
 }
 
 /// Shared adversarial update schedule for native vocoder trainers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VocoderAdversarialUpdateSchedule {
     /// Update generator and discriminator once for every batch.
+    #[default]
     EveryBatch,
     /// Run a deterministic discriminator-then-generator cycle.
     ///
@@ -87,12 +86,6 @@ pub enum VocoderAdversarialUpdateSchedule {
         discriminator_steps: u64,
         generator_steps: u64,
     },
-}
-
-impl Default for VocoderAdversarialUpdateSchedule {
-    fn default() -> Self {
-        Self::EveryBatch
-    }
 }
 
 /// Per-step schedule metrics emitted by native vocoder trainers.

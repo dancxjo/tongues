@@ -72,8 +72,8 @@ pub fn feature_matching_loss<B: Backend>(
 ) -> Tensor<B, 1> {
     let mut loss: Option<Tensor<B, 1>> = None;
     let mut count = 0usize;
-    for (real_layers, fake_layers) in real_fmaps.into_iter().zip(fake_fmaps.into_iter()) {
-        for (real_map, fake_map) in real_layers.into_iter().zip(fake_layers.into_iter()) {
+    for (real_layers, fake_layers) in real_fmaps.into_iter().zip(fake_fmaps) {
+        for (real_map, fake_map) in real_layers.into_iter().zip(fake_layers) {
             // Align time axes before computing L1 to tolerate minor length differences
             // that arise when the generator segment length differs from the target.
             let (real_aligned, fake_aligned) = align_time_axes(real_map.detach(), fake_map);
@@ -155,7 +155,7 @@ pub fn adversarial_discriminator_loss<B: Backend>(
 ) -> Tensor<B, 1> {
     let mut loss: Option<Tensor<B, 1>> = None;
     let mut count = 0usize;
-    for (real, fake) in real_scores.into_iter().zip(fake_scores.into_iter()) {
+    for (real, fake) in real_scores.into_iter().zip(fake_scores) {
         let real_loss = (real - Tensor::ones_like(&fake)).powi_scalar(2).mean();
         let fake_loss = fake.powi_scalar(2).mean();
         let sub_loss = (real_loss + fake_loss) / 2.0f64;

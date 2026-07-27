@@ -1503,9 +1503,8 @@ mod tests {
         );
 
         let device = NdArrayDevice::Cpu;
-        let engine =
-            BurnVitsSpeech::<TestBackend>::load(config, checkpoint, speakers, device.clone())
-                .expect("published VITS engine");
+        let engine = BurnVitsSpeech::<TestBackend>::load(config, checkpoint, speakers, device)
+            .expect("published VITS engine");
         let token_count = token_ids.len();
 
         for speaker in vits["speakers"].as_array().expect("speaker references") {

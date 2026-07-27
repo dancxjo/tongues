@@ -432,16 +432,14 @@ impl SymbolSet {
         false
     }
 
-    fn append_final_punctuation_if_missing(&self, lowered: &mut Vec<StyleTts2SymbolToken>) {
+    fn append_final_punctuation_if_missing(&self, lowered: &mut [StyleTts2SymbolToken]) {
         if lowered.is_empty() {
             return;
         }
         if lowered
             .last()
             .is_some_and(|token| is_terminal_punctuation(&token.symbol))
-        {
-            return;
-        }
+        {}
     }
 
     fn apply_prosody_markers(
@@ -592,10 +590,9 @@ impl PhoneBackedPhonemeSymbols {
                 .realized_as
                 .iter()
                 .any(phone_should_lower_as_underlying_phoneme)
+                && let Some(token_id) = spec_token_id(&phoneme.phoneme)
             {
-                if let Some(token_id) = spec_token_id(&phoneme.phoneme) {
-                    symbol = Some(symbol_set.resolve_phoneme_symbol(token_id, phoneme)?);
-                }
+                symbol = Some(symbol_set.resolve_phoneme_symbol(token_id, phoneme)?);
             }
 
             for phone in &phoneme.realized_as {
@@ -705,9 +702,9 @@ pub fn styletts2_en_us_symbol_set() -> SymbolSet {
     let mut set = SymbolSet::new(
         arpabet_symbols
             .into_iter()
-            .chain(ipa_phone_symbols.into_iter())
-            .chain(intonation_symbols.into_iter())
-            .chain(punctuation_symbols.into_iter()),
+            .chain(ipa_phone_symbols)
+            .chain(intonation_symbols)
+            .chain(punctuation_symbols),
     );
 
     for symbol in arpabet_symbols {

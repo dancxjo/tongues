@@ -195,10 +195,12 @@ impl TtsPlaybackLedger {
             }));
         }
         if delta.revision <= self.current_revision {
-            return Err(LedgerError::DeltaError(PlanDeltaError::OutOfOrderRevision {
-                current: self.current_revision,
-                received: delta.revision,
-            }));
+            return Err(LedgerError::DeltaError(
+                PlanDeltaError::OutOfOrderRevision {
+                    current: self.current_revision,
+                    received: delta.revision,
+                },
+            ));
         }
 
         // Validate all changes before mutating state.
@@ -229,53 +231,43 @@ impl TtsPlaybackLedger {
 
     fn validate_change(&self, change: &PlanChange) -> Result<(), LedgerError> {
         match change {
-            PlanChange::Schedule {
-                emission_id,
-                ..
-            } => {
+            PlanChange::Schedule { emission_id, .. } => {
                 if self.entries.contains_key(emission_id) {
-                    return Err(LedgerError::DeltaError(PlanDeltaError::DuplicateEmissionId {
-                        emission_id: emission_id.clone(),
-                    }));
+                    return Err(LedgerError::DeltaError(
+                        PlanDeltaError::DuplicateEmissionId {
+                            emission_id: emission_id.clone(),
+                        },
+                    ));
                 }
             }
-            PlanChange::Commit {
-                emission_id,
-                ..
-            } => {
+            PlanChange::Commit { emission_id, .. } => {
                 if !self.entries.contains_key(emission_id) {
                     return Err(LedgerError::DeltaError(PlanDeltaError::UnknownEmissionId {
                         emission_id: emission_id.clone(),
                     }));
                 }
             }
-            PlanChange::Cancel { emission_id } => {
-                match self.entries.get(emission_id) {
-                    None => {
-                        return Err(LedgerError::DeltaError(
-                            PlanDeltaError::UnknownEmissionId {
-                                emission_id: emission_id.clone(),
-                            },
-                        ));
-                    }
-                    Some(entry) if matches!(entry.delivery_state, DeliveryState::Played) => {
-                        return Err(LedgerError::DeltaError(
-                            PlanDeltaError::CannotCancelPlayedEmission {
-                                emission_id: emission_id.clone(),
-                            },
-                        ));
-                    }
-                    _ => {}
+            PlanChange::Cancel { emission_id } => match self.entries.get(emission_id) {
+                None => {
+                    return Err(LedgerError::DeltaError(PlanDeltaError::UnknownEmissionId {
+                        emission_id: emission_id.clone(),
+                    }));
                 }
-            }
+                Some(entry) if matches!(entry.delivery_state, DeliveryState::Played) => {
+                    return Err(LedgerError::DeltaError(
+                        PlanDeltaError::CannotCancelPlayedEmission {
+                            emission_id: emission_id.clone(),
+                        },
+                    ));
+                }
+                _ => {}
+            },
             PlanChange::ReplaceSuffix { from_emission_id } => {
                 match self.entries.get(from_emission_id) {
                     None => {
-                        return Err(LedgerError::DeltaError(
-                            PlanDeltaError::UnknownEmissionId {
-                                emission_id: from_emission_id.clone(),
-                            },
-                        ));
+                        return Err(LedgerError::DeltaError(PlanDeltaError::UnknownEmissionId {
+                            emission_id: from_emission_id.clone(),
+                        }));
                     }
                     Some(entry) if matches!(entry.delivery_state, DeliveryState::Played) => {
                         return Err(LedgerError::DeltaError(
@@ -366,12 +358,12 @@ impl TtsPlaybackLedger {
         pcm: Vec<f32>,
         sample_rate_hz: u32,
     ) -> Result<(), LedgerError> {
-        let entry = self
-            .entries
-            .get_mut(emission_id)
-            .ok_or_else(|| LedgerError::UnknownEmission {
-                emission_id: emission_id.clone(),
-            })?;
+        let entry =
+            self.entries
+                .get_mut(emission_id)
+                .ok_or_else(|| LedgerError::UnknownEmission {
+                    emission_id: emission_id.clone(),
+                })?;
         if matches!(entry.delivery_state, DeliveryState::Played) {
             return Err(LedgerError::PlayedEntryImmutable {
                 emission_id: emission_id.clone(),
@@ -392,12 +384,12 @@ impl TtsPlaybackLedger {
         emission_id: &EmissionId,
         new_state: DeliveryState,
     ) -> Result<(), LedgerError> {
-        let entry = self
-            .entries
-            .get_mut(emission_id)
-            .ok_or_else(|| LedgerError::UnknownEmission {
-                emission_id: emission_id.clone(),
-            })?;
+        let entry =
+            self.entries
+                .get_mut(emission_id)
+                .ok_or_else(|| LedgerError::UnknownEmission {
+                    emission_id: emission_id.clone(),
+                })?;
 
         // Commitment guard.
         if matches!(new_state, DeliveryState::Played) && !entry.committed {
@@ -598,9 +590,7 @@ mod tests {
             ))
             .unwrap();
 
-        ledger
-            .attach_pcm(&emission_id, vec![0.1], 22_050)
-            .unwrap();
+        ledger.attach_pcm(&emission_id, vec![0.1], 22_050).unwrap();
 
         let result = ledger.advance_state(&emission_id, DeliveryState::Played);
         assert!(matches!(
@@ -617,9 +607,7 @@ mod tests {
         ledger
             .apply_delta(&schedule_delta(utterance_id(), 1, "e1", "m1", true))
             .unwrap();
-        ledger
-            .attach_pcm(&emission_id, vec![0.1], 22_050)
-            .unwrap();
+        ledger.attach_pcm(&emission_id, vec![0.1], 22_050).unwrap();
         ledger
             .advance_state(&emission_id, DeliveryState::Played)
             .unwrap();
@@ -734,9 +722,7 @@ mod tests {
         ledger
             .apply_delta(&schedule_delta(utterance_id(), 1, "e1", "m1", true))
             .unwrap();
-        ledger
-            .attach_pcm(&emission_id, vec![0.1], 22_050)
-            .unwrap();
+        ledger.attach_pcm(&emission_id, vec![0.1], 22_050).unwrap();
         ledger
             .advance_state(&emission_id, DeliveryState::Queued)
             .unwrap();
@@ -775,9 +761,7 @@ mod tests {
         assert!(ledger.entry(&emission_id).unwrap().committed);
 
         // Now it can be played.
-        ledger
-            .attach_pcm(&emission_id, vec![0.1], 22_050)
-            .unwrap();
+        ledger.attach_pcm(&emission_id, vec![0.1], 22_050).unwrap();
         ledger
             .advance_state(&emission_id, DeliveryState::Played)
             .unwrap();

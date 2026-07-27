@@ -531,13 +531,13 @@ impl StreamValidator {
                 };
                 match behavior {
                     InvalidEventBehavior::Reject => Err(error),
-                    InvalidEventBehavior::EmitWarningAndDrop => {
-                        Ok(ValidationOutcome::DroppedWithWarning(StreamEvent::Warning {
+                    InvalidEventBehavior::EmitWarningAndDrop => Ok(
+                        ValidationOutcome::DroppedWithWarning(StreamEvent::Warning {
                             code: "stream_event_dropped".into(),
                             message: error.to_string(),
                             recoverable: true,
-                        }))
-                    }
+                        }),
+                    ),
                 }
             }
         }
@@ -1019,11 +1019,7 @@ mod tests {
                 Provenance::direct(),
             ))
             .unwrap();
-        let mut out_of_order = sequencer.push(
-            StreamEvent::Completed,
-            at,
-            Provenance::direct(),
-        );
+        let mut out_of_order = sequencer.push(StreamEvent::Completed, at, Provenance::direct());
         out_of_order.sequence = 9;
         let outcome = validator
             .validate_with_policy(

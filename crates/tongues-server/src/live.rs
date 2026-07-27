@@ -118,6 +118,9 @@ impl OllamaProvider {
 }
 
 impl StreamingTextProvider for OllamaProvider {
+    // Keep the nested stream validation readable on the repository's Rust 2021
+    // edition; equivalent let-chain syntax requires a newer edition.
+    #[allow(clippy::collapsible_if)]
     fn stream_turn<'a>(
         &'a self,
         request: &'a ChatTurnRequest,

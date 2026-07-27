@@ -261,12 +261,9 @@ mod tests {
         let vocoder_config = std::env::var_os("TONGUES_TEST_COQUI_HIFIGAN_CONFIG")
             .expect("TONGUES_TEST_COQUI_HIFIGAN_CONFIG must accompany the vocoder model");
         let device = NdArrayDevice::Cpu;
-        let acoustic = BurnSpeedySpeechAcoustic::<TestBackend>::load(
-            acoustic_config,
-            acoustic_model,
-            device.clone(),
-        )
-        .expect("acoustic model");
+        let acoustic =
+            BurnSpeedySpeechAcoustic::<TestBackend>::load(acoustic_config, acoustic_model, device)
+                .expect("acoustic model");
         let vocoder =
             BurnHifiganVocoder::<TestBackend>::load(vocoder_config, vocoder_model, device)
                 .expect("vocoder");

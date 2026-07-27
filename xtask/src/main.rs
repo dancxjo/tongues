@@ -1546,7 +1546,7 @@ fn continue_closing_punctuation_end(buffer: &str, mut index: usize) -> usize {
 
 fn continue_dot_is_abbreviation(buffer: &str, dot_index: usize) -> bool {
     let after_dot = dot_index + 1;
-    if buffer[after_dot..].chars().next() == Some('.') {
+    if buffer[after_dot..].starts_with('.') {
         return false;
     }
     let prefix = buffer[..dot_index].trim_end();
@@ -1572,6 +1572,9 @@ fn continue_dot_is_abbreviation(buffer: &str, dot_index: usize) -> bool {
     )
 }
 
+// The command implementations intentionally continue below their focused unit
+// tests in this single-file binary; moving them would obscure the command flow.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::{

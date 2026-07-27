@@ -3,6 +3,11 @@ set positional-arguments
 default:
     @just --list
 
+# Run the same formatting and Clippy gates used by CI
+lint:
+    cargo fmt --all --check
+    scripts/clippy-feature-matrix.sh all
+
 # Fetch checksum-pinned Cargo assets and prove the linguistic layer builds offline
 prepare-assets:
     cargo fetch

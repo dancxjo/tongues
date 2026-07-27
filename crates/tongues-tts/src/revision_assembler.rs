@@ -27,7 +27,7 @@
 //! Given identical inputs the assembler always produces identical outputs, so
 //! crossfade behavior can be verified in unit tests without an audio device.
 
-use anyhow::{Result, ensure};
+use anyhow::{ensure, Result};
 
 /// Backend-neutral assembler for streaming revision of TTS waveforms.
 ///
@@ -106,7 +106,10 @@ impl RevisionWaveformAssembler {
         // Truncate to the played prefix.
         self.buffer.truncate(self.played_count);
 
-        let crossfade_len = self.crossfade_samples.min(self.played_count).min(new_pcm.len());
+        let crossfade_len = self
+            .crossfade_samples
+            .min(self.played_count)
+            .min(new_pcm.len());
 
         // Build the output: crossfade region + remainder.
         let mut output = Vec::with_capacity(new_pcm.len());
@@ -231,9 +234,17 @@ mod tests {
         assert_eq!(output.len(), new_pcm.len());
         // At index 0: incoming_weight=0, result is fully from outgoing buffer.
         // outgoing = buffer[0..4] = [1,2,3,4]; new_pcm[0] = 0.0.
-        assert!((output[0] - 1.0).abs() < 1e-6, "expected 1.0 at index 0, got {}", output[0]);
+        assert!(
+            (output[0] - 1.0).abs() < 1e-6,
+            "expected 1.0 at index 0, got {}",
+            output[0]
+        );
         // Last index of crossfade: fully incoming.
-        assert!((output[3] - 30.0).abs() < 1e-6, "expected 30.0 at index 3, got {}", output[3]);
+        assert!(
+            (output[3] - 30.0).abs() < 1e-6,
+            "expected 30.0 at index 3, got {}",
+            output[3]
+        );
         // Remainder is unmodified.
         assert!((output[4] - 40.0).abs() < 1e-6);
         assert!((output[5] - 50.0).abs() < 1e-6);

@@ -1216,6 +1216,8 @@ fn build_boundary_examples(
     examples
 }
 
+// Keep the row provenance and normalization inputs explicit at construction.
+#[allow(clippy::too_many_arguments)]
 fn push_example(
     examples: &mut Vec<BoundaryTrainingExample>,
     action: BoundaryAction,
@@ -1749,7 +1751,7 @@ mod tests {
 
     #[test]
     fn evaluate_predictions_all_correct_gives_perfect_metrics() {
-        let pairs = vec![
+        let pairs = [
             ("<boundary:emit>Hello.\n", "<boundary:emit>Hello.\n"),
             ("<boundary:continue>", "<boundary:continue>"),
             ("<boundary:repair>A B", "<boundary:repair>A B"),
@@ -1769,7 +1771,7 @@ mod tests {
     #[test]
     fn evaluate_predictions_wrong_action_changes_accuracy() {
         // Gold says emit but model says continue
-        let pairs = vec![
+        let pairs = [
             ("<boundary:emit>Hello.\n", "<boundary:continue>"),
             ("<boundary:emit>World.\n", "<boundary:emit>World.\n"),
         ];
@@ -1787,7 +1789,7 @@ mod tests {
 
     #[test]
     fn evaluate_predictions_invalid_output_counted() {
-        let pairs = vec![
+        let pairs = [
             ("<boundary:emit>Hello.\n", "garbage output"),
             ("<boundary:emit>World.\n", "<boundary:emit>World.\n"),
         ];

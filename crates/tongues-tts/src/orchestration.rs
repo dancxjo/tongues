@@ -210,6 +210,7 @@ pub struct OutputAudioContract {
 /// matters for conversational or high-coverage use cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CapabilityTier {
     /// Low-latency conversational pipelines.
     ///
@@ -236,6 +237,7 @@ pub enum CapabilityTier {
     ///
     /// Used for models under evaluation, voice-conversion pipelines, and any
     /// composition whose measured performance has not yet been confirmed.
+    #[default]
     Unassigned,
 }
 
@@ -255,12 +257,6 @@ impl CapabilityTier {
     /// and Tier C pipelines do not require it.
     pub const fn is_revision_tier(self) -> bool {
         matches!(self, Self::TierA)
-    }
-}
-
-impl Default for CapabilityTier {
-    fn default() -> Self {
-        Self::Unassigned
     }
 }
 
@@ -478,16 +474,15 @@ impl BackendCapabilities {
                     self.speakers.values.available(),
                 ));
             }
-            Some(SpeakerSelection::Numeric(id)) => {
-                if !self.speakers.values.contains_numeric(*id) {
-                    return Err(unsupported_value(
-                        &self.backend,
-                        "speaker_id",
-                        &id.to_string(),
-                        self.speakers.values.available_numeric(),
-                    ));
-                }
+            Some(SpeakerSelection::Numeric(id)) if !self.speakers.values.contains_numeric(*id) => {
+                return Err(unsupported_value(
+                    &self.backend,
+                    "speaker_id",
+                    &id.to_string(),
+                    self.speakers.values.available_numeric(),
+                ));
             }
+            Some(SpeakerSelection::Numeric(_)) => {}
             None => {}
         }
 
@@ -516,16 +511,17 @@ impl BackendCapabilities {
                     self.languages.values.available(),
                 ));
             }
-            Some(LanguageSelection::Numeric(id)) => {
-                if !self.languages.values.contains_numeric(*id) {
-                    return Err(unsupported_value(
-                        &self.backend,
-                        "language_id",
-                        &id.to_string(),
-                        self.languages.values.available_numeric(),
-                    ));
-                }
+            Some(LanguageSelection::Numeric(id))
+                if !self.languages.values.contains_numeric(*id) =>
+            {
+                return Err(unsupported_value(
+                    &self.backend,
+                    "language_id",
+                    &id.to_string(),
+                    self.languages.values.available_numeric(),
+                ));
             }
+            Some(LanguageSelection::Numeric(_)) => {}
             None => {}
         }
 

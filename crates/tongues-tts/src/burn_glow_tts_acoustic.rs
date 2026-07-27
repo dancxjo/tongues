@@ -19,6 +19,8 @@ use crate::{
 
 pub const COQUI_D_VECTOR_SPACE: &str = "coqui-speaker-encoder-d-vector-v1";
 
+// Keep backend variants inline to avoid changing the model construction API.
+#[allow(clippy::large_enum_variant)]
 enum GlowDurationBackend<B: Backend> {
     Deterministic(GlowTts<B>),
     Stochastic(StochasticGlowTts<B>),

@@ -68,6 +68,8 @@ pub fn run_styletts2_command(command: Styletts2Commands, device_arg: DeviceArg) 
     }
 }
 
+// These values directly mirror the CLI surface and remain explicit at dispatch.
+#[allow(clippy::too_many_arguments)]
 fn run_discover(
     text: &str,
     out_dir: &Path,

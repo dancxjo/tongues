@@ -1692,8 +1692,7 @@ mod tests {
             .collect::<Vec<_>>();
         let device = NdArrayDevice::Cpu;
         let config = GlowTtsInferenceConfig::from_file(config_path).expect("published config");
-        let model =
-            GlowTts::<TestBackend>::load(config, checkpoint_path, device.clone()).expect("model");
+        let model = GlowTts::<TestBackend>::load(config, checkpoint_path, device).expect("model");
         let weight_fixture = &fixture["stages"]["final_invertible_weight"];
         let actual_weight = model
             .decoder
@@ -1856,7 +1855,7 @@ mod tests {
         let config = GlowTtsInferenceConfig::from_file(config_path).expect("published SC config");
         assert_eq!(config.network.speaker_conditioning_channels(), 256);
         assert!(!config.network.use_sdp);
-        let model = GlowTts::<TestBackend>::load(config, checkpoint_path, device.clone())
+        let model = GlowTts::<TestBackend>::load(config, checkpoint_path, device)
             .expect("published SC model");
         let output = model
             .inference(

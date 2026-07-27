@@ -390,6 +390,9 @@ pub struct CommittedMorpheme {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
+// This serialized event schema stays inline for stable construction and replay
+// compatibility; boxing a variant would alter its public API.
+#[allow(clippy::large_enum_variant)]
 pub enum SimulatorEventKind {
     EvidenceObserved {
         evidence: ObservedEvidence,
@@ -2282,7 +2285,6 @@ fn rows_for_fixture(fixture: &DuplexFixture, corpus: &str) -> AnyResult<Vec<Dupl
                 } else {
                     None
                 }
-
             })
             .unwrap_or(0.0);
 
@@ -2500,6 +2502,8 @@ fn build_repair_anchor(
     }
 }
 
+// Dataset counts remain explicit so generated documentation names each split.
+#[allow(clippy::too_many_arguments)]
 fn duplex_dataset_readme(
     fixtures_path: &Path,
     fixture_count: usize,

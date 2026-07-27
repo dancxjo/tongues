@@ -149,6 +149,9 @@ struct Cli {
     command: Option<Commands>,
 }
 
+// Clap owns the inline variant layout; boxing a subcommand would complicate
+// parsing and every dispatch site without changing CLI behavior.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Simulate deterministic duplex completion beams and commit frontiers
@@ -2145,14 +2148,12 @@ fn command_needs_device(command: &Commands) -> bool {
                 | InterpretationCommands::Stream { .. }
         ),
         Commands::CommonPhone { .. } => false,
-        Commands::Vits { command } => !matches!(
-            command,
-            vits_cmds::VitsCommands::Initialize { .. }
-        ),
-        Commands::Vocoder { command } => !matches!(
-            command,
-            vocoder_cmds::VocoderCommands::Initialize { .. }
-        ),
+        Commands::Vits { command } => {
+            !matches!(command, vits_cmds::VitsCommands::Initialize { .. })
+        }
+        Commands::Vocoder { command } => {
+            !matches!(command, vocoder_cmds::VocoderCommands::Initialize { .. })
+        }
         Commands::SentenceParser { command } => matches!(
             command,
             SentenceParserCommands::Train { .. }
@@ -2192,31 +2193,24 @@ fn command_needs_device(command: &Commands) -> bool {
 }
 
 fn command_defaults_to_quiet(command: &Commands) -> bool {
-    match command {
+    matches!(
+        command,
         Commands::G2p2g {
             command: G2p2gCommands::Infer { .. },
-        }
-        | Commands::SentenceParser {
+        } | Commands::SentenceParser {
             command: SentenceParserCommands::Infer { .. },
-        }
-        | Commands::Head2phones {
+        } | Commands::Head2phones {
             command: Head2PhonesCommands::Infer { .. },
-        }
-        | Commands::SentenceParser {
+        } | Commands::SentenceParser {
             command: SentenceParserCommands::Stream { .. },
-        }
-        | Commands::Interpretation {
+        } | Commands::Interpretation {
             command: InterpretationCommands::Stream { .. },
-        }
-        | Commands::Wiktionary {
+        } | Commands::Wiktionary {
             command: WiktionaryCommands::Infer { .. },
-        }
-        | Commands::Emotions {
+        } | Commands::Emotions {
             command: EmotionCommands::Infer { .. },
-        }
-        | Commands::Predict { .. } => true,
-        _ => false,
-    }
+        } | Commands::Predict { .. }
+    )
 }
 
 fn warn_legacy_command(old: &str, new: &str) {
@@ -2868,7 +2862,15 @@ fn run_sentence_parser_command(
             limit,
             seed,
             report,
-        } => cmd_sentence_parser_eval(&model, &data, &split, limit, seed, report.as_deref(), device_arg),
+        } => cmd_sentence_parser_eval(
+            &model,
+            &data,
+            &split,
+            limit,
+            seed,
+            report.as_deref(),
+            device_arg,
+        ),
         SentenceParserCommands::Parse { model, text } => {
             let config_path = model.join("model_config.json");
             let lowercase = if config_path.exists() {
@@ -3864,7 +3866,6 @@ fn cmd_be_with_onnx<B: Backend>(
     })?;
 
     eprintln!();
-    drop(sink);
     eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
     player.wait_until_done(total_samples);
     Ok(())
@@ -3958,7 +3959,6 @@ fn cmd_be_with_styletts2<B: Backend>(
     )?;
 
     eprintln!();
-    drop(sink);
     eprintln!("be: waiting for CPAL playback to drain ({total_samples} queued samples)");
     player.wait_until_done(total_samples);
     Ok(())
@@ -4094,6 +4094,8 @@ fn stream_ollama_generate(
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn speak_head2phones_sentence<B: Backend>(
     sentence: &str,
     variety: &str,
@@ -4143,6 +4145,8 @@ fn speak_head2phones_sentence<B: Backend>(
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn speak_head2phones_head<B: Backend>(
     sentence: &str,
     variety: &str,
@@ -4213,7 +4217,8 @@ fn speak_head2phones_head<B: Backend>(
             .sequence
             .to_text_ids_compatible(speech_backend.voice_config())?;
         let mut audio = speech_backend.synthesize_ids(&ids)?.pcm_mono_f32;
-        audio.extend(std::iter::repeat(0.0).take(
+        audio.extend(std::iter::repeat_n(
+            0.0,
             (speech_backend.sample_rate_hz() as usize * chunk.pause_after_ms as usize) / 1000,
         ));
         sink.emit(speech::AudioChunk {
@@ -4228,6 +4233,8 @@ fn speak_head2phones_head<B: Backend>(
     Ok(nonempty_remainder(rest))
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn speak_head2phones_sentence_styletts2<B: Backend>(
     sentence: &str,
     variety: &str,
@@ -4285,6 +4292,8 @@ fn speak_head2phones_sentence_styletts2<B: Backend>(
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn speak_head2phones_head_styletts2<B: Backend>(
     sentence: &str,
     variety: &str,
@@ -4522,6 +4531,8 @@ fn synthesize_mechanical_sentence(
     speech_backend.synthesize_plan_streaming(&plan, sink)
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn synthesize_mechanical_sentence_styletts2(
     sentence: &str,
     variety: &str,
@@ -5351,8 +5362,11 @@ fn run_sentence_parser_eval<B: Backend>(
 
     // Maximum disagreements to print.
     const MAX_DISAGREEMENTS: usize = 8;
-    let mut disagreements: Vec<(usize, &tongues_sentence_parser::BoundaryTrainingExample, String)> =
-        Vec::new();
+    let mut disagreements: Vec<(
+        usize,
+        &tongues_sentence_parser::BoundaryTrainingExample,
+        String,
+    )> = Vec::new();
 
     for &row_index in sample_indexes {
         let row = &rows[row_index];
@@ -5381,8 +5395,16 @@ fn run_sentence_parser_eval<B: Backend>(
             println!(
                 "  row={} gold_action={} pred_action={}",
                 format_count(row_index + 1),
-                gold_action.is_empty().then_some("<invalid>").unwrap_or(gold_action),
-                pred_action.is_empty().then_some("<invalid>").unwrap_or(pred_action),
+                if gold_action.is_empty() {
+                    "<invalid>"
+                } else {
+                    gold_action
+                },
+                if pred_action.is_empty() {
+                    "<invalid>"
+                } else {
+                    pred_action
+                },
             );
             println!("    input: {}", compact_display(&row.input, 120));
             println!("    gold:  {}", compact_display(&row.output, 120));
@@ -5391,8 +5413,7 @@ fn run_sentence_parser_eval<B: Backend>(
         println!();
     }
 
-    let mean_prediction_ms =
-        total_prediction.as_secs_f64() * 1000.0 / sample_indexes.len() as f64;
+    let mean_prediction_ms = total_prediction.as_secs_f64() * 1000.0 / sample_indexes.len() as f64;
 
     println!("Summary:");
     println!(
@@ -5411,10 +5432,7 @@ fn run_sentence_parser_eval<B: Backend>(
         "  boundary precision    : {:.3}",
         metrics.boundary.precision
     );
-    println!(
-        "  boundary recall       : {:.3}",
-        metrics.boundary.recall
-    );
+    println!("  boundary recall       : {:.3}", metrics.boundary.recall);
     println!("  boundary F1           : {:.3}", metrics.boundary.f1);
     println!(
         "  no-boundary precision : {:.3}",
@@ -5424,10 +5442,7 @@ fn run_sentence_parser_eval<B: Backend>(
         "  no-boundary recall    : {:.3}",
         metrics.no_boundary.recall
     );
-    println!(
-        "  no-boundary F1        : {:.3}",
-        metrics.no_boundary.f1
-    );
+    println!("  no-boundary F1        : {:.3}", metrics.no_boundary.f1);
     if metrics.repair_count > 0 {
         println!(
             "  repair examples       : {}",
@@ -5803,9 +5818,7 @@ fn effective_wiktionary_data_path(
     path: PathBuf,
     config: &tongues_wiktionary::WiktionaryConfig,
 ) -> PathBuf {
-    if path == PathBuf::from(DEFAULT_WIKTIONARY_DATA_DIR)
-        && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID
-    {
+    if path == *DEFAULT_WIKTIONARY_DATA_DIR && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID {
         PathBuf::from("datasets/wiktionary").join(&config.dataset_id)
     } else {
         path
@@ -5816,9 +5829,7 @@ fn effective_wiktionary_model_path(
     path: PathBuf,
     config: &tongues_wiktionary::WiktionaryConfig,
 ) -> PathBuf {
-    if path == PathBuf::from(DEFAULT_WIKTIONARY_MODEL_DIR)
-        && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID
-    {
+    if path == *DEFAULT_WIKTIONARY_MODEL_DIR && config.dataset_id != DEFAULT_WIKTIONARY_DATASET_ID {
         PathBuf::from("models/wiktionary").join(&config.dataset_id)
     } else {
         path
@@ -6563,7 +6574,7 @@ fn cmd_wiktionary_train_prepared_rows(
         filter_wiktionary_examples_by_notation(valid_rows_raw, notations),
         task,
     )?;
-    let test_rows = if sight_words && !test_rows_raw.is_empty() {
+    let _test_rows = if sight_words && !test_rows_raw.is_empty() {
         filter_wiktionary_examples(
             filter_wiktionary_examples_by_notation(test_rows_raw, notations),
             task,
@@ -7333,6 +7344,8 @@ where
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn cmd_wiktionary_infer(
     model_dir: &Path,
     task: &str,
@@ -7778,7 +7791,6 @@ fn run_interpretation_command(
             if let Some(seed) = seed {
                 train_config.seed = seed;
             }
-            let mut train_config = train_config;
             train_config.input_feature_bins = interpretation_feature_bins(&data)?;
             cmd_interpretation_train(&data, &out, &train_config, device_arg)
         }
@@ -7986,8 +7998,10 @@ fn run_common_phone_command(command: CommonPhoneCommands) -> Result<()> {
                 device == "cpu",
                 "common-phone v0 currently supports --device cpu only"
             );
-            let mut config = tongues_common_phone::CommonPhoneTrainConfig::default();
-            config.task = tongues_common_phone::CommonPhoneTask::parse(&task)?;
+            let mut config = tongues_common_phone::CommonPhoneTrainConfig {
+                task: tongues_common_phone::CommonPhoneTask::parse(&task)?,
+                ..Default::default()
+            };
             if let Some(epochs) = epochs {
                 config.epochs = epochs;
             }
@@ -10079,6 +10093,8 @@ fn token_word_index(features: &speaking::FeatureBundle) -> Option<usize> {
 
 // ── pronunciation discrepancies ───────────────────────────────────────────
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn cmd_discrepancies(
     out: &Path,
     limit: usize,
@@ -10125,6 +10141,8 @@ fn cmd_discrepancies(
     }
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn cmd_discrepancies_backend<B: Backend>(
     device: &B::Device,
     out: &Path,
@@ -10913,7 +10931,7 @@ fn cmd_prepare(
 
         // Split deterministically via FNV-1a hash
         let hash_val = fnv1a_hash(&lex.base_word);
-        let fraction = (hash_val as f64) / (std::u64::MAX as f64);
+        let fraction = (hash_val as f64) / (u64::MAX as f64);
 
         let line = serde_json::to_string(&lex)?;
 
@@ -11528,6 +11546,8 @@ fn cmd_eval(
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn run_eval<B: Backend>(
     device: &B::Device,
     model_config: &ModelConfig,
@@ -12695,6 +12715,8 @@ fn cmd_predict(
     Ok(())
 }
 
+// This dispatch boundary keeps its CLI and model inputs explicit.
+#[allow(clippy::too_many_arguments)]
 fn run_predict<B: Backend>(
     device: &B::Device,
     model_config: &ModelConfig,
@@ -13320,7 +13342,7 @@ mod tests {
             output: "sɛd".to_string(),
             source: "test".to_string(),
         }];
-        let valid_rows = vec![
+        let _valid_rows = [
             tongues_wiktionary::TrainingExample {
                 task: tongues_wiktionary::WiktionaryTask::PhonologyToOrthography,
                 lang: Some("eng".to_string()),
@@ -13351,7 +13373,10 @@ mod tests {
                 .count(),
             SIGHT_WORD_TRAINING_REPEATS + 1
         );
-        assert_eq!(train_rows.iter().filter(|row| row.output == "one").count(), 0);
+        assert_eq!(
+            train_rows.iter().filter(|row| row.output == "one").count(),
+            0
+        );
         assert!(!train_rows
             .iter()
             .any(|row| row.lang.as_deref() == Some("deu")));

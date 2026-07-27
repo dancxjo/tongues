@@ -820,7 +820,7 @@ fn train_cpu(
     let feature_bundle_vocab: Vocab =
         read_vocab(data, "feature_bundle_vocab.json", "feature_bundles.json")?;
     let axis_vocabs: BTreeMap<String, Vocab> = read_json(&data.join("feature_axis_vocabs.json"))?;
-    let feature_bins = first_feature_bins(data, &train_rows)?;
+    let feature_bins = first_feature_bins(data, train_rows)?;
     let model_config = ModelConfig {
         architecture: ARCHITECTURE.to_string(),
         input_feature_bins: feature_bins,
@@ -864,7 +864,7 @@ fn train_cpu(
         None => {
             fresh_model
                 .valid()
-                .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
+                .save_file(out.join(LATEST_MODEL_STEM), &make_recorder())?;
             write_train_state(
                 out,
                 0,
@@ -944,7 +944,7 @@ fn train_cpu(
         );
         eval_model
             .clone()
-            .save_file(&out.join(format!("model-epoch-{epoch}")), &make_recorder())?;
+            .save_file(out.join(format!("model-epoch-{epoch}")), &make_recorder())?;
         progress(TrainProgress::Checkpoint {
             epoch,
             path: out
@@ -1340,7 +1340,7 @@ fn load_model_cpu(
 ) -> Result<CommonPhoneModel<CpuInferBackend>> {
     model_config
         .init(device)
-        .load_file(&model_dir.join("model"), &make_recorder(), device)
+        .load_file(model_dir.join("model"), &make_recorder(), device)
         .context("loading Common Phone model")
 }
 
@@ -1357,6 +1357,9 @@ struct CommonPhoneBatch<B: Backend> {
     feature_bundle_target_lengths: Tensor<B, 1, Int>,
 }
 
+// Training state is passed explicitly so checkpoint/progress behavior remains
+// visible at this durable epoch boundary.
+#[allow(clippy::too_many_arguments)]
 fn train_epoch_cpu<R: rand::Rng>(
     model: &mut CommonPhoneModel<CpuTrainBackend>,
     optimizer: &mut impl Optimizer<CommonPhoneModel<CpuTrainBackend>, CpuTrainBackend>,
@@ -1403,7 +1406,7 @@ fn train_epoch_cpu<R: rand::Rng>(
         *model = optimizer.step(config.learning_rate, model.clone(), grads);
         total += loss_val;
         n += 1;
-        if n <= 3 || n % 20 == 0 || examples_seen == rows.len() {
+        if n <= 3 || n.is_multiple_of(20) || examples_seen == rows.len() {
             progress(TrainProgress::Batch {
                 epoch,
                 examples: examples_seen,
@@ -1411,10 +1414,10 @@ fn train_epoch_cpu<R: rand::Rng>(
                 loss: total / n as f32,
             });
         }
-        if n % TRAIN_CHECKPOINT_BATCH_INTERVAL == 0 {
+        if n.is_multiple_of(TRAIN_CHECKPOINT_BATCH_INTERVAL) {
             model
                 .valid()
-                .save_file(&out.join(LATEST_MODEL_STEM), &make_recorder())?;
+                .save_file(out.join(LATEST_MODEL_STEM), &make_recorder())?;
             write_train_state(
                 out,
                 epoch,
@@ -1731,9 +1734,7 @@ fn expand_temporal_context(
                     0.0
                 });
             }
-            for _ in 2..position_bins {
-                expanded.push(0.0);
-            }
+            expanded.extend(std::iter::repeat_n(0.0, position_bins.saturating_sub(2)));
         }
     }
     expanded
@@ -2435,8 +2436,8 @@ fn normalize_phone_token(token: &str) -> Option<String> {
         return None;
     }
     let token = token
-        .trim_start_matches(|ch| ch == 'ˈ' || ch == 'ˌ')
-        .trim_end_matches(|ch| ch == 'ˈ' || ch == 'ˌ')
+        .trim_start_matches(['ˈ', 'ˌ'])
+        .trim_end_matches(['ˈ', 'ˌ'])
         .to_string();
     (!token.is_empty()).then_some(token)
 }
@@ -3240,6 +3241,8 @@ struct CommonPhoneStats {
     skipped_examples: usize,
 }
 
+// Keep all split and vocabulary totals explicit at the stats assembly boundary.
+#[allow(clippy::too_many_arguments)]
 fn dataset_stats(
     config: &CommonPhoneConfig,
     train: &[CommonPhoneRow],
@@ -3474,7 +3477,7 @@ item []:
 
     #[test]
     fn vocab_does_not_duplicate_reserved_tokens() {
-        let tokens = vec![
+        let tokens = [
             UNK.to_string(),
             CTC_BLANK.to_string(),
             "p".to_string(),

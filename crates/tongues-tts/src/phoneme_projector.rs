@@ -457,7 +457,7 @@ mod tests {
             Spec::Known(FeatureValue::Number(word_index as f64)),
         );
         PhonemeToken {
-            phoneme: Spec::Known(PhonemeId(format!("en-US.phoneme.{id}").into())),
+            phoneme: Spec::Known(PhonemeId(format!("en-US.phoneme.{id}"))),
             span: None,
             features,
             realized_as: vec![],

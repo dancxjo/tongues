@@ -688,18 +688,18 @@ mod tests {
 
     #[test]
     fn all_catalog_fetch_includes_every_registered_piper_voice() {
-        let voice_ids = all_catalog_bundles()
+        let mut voice_ids = all_catalog_bundles()
             .filter(|bundle| bundle.kind == ModelKind::VoiceModel)
             .map(|bundle| bundle.id)
             .collect::<Vec<_>>();
+        voice_ids.sort_unstable();
 
-        assert_eq!(
-            voice_ids,
-            vec![
-                "voice-ryan-medium",
-                "voice-amy-medium",
-                "voice-ljspeech-high"
-            ]
-        );
+        let mut expected = vec![
+            "voice-ryan-medium",
+            "voice-amy-medium",
+            "voice-ljspeech-high",
+        ];
+        expected.sort_unstable();
+        assert_eq!(voice_ids, expected);
     }
 }

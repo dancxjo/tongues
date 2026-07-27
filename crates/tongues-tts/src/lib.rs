@@ -310,8 +310,8 @@ pub use vocoder_recipe::{
     VocoderTrainingHyperparams, VocoderTrainingState, RECIPE_SCHEMA_VERSION,
 };
 pub use vocoder_trainer::{
-    evaluate_vocoder, export_vocoder, load_vocoder_examples, train_vocoder,
-    NativeVocoderKind, NativeVocoderRecipe, VocoderEvaluationReport, VocoderPreparedExample,
+    evaluate_vocoder, export_vocoder, load_vocoder_examples, train_vocoder, NativeVocoderKind,
+    NativeVocoderRecipe, VocoderEvaluationReport, VocoderPreparedExample,
     VocoderTrainingProgress as NativeVocoderTrainingProgress, VocoderTrainingReport,
 };
 pub use wavlm::{WavLm, WavLmConfig};
@@ -1555,10 +1555,10 @@ impl OnnxSpeechBackend {
             let mut output = self
                 .synthesize_ids_with_context(&ids, options, plan.speaker.as_ref())?
                 .pcm_mono_f32;
-            output.extend(std::iter::repeat(0.0).take(pause_sample_count(
-                self.config.sample_rate_hz,
-                chunk.pause_after_ms,
-            )));
+            output.extend(std::iter::repeat_n(
+                0.0,
+                pause_sample_count(self.config.sample_rate_hz, chunk.pause_after_ms),
+            ));
             sink.emit(AudioChunk {
                 chunk_index,
                 is_final: chunk_index + 1 == chunk_count,
@@ -2490,7 +2490,10 @@ fn initialize_ort_runtime() -> Result<()> {
     ort::init().commit();
     Ok(())
 }
+pub use burn_acoustic::BurnSpeedySpeechAcoustic;
 
+// Public backend re-exports intentionally follow this focused test module.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2825,4 +2828,3 @@ mod tests {
         config
     }
 }
-pub use burn_acoustic::BurnSpeedySpeechAcoustic;

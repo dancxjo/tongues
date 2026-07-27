@@ -75,8 +75,7 @@ fn generator_output<B: Backend>(
     let target_dims = target_waveform.dims();
     let predicted_dims = predicted_waveform.dims();
     let aligned_samples = target_dims[2].min(predicted_dims[2]);
-    let target_waveform =
-        target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
+    let target_waveform = target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
     let predicted_waveform =
         predicted_waveform.slice([0..predicted_dims[0], 0..1, 0..aligned_samples]);
     let real = target_waveform.clone().detach();
@@ -105,8 +104,7 @@ fn generator_output<B: Backend>(
         let config = mel_config
             .context("enabled MelGAN mel loss requires a differentiable mel contract")?
             .audio_config();
-        let target_mel =
-            crate::vits_trainer::differentiable_mel(real.clone(), &config)?;
+        let target_mel = crate::vits_trainer::differentiable_mel(real.clone(), &config)?;
         let generated_mel =
             crate::vits_trainer::differentiable_mel(predicted_waveform.clone(), &config)?;
         crate::mel_spectrogram_loss(target_mel, generated_mel)
@@ -134,8 +132,7 @@ fn discriminator_output<B: Backend>(
     let target_dims = target_waveform.dims();
     let predicted_dims = predicted_waveform.dims();
     let aligned_samples = target_dims[2].min(predicted_dims[2]);
-    let target_waveform =
-        target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
+    let target_waveform = target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
     let predicted_waveform =
         predicted_waveform.slice([0..predicted_dims[0], 0..1, 0..aligned_samples]);
     let msd_real = msd.forward(target_waveform);

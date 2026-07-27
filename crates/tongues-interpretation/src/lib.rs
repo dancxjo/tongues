@@ -1843,12 +1843,12 @@ pub fn normalize_librispeech_text(text: &str) -> String {
 
 pub fn normalize_asr_transcript(text: &str) -> String {
     text.chars()
-        .filter_map(|ch| match ch {
-            ch if ch.is_control() => Some(' '),
-            '\u{2018}' | '\u{2019}' => Some('\''),
-            '\u{201c}' | '\u{201d}' => Some('"'),
-            '\u{2013}' | '\u{2014}' => Some('-'),
-            ch => Some(ch),
+        .map(|ch| match ch {
+            ch if ch.is_control() => ' ',
+            '\u{2018}' | '\u{2019}' => '\'',
+            '\u{201c}' | '\u{201d}' => '"',
+            '\u{2013}' | '\u{2014}' => '-',
+            ch => ch,
         })
         .collect::<String>()
         .split_whitespace()
@@ -3239,10 +3239,13 @@ where
 {
     model_config
         .init(device)
-        .load_file(&model_dir.join("model"), &make_recorder(), device)
+        .load_file(model_dir.join("model"), &make_recorder(), device)
         .context("loading LibriSpeech ASR model")
 }
 
+// The public ASR training API keeps every data, checkpoint, and progress input
+// explicit for reproducible resume behavior.
+#[allow(clippy::too_many_arguments)]
 pub fn train<B: AutodiffBackend, R: Rng>(
     model_config: &ModelConfig,
     train_config: &InterpretationTrainConfig,
@@ -3510,7 +3513,7 @@ where
             report.masked_audio_mse
         );
         eval_model.clone().save_file(
-            &out_dir.join(format!("model-epoch-{epoch}")),
+            out_dir.join(format!("model-epoch-{epoch}")),
             &make_recorder(),
         )?;
         make_recorder()
@@ -3681,6 +3684,7 @@ where
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn train_epoch<B: AutodiffBackend, R: Rng>(
     model: &mut AsrModel<B>,
     optimizer: &mut impl Optimizer<AsrModel<B>, B>,
@@ -3701,7 +3705,7 @@ fn train_epoch<B: AutodiffBackend, R: Rng>(
 ) -> Result<f32> {
     let mut indices: Vec<_> = (0..rows.len()).collect();
     indices.shuffle(rng);
-    let batches = (rows.len() + config.batch_size - 1) / config.batch_size;
+    let batches = rows.len().div_ceil(config.batch_size);
     let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(batches as u64));
     let template = format!(
         "{{spinner:.green}} LibriSpeech epoch {}/{} [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{human_pos}}/{{human_len}} ETA {{eta_precise}} loss={{msg}}",
@@ -3882,6 +3886,7 @@ impl EvalSampleStats {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_asr_batch_row(
     index: usize,
     data_dir: &Path,
@@ -3984,6 +3989,7 @@ fn prepare_asr_batch_row(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_batch<B: Backend>(
     data_dir: &Path,
     rows: &[LibriSpeechUtterance],
@@ -4882,9 +4888,7 @@ fn parse_ok_labels_for(row: &LibriSpeechUtterance, frames: usize) -> Vec<i32> {
             continue;
         }
         let label = if sentence.syntax.parse_ok { 1 } else { 0 };
-        for frame in sentence.start_frame.min(frames)..sentence.end_frame.min(frames) {
-            labels[frame] = label;
-        }
+        labels[sentence.start_frame.min(frames)..sentence.end_frame.min(frames)].fill(label);
     }
     labels
 }
@@ -4921,14 +4925,14 @@ fn syntax_word_labels_for(
             .max(start_frame + 1)
             .min(sentence.end_frame.max(start_frame + 1))
             .min(frames);
-            for frame in start_frame..end_frame {
-                labels[frame] = label(word);
-            }
+            labels[start_frame..end_frame].fill(label(word));
         }
     }
     labels
 }
 
+// Evaluation reports preserve the complete model/data/vocabulary provenance.
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate<B: Backend>(
     model: &AsrModel<B>,
     data_dir: &Path,
@@ -5172,8 +5176,8 @@ fn argmax_ids<B: Backend>(logits: Tensor<B, 3>) -> Vec<Vec<u32>> {
     let [batch, frames, classes] = logits.dims();
     let values: Vec<f32> = logits.into_data().to_vec().unwrap_or_default();
     let mut out = vec![vec![0; frames]; batch];
-    for b in 0..batch {
-        for f in 0..frames {
+    for (b, batch_out) in out.iter_mut().enumerate().take(batch) {
+        for (f, frame_out) in batch_out.iter_mut().enumerate().take(frames) {
             let base = (b * frames + f) * classes;
             let mut best = 0usize;
             let mut best_score = f32::NEG_INFINITY;
@@ -5184,7 +5188,7 @@ fn argmax_ids<B: Backend>(logits: Tensor<B, 3>) -> Vec<Vec<u32>> {
                     best_score = score;
                 }
             }
-            out[b][f] = best as u32;
+            *frame_out = best as u32;
         }
     }
     out
@@ -5240,6 +5244,8 @@ fn fit_feature_width(features: &mut [Vec<f32>], bins: usize) {
     }
 }
 
+// Streaming inference keeps the timing and feature contract explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn stream_from_samples<B: Backend>(
     model: &AsrModel<B>,
     samples: &[f32],
@@ -5544,7 +5550,7 @@ mod tests {
             ],
             masked_word_examples: Vec::new(),
         };
-        let vocab = build_word_vocab(&[row.clone()]);
+        let vocab = build_word_vocab(std::slice::from_ref(&row));
         let current = current_word_targets(&row, &vocab);
         assert_eq!(current.len(), 2);
         assert!(current.iter().all(|id| *id != 0));

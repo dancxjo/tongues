@@ -26,8 +26,10 @@
 use anyhow::Result;
 use speaking::UtterancePlan;
 
-use crate::{AudioChunk, AudioSink, SpeechModelCapabilities, SpeechModelFamily,
-            SpeechSynthesisEngine, SpeechSynthesisRequest};
+use crate::{
+    AudioChunk, AudioSink, SpeechModelCapabilities, SpeechModelFamily, SpeechSynthesisEngine,
+    SpeechSynthesisRequest,
+};
 
 /// Configuration for the deterministic mock TTS renderer.
 #[derive(Debug, Clone, PartialEq)]
@@ -185,9 +187,7 @@ mod tests {
         };
         plan.target_phones = (0..count)
             .map(|index| speaking::PhoneToken {
-                phone: speaking::Spec::Known(speaking::PhoneId::from(
-                    format!("ipa.phone.{index}"),
-                )),
+                phone: speaking::Spec::Known(speaking::PhoneId::from(format!("ipa.phone.{index}"))),
                 span: None,
                 features: speaking::FeatureBundle::default(),
                 acoustic_evidence: Vec::new(),
@@ -235,13 +235,10 @@ mod tests {
         };
         let mut chunks = Vec::new();
         renderer
-            .synthesize_plan_streaming(
-                &request,
-                &mut |chunk: AudioChunk| {
-                    chunks.push(chunk);
-                    Ok(())
-                },
-            )
+            .synthesize_plan_streaming(&request, &mut |chunk: AudioChunk| {
+                chunks.push(chunk);
+                Ok(())
+            })
             .unwrap();
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].is_final);
@@ -266,14 +263,11 @@ mod tests {
         let mut received: Vec<f32> = Vec::new();
         let mut last_is_final = false;
         renderer
-            .synthesize_plan_streaming(
-                &request,
-                &mut |chunk: AudioChunk| {
-                    last_is_final = chunk.is_final;
-                    received.extend(chunk.pcm_mono_f32);
-                    Ok(())
-                },
-            )
+            .synthesize_plan_streaming(&request, &mut |chunk: AudioChunk| {
+                last_is_final = chunk.is_final;
+                received.extend(chunk.pcm_mono_f32);
+                Ok(())
+            })
             .unwrap();
         assert!(last_is_final);
         assert_eq!(received, expected_pcm);

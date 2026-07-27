@@ -13,16 +13,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use burn::module::{AutodiffModule, Module};
-use burn::optim::{
-    grad_clipping::GradientClippingConfig, AdamWConfig, GradientsParams, Optimizer,
-};
+use burn::optim::{grad_clipping::GradientClippingConfig, AdamWConfig, GradientsParams, Optimizer};
 use burn::record::{BinFileRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
 use serde::{Deserialize, Serialize};
-use tongues_data::speech_corpus::{
-    feature_cache_path, CachedSpeechFeatures, SpeechRecord,
-};
+use tongues_data::speech_corpus::{feature_cache_path, CachedSpeechFeatures, SpeechRecord};
 
 use crate::{
     combine_vits_generator_losses, VitsDiscriminators, VitsFreezeConfig, VitsInferenceConfig,
@@ -43,22 +39,13 @@ pub struct VitsPreparedExample {
     pub language_id: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VitsTrainOptions {
     /// Stop successfully after this many new batches. Intended for durable
     /// interruption/resume acceptance tests.
     pub max_steps: Option<u64>,
     /// Use compact discriminators for the documented CPU fixture.
     pub fixture: bool,
-}
-
-impl Default for VitsTrainOptions {
-    fn default() -> Self {
-        Self {
-            max_steps: None,
-            fixture: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,9 +89,8 @@ pub fn load_vits_examples(
         if line.trim().is_empty() {
             continue;
         }
-        let record: SpeechRecord = serde_json::from_str(&line).with_context(|| {
-            format!("parsing {} line {}", split_path.display(), index + 1)
-        })?;
+        let record: SpeechRecord = serde_json::from_str(&line)
+            .with_context(|| format!("parsing {} line {}", split_path.display(), index + 1))?;
         let cache_path = feature_cache_path(feature_cache, &record.id);
         let cached: CachedSpeechFeatures = serde_json::from_reader(
             File::open(&cache_path)
@@ -158,7 +144,10 @@ pub fn load_vits_examples(
             .map_err(anyhow::Error::from)?;
         let speaker_id = match record.speaker.as_deref() {
             Some(name) => Some(*speaker_ids.get(name).with_context(|| {
-                format!("speaker `{name}` from {} is not in the speaker map", record.id)
+                format!(
+                    "speaker `{name}` from {} is not in the speaker map",
+                    record.id
+                )
             })?),
             None => None,
         };
@@ -271,18 +260,14 @@ pub fn train_vits<B: AutodiffBackend>(
         discriminator_optimizer_config =
             discriminator_optimizer_config.with_grad_clipping(clipping);
     }
-    let mut generator_optimizer = generator_optimizer_config
-        .init::<B, VitsTrainableGenerator<B>>();
-    let mut discriminator_optimizer = discriminator_optimizer_config
-        .init::<B, VitsDiscriminators<B>>();
+    let mut generator_optimizer = generator_optimizer_config.init::<B, VitsTrainableGenerator<B>>();
+    let mut discriminator_optimizer =
+        discriminator_optimizer_config.init::<B, VitsDiscriminators<B>>();
     if state.global_step > 0 {
         let gen_record = recorder
             .load(stem(&state.generator_optimizer_checkpoint), device)
             .with_context(|| {
-                format!(
-                    "loading {}",
-                    state.generator_optimizer_checkpoint.display()
-                )
+                format!("loading {}", state.generator_optimizer_checkpoint.display())
             })?;
         generator_optimizer = generator_optimizer.load_record(gen_record);
         let disc_record = recorder
@@ -330,10 +315,7 @@ pub fn train_vits<B: AutodiffBackend>(
                 forward.target_waveform.clone(),
                 forward.generated_waveform.clone(),
             );
-            let target_mel = differentiable_mel(
-                forward.target_waveform.clone(),
-                &config.audio,
-            )?;
+            let target_mel = differentiable_mel(forward.target_waveform.clone(), &config.audio)?;
             let generated_mel =
                 differentiable_mel(forward.generated_waveform.clone(), &config.audio)?;
             let losses = combine_vits_generator_losses(
@@ -350,13 +332,9 @@ pub fn train_vits<B: AutodiffBackend>(
                 loss_value.is_finite(),
                 "non-finite VITS generator loss at epoch {epoch_number} batch {batch_index}"
             );
-            let generator_grads =
-                GradientsParams::from_grads(losses.total.backward(), &generator);
-            generator = generator_optimizer.step(
-                state.generator_learning_rate,
-                generator,
-                generator_grads,
-            );
+            let generator_grads = GradientsParams::from_grads(losses.total.backward(), &generator);
+            generator =
+                generator_optimizer.step(state.generator_learning_rate, generator, generator_grads);
 
             let batch = collate::<B>(
                 config,
@@ -371,10 +349,8 @@ pub fn train_vits<B: AutodiffBackend>(
                 config.audio.hop_length,
                 recipe.seed ^ state.global_step ^ 0xd15c,
             )?;
-            let discriminator_loss = discriminators.discriminator_loss(
-                forward.target_waveform,
-                forward.generated_waveform,
-            );
+            let discriminator_loss = discriminators
+                .discriminator_loss(forward.target_waveform, forward.generated_waveform);
             let discriminator_value: f32 = discriminator_loss.clone().into_scalar().elem();
             ensure!(
                 discriminator_value.is_finite(),
@@ -466,9 +442,9 @@ pub fn train_vits<B: AutodiffBackend>(
         state.batch_in_epoch = 0;
         state.generator_learning_rate = (state.generator_learning_rate * recipe.scheduler.gamma)
             .max(recipe.scheduler.minimum_learning_rate);
-        state.discriminator_learning_rate =
-            (state.discriminator_learning_rate * recipe.scheduler.gamma)
-                .max(recipe.scheduler.minimum_learning_rate);
+        state.discriminator_learning_rate = (state.discriminator_learning_rate
+            * recipe.scheduler.gamma)
+            .max(recipe.scheduler.minimum_learning_rate);
         save_validation_sample(
             layout,
             state.global_step,
@@ -514,8 +490,7 @@ pub fn evaluate_vits<B: Backend>(
     device: &B::Device,
 ) -> Result<VitsEvaluationReport> {
     let recorder = RecorderImpl::new();
-    let generator: VitsTrainableGenerator<B> =
-        VitsTrainableGenerator::init_random(config, device)?
+    let generator: VitsTrainableGenerator<B> = VitsTrainableGenerator::init_random(config, device)?
         .load_file(
             layout.root().join("trainer-generator-latest"),
             &recorder,
@@ -531,7 +506,14 @@ pub fn evaluate_vits<B: Backend>(
         &recorder,
         device,
     )?;
-    evaluate_modules(config, recipe, &generator, &discriminators, examples, device)
+    evaluate_modules(
+        config,
+        recipe,
+        &generator,
+        &discriminators,
+        examples,
+        device,
+    )
 }
 
 pub fn export_vits<B: Backend>(
@@ -540,8 +522,7 @@ pub fn export_vits<B: Backend>(
     device: &B::Device,
 ) -> Result<PathBuf> {
     let recorder = RecorderImpl::new();
-    let generator: VitsTrainableGenerator<B> =
-        VitsTrainableGenerator::init_random(config, device)?
+    let generator: VitsTrainableGenerator<B> = VitsTrainableGenerator::init_random(config, device)?
         .load_file(
             layout.root().join("trainer-generator-latest"),
             &recorder,
@@ -559,7 +540,11 @@ fn validate_examples(
 ) -> Result<()> {
     ensure!(!examples.is_empty(), "VITS example set is empty");
     for example in examples {
-        ensure!(!example.token_ids.is_empty(), "{} has no tokens", example.record_id);
+        ensure!(
+            !example.token_ids.is_empty(),
+            "{} has no tokens",
+            example.record_id
+        );
         ensure!(
             example.spectrogram.len() == config.network.out_channels,
             "{} has {} spectrogram bins; expected {}",
@@ -577,7 +562,10 @@ fn validate_examples(
             frames
         );
         ensure!(
-            example.spectrogram.iter().all(|channel| channel.len() == frames),
+            example
+                .spectrogram
+                .iter()
+                .all(|channel| channel.len() == frames),
             "{} has inconsistent spectrogram channel lengths",
             example.record_id
         );
@@ -624,9 +612,16 @@ fn collate<B: Backend>(
     segment_frames: usize,
     device: &B::Device,
 ) -> Result<VitsTrainingBatch<B>> {
-    let selected = indices.iter().map(|index| &examples[*index]).collect::<Vec<_>>();
+    let selected = indices
+        .iter()
+        .map(|index| &examples[*index])
+        .collect::<Vec<_>>();
     let batch = selected.len();
-    let tokens = selected.iter().map(|row| row.token_ids.len()).max().unwrap();
+    let tokens = selected
+        .iter()
+        .map(|row| row.token_ids.len())
+        .max()
+        .unwrap();
     let frames = selected
         .iter()
         .map(|row| row.spectrogram[0].len())
@@ -677,15 +672,9 @@ fn collate<B: Backend>(
     Ok(VitsTrainingBatch {
         token_ids: Tensor::from_data(TensorData::new(token_values, [batch, tokens]), device),
         token_lengths,
-        spectrogram: Tensor::from_data(
-            TensorData::new(spectrogram, [batch, bins, frames]),
-            device,
-        ),
+        spectrogram: Tensor::from_data(TensorData::new(spectrogram, [batch, bins, frames]), device),
         frame_lengths,
-        waveform: Tensor::from_data(
-            TensorData::new(waveform, [batch, 1, samples]),
-            device,
-        ),
+        waveform: Tensor::from_data(TensorData::new(waveform, [batch, 1, samples]), device),
         speaker_ids,
         language_ids,
     })
@@ -737,14 +726,16 @@ pub(crate) fn differentiable_mel<B: Backend>(
                 * (2.0 * PI * index as f32 / audio.fft_size.saturating_sub(1).max(1) as f32).cos()
         })
         .collect::<Vec<_>>();
-    let window = Tensor::<B, 3>::from_data(
-        TensorData::new(window, [1, 1, audio.fft_size]),
-        &device,
-    );
+    let window =
+        Tensor::<B, 3>::from_data(TensorData::new(window, [1, 1, audio.fft_size]), &device);
     let mut framed = Vec::with_capacity(frames);
     for frame in 0..frames {
         let start = frame * audio.hop_length;
-        framed.push(signal.clone().slice([0..batch, start..start + audio.fft_size]));
+        framed.push(
+            signal
+                .clone()
+                .slice([0..batch, start..start + audio.fft_size]),
+        );
     }
     let framed: Tensor<B, 3> = Tensor::stack(framed, 1);
     let framed = framed * window;
@@ -785,7 +776,11 @@ pub(crate) fn differentiable_mel<B: Backend>(
         &device,
     )
     .repeat_dim(0, batch);
-    Ok(magnitude.matmul(mel).clamp_min(1.0e-5).log().swap_dims(1, 2))
+    Ok(magnitude
+        .matmul(mel)
+        .clamp_min(1.0e-5)
+        .log()
+        .swap_dims(1, 2))
 }
 
 fn mel_filter_bank(
@@ -875,8 +870,7 @@ where
     let generator_part = layout.root().join("trainer-generator-latest.part");
     let discriminator_part = layout.root().join("trainer-discriminator-latest.part");
     let generator_optimizer_part = layout.root().join("optim-generator-latest.part");
-    let discriminator_optimizer_part =
-        layout.root().join("optim-discriminator-latest.part");
+    let discriminator_optimizer_part = layout.root().join("optim-discriminator-latest.part");
     let inference_part = layout.root().join("model-latest.safetensors.part");
     generator
         .clone()
@@ -913,14 +907,8 @@ where
     }
     fs::rename(&staged[0], generator_stem.with_extension("bin"))?;
     fs::rename(&staged[1], discriminator_stem.with_extension("bin"))?;
-    fs::rename(
-        &staged[2],
-        &state.generator_optimizer_checkpoint,
-    )?;
-    fs::rename(
-        &staged[3],
-        &state.discriminator_optimizer_checkpoint,
-    )?;
+    fs::rename(&staged[2], &state.generator_optimizer_checkpoint)?;
+    fs::rename(&staged[3], &state.discriminator_optimizer_checkpoint)?;
     fs::rename(&staged[4], layout.latest_checkpoint())?;
     if is_best {
         fs::copy(layout.latest_checkpoint(), layout.best_checkpoint()).with_context(|| {
@@ -965,8 +953,7 @@ fn evaluate_modules<B: Backend>(
             forward.generated_waveform.clone(),
         );
         let target_mel = differentiable_mel(forward.target_waveform, &config.audio)?;
-        let generated_mel =
-            differentiable_mel(forward.generated_waveform.clone(), &config.audio)?;
+        let generated_mel = differentiable_mel(forward.generated_waveform.clone(), &config.audio)?;
         let losses = combine_vits_generator_losses(
             adversarial,
             feature_matching,

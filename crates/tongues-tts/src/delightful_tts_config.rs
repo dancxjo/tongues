@@ -386,7 +386,7 @@ impl DelightfulTtsConfig {
 
         let mut config = Self {
             num_chars: usize_field(args, "num_chars")?.unwrap_or_else(|| {
-                published_vocabulary_size(root).unwrap_or_else(|| default_num_chars())
+                published_vocabulary_size(root).unwrap_or_else(default_num_chars)
             }),
             out_channels: audio.num_mels,
             encoder: DelightfulConformerConfig {

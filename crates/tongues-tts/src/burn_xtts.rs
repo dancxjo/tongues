@@ -162,7 +162,7 @@ impl<B: Backend> ConditioningAttention<B> {
         } else {
             32
         };
-        while channels % groups != 0 {
+        while !channels.is_multiple_of(groups) {
             groups /= 2;
         }
         Self {
@@ -1083,7 +1083,9 @@ impl<B: Backend> BurnXtts<B> {
                 .validate()
                 .context("invalid XTTS reference audio")?;
             let mut mono = reference.convert_channels(1)?;
-            let max_samples = usize::try_from(self.config.max_ref_len)?
+            let max_samples = self
+                .config
+                .max_ref_len
                 .checked_mul(mono.sample_rate_hz as usize)
                 .context("XTTS maximum reference length overflow")?;
             mono.samples.truncate(max_samples);
@@ -1640,13 +1642,10 @@ fn xtts_clean_text(text: &str, language: &str) -> Result<String> {
     let mut output = text
         .trim()
         .to_lowercase()
-        .replace('“', "\"")
-        .replace('”', "\"")
-        .replace('‘', "'")
-        .replace('’', "'")
+        .replace(['“', '”'], "\"")
+        .replace(['‘', '’'], "'")
         .replace('…', "...")
-        .replace('–', "-")
-        .replace('—', "-");
+        .replace(['–', '—'], "-");
     output = output.split_whitespace().collect::<Vec<_>>().join(" ");
     ensure!(!output.is_empty(), "XTTS text is empty after cleaning");
     ensure!(

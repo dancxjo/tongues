@@ -98,6 +98,18 @@ scripts/check-feature-matrix.sh all
 scripts/speech-smoke.sh
 ```
 
+Before submitting a change, run the same formatting and Clippy gates as CI:
+
+```sh
+just lint
+```
+
+The repository toolchain is pinned in `rust-toolchain.toml`; rustup selects it
+automatically and installs the required `rustfmt` and `clippy` components.
+Toolchain upgrades are explicit repository changes: update the channel there
+and every `dtolnay/rust-toolchain@…` workflow pin to the same reviewed release,
+then run `just lint` and the workspace tests in the same commit.
+
 For detailed training, data preparation, and model-family documentation, see:
 
 - [G2P2G](docs/g2p2g.md)

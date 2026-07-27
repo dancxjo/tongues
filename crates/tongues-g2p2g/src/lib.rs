@@ -294,6 +294,9 @@ pub fn seq2seq_loss<B: Backend>(logits: Tensor<B, 3>, targets: Tensor<B, 2, Int>
 // ── Training ───────────────────────────────────────────────────────────────
 
 /// Train the model for one epoch. Returns the mean training loss.
+// The public training boundary keeps model, optimizer, vocabularies, RNG, and
+// progress explicit so callers control every reproducibility input.
+#[allow(clippy::too_many_arguments)]
 pub fn train_epoch<B: AutodiffBackend, R: Rng>(
     model: &mut Seq2SeqModel<B>,
     optimizer: &mut impl Optimizer<Seq2SeqModel<B>, B>,
@@ -461,7 +464,7 @@ pub fn train_seq2seq_epoch<B: AutodiffBackend, R: Rng>(
 }
 
 fn balanced_batch_task(position: usize) -> Task {
-    if position % 2 == 0 {
+    if position.is_multiple_of(2) {
         Task::G2P
     } else {
         Task::P2G
@@ -511,7 +514,7 @@ pub fn evaluate<B: Backend, R: Rng>(
             .collect()
     };
 
-    let eval_batches = (examples.len() + 63) / 64;
+    let eval_batches = examples.len().div_ceil(64);
     let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(eval_batches as u64));
     pb.set_style(
         counted_progress_style(
@@ -606,7 +609,7 @@ pub fn evaluate_seq2seq_examples<B: Backend, R: Rng>(
         examples
     };
 
-    let eval_batches = (eval_examples.len() + 63) / 64;
+    let eval_batches = eval_examples.len().div_ceil(64);
     let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(eval_batches as u64));
     pb.set_style(
         counted_progress_style(
@@ -859,6 +862,8 @@ fn counted_progress_style(template: &str) -> indicatif::ProgressStyle {
         .progress_chars("#>-")
 }
 
+// Preserve the established public training API and its explicit artifact inputs.
+#[allow(clippy::too_many_arguments)]
 pub fn train<B: AutodiffBackend, R: Rng>(
     model_config: &ModelConfig,
     train_config: &TrainConfig,
@@ -993,8 +998,7 @@ where
     let mut val_loss_history: Vec<(f32, f32)> = Vec::new();
 
     for epoch in start_epoch..=train_config.epochs {
-        let n_batches =
-            (train_lexemes.len() + train_config.batch_size - 1) / train_config.batch_size;
+        let n_batches = train_lexemes.len().div_ceil(train_config.batch_size);
         let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(n_batches as u64));
         let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
             last_train_loss,
@@ -1263,8 +1267,7 @@ where
     let mut val_loss_history: Vec<(f32, f32)> = Vec::new();
 
     for epoch in start_epoch..=train_config.epochs {
-        let n_batches =
-            (train_examples.len() + train_config.batch_size - 1) / train_config.batch_size;
+        let n_batches = train_examples.len().div_ceil(train_config.batch_size);
         let pb = tongues_core::register_progress_bar(indicatif::ProgressBar::new(n_batches as u64));
         let template = if let (Some(tl), Some(vl), Some(va), Some(vt)) = (
             last_train_loss,
@@ -1401,6 +1404,8 @@ pub struct EvalReport {
 }
 
 /// Produce sequence-to-sequence evaluation metrics.
+// Evaluation provenance is intentionally supplied as separate explicit inputs.
+#[allow(clippy::too_many_arguments)]
 pub fn eval_report<B: Backend, R: Rng>(
     model: &Seq2SeqModel<B>,
     test_lexemes: &[Lexeme],
@@ -1512,8 +1517,8 @@ mod tests {
     #[test]
     fn model_forward_shape() {
         let vocab = Vocab::build(
-            &vec!["cat".to_string(), "dog".to_string()],
-            &vec!["kæt".to_string(), "dɔɡ".to_string()],
+            &["cat".to_string(), "dog".to_string()],
+            &["kæt".to_string(), "dɔɡ".to_string()],
             &[],
         );
         let device = Default::default();
@@ -1557,8 +1562,8 @@ mod tests {
         fs::create_dir_all(dir).unwrap();
 
         let vocab = Vocab::build(
-            &vec!["cat".to_string(), "dog".to_string()],
-            &vec!["kæt".to_string(), "dɔɡ".to_string()],
+            &["cat".to_string(), "dog".to_string()],
+            &["kæt".to_string(), "dɔɡ".to_string()],
             &[],
         );
         let device = Default::default();

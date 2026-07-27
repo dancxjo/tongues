@@ -9,12 +9,11 @@ use burn_cuda::{Cuda, CudaDevice};
 use clap::Subcommand;
 use sha2::{Digest, Sha256};
 use tongues_tts::{
-    evaluate_vits, export_vits, initialize_vits_run_with_progress,
-    load_vits_examples, load_vits_training_model_config, train_vits,
-    write_vits_training_manifest, BurnVitsSpeech, ResolvedSpeechDevice,
-    VitsCheckpointPolicy, VitsDatasetManifest, VitsRunLayout, VitsTrainingBackend,
-    VitsTrainingManifest, VitsTrainingProgress, VitsTrainingRecipe, VitsTrainOptions,
-    VITS_TRAINING_MANIFEST_SCHEMA_VERSION,
+    evaluate_vits, export_vits, initialize_vits_run_with_progress, load_vits_examples,
+    load_vits_training_model_config, train_vits, write_vits_training_manifest, BurnVitsSpeech,
+    ResolvedSpeechDevice, VitsCheckpointPolicy, VitsDatasetManifest, VitsRunLayout,
+    VitsTrainOptions, VitsTrainingBackend, VitsTrainingManifest, VitsTrainingProgress,
+    VitsTrainingRecipe, VITS_TRAINING_MANIFEST_SCHEMA_VERSION,
 };
 
 type Cpu = NdArray<f32>;
@@ -125,8 +124,7 @@ pub fn run(command: VitsCommands, device: ResolvedSpeechDevice) -> Result<()> {
             seed,
             device,
         ),
-        VitsCommands::Train { run, max_steps }
-        | VitsCommands::Resume { run, max_steps } => {
+        VitsCommands::Train { run, max_steps } | VitsCommands::Resume { run, max_steps } => {
             run_training(&run, max_steps, false, device)
         }
         VitsCommands::Evaluate { run, split } => evaluate(&run, &split, device),
@@ -216,8 +214,7 @@ fn initialize(
         baseline_metric,
         best_metric: None,
     };
-    let (layout, _) =
-        initialize_vits_run_with_progress(out, &recipe, &manifest, print_progress)?;
+    let (layout, _) = initialize_vits_run_with_progress(out, &recipe, &manifest, print_progress)?;
     print_paths(&layout);
     print_compute(recipe.backend, false);
     Ok(())
@@ -280,9 +277,7 @@ fn run_training(
         let mut updated_manifest = manifest;
         if updated_manifest.record_metric(metric)? {
             write_vits_training_manifest(&layout, &recipe, &updated_manifest)?;
-            println!(
-                "Recorded improved target metric validation-generator-loss={metric}"
-            );
+            println!("Recorded improved target metric validation-generator-loss={metric}");
         }
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -437,7 +432,10 @@ fn fixture(out: &Path, epochs: u64) -> Result<()> {
         },
         print_progress,
     )?;
-    ensure!(first.interrupted, "fixture interruption checkpoint was not exercised");
+    ensure!(
+        first.interrupted,
+        "fixture interruption checkpoint was not exercised"
+    );
     let state: tongues_tts::VitsTrainingState = read_json(&layout.train_state())?;
     ensure!(
         state.batch_in_epoch > 0,
@@ -599,7 +597,10 @@ fn ensure_map(out: &Path, name: &str) {
 
 fn count_jsonl(path: &Path) -> Result<usize> {
     let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(source.lines().filter(|line| !line.trim().is_empty()).count())
+    Ok(source
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count())
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -631,7 +632,10 @@ fn print_paths(layout: &VitsRunLayout) {
         "  discriminator optimizer: {}",
         layout.latest_discriminator_optimizer().display()
     );
-    println!("  best inference export: {}", layout.best_checkpoint().display());
+    println!(
+        "  best inference export: {}",
+        layout.best_checkpoint().display()
+    );
     println!("  validation samples: {}", layout.sample_dir().display());
 }
 
@@ -671,9 +675,9 @@ fn print_progress(progress: VitsTrainingProgress) {
             batch,
             batches,
             global_step,
-        } if batch <= 3 || batch == batches || batch % 25 == 0 => println!(
-            "VITS epoch {epoch} batch {batch}/{batches} global_step={global_step}"
-        ),
+        } if batch <= 3 || batch == batches || batch % 25 == 0 => {
+            println!("VITS epoch {epoch} batch {batch}/{batches} global_step={global_step}")
+        }
         VitsTrainingProgress::Batch { .. } => {}
         VitsTrainingProgress::Checkpoint {
             epoch,

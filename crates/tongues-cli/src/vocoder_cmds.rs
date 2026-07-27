@@ -11,10 +11,10 @@ use sha2::{Digest, Sha256};
 use tongues_tts::{
     evaluate_vocoder, export_vocoder, load_vocoder_examples, train_vocoder, BurnVocoder,
     HifiganGeneratorConfig, HifiganTrainingRecipe, MelganGeneratorConfig, MelganTrainingRecipe,
-    NativeVocoderKind, NativeVocoderRecipe, PqmfConfig, RecipeMelContract, ResolvedSpeechDevice,
-    SerializableLossWeights, VocoderAdversarialUpdateSchedule, VocoderPreparedExample,
-    VocoderTrainingHyperparams, NativeVocoderTrainingProgress, VocoderTrainingState,
-    RECIPE_SCHEMA_VERSION,
+    NativeVocoderKind, NativeVocoderRecipe, NativeVocoderTrainingProgress, PqmfConfig,
+    RecipeMelContract, ResolvedSpeechDevice, SerializableLossWeights,
+    VocoderAdversarialUpdateSchedule, VocoderPreparedExample, VocoderTrainingHyperparams,
+    VocoderTrainingState, RECIPE_SCHEMA_VERSION,
 };
 
 type Cpu = NdArray<f32>;
@@ -133,8 +133,7 @@ pub fn run(command: VocoderCommands, device: ResolvedSpeechDevice) -> Result<()>
             &dataset_license,
             &dataset_provenance,
         ),
-        VocoderCommands::Train { run, max_steps }
-        | VocoderCommands::Resume { run, max_steps } => {
+        VocoderCommands::Train { run, max_steps } | VocoderCommands::Resume { run, max_steps } => {
             train(&run, max_steps, false, device)
         }
         VocoderCommands::Evaluate { run, split } => evaluate(&run, &split, false, device),
@@ -253,12 +252,7 @@ fn train(
     Ok(())
 }
 
-fn evaluate(
-    run: &Path,
-    split: &str,
-    fixture: bool,
-    device: ResolvedSpeechDevice,
-) -> Result<()> {
+fn evaluate(run: &Path, split: &str, fixture: bool, device: ResolvedSpeechDevice) -> Result<()> {
     let recipe: NativeVocoderRecipe = read_json(&run.join("recipe.json"))?;
     let manifest: VocoderRunManifest = read_json(&run.join("run-manifest.json"))?;
     let path = match split {
@@ -273,13 +267,9 @@ fn evaluate(
         recipe.mel_contract().sample_rate_hz,
     )?;
     let report = match device {
-        ResolvedSpeechDevice::Cpu => evaluate_vocoder::<Cpu>(
-            &recipe,
-            run,
-            &examples,
-            &NdArrayDevice::Cpu,
-            fixture,
-        )?,
+        ResolvedSpeechDevice::Cpu => {
+            evaluate_vocoder::<Cpu>(&recipe, run, &examples, &NdArrayDevice::Cpu, fixture)?
+        }
         ResolvedSpeechDevice::Cuda { index } => evaluate_vocoder::<CudaBackend>(
             &recipe,
             run,
@@ -378,13 +368,8 @@ fn fixture_one(kind: NativeVocoderKind, run: &Path, epochs: u64) -> Result<()> {
     ensure!(first.interrupted);
     let state: VocoderTrainingState = read_json(&run.join("train_state.json"))?;
     ensure!(state.batch_in_epoch == 1);
-    let baseline = evaluate_vocoder::<Cpu>(
-        &recipe,
-        run,
-        &examples[2..],
-        &NdArrayDevice::Cpu,
-        true,
-    )?;
+    let baseline =
+        evaluate_vocoder::<Cpu>(&recipe, run, &examples[2..], &NdArrayDevice::Cpu, true)?;
     let resumed = train_vocoder::<CpuTrain>(
         &recipe,
         run,
@@ -398,13 +383,8 @@ fn fixture_one(kind: NativeVocoderKind, run: &Path, epochs: u64) -> Result<()> {
         None,
         print_progress,
     )?;
-    let final_report = evaluate_vocoder::<Cpu>(
-        &recipe,
-        run,
-        &examples[2..],
-        &NdArrayDevice::Cpu,
-        true,
-    )?;
+    let final_report =
+        evaluate_vocoder::<Cpu>(&recipe, run, &examples[2..], &NdArrayDevice::Cpu, true)?;
     ensure!(
         final_report.finite_audio && final_report.generated_samples > 0,
         "{} fixture produced invalid audio",
@@ -542,21 +522,27 @@ fn fixture_config(kind: NativeVocoderKind) -> String {
         NativeVocoderKind::MultibandMelgan => "multiband_melgan_generator",
     };
     let params = match kind {
-        NativeVocoderKind::Hifigan => r#"{
+        NativeVocoderKind::Hifigan => {
+            r#"{
           resblock_type:"1", upsample_factors:[2,2,2],
           upsample_kernel_sizes:[4,4,4], upsample_initial_channel:8,
           resblock_kernel_sizes:[3], resblock_dilation_sizes:[[1,2,3]]
-        }"#,
-        NativeVocoderKind::Melgan => r#"{
+        }"#
+        }
+        NativeVocoderKind::Melgan => {
+            r#"{
           in_channels:4, out_channels:1, proj_kernel:3, base_channels:32,
           upsample_factors:[2,2,2], res_kernel:3, num_res_blocks:2,
           inference_padding:1
-        }"#,
-        NativeVocoderKind::MultibandMelgan => r#"{
+        }"#
+        }
+        NativeVocoderKind::MultibandMelgan => {
+            r#"{
           in_channels:4, out_channels:4, proj_kernel:3, base_channels:8,
           upsample_factors:[2], res_kernel:3, num_res_blocks:1,
           inference_padding:1
-        }"#,
+        }"#
+        }
     };
     format!(
         r#"{{
@@ -615,7 +601,10 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn print_paths(run: &Path) {
     println!("Native vocoder durable paths:");
     println!("  train state: {}", run.join("train_state.json").display());
-    println!("  model state: {}", run.join("trainer-latest.bin").display());
+    println!(
+        "  model state: {}",
+        run.join("trainer-latest.bin").display()
+    );
     println!(
         "  generator optimizer: {}",
         run.join("optim-generator-latest.bin").display()
@@ -624,7 +613,10 @@ fn print_paths(run: &Path) {
         "  discriminator optimizer: {}",
         run.join("optim-discriminator-latest.bin").display()
     );
-    println!("  best inference export: {}", run.join("model.safetensors").display());
+    println!(
+        "  best inference export: {}",
+        run.join("model.safetensors").display()
+    );
     println!("  samples: {}", run.join("samples").display());
 }
 

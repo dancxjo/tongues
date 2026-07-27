@@ -8,17 +8,17 @@ use std::time::Instant;
 
 use crate::DeviceArg;
 use speaking::{
-    EvidenceProvenance, EvidenceSource, PhonemicizeOutput, PhonemicizeRequest,
-    PronunciationWarning, PronunciationWarningKind, ProsodyTrack, SpeakerId, SpeakerReference,
-    SpeakerReferenceSource, Spec, StyleRef, StyleSource, UtteranceId, UtterancePlan, VarietyId,
-    phoneme_default_phone_display_symbol, phonemicizer_for_variety,
+    phoneme_default_phone_display_symbol, phonemicizer_for_variety, EvidenceProvenance,
+    EvidenceSource, PhonemicizeOutput, PhonemicizeRequest, PronunciationWarning,
+    PronunciationWarningKind, ProsodyTrack, SpeakerId, SpeakerReference, SpeakerReferenceSource,
+    Spec, StyleRef, StyleSource, UtteranceId, UtterancePlan, VarietyId,
 };
 use speech::LinguisticProjector as _;
 use speech::SpeechSynthesisEngine as _;
 use styletts2::{
-    DEFAULT_MAX_TTS_SYMBOLS, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
-    StyleTts2SynthesisRequest, StyleTts2Timing, prepare_styletts2_plan, styletts2_en_us_symbol_set,
-    styletts2_text_for_symbols, validate_styletts2_plan,
+    prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
+    validate_styletts2_plan, MockStyleTts2Backend, StyleTts2Backend, StyleTts2PlanOptions,
+    StyleTts2SynthesisRequest, StyleTts2Timing, DEFAULT_MAX_TTS_SYMBOLS,
 };
 use tongues_tts as speech;
 
@@ -1702,7 +1702,7 @@ fn load_backend(
         SpeakBackend::Onnx => {
             #[cfg(feature = "onnx-tts")]
             {
-                use speech::{OnnxSpeechBackend, VoiceConfig, voice_config_path};
+                use speech::{voice_config_path, OnnxSpeechBackend, VoiceConfig};
                 let selected_model = crate::models::selected_voice_model_bundle()?.id.to_string();
                 let primary_model = crate::models::ensure_voice_model_available()?;
                 let config_path = voice_config_path(&primary_model);
@@ -2545,7 +2545,7 @@ fn print_available_speakers(command: &SpeakCommand) -> Result<()> {
     );
     #[cfg(feature = "onnx-tts")]
     {
-        use speech::{VoiceConfig, voice_config_path};
+        use speech::{voice_config_path, VoiceConfig};
         let primary_model = crate::models::ensure_voice_model_available()?;
         let config_path = voice_config_path(&primary_model);
         let config = VoiceConfig::from_json_file(&config_path)?;
@@ -2761,8 +2761,8 @@ impl AudioStreamPlayer {
     pub(crate) fn new(input_sample_rate: u32) -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         use std::sync::{
-            Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
         };
 
         let host = cpal::default_host();
@@ -2947,15 +2947,9 @@ mod tests {
 
     #[test]
     fn fairseq_defaults_follow_the_pronunciation_variety() {
-        assert_eq!(
-            default_fairseq_mms_model("en-US"),
-            "fairseq-mms-vits-eng"
-        );
+        assert_eq!(default_fairseq_mms_model("en-US"), "fairseq-mms-vits-eng");
         for variety in ["ckt", "chukchi", "ckt-Cyrl"] {
-            assert_eq!(
-                default_fairseq_mms_model(variety),
-                "fairseq-mms-vits-ckt"
-            );
+            assert_eq!(default_fairseq_mms_model(variety), "fairseq-mms-vits-ckt");
         }
     }
 

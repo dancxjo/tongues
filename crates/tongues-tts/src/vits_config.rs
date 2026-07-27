@@ -83,9 +83,7 @@ pub struct VitsTrainingModelConfig {
     pub add_blank: bool,
 }
 
-pub fn load_vits_training_model_config(
-    path: impl AsRef<Path>,
-) -> Result<VitsTrainingModelConfig> {
+pub fn load_vits_training_model_config(path: impl AsRef<Path>) -> Result<VitsTrainingModelConfig> {
     let path = path.as_ref();
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read VITS config {}", path.display()))?;

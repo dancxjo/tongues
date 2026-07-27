@@ -206,15 +206,11 @@ pub struct WiktionaryConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum WiktionarySourceKind {
+    #[default]
     Pronunciation,
     PieEtymology,
-}
-
-impl Default for WiktionarySourceKind {
-    fn default() -> Self {
-        Self::Pronunciation
-    }
 }
 
 impl Default for WiktionaryConfig {
@@ -1265,14 +1261,16 @@ fn parse_xml_pages_with_progress<R: BufRead>(
         }
     }
 
-    if checkpoint_dir.is_some() && pages_seen > resume.pages_seen && pages_seen >= shard_start {
-        write_parse_checkpoint_shard(
-            checkpoint_dir.expect("checked above"),
-            shard_start,
-            pages_seen,
-            &shard_data,
-            progress,
-        )?;
+    if pages_seen > resume.pages_seen && pages_seen >= shard_start {
+        if let Some(checkpoint_dir) = checkpoint_dir {
+            write_parse_checkpoint_shard(
+                checkpoint_dir,
+                shard_start,
+                pages_seen,
+                &shard_data,
+                progress,
+            )?;
+        }
     }
 
     progress(PrepareProgress::Parse {
@@ -1293,6 +1291,9 @@ struct ParseResumeState {
     data: ExtractedWiktionaryData,
 }
 
+// Parsing state is explicit here because every value participates in durable
+// checkpoint and resume behavior.
+#[allow(clippy::too_many_arguments)]
 fn finish_parsed_page(
     title: &str,
     text: &str,
@@ -1334,7 +1335,7 @@ fn finish_parsed_page(
 }
 
 fn should_write_parse_checkpoint(pages_seen: usize) -> bool {
-    pages_seen <= 10 || pages_seen % PARSE_CHECKPOINT_PAGE_INTERVAL == 0
+    pages_seen <= 10 || pages_seen.is_multiple_of(PARSE_CHECKPOINT_PAGE_INTERVAL)
 }
 
 fn load_parse_checkpoints(
@@ -1413,7 +1414,7 @@ fn maybe_report_parse_progress(
     pages_seen: usize,
     data: &ExtractedWiktionaryData,
 ) {
-    if pages_seen <= 10 || pages_seen % 1_000 == 0 {
+    if pages_seen <= 10 || pages_seen.is_multiple_of(1_000) {
         progress(PrepareProgress::Parse {
             pages: pages_seen,
             patterns: data.patterns.len(),
@@ -1770,6 +1771,8 @@ pub fn extract_entry_etymologies(
     entries
 }
 
+// Preserve the explicit template provenance fields at the entry boundary.
+#[allow(clippy::too_many_arguments)]
 fn push_entry_etymology(
     entries: &mut Vec<EtymologyEntry>,
     seen: &mut HashSet<String>,
@@ -3487,7 +3490,7 @@ fn maybe_report_expand_progress(
     examples: usize,
     path: Option<&Path>,
 ) {
-    if rows <= 10 || rows % 10_000 == 0 {
+    if rows <= 10 || rows.is_multiple_of(10_000) {
         progress(PrepareProgress::Expand {
             rows,
             examples,
@@ -3787,13 +3790,11 @@ pub fn normalize_metadata_controls(lang: &str, value: &str) -> NormalizedMetadat
 
 fn metadata_phrases(value: &str) -> Vec<String> {
     let cleaned = clean_wikitext_cell(value)
-        .replace('æ', " ae ")
-        .replace('Æ', " ae ")
+        .replace(['æ', 'Æ'], " ae ")
         .replace('ɡ', " g ")
         .replace('_', " ")
         .replace('&', " and ")
-        .replace('–', "-")
-        .replace('—', "-");
+        .replace(['–', '—'], "-");
     let mut phrases = Vec::new();
     let mut current = String::new();
     for ch in cleaned.chars().flat_map(char::to_lowercase) {
@@ -3948,8 +3949,7 @@ fn canonical_tag_fragment(value: &str) -> String {
     let cleaned = clean_wikitext_cell(value)
         .replace('&', " and ")
         .replace('_', " ")
-        .replace('–', "-")
-        .replace('—', "-")
+        .replace(['–', '—'], "-")
         .replace('’', "'");
     let parts = cleaned
         .split(|c: char| {
@@ -5720,9 +5720,18 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
             },
         ];
         let (train, valid, test) = split_examples(rows, 0.5, 0.25, 11);
-        let cat_splits = usize::from(train.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")))
-            + usize::from(valid.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")))
-            + usize::from(test.iter().any(|row| row.output == "cat" || row.input.ends_with(" cat")));
+        let cat_splits = usize::from(
+            train
+                .iter()
+                .any(|row| row.output == "cat" || row.input.ends_with(" cat")),
+        ) + usize::from(
+            valid
+                .iter()
+                .any(|row| row.output == "cat" || row.input.ends_with(" cat")),
+        ) + usize::from(
+            test.iter()
+                .any(|row| row.output == "cat" || row.input.ends_with(" cat")),
+        );
         assert_eq!(cat_splits, 1);
     }
 }

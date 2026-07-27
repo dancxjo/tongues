@@ -1549,7 +1549,10 @@ fn prefix_planned_phonemes(
     part: &OrthographicToken,
     variety: &LinguisticVariety,
 ) -> Option<Vec<PlannedPhoneme>> {
-    let tokens = variety.morphology.as_ref()?.prefix_pronunciation(&part.text)?;
+    let tokens = variety
+        .morphology
+        .as_ref()?
+        .prefix_pronunciation(&part.text)?;
     let stress_id = FeatureId("phonology.stress".into());
     let planned: Vec<PlannedPhoneme> = tokens
         .into_iter()

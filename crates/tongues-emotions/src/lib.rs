@@ -634,9 +634,13 @@ fn train_epoch(
         let scale = 1.0 / batch.len() as f32;
         for label in 0..model.config.labels.len() {
             model.bias[label] -= config.learning_rate * grad_b[label] * scale;
-            for dim in 0..model.config.feature_dims {
+            for (dim, gradient) in grad_w[label]
+                .iter()
+                .enumerate()
+                .take(model.config.feature_dims)
+            {
                 let regularized =
-                    grad_w[label][dim] * scale + config.weight_decay * model.weights[label][dim];
+                    gradient * scale + config.weight_decay * model.weights[label][dim];
                 model.weights[label][dim] -= config.learning_rate * regularized;
             }
         }
@@ -800,7 +804,11 @@ struct SplitGroups {
 }
 
 fn source_group_id(source: &EmotionSourceRow) -> String {
-    format!("{}|{}", source.speaker.as_deref().unwrap_or("_"), source.path.display())
+    format!(
+        "{}|{}",
+        source.speaker.as_deref().unwrap_or("_"),
+        source.path.display()
+    )
 }
 
 fn split_source_groups(
@@ -820,7 +828,10 @@ fn split_source_groups(
     let valid_end = (train_end + (n as f64 * config.valid_frac).round() as usize).min(n);
     SplitGroups {
         train: groups[..train_end.min(n)].iter().cloned().collect(),
-        valid: groups[train_end.min(n)..valid_end].iter().cloned().collect(),
+        valid: groups[train_end.min(n)..valid_end]
+            .iter()
+            .cloned()
+            .collect(),
         test: groups[valid_end..].iter().cloned().collect(),
     }
 }

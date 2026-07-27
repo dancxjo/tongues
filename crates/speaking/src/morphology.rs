@@ -53,9 +53,10 @@ impl Morphology {
     /// registered for this surface form or its pronunciation list is empty.
     pub fn prefix_pronunciation(&self, surface: &str) -> Option<Vec<PhonemeToken>> {
         let lower = surface.to_lowercase();
-        let prefix = self.morphemes.values().find(|m| {
-            m.kind == MorphemeKind::Prefix && m.form.trim_end_matches('-') == lower
-        })?;
+        let prefix = self
+            .morphemes
+            .values()
+            .find(|m| m.kind == MorphemeKind::Prefix && m.form.trim_end_matches('-') == lower)?;
         if prefix.pronunciation.is_empty() {
             None
         } else {

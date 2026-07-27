@@ -8,25 +8,20 @@ use std::time::Instant;
 
 use anyhow::{ensure, Context, Result};
 use burn::module::{AutodiffModule, Module};
-use burn::optim::{
-    grad_clipping::GradientClippingConfig, AdamWConfig, GradientsParams, Optimizer,
-};
+use burn::optim::{grad_clipping::GradientClippingConfig, AdamWConfig, GradientsParams, Optimizer};
 use burn::record::{BinFileRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn::tensor::{ElementConversion, Tensor, TensorData};
 use burn_store::{BurnToPyTorchAdapter, ModuleSnapshot, SafetensorsStore};
 use serde::{Deserialize, Serialize};
-use tongues_data::speech_corpus::{
-    feature_cache_path, CachedSpeechFeatures, SpeechRecord,
-};
+use tongues_data::speech_corpus::{feature_cache_path, CachedSpeechFeatures, SpeechRecord};
 
 use crate::{
-    waveform_reconstruction_loss, AudioFeatureConfig,
-    BurnVocoderTrainingBatch, BurnVocoderTrainingHooks, HifiganBundleConfig,
-    HifiganTrainer, HifiganTrainingRecipe, MelganBundleConfig, MelganTrainer,
-    MelganTrainingRecipe, MelganVariant, MultiPeriodDiscriminator, MultiScaleDiscriminator,
-    MultibandMelganTrainer, VocoderTrainingPhase,
-    VocoderTrainingState,
+    waveform_reconstruction_loss, AudioFeatureConfig, BurnVocoderTrainingBatch,
+    BurnVocoderTrainingHooks, HifiganBundleConfig, HifiganTrainer, HifiganTrainingRecipe,
+    MelganBundleConfig, MelganTrainer, MelganTrainingRecipe, MelganVariant,
+    MultiPeriodDiscriminator, MultiScaleDiscriminator, MultibandMelganTrainer,
+    VocoderTrainingPhase, VocoderTrainingState,
 };
 
 type BinaryRecorder = BinFileRecorder<FullPrecisionSettings>;
@@ -106,8 +101,7 @@ impl NativeVocoderRecipe {
                     .context("MultiBand-MelGAN recipe requires PQMF")?;
                 recipe.generator.validate().map_err(anyhow::Error::new)?;
                 ensure!(
-                    recipe.generator.upsample_factor() * pqmf.bands
-                        == recipe.mel_contract.hop_size,
+                    recipe.generator.upsample_factor() * pqmf.bands == recipe.mel_contract.hop_size,
                     "MultiBand-MelGAN output factor does not match mel hop"
                 );
             }
@@ -222,6 +216,9 @@ pub enum VocoderTrainingProgress {
 }
 
 #[derive(Module, Debug)]
+// Trainer variants stay inline because boxing would ripple through checkpoint
+// and optimizer dispatch without changing the durable model format.
+#[allow(clippy::large_enum_variant)]
 enum VocoderModel<B: Backend> {
     Hifigan(HifiganTrainer<B>),
     Melgan(MelganTrainer<B>),
@@ -286,9 +283,8 @@ pub fn load_vocoder_examples(
         if line.trim().is_empty() {
             continue;
         }
-        let record: SpeechRecord = serde_json::from_str(&line).with_context(|| {
-            format!("parsing {} line {}", split_path.display(), index + 1)
-        })?;
+        let record: SpeechRecord = serde_json::from_str(&line)
+            .with_context(|| format!("parsing {} line {}", split_path.display(), index + 1))?;
         let cache_path = feature_cache_path(feature_cache, &record.id);
         let cached: CachedSpeechFeatures =
             serde_json::from_reader(File::open(&cache_path).with_context(|| {
@@ -353,8 +349,11 @@ pub fn train_vocoder<B: AutodiffBackend>(
         state.discriminator_learning_rate = recipe.hyperparams().discriminator_learning_rate;
     }
     let mut model = if state.global_step > 0 {
-        init_model(recipe, source_config, source_checkpoint, device, fixture)?
-            .load_file(&model_stem, &recorder, device)?
+        init_model(recipe, source_config, source_checkpoint, device, fixture)?.load_file(
+            &model_stem,
+            &recorder,
+            device,
+        )?
     } else {
         init_model(recipe, source_config, source_checkpoint, device, fixture)?
     };
@@ -375,12 +374,10 @@ pub fn train_vocoder<B: AutodiffBackend>(
     let mut generator_optimizer = generator_config.init::<B, VocoderModel<B>>();
     let mut discriminator_optimizer = discriminator_config.init::<B, VocoderModel<B>>();
     if state.global_step > 0 {
-        generator_optimizer = generator_optimizer.load_record(
-            recorder.load(gen_optim_path.with_extension(""), device)?,
-        );
-        discriminator_optimizer = discriminator_optimizer.load_record(
-            recorder.load(disc_optim_path.with_extension(""), device)?,
-        );
+        generator_optimizer = generator_optimizer
+            .load_record(recorder.load(gen_optim_path.with_extension(""), device)?);
+        discriminator_optimizer = discriminator_optimizer
+            .load_record(recorder.load(disc_optim_path.with_extension(""), device)?);
         progress(VocoderTrainingProgress::Resume {
             epoch: state.epoch,
             batch: state.batch_in_epoch,
@@ -401,7 +398,10 @@ pub fn train_vocoder<B: AutodiffBackend>(
                 .hyperparams()
                 .resolved_adversarial_schedule()
                 .training_phase(state.global_step);
-            if matches!(phase, VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint) {
+            if matches!(
+                phase,
+                VocoderTrainingPhase::Generator | VocoderTrainingPhase::Joint
+            ) {
                 let generator_view = model.clone().no_grad_discriminators();
                 let output = generator_view.training_forward(
                     collate(recipe, train, &batches[batch_index], device)?,
@@ -414,13 +414,12 @@ pub fn train_vocoder<B: AutodiffBackend>(
                 let value: f32 = scalar.elem();
                 ensure!(value.is_finite(), "non-finite vocoder generator loss");
                 let gradients = GradientsParams::from_grads(loss.backward(), &model);
-                model = generator_optimizer.step(
-                    state.generator_learning_rate,
-                    model,
-                    gradients,
-                );
+                model = generator_optimizer.step(state.generator_learning_rate, model, gradients);
             }
-            if matches!(phase, VocoderTrainingPhase::Discriminator | VocoderTrainingPhase::Joint) {
+            if matches!(
+                phase,
+                VocoderTrainingPhase::Discriminator | VocoderTrainingPhase::Joint
+            ) {
                 let output = model.training_forward(
                     collate(recipe, train, &batches[batch_index], device)?,
                     state.global_step,
@@ -512,12 +511,12 @@ pub fn train_vocoder<B: AutodiffBackend>(
         state.best_loss = state.best_loss.min(evaluation.loss);
         state.epoch = epoch;
         state.batch_in_epoch = 0;
-        state.generator_learning_rate =
-            (state.generator_learning_rate * recipe.hyperparams().scheduler_gamma)
-                .max(recipe.hyperparams().minimum_learning_rate);
-        state.discriminator_learning_rate =
-            (state.discriminator_learning_rate * recipe.hyperparams().scheduler_gamma)
-                .max(recipe.hyperparams().minimum_learning_rate);
+        state.generator_learning_rate = (state.generator_learning_rate
+            * recipe.hyperparams().scheduler_gamma)
+            .max(recipe.hyperparams().minimum_learning_rate);
+        state.discriminator_learning_rate = (state.discriminator_learning_rate
+            * recipe.hyperparams().scheduler_gamma)
+            .max(recipe.hyperparams().minimum_learning_rate);
         save_sample(
             recipe,
             run,
@@ -565,12 +564,11 @@ pub fn evaluate_vocoder<B: Backend>(
 ) -> Result<VocoderEvaluationReport> {
     let run = run.as_ref();
     let recorder = BinaryRecorder::new();
-    let model: VocoderModel<B> =
-        init_model(recipe, None, None, device, fixture)?.load_file(
-            run.join("trainer-latest"),
-            &recorder,
-            device,
-        )?;
+    let model: VocoderModel<B> = init_model(recipe, None, None, device, fixture)?.load_file(
+        run.join("trainer-latest"),
+        &recorder,
+        device,
+    )?;
     evaluate_model(recipe, &model, examples, device)
 }
 
@@ -582,12 +580,11 @@ pub fn export_vocoder<B: Backend>(
 ) -> Result<PathBuf> {
     let run = run.as_ref();
     let recorder = BinaryRecorder::new();
-    let model: VocoderModel<B> =
-        init_model(recipe, None, None, device, fixture)?.load_file(
-            run.join("trainer-latest"),
-            &recorder,
-            device,
-        )?;
+    let model: VocoderModel<B> = init_model(recipe, None, None, device, fixture)?.load_file(
+        run.join("trainer-latest"),
+        &recorder,
+        device,
+    )?;
     let path = run.join("model.safetensors");
     save_inference_checkpoint(&model, &path)?;
     Ok(path)
@@ -612,8 +609,7 @@ fn init_model<B: Backend>(
             let generator = if let (Some(config), Some(checkpoint)) =
                 (source_config, source_checkpoint)
             {
-                HifiganBundleConfig::from_file(config)?
-                    .load_burn_generator(checkpoint, device)?
+                HifiganBundleConfig::from_file(config)?.load_burn_generator(checkpoint, device)?
             } else {
                 recipe.generator.init(device).map_err(anyhow::Error::new)?
             };
@@ -626,15 +622,14 @@ fn init_model<B: Backend>(
             VocoderModel::Hifigan(trainer)
         }
         NativeVocoderRecipe::Melgan(recipe) => {
-            let generator = if let (Some(config), Some(checkpoint)) =
-                (source_config, source_checkpoint)
-            {
-                let config = MelganBundleConfig::from_file(config)?;
-                ensure!(config.variant()? == MelganVariant::Melgan);
-                config.load_burn_generator(checkpoint, device)?
-            } else {
-                recipe.generator.init(device).map_err(anyhow::Error::new)?
-            };
+            let generator =
+                if let (Some(config), Some(checkpoint)) = (source_config, source_checkpoint) {
+                    let config = MelganBundleConfig::from_file(config)?;
+                    ensure!(config.variant()? == MelganVariant::Melgan);
+                    config.load_burn_generator(checkpoint, device)?
+                } else {
+                    recipe.generator.init(device).map_err(anyhow::Error::new)?
+                };
             let mut trainer =
                 MelganTrainer::new_complete(generator, device, weights, schedule, &audio);
             if fixture {
@@ -643,21 +638,19 @@ fn init_model<B: Backend>(
             VocoderModel::Melgan(trainer)
         }
         NativeVocoderRecipe::MultibandMelgan(recipe) => {
-            let generator = if let (Some(config), Some(checkpoint)) =
-                (source_config, source_checkpoint)
-            {
-                let config = MelganBundleConfig::from_file(config)?;
-                ensure!(config.variant()? == MelganVariant::Multiband);
-                config.load_burn_multiband_generator(checkpoint, device)?
-            } else {
-                recipe
-                    .generator
-                    .init_multiband(recipe.pqmf.clone().context("missing PQMF")?, device)
-                    .map_err(anyhow::Error::new)?
-            };
-            let mut trainer = MultibandMelganTrainer::new_complete(
-                generator, device, weights, schedule, &audio,
-            );
+            let generator =
+                if let (Some(config), Some(checkpoint)) = (source_config, source_checkpoint) {
+                    let config = MelganBundleConfig::from_file(config)?;
+                    ensure!(config.variant()? == MelganVariant::Multiband);
+                    config.load_burn_multiband_generator(checkpoint, device)?
+                } else {
+                    recipe
+                        .generator
+                        .init_multiband(recipe.pqmf.context("missing PQMF")?, device)
+                        .map_err(anyhow::Error::new)?
+                };
+            let mut trainer =
+                MultibandMelganTrainer::new_complete(generator, device, weights, schedule, &audio);
             if fixture {
                 trainer.msd = MultiScaleDiscriminator::new_fixture(device);
             }
@@ -666,13 +659,15 @@ fn init_model<B: Backend>(
     })
 }
 
-fn validate_examples(recipe: &NativeVocoderRecipe, examples: &[VocoderPreparedExample]) -> Result<()> {
+fn validate_examples(
+    recipe: &NativeVocoderRecipe,
+    examples: &[VocoderPreparedExample],
+) -> Result<()> {
     ensure!(!examples.is_empty(), "empty vocoder example set");
     let mel_bins = recipe.mel_contract().mel_bins;
     for example in examples {
         ensure!(
-            !example.mel.is_empty()
-                && example.mel.iter().all(|frame| frame.len() == mel_bins),
+            !example.mel.is_empty() && example.mel.iter().all(|frame| frame.len() == mel_bins),
             "{} has invalid mel geometry",
             example.record_id
         );
@@ -734,10 +729,7 @@ fn collate<B: Backend>(
     }
     Ok(BurnVocoderTrainingBatch {
         conditioning_mel: Tensor::from_data(TensorData::new(mel, [batch, frames, bins]), device),
-        target_waveform: Tensor::from_data(
-            TensorData::new(waveform, [batch, 1, samples]),
-            device,
-        ),
+        target_waveform: Tensor::from_data(TensorData::new(waveform, [batch, 1, samples]), device),
     })
 }
 
@@ -770,10 +762,8 @@ fn evaluate_model<B: Backend>(
         let target_dims = target.dims();
         let generated_dims = generated.dims();
         let aligned_samples = target_dims[2].min(generated_dims[2]);
-        let target =
-            target.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
-        let generated =
-            generated.slice([0..generated_dims[0], 0..1, 0..aligned_samples]);
+        let target = target.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
+        let generated = generated.slice([0..generated_dims[0], 0..1, 0..aligned_samples]);
         let generated_mel =
             crate::vits_trainer::differentiable_mel(generated.clone(), &recipe.audio_config())?;
         let target_mel =
@@ -788,8 +778,7 @@ fn evaluate_model<B: Backend>(
             + wave_value as f64 * weights.waveform_reconstruction;
     }
     let elapsed = started.elapsed().as_secs_f64();
-    let audio_seconds =
-        generated_samples as f64 / recipe.mel_contract().sample_rate_hz as f64;
+    let audio_seconds = generated_samples as f64 / recipe.mel_contract().sample_rate_hz as f64;
     Ok(VocoderEvaluationReport {
         examples: examples.len(),
         loss: total_loss / examples.len() as f64,
@@ -860,10 +849,7 @@ where
     Ok(())
 }
 
-fn save_inference_checkpoint<B: Backend>(
-    model: &VocoderModel<B>,
-    path: &Path,
-) -> Result<()> {
+fn save_inference_checkpoint<B: Backend>(model: &VocoderModel<B>, path: &Path) -> Result<()> {
     let mut store = SafetensorsStore::from_file(path)
         .overwrite(true)
         .skip_enum_variants(true)
@@ -871,9 +857,7 @@ fn save_inference_checkpoint<B: Backend>(
     match model {
         VocoderModel::Hifigan(trainer) => trainer.generator.save_into(&mut store)?,
         VocoderModel::Melgan(trainer) => trainer.generator.save_into(&mut store)?,
-        VocoderModel::MultibandMelgan(trainer) => {
-            trainer.generator.save_into(&mut store)?
-        }
+        VocoderModel::MultibandMelgan(trainer) => trainer.generator.save_into(&mut store)?,
     }
     Ok(())
 }
@@ -887,9 +871,8 @@ fn save_sample<B: Backend>(
     device: &B::Device,
     progress: &mut impl FnMut(VocoderTrainingProgress),
 ) -> Result<()> {
-    let generated = model.generate(
-        collate(recipe, std::slice::from_ref(example), &[0], device)?.conditioning_mel,
-    )?;
+    let generated = model
+        .generate(collate(recipe, std::slice::from_ref(example), &[0], device)?.conditioning_mel)?;
     let samples = generated.into_data().to_vec::<f32>()?;
     ensure!(
         !samples.is_empty() && samples.iter().all(|sample| sample.is_finite()),

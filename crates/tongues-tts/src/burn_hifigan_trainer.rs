@@ -182,8 +182,7 @@ impl<B: Backend> HifiganTrainer<B> {
             Tensor::zeros_like(&adv_loss)
         };
         let recon_zero = Tensor::zeros_like(&adv_loss);
-        let gen_loss =
-            combined_generator_loss(adv_loss, fm_loss, mel_loss, recon_zero, &weights);
+        let gen_loss = combined_generator_loss(adv_loss, fm_loss, mel_loss, recon_zero, &weights);
 
         Ok(BurnVocoderTrainingOutput {
             progress,

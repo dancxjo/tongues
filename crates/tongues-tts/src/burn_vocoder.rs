@@ -22,6 +22,8 @@ pub trait BurnTensorVocoder<B: Backend>: NeuralVocoder {
     ) -> Result<Tensor<B, 3>>;
 }
 
+// This public dispatch enum remains inline for stable construction semantics.
+#[allow(clippy::large_enum_variant)]
 pub enum BurnVocoder<B: Backend> {
     Hifigan(BurnHifiganVocoder<B>),
     Melgan(BurnMelganVocoder<B>),

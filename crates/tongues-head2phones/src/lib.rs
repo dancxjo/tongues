@@ -1528,7 +1528,7 @@ fn prefix_ends_with_nonterminal_abbreviation(prefix: &str) -> bool {
     let trimmed = prefix.trim_end();
     trimmed
         .strip_suffix('.')
-        .and_then(|without_dot| Some(without_dot.len()))
+        .map(|without_dot| without_dot.len())
         .is_some_and(|dot_index| dot_is_nonterminal(trimmed, dot_index))
 }
 
@@ -1669,13 +1669,13 @@ pub fn first_complete_head(input: &str) -> Option<HeadChunk> {
 
 fn dot_is_nonterminal(input: &str, dot_index: usize) -> bool {
     let after_dot = dot_index + 1;
-    if input[after_dot..].chars().next() == Some('.') {
+    if input[after_dot..].starts_with('.') {
         return false;
     }
     if dot_is_inside_dotted_abbreviation(input, dot_index) {
         return true;
     }
-    let prev = input[..dot_index].chars().rev().next();
+    let prev = input[..dot_index].chars().next_back();
     let next = input[after_dot..].chars().next();
     if prev.is_some_and(|ch| ch.is_ascii_digit()) && next.is_some_and(|ch| ch.is_ascii_digit()) {
         return true;
@@ -2873,10 +2873,9 @@ fn no_head_prefixes(head: &str, config: &Head2PhonesConfig, rng: &mut StdRng) ->
                 ch,
                 '.' | '!' | '?' | ';' | ':' | ',' | '"' | '\'' | ')' | ']' | '}' | '\n'
             )
-        }) {
-            if index > 0 {
-                cuts.push(index);
-            }
+        }) && index > 0
+        {
+            cuts.push(index);
         }
     }
     cuts.sort_unstable();

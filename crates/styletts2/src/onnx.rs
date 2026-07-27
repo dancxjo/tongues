@@ -81,16 +81,11 @@ impl Default for StyleTts2DiffusionOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StyleTts2OnnxOptimization {
+    #[default]
     Generation,
     Deterministic,
-}
-
-impl Default for StyleTts2OnnxOptimization {
-    fn default() -> Self {
-        Self::Generation
-    }
 }
 
 impl StyleTts2OnnxOptimization {
@@ -1101,6 +1096,9 @@ fn load_session(
     }
 }
 
+// Providers are appended under independent feature flags, so no single vec!
+// initializer represents every supported build combination.
+#[allow(clippy::vec_init_then_push)]
 fn styletts2_execution_providers(_options: StyleTts2OnnxOptions) -> Vec<ExecutionProviderDispatch> {
     #[allow(unused_mut)]
     let mut providers = Vec::new();

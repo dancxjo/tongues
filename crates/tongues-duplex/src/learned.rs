@@ -1058,11 +1058,11 @@ fn sequence_token_f1(predicted: &[String], target: &[String]) -> f64 {
     }
     let mut matches = 0usize;
     for token in predicted {
-        if let Some(count) = target_counts.get_mut(&normalize_key(token)) {
-            if *count > 0 {
-                matches += 1;
-                *count -= 1;
-            }
+        if let Some(count) = target_counts.get_mut(&normalize_key(token))
+            && *count > 0
+        {
+            matches += 1;
+            *count -= 1;
         }
     }
     let precision = matches as f64 / predicted.len() as f64;

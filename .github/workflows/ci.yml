@@ -17,12 +17,51 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  formatting:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+  clippy-workspace:
+    name: Clippy workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Lint default, no-default, and all-feature workspaces
+        run: scripts/clippy-feature-matrix.sh workspace
+
+  clippy-powerset:
+    name: Clippy package feature powerset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Lint supported package feature combinations
+        run: scripts/clippy-feature-matrix.sh powerset
+
   workspace:
     name: Workspace checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
@@ -32,7 +71,7 @@ jobs:
           CARGO_NET_OFFLINE=true cargo check -p speaking --locked
           python3 scripts/check-linguistic-assets.py
       - name: Check repository scripts
-        run: bash -n scripts/check-feature-matrix.sh scripts/speech-smoke.sh scripts/speech-conformance.sh
+        run: bash -n scripts/check-feature-matrix.sh scripts/clippy-feature-matrix.sh scripts/speech-smoke.sh scripts/speech-conformance.sh
       - name: Check default, no-default, and all-feature workspaces
         run: scripts/check-feature-matrix.sh workspace
       - name: Build the speech CLI in release mode
@@ -50,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
       - uses: Swatinem/rust-cache@v2
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev

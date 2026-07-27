@@ -240,7 +240,6 @@ fn chunk_symbols(
     split_required_question_chunks(tokens)
         .into_iter()
         .flat_map(|tokens| split_oversized_chunk(tokens, max_symbols_per_chunk))
-        .into_iter()
         .filter(|chunk| !chunk.symbols.is_empty())
         .collect()
 }

@@ -870,7 +870,7 @@ pub fn phonemicize_lexemes(base_words: Vec<String>) -> Vec<Lexeme> {
     let num_threads = 20;
     let mut handles = Vec::new();
 
-    let chunk_size = (base_words.len() + num_threads - 1) / num_threads;
+    let chunk_size = base_words.len().div_ceil(num_threads);
 
     for t in 0..num_threads {
         let base_words = Arc::clone(&base_words);
@@ -988,11 +988,17 @@ pub fn check_split_leakage(train: &[Lexeme], valid: &[Lexeme], test: &[Lexeme]) 
     check_group_split_leakage(&[
         (
             "train",
-            train.iter().map(|lexeme| lexeme.base_word.clone()).collect(),
+            train
+                .iter()
+                .map(|lexeme| lexeme.base_word.clone())
+                .collect(),
         ),
         (
             "valid",
-            valid.iter().map(|lexeme| lexeme.base_word.clone()).collect(),
+            valid
+                .iter()
+                .map(|lexeme| lexeme.base_word.clone())
+                .collect(),
         ),
         (
             "test",
@@ -1026,6 +1032,9 @@ impl Task {
     }
 
     /// Parse a task direction from a string slice.
+    // Retain the existing optional parser API used by callers; changing this
+    // to FromStr would alter both its return type and compatibility contract.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "g2p" => Some(Task::G2P),

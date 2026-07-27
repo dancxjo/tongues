@@ -258,13 +258,13 @@ impl GlowTtsNetworkConfig {
             "Glow-TTS decoder block counts, dilation, and odd kernel must be positive"
         );
         ensure!(
-            self.hidden_channels_dec % 2 == 0,
+            self.hidden_channels_dec.is_multiple_of(2),
             "Glow-TTS decoder hidden channels must be even"
         );
         ensure!(
             self.num_squeeze > 0
                 && self.num_splits > 0
-                && self.num_splits % 2 == 0
+                && self.num_splits.is_multiple_of(2)
                 && (self.out_channels * self.num_squeeze).is_multiple_of(self.num_splits),
             "Glow-TTS squeeze channels must divide evenly across an even invertible-convolution split"
         );

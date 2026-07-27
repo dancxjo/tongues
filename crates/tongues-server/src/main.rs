@@ -855,6 +855,8 @@ fn bind_address_allowed(addr: SocketAddr, insecure_remote_opt_in: bool) -> bool 
     addr.ip().is_loopback() || insecure_remote_opt_in
 }
 
+// Rust 2021 cannot express the equivalent let-chain without nesting.
+#[allow(clippy::collapsible_if)]
 async fn enforce_request_policy(request: Request, next: Next) -> Response {
     if request.method() != Method::GET
         && request.method() != Method::HEAD
@@ -1751,7 +1753,7 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
         .values()
         .map(|job| job.summary.clone())
         .collect::<Vec<_>>();
-    jobs.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+    jobs.sort_by_key(|job| std::cmp::Reverse(job.created_at_ms));
     Json(jobs)
 }
 
@@ -2109,6 +2111,9 @@ async fn job_events(
         .into_response()
 }
 
+// Several validations retain their matched values for precise error messages;
+// Rust 2021 cannot express the suggested let-chain.
+#[allow(clippy::collapsible_if)]
 fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> Result<(), String> {
     if payload.command != "cargo" {
         return Err("only cargo jobs are supported".into());
@@ -2310,9 +2315,9 @@ fn validate_job_argument_value(
     }
     if is_job_config_flag(flag) {
         validate_job_config_path(workspace_root, value)?;
-    } else if is_job_artifact_path_flag(flag) {
-        validate_job_artifact_path(workspace_root, value)?;
-    } else if job_prefix_is(prefix, &["styletts2", "discover"]) && flag == "--references-dir" {
+    } else if is_job_artifact_path_flag(flag)
+        || (job_prefix_is(prefix, &["styletts2", "discover"]) && flag == "--references-dir")
+    {
         validate_job_artifact_path(workspace_root, value)?;
     }
     Ok(())
@@ -3004,10 +3009,7 @@ fn validate_artifact_relative_path(
     let Some(root) = artifact_root_name(relative) else {
         return Err("paths must stay inside approved artifact roots".into());
     };
-    if !ALLOWED_ARTIFACT_ROOTS
-        .iter()
-        .any(|allowed| *allowed == root)
-    {
+    if !ALLOWED_ARTIFACT_ROOTS.contains(&root) {
         return Err("paths must stay inside approved artifact roots".into());
     }
     validate_existing_ancestor_within_workspace(workspace_root, relative)
@@ -3060,11 +3062,7 @@ fn is_allowed_root_artifact_file(relative: &FsPath) -> bool {
         && relative
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                ALLOWED_ROOT_ARTIFACT_FILES
-                    .iter()
-                    .any(|allowed| *allowed == name)
-            })
+            .is_some_and(|name| ALLOWED_ROOT_ARTIFACT_FILES.contains(&name))
 }
 
 fn is_visible_artifact_path(relative: &FsPath, is_dir: bool) -> bool {
@@ -4063,28 +4061,34 @@ fn base_registered_speech_compositions_at(
         id: "unavailable".into(),
         entries: Vec::new(),
     });
-    compositions.extend(catalog.entries.iter().filter(|entry| {
-        entry.backend.as_deref() == Some("onnx")
-            && entry.kind == tongues_tts::CatalogModelKind::VoiceModel
-    }).map(|voice| {
-        let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
-            format!("projector/{}", voice.id),
-            voice.id.clone(),
-            Vec::new(),
-        );
-        tongues_tts::RegisteredSpeechComposition {
-            id: pipeline
-                .canonical_id()
-                .expect("registered ONNX pipeline must be valid"),
-            display_name: voice.display_name.clone(),
-            backend: "onnx".into(),
-            model: voice.id.clone(),
-            pipeline,
-            recommended: voice.id == selected,
-            capability_tier: tongues_tts::CapabilityTier::TierB,
-            revision_capable: false,
-        }
-    }));
+    compositions.extend(
+        catalog
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.backend.as_deref() == Some("onnx")
+                    && entry.kind == tongues_tts::CatalogModelKind::VoiceModel
+            })
+            .map(|voice| {
+                let pipeline = tongues_tts::SpeechPipelineSelection::end_to_end(
+                    format!("projector/{}", voice.id),
+                    voice.id.clone(),
+                    Vec::new(),
+                );
+                tongues_tts::RegisteredSpeechComposition {
+                    id: pipeline
+                        .canonical_id()
+                        .expect("registered ONNX pipeline must be valid"),
+                    display_name: voice.display_name.clone(),
+                    backend: "onnx".into(),
+                    model: voice.id.clone(),
+                    pipeline,
+                    recommended: voice.id == selected,
+                    capability_tier: tongues_tts::CapabilityTier::TierB,
+                    revision_capable: false,
+                }
+            }),
+    );
     compositions
 }
 
@@ -5769,6 +5773,8 @@ fn catalog_entry_installation_error(
     (!missing.is_empty()).then(|| format!("missing model artifacts: {}", missing.join(", ")))
 }
 
+// The status projection keeps each discovered backend signal explicit.
+#[allow(clippy::too_many_arguments)]
 fn discover_speech_path(
     home: &FsPath,
     backend: &str,
@@ -7410,6 +7416,8 @@ fn catalog_entry_files_present(root: &FsPath, entry: &tongues_tts::ModelCatalogE
         })
 }
 
+// Component readiness inputs are intentionally explicit at the UI boundary.
+#[allow(clippy::too_many_arguments)]
 fn component_statuses(
     readiness: &str,
     runnable: bool,
@@ -7518,14 +7526,14 @@ fn catalog_component_stage(
 fn catalog_component_spans(
     entry: &tongues_tts::ModelCatalogEntry,
 ) -> Vec<tongues_tts::SpeechPipelineStage> {
-    (catalog_component_stage(entry) == tongues_tts::SpeechPipelineStage::EndToEnd)
-        .then(|| {
-            vec![
-                tongues_tts::SpeechPipelineStage::AcousticModel,
-                tongues_tts::SpeechPipelineStage::Vocoder,
-            ]
-        })
-        .unwrap_or_default()
+    if catalog_component_stage(entry) == tongues_tts::SpeechPipelineStage::EndToEnd {
+        vec![
+            tongues_tts::SpeechPipelineStage::AcousticModel,
+            tongues_tts::SpeechPipelineStage::Vocoder,
+        ]
+    } else {
+        Vec::new()
+    }
 }
 
 fn native_component_readiness(
@@ -7979,6 +7987,8 @@ fn emotion_signatures_path(state: &AppState) -> PathBuf {
     state.workspace_root.join("emotion_signatures.json")
 }
 
+// Keep matched option values available for precise Rust 2021 validation errors.
+#[allow(clippy::collapsible_if)]
 fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     if payload.text.trim().is_empty() && payload.backend.as_deref() != Some("freevc") {
         return Err("text is required".into());
@@ -8367,7 +8377,7 @@ fn load_emotion_signatures(
 
     let sample_counts = find_style_vectors_path(state)
         .as_ref()
-        .map(|path| load_emotion_sample_counts(path))
+        .map(load_emotion_sample_counts)
         .transpose()?
         .unwrap_or_default();
 

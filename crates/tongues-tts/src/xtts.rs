@@ -207,7 +207,9 @@ impl XttsV2Config {
         ensure!(
             model_args.gpt_layers > 0
                 && model_args.gpt_n_heads > 0
-                && model_args.gpt_n_model_channels % model_args.gpt_n_heads == 0,
+                && model_args
+                    .gpt_n_model_channels
+                    .is_multiple_of(model_args.gpt_n_heads),
             "XTTS GPT channels must be divisible by its positive head count"
         );
         ensure!(
