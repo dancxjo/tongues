@@ -197,6 +197,20 @@ export function relatedSpanIds(session, spanId) {
   return related;
 }
 
+export function focusedSessionSpan(session, search = "") {
+  const params = new URLSearchParams(search);
+  const requested = params.get("span");
+  const start = Number(params.get("start_ms"));
+  const end = Number(params.get("end_ms"));
+  const spans = projectSession(session).edited;
+  return spans.find(candidate =>
+    candidate.id === requested || candidate.id.endsWith(`:${requested}`))
+    ?? spans.find(candidate =>
+      Number.isFinite(start) && Number.isFinite(end)
+      && candidate.start_ms < end && candidate.end_ms > start)
+    ?? null;
+}
+
 export function segmentationState(session) {
   const artifacts = (session?.attachments ?? [])
     .filter(attachment => attachment.kind === "phonetic_segmentation")

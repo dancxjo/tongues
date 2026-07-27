@@ -1,6 +1,6 @@
 import {
-  appendOperation, projectSession, redo, relatedSpanIds, segmentationState, sessionFromEvents,
-  undo, validateSession, waveformPolylinePoints,
+  appendOperation, focusedSessionSpan, projectSession, redo, relatedSpanIds, segmentationState,
+  sessionFromEvents, undo, validateSession, waveformPolylinePoints,
 } from "./wavedeck-model.mjs";
 
 let session = null;
@@ -94,18 +94,9 @@ async function loadDurableSession(sessionId) {
 
 function restoreRouteSelection(search = location.search) {
   if (!session) return;
-  const params = new URLSearchParams(search);
-  const requested = params.get("span");
-  const start = Number(params.get("start_ms"));
-  const end = Number(params.get("end_ms"));
-  const projection = projectSession(session);
-  const span = projection.edited.find(candidate =>
-    candidate.id === requested
-    || candidate.id.endsWith(`:${requested}`)
-    || (Number.isFinite(start) && Number.isFinite(end)
-      && candidate.start_ms < end && candidate.end_ms > start));
+  const span = focusedSessionSpan(session, search);
   if (!span) {
-    if (requested || Number.isFinite(start) || Number.isFinite(end)) {
+    if (new URLSearchParams(search).size) {
       byId("recovery").textContent = "The requested Run Tracks interval is no longer present; the full session is open.";
     }
     return;

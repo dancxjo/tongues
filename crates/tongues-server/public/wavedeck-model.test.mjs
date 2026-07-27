@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {
-  appendOperation, projectSession, redo, relatedSpanIds, segmentationState, sessionFromEvents,
-  undo, validateSession, waveformPolylinePoints,
+  appendOperation, focusedSessionSpan, projectSession, redo, relatedSpanIds, segmentationState,
+  sessionFromEvents, undo, validateSession, waveformPolylinePoints,
 } from "./wavedeck-model.mjs";
 
 const phoneticFixture = JSON.parse(readFileSync(new URL(
@@ -115,6 +115,16 @@ test("word and phone selections expose linked evidence in WaveDeck", () => {
   const phoneId = "phonetic-segmentation:phones-v1:1";
   assert.ok(relatedSpanIds(session, phoneId).has("word:utterance-1:0"));
   assert.ok(relatedSpanIds(session, "word:utterance-1:0").has(phoneId));
+});
+
+test("exact deep-link span wins over a broad overlapping audio interval", () => {
+  const session = validateSession(structuredClone(phoneticFixture.session));
+  const phoneId = "phonetic-segmentation:phones-v1:3";
+  const span = focusedSessionSpan(
+    session,
+    `?span=${encodeURIComponent(phoneId)}&start_ms=370&end_ms=505`,
+  );
+  assert.equal(span.id, phoneId);
 });
 
 test("missing and partial segmentation states never imply authoritative timing", () => {
