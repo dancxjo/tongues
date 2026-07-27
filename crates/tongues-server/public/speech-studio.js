@@ -43,6 +43,14 @@
         liveSpoken: '',
         liveFinalTokenAt: 0,
         liveFirstAudioAt: 0,
+        browserMicSocket: null,
+        browserMicContext: null,
+        browserMicStream: null,
+        browserMicSource: null,
+        browserMicNode: null,
+        browserMicGain: null,
+        browserMicSequence: 0,
+        browserMicStartFrame: 0,
     };
     const VERIFICATION_CONCURRENCY = 1;
     const DEFAULT_COMPARISON_CONCURRENCY = 2;
@@ -1360,6 +1368,12 @@
                     )).join(', ')
                     : (audioInput.device_discovery_error || 'No local microphone devices reported.')
             )}</p>
+            <div class="browser-mic-probe">
+                <button id="browser-mic-start" type="button">Test this browser’s microphone</button>
+                <button id="browser-mic-stop" type="button" class="secondary-button" disabled>Stop test</button>
+                <meter id="browser-mic-level" min="0" max="1" value="0" aria-label="Browser microphone level"></meter>
+                <p id="browser-mic-status" aria-live="polite">Uses this browser device, not the server host microphone.</p>
+            </div>
         ` : '';
         target.innerHTML = `
             <p class="eyebrow">${escapeHtml(stage.replaceAll('_', ' '))}</p>
@@ -1376,6 +1390,172 @@
             <p>${escapeHtml(ownership)}</p>
             ${inputDiscovery}
         `;
+        if (audioInput) {
+            byId('browser-mic-start')?.addEventListener('click', () => {
+                startBrowserMicProbe().catch((error) => {
+                    setBrowserMicStatus(`Browser microphone failed: ${error.message}`, true);
+                });
+            });
+            byId('browser-mic-stop')?.addEventListener('click', () => {
+                stopBrowserMicProbe();
+            });
+        }
+    }
+
+    function setBrowserMicStatus(message, failed = false) {
+        const status = byId('browser-mic-status');
+        if (status) {
+            status.textContent = message;
+            status.dataset.state = failed ? 'failed' : 'ready';
+        }
+    }
+
+    function browserMicSocketUrl() {
+        const scheme = browser.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${scheme}//${browser.location.host}/api/audio-input/browser-stream`;
+    }
+
+    async function startBrowserMicProbe() {
+        if (!browser?.isSecureContext) {
+            throw new Error(
+                'microphone capture requires a secure browser context; use trusted HTTPS or open http://localhost:3000 through an SSH port-forward',
+            );
+        }
+        if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error('this browser does not expose getUserMedia');
+        }
+        stopBrowserMicProbe(false);
+        const start = byId('browser-mic-start');
+        const stop = byId('browser-mic-stop');
+        if (start) start.disabled = true;
+        setBrowserMicStatus('Requesting browser microphone permission…');
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                },
+                video: false,
+            });
+            state.browserMicStream = stream;
+            const AudioContext = browser.AudioContext || browser.webkitAudioContext;
+            if (!AudioContext) throw new Error('this browser does not expose Web Audio');
+            const context = new AudioContext();
+            await context.audioWorklet.addModule('/browser-mic-worklet.js');
+            await context.resume();
+            const socket = new WebSocket(browserMicSocketUrl());
+            socket.binaryType = 'arraybuffer';
+            state.browserMicContext = context;
+            state.browserMicSocket = socket;
+            state.browserMicSequence = 0;
+            state.browserMicStartFrame = 0;
+
+            const ready = new Promise((resolve, reject) => {
+                const timeout = browser.setTimeout(
+                    () => reject(new Error('server did not open the microphone stream')),
+                    5000,
+                );
+                socket.addEventListener('open', () => {
+                    socket.send(JSON.stringify({
+                        type: 'open',
+                        schema_version: 1,
+                        sample_rate_hz: context.sampleRate,
+                        channels: 1,
+                    }));
+                }, { once: true });
+                socket.addEventListener('message', (event) => {
+                    let message;
+                    try {
+                        message = JSON.parse(event.data);
+                    } catch {
+                        return;
+                    }
+                    if (message.type === 'ready') {
+                        browser.clearTimeout(timeout);
+                        resolve(message);
+                    } else if (message.type === 'level') {
+                        const meter = byId('browser-mic-level');
+                        if (meter) meter.value = Math.min(1, Number(message.rms || 0) * 4);
+                        setBrowserMicStatus(
+                            `Browser audio reached Tongues: RMS ${Number(message.rms || 0).toFixed(3)}, peak ${Number(message.peak || 0).toFixed(3)}, chunk ${message.chunk_sequence}.`,
+                        );
+                    } else if (message.type === 'discontinuity') {
+                        setBrowserMicStatus(
+                            `Browser audio discontinuity: ${message.reason} (expected ${message.expected_chunk_sequence}, received ${message.received_chunk_sequence}).`,
+                            true,
+                        );
+                    } else if (message.type === 'error') {
+                        setBrowserMicStatus(`${message.code}: ${message.message}`, true);
+                    } else if (message.type === 'ended') {
+                        socket.close();
+                        stopBrowserMicProbe(false);
+                        setBrowserMicStatus('Browser microphone test stopped.');
+                    }
+                });
+                socket.addEventListener('error', () => {
+                    browser.clearTimeout(timeout);
+                    reject(new Error('browser microphone WebSocket failed'));
+                }, { once: true });
+            });
+            await ready;
+
+            const source = context.createMediaStreamSource(stream);
+            const node = new AudioWorkletNode(context, 'tongues-browser-mic-capture');
+            const silentGain = context.createGain();
+            silentGain.gain.value = 0;
+            node.port.onmessage = (event) => {
+                if (socket.readyState !== WebSocket.OPEN) return;
+                const pcm = event.data;
+                const packet = new ArrayBuffer(16 + pcm.byteLength);
+                const header = new DataView(packet, 0, 16);
+                header.setBigUint64(0, BigInt(state.browserMicSequence), true);
+                header.setBigUint64(8, BigInt(state.browserMicStartFrame), true);
+                new Uint8Array(packet, 16).set(new Uint8Array(pcm));
+                socket.send(packet);
+                state.browserMicSequence += 1;
+                state.browserMicStartFrame += pcm.byteLength / Float32Array.BYTES_PER_ELEMENT;
+            };
+            source.connect(node);
+            node.connect(silentGain);
+            silentGain.connect(context.destination);
+            state.browserMicSource = source;
+            state.browserMicNode = node;
+            state.browserMicGain = silentGain;
+            if (stop) stop.disabled = false;
+            setBrowserMicStatus(
+                `Streaming this browser microphone at ${context.sampleRate} Hz to Tongues…`,
+            );
+        } catch (error) {
+            stopBrowserMicProbe(false);
+            if (start) start.disabled = false;
+            throw error;
+        }
+    }
+
+    function stopBrowserMicProbe(sendEnd = true) {
+        const socket = state.browserMicSocket;
+        if (sendEnd && socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'end' }));
+        } else {
+            socket?.close();
+        }
+        state.browserMicNode?.disconnect();
+        state.browserMicSource?.disconnect();
+        state.browserMicGain?.disconnect();
+        for (const track of state.browserMicStream?.getTracks?.() || []) track.stop();
+        state.browserMicContext?.close?.().catch(() => {});
+        state.browserMicSocket = null;
+        state.browserMicContext = null;
+        state.browserMicStream = null;
+        state.browserMicSource = null;
+        state.browserMicNode = null;
+        state.browserMicGain = null;
+        const start = byId('browser-mic-start');
+        const stop = byId('browser-mic-stop');
+        if (start) start.disabled = false;
+        if (stop) stop.disabled = true;
     }
 
     function renderRecipeSummary(path) {

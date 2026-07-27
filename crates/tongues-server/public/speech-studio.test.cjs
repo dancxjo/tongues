@@ -633,6 +633,16 @@ test('client navigation waits for an ordinary unmodified click', () => {
     }
 });
 
+test('browser microphone capture crosses the shared bounded server input', () => {
+    assert.match(studioSource, /navigator\.mediaDevices\.getUserMedia/);
+    assert.match(studioSource, /browser-mic-worklet\.js/);
+    assert.match(studioSource, /\/api\/audio-input\/browser-stream/);
+    assert.match(studioSource, /header\.setBigUint64\(0, BigInt\(state\.browserMicSequence\)/);
+    assert.match(studioSource, /header\.setBigUint64\(8, BigInt\(state\.browserMicStartFrame\)/);
+    assert.match(studioSource, /Browser audio reached Tongues: RMS/);
+    assert.match(stylesSource, /\.browser-mic-probe/);
+});
+
 test('compare preserves per-recipe results and permits partial failure', () => {
     assert.match(studioSource, /compareResults: new Map\(\)/);
     assert.match(studioSource, /mapWithConcurrency\(recipes, concurrency/);

@@ -602,6 +602,28 @@ a {
     padding-left: 1.2rem;
 }
 
+.browser-mic-probe {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 0.75rem;
+}
+
+.browser-mic-probe meter {
+    flex: 1 1 10rem;
+    min-width: 8rem;
+}
+
+.browser-mic-probe p {
+    flex: 1 0 100%;
+    margin: 0;
+}
+
+.browser-mic-probe p[data-state="failed"] {
+    color: var(--accent);
+}
+
 .copy-row code {
     background: var(--panel-soft);
     border-radius: 8px;

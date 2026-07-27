@@ -44,6 +44,7 @@ use tongues_duplex::{
 use tower_http::services::ServeDir;
 
 mod live;
+mod audio_input_ws;
 
 const STYLE_VECTOR_DIMS: usize = 256;
 const DEFAULT_DUPLEX_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
@@ -271,6 +272,10 @@ fn build_app(state: AppState) -> Router {
         .route(
             "/api/audio-input/capabilities",
             get(get_audio_input_capabilities),
+        )
+        .route(
+            "/api/audio-input/browser-stream",
+            get(audio_input_ws::browser_audio_upgrade),
         )
         .route("/api/emotions", get(get_emotions))
         .route("/api/cli/schema", get(get_cli_schema))

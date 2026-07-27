@@ -57,3 +57,28 @@ just serve
 Then inspect `GET /api/audio-input/capabilities`. Speech Studio reads that same
 response; selecting the Compose input stage shows source kinds and the actual
 host device inventory without a browser-maintained device catalog.
+
+For a microphone attached to the browser machine rather than the server host,
+the most reliable development path is an SSH port-forward. Start Tongues on
+the server:
+
+```sh
+just serve
+```
+
+On the browser machine, establish the tunnel:
+
+```sh
+ssh -L 3000:127.0.0.1:3000 USER@SERVER
+```
+
+Open `http://localhost:3000/speech/compose`, select the Input stage, and choose
+**Test this browser's microphone**. Browsers treat localhost as a trustworthy
+capture context while keeping the server off the LAN. A deployment with a
+trusted HTTPS certificate can connect directly instead. Remote `getUserMedia`
+is intentionally unavailable over plain non-local HTTP.
+
+The browser sends mono float32 PCM with sequence and absolute-frame headers
+over the bounded
+`/api/audio-input/browser-stream` WebSocket. The server returns RMS/peak and
+continuity evidence computed after the shared `AudioSource` boundary.
