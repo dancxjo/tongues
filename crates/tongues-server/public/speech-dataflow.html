@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Speech Dataflow · Tongues</title><style>
+:root{color-scheme:dark;--bg:#10151c;--panel:#1b2430;--line:#3a4a5e;--ink:#edf4ff;--muted:#9fb0c4;--accent:#80dfcd;--warn:#ffcc75}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px system-ui}header,main{max-width:1200px;margin:auto;padding:1rem}a{color:var(--accent)}
+.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0}button,select,input{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:.45rem;padding:.55rem}
+button:focus,select:focus,input:focus,.node:focus{outline:3px solid var(--accent);outline-offset:2px}.layout{display:grid;grid-template-columns:2fr 1fr;gap:1rem}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:.8rem;padding:1rem}.nodes{display:grid;gap:.55rem;padding:0;list-style:none}.node{display:grid;grid-template-columns:2rem 1fr auto;gap:.6rem;align-items:center;border:1px solid var(--line);border-radius:.5rem;padding:.65rem}
+.node div{display:grid}.node small{color:var(--muted)}.node.selected{border-color:var(--accent)}.node.bypassed{opacity:.55}.badge{font-size:.75rem}.order{font-size:1.3rem}
+#validation[data-state=invalid],.error{color:var(--warn)}.run-events .partial{font-style:italic;color:var(--muted)}.run-events .committed{font-weight:bold;color:var(--accent)}
+@media(max-width:760px){.layout{grid-template-columns:1fr}}</style></head><body>
+<header><a href="/speech/compose">← Speech Studio</a> · <a id="open-timeline" href="/wavedeck.html">Open session Timeline</a>
+<h1>Bidirectional speech dataflow</h1><p>Configure execution here; inspect and correct evidence in WaveDeck.</p></header><main>
+<section class="panel"><div class="toolbar"><label>Starter <select id="template"><option value="transcription">Transcription</option><option value="multilingual_transcription">Multilingual transcription</option><option value="meeting_transcript">Meeting transcript</option><option value="spoken_interpretation">Spoken interpretation</option><option value="full_conversation">Full conversation</option></select></label>
+<label>Name <input id="pipeline-name"></label><button id="save">Save</button><button id="restore">Restore</button><button id="share">Share JSON</button></div><p id="validation" role="status"></p></section>
+<div class="layout"><section class="panel" aria-labelledby="graph-heading"><h2 id="graph-heading">Pipeline graph</h2><ol id="nodes" class="nodes"></ol></section>
+<aside class="panel"><h2>Node library</h2><select id="catalog" aria-label="Backend node"></select><button id="add">Add after selected</button>
+<h3>Selected node</h3><div class="toolbar"><button id="up">Move up</button><button id="down">Move down</button><button id="duplicate">Duplicate</button><button id="bypass">Bypass</button><button id="remove">Remove</button></div>
+<select id="replacement" aria-label="Replacement node"></select><button id="replace">Replace compatible</button>
+<label>Configuration JSON<textarea id="node-config" rows="5"></textarea></label><button id="configure">Apply configuration</button>
+<h3>Typed connection</h3><select id="connect-from" aria-label="Connection source"></select><select id="connect-to" aria-label="Connection target"></select><button id="connect">Connect</button></aside></div>
+<section class="panel"><h2>Live evidence preview</h2><p>Partials/revisions are italic; committed recognition is bold and never inferred from unstable text.</p>
+<label>Input level <meter id="level" min="0" max="1" value="0"></meter></label>
+<dl id="telemetry"><dt>Boundary</dt><dd>idle</dd><dt>First partial</dt><dd>—</dd><dt>Committed</dt><dd>—</dd><dt>Language / speaker</dt><dd>—</dd><dt>Stage latency</dt><dd>—</dd><dt>Error</dt><dd>none</dd></dl>
+<button id="run">Run deterministic pipeline</button><ol id="run-events" class="run-events" aria-live="polite"></ol></section>
+<p id="status" role="status" aria-live="polite"></p></main><script type="module" src="/speech-dataflow.js"></script></body></html>
