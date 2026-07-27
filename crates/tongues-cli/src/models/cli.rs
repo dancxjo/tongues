@@ -65,7 +65,7 @@ pub struct ModelsUseCommand {
 
 #[derive(Debug, Args)]
 pub struct ModelsFetchCommand {
-    /// Fetch every model bundle in the registry, including every voice
+    /// Fetch every manifest bundle and every model in the default/configured catalogs
     #[arg(long, conflicts_with = "model")]
     all: bool,
     model: Option<String>,

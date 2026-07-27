@@ -67,6 +67,10 @@
     const DEFAULT_COMPARISON_CONCURRENCY = 2;
     const JOB_OUTPUT_LIMIT = 1_000;
     const USER_RECIPES_KEY = 'tongues.speech.user-recipes.v1';
+    const CATALOG_PAGE_SIZE = 32;
+    const CATALOG_CACHE_NAME = 'tongues.speech.catalog.v4';
+    const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+    const catalogPageCache = new Map();
     const WORKFLOWS = {
         speak: {
             path: '/speech',
@@ -769,7 +773,6 @@
                     </div>
                     <p id="catalog-status" class="catalog-status" role="status" aria-live="polite"></p>
                     <div id="component-inventory" class="component-inventory"></div>
-                    <button id="catalog-load-more" type="button" class="secondary-button hidden">Load more models</button>
                 </section>
 
                 <section id="speech-workflow-operate" class="studio-workflow hidden"
@@ -2298,17 +2301,10 @@
             target.appendChild(empty);
         }
         const total = discovery.page?.total;
-        const loaded = view === 'components'
-            ? (discovery.components || []).length
-            : (discovery.compositions || []).length;
         byId('component-count').textContent = `(${items.length} shown)`;
         byId('catalog-status').textContent = total == null
             ? `${items.length} matching entries`
-            : `${items.length} matching entries on this page · ${total.toLocaleString()} catalog models`;
-        const loadMore = byId('catalog-load-more');
-        loadMore.classList.toggle('hidden', discovery.page?.next_cursor == null);
-        loadMore.disabled = false;
-        loadMore.textContent = `Load more models${Number.isFinite(total) ? ` (${loaded} loaded)` : ''}`;
+            : `${items.length} matching entries loaded · ${total.toLocaleString()} catalog models`;
         const verifyAll = byId('verify-all-models');
         const pending = pendingVerificationIds(state.discovery);
         verifyAll.disabled = pending.length === 0;
@@ -2640,7 +2636,7 @@
                 const updated = await fetchDiscoveryPage();
                 if (activeGeneration === state.verificationGeneration) {
                     acceptDiscovery(updated, true);
-                    await refreshCatalog();
+                    await refreshCatalog({ fresh: true });
                 }
             } catch (error) {
                 failures.push(`final refresh: ${error.message}`);
@@ -2659,15 +2655,76 @@
         }
     }
 
-    async function fetchDiscoveryPage(cursor = 0, limit = null, filters = {}) {
+    function discoveryRequestUrl(cursor = 0, limit = null, filters = {}) {
         const query = new URLSearchParams();
         if (cursor) query.set('cursor', String(cursor));
         if (limit) query.set('limit', String(limit));
         for (const [name, value] of Object.entries(filters)) {
             if (value) query.set(name, value);
         }
+        return `/api/speech/models${query.size ? `?${query}` : ''}`;
+    }
+
+    async function readCachedCatalogPage(url) {
+        const memoryEntry = catalogPageCache.get(url);
+        if (memoryEntry && Date.now() - memoryEntry.cachedAt < CATALOG_CACHE_TTL_MS) {
+            return memoryEntry.discovery;
+        }
+        catalogPageCache.delete(url);
+        if (!browser?.caches) return null;
+        try {
+            const cache = await browser.caches.open(CATALOG_CACHE_NAME);
+            const response = await cache.match(url);
+            if (!response) return null;
+            const entry = await response.json();
+            if (
+                !entry?.discovery
+                || !Number.isFinite(entry.cached_at)
+                || Date.now() - entry.cached_at >= CATALOG_CACHE_TTL_MS
+            ) {
+                await cache.delete(url);
+                return null;
+            }
+            catalogPageCache.set(url, {
+                cachedAt: entry.cached_at,
+                discovery: entry.discovery,
+            });
+            return entry.discovery;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    async function cacheCatalogPage(url, discovery) {
+        const cachedAt = Date.now();
+        catalogPageCache.set(url, { cachedAt, discovery });
+        if (!browser?.caches) return;
+        try {
+            const cache = await browser.caches.open(CATALOG_CACHE_NAME);
+            await cache.put(url, new Response(JSON.stringify({
+                cached_at: cachedAt,
+                discovery,
+            }), {
+                headers: { 'Content-Type': 'application/json' },
+            }));
+        } catch (_) {
+            // Catalog browsing must still work when browser cache storage is unavailable.
+        }
+    }
+
+    async function fetchDiscoveryPage(
+        cursor = 0,
+        limit = null,
+        filters = {},
+        { cacheCatalog = false, refreshCache = false } = {},
+    ) {
+        const url = discoveryRequestUrl(cursor, limit, filters);
+        if (cacheCatalog && !refreshCache) {
+            const cached = await readCachedCatalogPage(url);
+            if (cached) return cached;
+        }
         const response = await fetch(
-            `/api/speech/models${query.size ? `?${query}` : ''}`,
+            url,
             { cache: 'no-store' },
         );
         if (!response.ok) throw new Error(await response.text());
@@ -2675,6 +2732,7 @@
         if (discovery.error && !(discovery.paths || []).length) {
             throw new Error(discovery.error);
         }
+        if (cacheCatalog) await cacheCatalogPage(url, discovery);
         return discovery;
     }
 
@@ -2710,20 +2768,37 @@
         renderCompareCandidates();
     }
 
-    async function refreshCatalog({ append = false } = {}) {
+    async function refreshCatalog({ append = false, fresh = false } = {}) {
         const generation = state.catalogRequestGeneration + 1;
         state.catalogRequestGeneration = generation;
-        const cursor = append ? state.catalogDiscovery?.page?.next_cursor : 0;
+        let cursor = append ? state.catalogDiscovery?.page?.next_cursor : 0;
         if (append && cursor == null) return;
-        byId('catalog-status').textContent = append
-            ? 'Loading more catalog models…'
-            : 'Searching the model catalog…';
-        const page = await fetchDiscoveryPage(cursor, 32, catalogFilters());
-        if (generation !== state.catalogRequestGeneration) return;
-        state.catalogDiscovery = append
-            ? mergeDiscovery(state.catalogDiscovery, page)
-            : page;
-        renderInventory();
+        let merged = append ? state.catalogDiscovery : null;
+        const filters = catalogFilters();
+        while (cursor != null) {
+            byId('catalog-status').textContent = cursor
+                ? 'Loading the remaining catalog models automatically…'
+                : 'Searching the model catalog…';
+            const page = await fetchDiscoveryPage(cursor, CATALOG_PAGE_SIZE, filters, {
+                cacheCatalog: true,
+                refreshCache: fresh,
+            });
+            if (generation !== state.catalogRequestGeneration) return;
+            merged = mergeDiscovery(merged, page);
+            state.catalogDiscovery = merged;
+            renderInventory();
+            cursor = page.page?.next_cursor;
+            if (cursor != null) {
+                const loaded = Math.min(
+                    page.page.total,
+                    page.page.cursor + page.page.returned,
+                );
+                byId('catalog-status').textContent = (
+                    `Loading catalog models automatically… ${loaded.toLocaleString()}`
+                    + ` of ${page.page.total.toLocaleString()} cached`
+                );
+            }
+        }
     }
 
     async function refreshDiscovery(verifyChanged = false) {
@@ -2733,6 +2808,9 @@
         acceptDiscovery(firstPage, true);
         state.catalogDiscovery = firstPage;
         renderInventory();
+        refreshCatalog({ append: true }).catch((error) => {
+            byId('catalog-status').textContent = `Catalog loading failed: ${error.message}`;
+        });
         await hydrateSavedRecipeDiscovery();
         if (verifyChanged) await verifyDiscovery(generation, firstPage);
     }
@@ -3914,17 +3992,6 @@
                 });
             });
         }
-        byId('catalog-load-more').addEventListener('click', async (event) => {
-            event.currentTarget.disabled = true;
-            try {
-                await refreshCatalog({ append: true });
-            } catch (error) {
-                byId('catalog-status').textContent = `Catalog loading failed: ${error.message}`;
-            } finally {
-                event.currentTarget.disabled = false;
-            }
-        });
-
         byId('speech-preset').addEventListener('change', (event) => {
             const userRecipe = state.userRecipes.find(
                 (candidate) => candidate.id === event.target.value,

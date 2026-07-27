@@ -1262,10 +1262,6 @@ a {
     line-height: 1.4;
 }
 
-#catalog-load-more {
-    margin-top: 0.85rem;
-}
-
 .component-card {
     background: #ffffff;
     border: 1px solid var(--panel-border);

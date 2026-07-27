@@ -31,6 +31,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
 use std::panic;
 use std::path::{Component, Path as FsPath, PathBuf};
+use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     Arc, Mutex,
@@ -71,6 +72,7 @@ const FILE_LIST_LIMIT: usize = 500;
 const DEFAULT_SPEECH_MAX_IN_FLIGHT: usize = 2;
 const MAX_REQUEST_BODY_BYTES: usize = 256 * 1024;
 const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PIPELINE_TEXT_SOURCE_BYTES: u64 = 1024 * 1024;
 const MAX_ACTIVE_JOBS: usize = 4;
 const INSECURE_REMOTE_ENV: &str = "TONGUES_ALLOW_INSECURE_REMOTE";
 const ALLOWED_ARTIFACT_ROOTS: &[&str] = &[
@@ -977,42 +979,99 @@ async fn run_pipeline_graph(
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         for step in &plan.steps {
-            for kind in ["started", "output", "completed"] {
-                let output = (kind == "output")
-                    .then(|| tongues_pipeline::configured_source_output(step))
-                    .flatten();
-                let detail = match kind {
-                    "output" if output.is_none() => Some(format!(
-                        "deterministic contract output from {}",
-                        step.component_id.as_deref().unwrap_or(&step.node_kind)
-                    )),
-                    _ => None,
-                };
-                let event = json!({
-                    "run_id": run_id,
-                    "plan_id": plan.plan_id,
-                    "graph_id": plan.graph_id,
-                    "graph_revision": plan.graph_revision,
-                    "node_id": step.node_id,
-                    "component_id": step.component_id,
-                    "kind": kind,
-                    "elapsed_ms": started.elapsed().as_millis() as u64,
-                    "output": output,
-                    "detail": detail,
-                });
-                run.events.push(event.clone());
-                run.updated_at_ms = unix_time_ms();
-                if write_durable_json(&run_path, &run).is_err() {
-                    return;
-                }
-                let line = event.to_string() + "\n";
-                if sender.send(Ok(Bytes::from(line))).await.is_err() {
-                    run.status = "cancelled".into();
+            let started_event =
+                pipeline_run_event(&run_id, &plan, step, "started", started, None, None);
+            if emit_pipeline_run_event(&sender, &run_path, &mut run, started_event)
+                .await
+                .is_err()
+            {
+                mark_pipeline_run_cancelled(&run_path, &mut run);
+                return;
+            }
+
+            let source = match pipeline_step_output_stream(step, &state.workspace_root).await {
+                Ok(source) => source,
+                Err(detail) => {
+                    let failed = pipeline_run_event(
+                        &run_id,
+                        &plan,
+                        step,
+                        "failed",
+                        started,
+                        None,
+                        Some(detail),
+                    );
+                    let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
+                    run.status = "failed".into();
                     run.updated_at_ms = unix_time_ms();
                     let _ = write_durable_json(&run_path, &run);
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+
+            if let Some(mut outputs) = source {
+                while let Some(result) = futures_util::StreamExt::next(&mut outputs).await {
+                    let output = match result {
+                        Ok(output) => output,
+                        Err(detail) => {
+                            let failed = pipeline_run_event(
+                                &run_id,
+                                &plan,
+                                step,
+                                "failed",
+                                started,
+                                None,
+                                Some(detail),
+                            );
+                            let _ =
+                                emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
+                            run.status = "failed".into();
+                            run.updated_at_ms = unix_time_ms();
+                            let _ = write_durable_json(&run_path, &run);
+                            return;
+                        }
+                    };
+                    let event = pipeline_run_event(
+                        &run_id,
+                        &plan,
+                        step,
+                        "output",
+                        started,
+                        Some(output),
+                        None,
+                    );
+                    if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                        .await
+                        .is_err()
+                    {
+                        mark_pipeline_run_cancelled(&run_path, &mut run);
+                        return;
+                    }
+                }
+            } else {
+                let detail = format!(
+                    "deterministic contract output from {}",
+                    step.component_id.as_deref().unwrap_or(&step.node_kind)
+                );
+                let event =
+                    pipeline_run_event(&run_id, &plan, step, "output", started, None, Some(detail));
+                if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                    .await
+                    .is_err()
+                {
+                    mark_pipeline_run_cancelled(&run_path, &mut run);
+                    return;
+                }
+            }
+
+            let completed =
+                pipeline_run_event(&run_id, &plan, step, "completed", started, None, None);
+            if emit_pipeline_run_event(&sender, &run_path, &mut run, completed)
+                .await
+                .is_err()
+            {
+                mark_pipeline_run_cancelled(&run_path, &mut run);
+                return;
             }
         }
         run.status = "completed".into();
@@ -1026,6 +1085,346 @@ async fn run_pipeline_graph(
             tokio_stream::wrappers::ReceiverStream::new(receiver),
         ))
         .unwrap()
+}
+
+type PipelineOutputStream = Pin<
+    Box<
+        dyn futures_util::Stream<Item = Result<tongues_pipeline::RuntimeOutput, String>>
+            + Send
+            + 'static,
+    >,
+>;
+
+fn pipeline_run_event(
+    run_id: &str,
+    plan: &tongues_pipeline::ExecutionPlan,
+    step: &tongues_pipeline::PlanStep,
+    kind: &str,
+    started: std::time::Instant,
+    output: Option<tongues_pipeline::RuntimeOutput>,
+    detail: Option<String>,
+) -> serde_json::Value {
+    json!({
+        "run_id": run_id,
+        "plan_id": plan.plan_id,
+        "graph_id": plan.graph_id,
+        "graph_revision": plan.graph_revision,
+        "node_id": step.node_id,
+        "component_id": step.component_id,
+        "kind": kind,
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+        "output": output,
+        "detail": detail,
+    })
+}
+
+async fn emit_pipeline_run_event(
+    sender: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
+    run_path: &FsPath,
+    run: &mut PipelineRunRecord,
+    event: serde_json::Value,
+) -> Result<(), String> {
+    run.events.push(event.clone());
+    run.updated_at_ms = unix_time_ms();
+    write_durable_json(run_path, run)?;
+    sender
+        .send(Ok(Bytes::from(event.to_string() + "\n")))
+        .await
+        .map_err(|_| "pipeline event receiver closed".to_string())
+}
+
+fn mark_pipeline_run_cancelled(run_path: &FsPath, run: &mut PipelineRunRecord) {
+    run.status = "cancelled".into();
+    run.updated_at_ms = unix_time_ms();
+    let _ = write_durable_json(run_path, run);
+}
+
+async fn pipeline_step_output_stream(
+    step: &tongues_pipeline::PlanStep,
+    workspace_root: &FsPath,
+) -> Result<Option<PipelineOutputStream>, String> {
+    match step.node_kind.as_str() {
+        "text_source" | "audio_file" => {
+            let output = tongues_pipeline::configured_source_output(step);
+            Ok(output.map(|output| {
+                Box::pin(futures_util::stream::once(async move { Ok(output) }))
+                    as PipelineOutputStream
+            }))
+        }
+        "text_file" => text_file_output_stream(step, workspace_root)
+            .await
+            .map(Some),
+        "text_url" => text_url_output_stream(step).await.map(Some),
+        _ => Ok(None),
+    }
+}
+
+async fn text_file_output_stream(
+    step: &tongues_pipeline::PlanStep,
+    workspace_root: &FsPath,
+) -> Result<PipelineOutputStream, String> {
+    use tokio::io::AsyncBufReadExt as _;
+
+    let configured = configured_string(step, "path")?;
+    let path = resolve_pipeline_text_file(workspace_root, configured)?;
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("text source {} is not a file", path.display()));
+    }
+    if metadata.len() > MAX_PIPELINE_TEXT_SOURCE_BYTES {
+        return Err(format!(
+            "text source {} exceeds the {}-byte limit",
+            path.display(),
+            MAX_PIPELINE_TEXT_SOURCE_BYTES
+        ));
+    }
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let reader = tokio::io::BufReader::new(file);
+    let source_id = format!("file:{}", path.display());
+    let stream =
+        futures_util::stream::try_unfold((reader, 0_u64), move |(mut reader, chunk_index)| {
+            let source_id = source_id.clone();
+            async move {
+                let mut bytes = Vec::new();
+                let count = reader
+                    .read_until(b'\n', &mut bytes)
+                    .await
+                    .map_err(|error| format!("failed to read text source: {error}"))?;
+                if count == 0 {
+                    return Ok(None);
+                }
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| "text file source is not valid UTF-8".to_string())?;
+                Ok(Some((
+                    tongues_pipeline::RuntimeOutput {
+                        port_id: "out".into(),
+                        value: serde_json::Value::String(text),
+                        derived_from: vec![format!("{source_id}#chunk:{chunk_index}")],
+                    },
+                    (reader, chunk_index + 1),
+                )))
+            }
+        });
+    Ok(Box::pin(stream))
+}
+
+fn resolve_pipeline_text_file(
+    workspace_root: &FsPath,
+    configured: &str,
+) -> Result<PathBuf, String> {
+    let requested = configured.trim();
+    if requested.is_empty() {
+        return Err("text file source requires a workspace-relative path".into());
+    }
+    if FsPath::new(requested).is_absolute() {
+        return Err("text file source paths must be relative to the Tongues workspace".into());
+    }
+    let relative = safe_relative_path(requested)?;
+    let workspace = canonical_workspace_root(workspace_root)?;
+    let path = workspace_root.join(relative);
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
+    if !resolved.starts_with(workspace) {
+        return Err("text file source paths must stay inside the Tongues workspace".into());
+    }
+    Ok(resolved)
+}
+
+async fn text_url_output_stream(
+    step: &tongues_pipeline::PlanStep,
+) -> Result<PipelineOutputStream, String> {
+    let configured = configured_string(step, "url")?;
+    let response = fetch_pipeline_text_url(configured).await?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PIPELINE_TEXT_SOURCE_BYTES)
+    {
+        return Err(format!(
+            "text URL response exceeds the {}-byte limit",
+            MAX_PIPELINE_TEXT_SOURCE_BYTES
+        ));
+    }
+    let source_id = response.url().to_string();
+    let upstream = Box::pin(response.bytes_stream());
+    let stream = futures_util::stream::try_unfold(
+        (upstream, Vec::<u8>::new(), 0_u64, 0_u64),
+        move |(mut upstream, mut pending, chunk_index, total)| {
+            let source_id = source_id.clone();
+            async move {
+                let mut total = total;
+                loop {
+                    if let Some(text) = take_utf8_stream_chunk(&mut pending, false)? {
+                        let output = tongues_pipeline::RuntimeOutput {
+                            port_id: "out".into(),
+                            value: serde_json::Value::String(text),
+                            derived_from: vec![format!("{source_id}#chunk:{chunk_index}")],
+                        };
+                        return Ok(Some((output, (upstream, pending, chunk_index + 1, total))));
+                    }
+                    match futures_util::StreamExt::next(&mut upstream).await {
+                        Some(Ok(bytes)) => {
+                            total = total.saturating_add(bytes.len() as u64);
+                            if total > MAX_PIPELINE_TEXT_SOURCE_BYTES {
+                                return Err(format!(
+                                    "text URL response exceeds the {}-byte limit",
+                                    MAX_PIPELINE_TEXT_SOURCE_BYTES
+                                ));
+                            }
+                            pending.extend_from_slice(&bytes);
+                        }
+                        Some(Err(error)) => {
+                            return Err(format!("failed while reading text URL: {error}"));
+                        }
+                        None => {
+                            if let Some(text) = take_utf8_stream_chunk(&mut pending, true)? {
+                                let output = tongues_pipeline::RuntimeOutput {
+                                    port_id: "out".into(),
+                                    value: serde_json::Value::String(text),
+                                    derived_from: vec![format!("{source_id}#chunk:{chunk_index}")],
+                                };
+                                return Ok(Some((
+                                    output,
+                                    (upstream, pending, chunk_index + 1, total),
+                                )));
+                            }
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+        },
+    );
+    Ok(Box::pin(stream))
+}
+
+fn configured_string<'a>(
+    step: &'a tongues_pipeline::PlanStep,
+    field: &str,
+) -> Result<&'a str, String> {
+    step.config
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{} requires a non-empty `{field}`", step.node_kind))
+}
+
+async fn fetch_pipeline_text_url(configured: &str) -> Result<reqwest::Response, String> {
+    let mut url = reqwest::Url::parse(configured.trim())
+        .map_err(|error| format!("invalid text URL: {error}"))?;
+    for _ in 0..=5 {
+        let (host, addresses) = validate_pipeline_text_url(&url).await?;
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .resolve_to_addrs(&host, &addresses)
+            .build()
+            .map_err(|error| format!("failed to create text URL client: {error}"))?
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|error| format!("failed to fetch text URL: {error}"))?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "text URL redirect did not include a valid Location".to_string())?;
+            url = url
+                .join(location)
+                .map_err(|error| format!("invalid text URL redirect: {error}"))?;
+            continue;
+        }
+        return response
+            .error_for_status()
+            .map_err(|error| format!("text URL returned an error: {error}"));
+    }
+    Err("text URL exceeded the 5-redirect limit".into())
+}
+
+async fn validate_pipeline_text_url(
+    url: &reqwest::Url,
+) -> Result<(String, Vec<SocketAddr>), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("text URL sources support only HTTP and HTTPS".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("text URL sources do not accept credentials in the URL".into());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "text URL requires a host".to_string())?;
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Err("text URL sources cannot access localhost".into());
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "text URL requires a known port".to_string())?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("failed to resolve text URL host: {error}"))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("text URL host did not resolve to an address".into());
+    }
+    if addresses
+        .iter()
+        .any(|address| !pipeline_url_address_allowed(address.ip()))
+    {
+        return Err("text URL sources cannot access private or local network addresses".into());
+    }
+    Ok((host.to_string(), addresses))
+}
+
+fn pipeline_url_address_allowed(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            !(address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_unspecified()
+                || address.is_broadcast()
+                || address.is_multicast())
+        }
+        std::net::IpAddr::V6(address) => {
+            if let Some(address) = address.to_ipv4_mapped() {
+                return pipeline_url_address_allowed(address.into());
+            }
+            !(address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_unique_local()
+                || address.is_unicast_link_local())
+        }
+    }
+}
+
+fn take_utf8_stream_chunk(pending: &mut Vec<u8>, eof: bool) -> Result<Option<String>, String> {
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    match std::str::from_utf8(pending) {
+        Ok(text) => {
+            let text = text.to_owned();
+            pending.clear();
+            Ok(Some(text))
+        }
+        Err(error) if error.error_len().is_some() => {
+            Err("text URL response is not valid UTF-8".into())
+        }
+        Err(error) if error.valid_up_to() > 0 => {
+            let valid = pending.drain(..error.valid_up_to()).collect::<Vec<_>>();
+            Ok(Some(
+                String::from_utf8(valid).expect("prefix was validated as UTF-8"),
+            ))
+        }
+        Err(_) if eof => Err("text URL response ends with incomplete UTF-8".into()),
+        Err(_) => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -9852,6 +10251,89 @@ mod tests {
             .expect("fixture ASR")
             .model = "fixture-asr-v2".into();
         assert_ne!(first, pipeline_catalog_revision(&catalog));
+    }
+
+    #[tokio::test]
+    async fn text_file_source_streams_utf8_chunks_and_preserves_line_endings() {
+        let root =
+            std::env::temp_dir().join(format!("tongues-text-source-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create text source root");
+        std::fs::write(root.join("source.txt"), "First line.\nč, ə, ʃ\nLast line.")
+            .expect("write text source");
+        let step = tongues_pipeline::PlanStep {
+            index: 0,
+            node_id: "source".into(),
+            node_kind: "text_file".into(),
+            component_id: None,
+            config: serde_json::Map::from_iter([("path".into(), json!("source.txt"))]),
+            resource_owner: "node:source".into(),
+            lifecycle: Vec::new(),
+            merge: None,
+        };
+
+        let mut stream = text_file_output_stream(&step, &root)
+            .await
+            .expect("open text stream");
+        let mut chunks = Vec::new();
+        while let Some(output) = futures_util::StreamExt::next(&mut stream).await {
+            let output = output.expect("read text stream");
+            assert_eq!(output.port_id, "out");
+            chunks.push(output.value.as_str().unwrap().to_string());
+        }
+        assert_eq!(chunks, ["First line.\n", "č, ə, ʃ\n", "Last line."]);
+
+        std::fs::remove_dir_all(root).expect("remove text source root");
+    }
+
+    #[test]
+    fn text_file_source_rejects_paths_outside_workspace() {
+        let root = std::env::temp_dir().join(format!("tongues-text-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create text source root");
+        assert!(resolve_pipeline_text_file(&root, "../outside.txt").is_err());
+        assert!(resolve_pipeline_text_file(&root, "/etc/passwd").is_err());
+        std::fs::remove_dir_all(root).expect("remove text source root");
+    }
+
+    #[test]
+    fn url_text_stream_decoder_preserves_split_utf8_and_rejects_invalid_bytes() {
+        let mut pending = vec![b'a', 0xc4];
+        assert_eq!(
+            take_utf8_stream_chunk(&mut pending, false).unwrap(),
+            Some("a".into())
+        );
+        assert_eq!(pending, [0xc4]);
+        pending.push(0x8d);
+        assert_eq!(
+            take_utf8_stream_chunk(&mut pending, false).unwrap(),
+            Some("č".into())
+        );
+        assert!(pending.is_empty());
+
+        pending.extend([0xff]);
+        assert!(take_utf8_stream_chunk(&mut pending, true).is_err());
+    }
+
+    #[test]
+    fn url_text_sources_reject_private_and_local_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.1.2",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+        ] {
+            assert!(
+                !pipeline_url_address_allowed(address.parse().unwrap()),
+                "{address}"
+            );
+        }
+        assert!(pipeline_url_address_allowed(
+            "93.184.216.34".parse().unwrap()
+        ));
+        assert!(pipeline_url_address_allowed(
+            "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
+        ));
     }
 
     #[test]

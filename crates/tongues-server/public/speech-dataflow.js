@@ -1,6 +1,6 @@
 import {
   addNode,applyNodeConfig,bypassNode,buildCatalog,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
-  diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,nodeLabel,nodePosition,
+  catalogEntryForNode,diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,nodeLabel,nodePosition,
   portsFor,removeEdge,removeNode,replaceNode,setNodePosition,touch,
 } from "./speech-dataflow-model.mjs";
 
@@ -9,8 +9,46 @@ let discovery=null,catalog=[],starters=[],pipeline=null,cy=null;
 let selectedNode=null,selectedEdge=null,connecting=null,validation={valid:false,diagnostics:[]};
 let validationGeneration=0,validationTimer=null,runController=null;
 
+const NODE_THEMES={
+  "Sources":{accent:"#75bfff",surface:"#192f44"},
+  "Audio processing":{accent:"#5ed7d2",surface:"#183238"},
+  "Audio & linguistic processing":{accent:"#69d5bb",surface:"#19342f"},
+  "Recognition":{accent:"#a99bff",surface:"#292744"},
+  "Language & speaker analysis":{accent:"#d999f2",surface:"#342641"},
+  "Linguistic processing":{accent:"#c5a4ff",surface:"#2e2945"},
+  "Response generation":{accent:"#f29ac2",surface:"#3a2638"},
+  "Synthesis":{accent:"#f3b36f",surface:"#382d23"},
+  "Outputs":{accent:"#68dca6",surface:"#1c332c"},
+  "Inspection & control":{accent:"#e2ca78",surface:"#343025"},
+};
+const FALLBACK_NODE_THEME={accent:"#8ba5bf",surface:"#202c3b"};
+
 function announce(text,error=false){byId("status").textContent=text;byId("status").classList.toggle("error",error);}
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function readableType(value){
+  const labels={
+    audio_stream:"audio stream",audio_buffer:"audio buffer",transcript_partial:"partial transcript",
+    transcript_revised:"revised transcript",transcript_committed:"committed transcript",
+    speaker_assignment:"speaker labels",utterance_plan:"utterance plan",
+  };
+  return labels[value]??String(value??"unknown").replaceAll("_"," ");
+}
+function nodePortSummary(node,ports,direction){
+  const connected=port=>pipeline.edges.some(edge=>{
+    const endpoint=direction==="input"?edge.to:edge.from;
+    return endpoint.node_id===node.id&&endpoint.port_id===port.id;
+  });
+  const primary=ports.filter(port=>!["error","cancellation"].includes(port.value_type))
+    .map((port,index)=>({port,index,connected:connected(port)}))
+    .sort((a,b)=>Number(b.connected)-Number(a.connected)||Number(Boolean(b.port.must_consume))-Number(Boolean(a.port.must_consume))||a.index-b.index)
+    .map(item=>item.port);
+  const visible=primary.slice(0,2).map(port=>{
+    const name=String(port.label??port.id).replaceAll("_"," ");
+    const type=readableType(port.value_type);
+    return name==="in"||name==="out"||type.includes(name)?type:`${name}: ${type}`;
+  });
+  return `${visible.join("  ·  ")}${primary.length>visible.length?`  +${primary.length-visible.length}`:""}`;
+}
 async function request(path,options={}){
   const response=await fetch(path,options),text=await response.text();
   let value={};try{value=text?JSON.parse(text):{};}catch{value={error:text};}
@@ -59,14 +97,27 @@ function initCanvas(){
   cy=globalThis.cytoscape({
     container:byId("canvas"),elements:[],wheelSensitivity:.18,
     style:[
-      {selector:"node",style:{"shape":"round-rectangle","width":190,"height":82,"background-color":"#202c3b","border-width":2,"border-color":"#40536a","label":"data(label)","color":"#edf5ff","font-size":12,"text-wrap":"wrap","text-max-width":168,"text-valign":"center","text-halign":"center"}},
-      {selector:"node:selected",style:{"border-color":"#76e2ce","border-width":4}},
-      {selector:"node.unavailable",style:{"border-color":"#ff8c91","border-style":"dashed"}},
-      {selector:"node.invalid",style:{"border-color":"#ffc86b"}},
-      {selector:"node.inactive",style:{"opacity":.45,"border-style":"dashed"}},
-      {selector:"node.compatible",style:{"overlay-color":"#76e2ce","overlay-opacity":.18,"overlay-padding":10}},
-      {selector:"edge",style:{"curve-style":"bezier","target-arrow-shape":"triangle","line-color":"#71869e","target-arrow-color":"#71869e","width":3,"label":"data(type)","font-size":9,"color":"#a6b7ca","text-background-color":"#0c1118","text-background-opacity":.85,"text-background-padding":2}},
-      {selector:"edge:selected",style:{"line-color":"#76e2ce","target-arrow-color":"#76e2ce","width":5}},
+      {selector:"node",style:{
+        "shape":"round-rectangle","width":228,"height":126,
+        "background-color":"data(surface)","border-width":3,"border-color":"data(accent)",
+        "label":"data(label)","color":"#f7fbff","font-family":"system-ui, sans-serif","font-size":14,
+        "font-weight":600,"line-height":1.35,"text-wrap":"wrap","text-max-width":194,
+        "text-valign":"center","text-halign":"center","text-justification":"left",
+        "shadow-blur":16,"shadow-color":"#000000","shadow-opacity":.36,"shadow-offset-x":0,"shadow-offset-y":6,
+      }},
+      {selector:"node:selected",style:{"border-color":"#f7fffd","border-width":5,"underlay-color":"#76e2ce","underlay-opacity":.2,"underlay-padding":9}},
+      {selector:"node.unavailable",style:{"border-color":"#ff8c91","border-style":"dashed","background-color":"#3a252d"}},
+      {selector:"node.invalid",style:{"border-color":"#ffc86b","background-color":"#3b3024"}},
+      {selector:"node.inactive",style:{"opacity":.68,"border-style":"dashed"}},
+      {selector:"node.compatible",style:{"overlay-color":"#76e2ce","overlay-opacity":.22,"overlay-padding":12}},
+      {selector:"edge",style:{
+        "curve-style":"bezier","target-arrow-shape":"triangle","arrow-scale":1.2,
+        "line-color":"#839bb4","target-arrow-color":"#839bb4","width":4,
+        "label":"data(type)","font-family":"system-ui, sans-serif","font-size":11,"font-weight":600,
+        "color":"#e5eff9","text-background-color":"#101923","text-background-opacity":.96,
+        "text-background-padding":5,"text-background-shape":"roundrectangle",
+      }},
+      {selector:"edge:selected",style:{"line-color":"#76e2ce","target-arrow-color":"#76e2ce","width":6,"z-index":10}},
       {selector:"edge.invalid",style:{"line-color":"#ffc86b","target-arrow-color":"#ffc86b","line-style":"dashed"}},
     ],
   });
@@ -117,17 +168,19 @@ function loadGraph(graph){
 function graphElements(){
   const grouped=diagnosticsByTarget(validation);
   const nodes=pipeline.nodes.map(node=>{
-    const item=catalog.find(entry=>entry.kind===node.kind&&entry.component_id===node.component_id);
+    const item=catalogEntryForNode(node,catalog);
     const ports=discovery.node_kinds?.[node.kind]?.ports??[];
-    const inputs=ports.filter(port=>port.direction==="input").map(port=>`◀ ${port.label}: ${port.value_type}`);
-    const outputs=ports.filter(port=>port.direction==="output").map(port=>`${port.label}: ${port.value_type} ▶`);
+    const kind=discovery.node_kinds?.[node.kind],theme=NODE_THEMES[item?.group]??FALLBACK_NODE_THEME;
+    const inputs=nodePortSummary(node,ports.filter(port=>port.direction==="input"),"input");
+    const outputs=nodePortSummary(node,ports.filter(port=>port.direction==="output"),"output");
+    const label=[kind?.label??nodeLabel(node,catalog),"",inputs&&`IN   ${inputs}`,outputs&&`OUT  ${outputs}`].filter(line=>line!==false).join("\n");
     const classes=[item?.readiness&&item.readiness!=="ready"?"unavailable":"",grouped.nodes[node.id]?.length?"invalid":"",node.disabled||node.bypassed?"inactive":""].filter(Boolean).join(" ");
-    return{group:"nodes",data:{id:node.id,label:`${nodeLabel(node,catalog)}\n${inputs.slice(0,2).join(" · ")}${inputs.length>2?" …":""}\n${outputs.slice(0,2).join(" · ")}${outputs.length>2?" …":""}`},position:nodePosition(pipeline,node.id),classes};
+    return{group:"nodes",data:{id:node.id,label,accent:theme.accent,surface:theme.surface},position:nodePosition(pipeline,node.id),classes};
   });
   const edges=pipeline.edges.map(edge=>{
     const source=pipeline.nodes.find(node=>node.id===edge.from.node_id);
     const port=portsFor(source,"output",discovery).find(item=>item.id===edge.from.port_id);
-    return{group:"edges",data:{id:edge.id,source:edge.from.node_id,target:edge.to.node_id,type:port?.value_type??"unknown"},classes:grouped.edges[edge.id]?.length?"invalid":""};
+    return{group:"edges",data:{id:edge.id,source:edge.from.node_id,target:edge.to.node_id,type:readableType(port?.value_type)},classes:grouped.edges[edge.id]?.length?"invalid":""};
   });
   return[...nodes,...edges];
 }
@@ -162,7 +215,7 @@ function renderInspector(){
 }
 
 function renderNodeInspector(node){
-  const item=catalog.find(entry=>entry.kind===node.kind&&entry.component_id===node.component_id);
+  const item=catalogEntryForNode(node,catalog);
   byId("node-title").textContent=nodeLabel(node,catalog);byId("node-detail").textContent=item?.detail??node.kind;
   const commandByKind={tts:"speak",interpretation:"interpretation/stream"};
   const commandId=commandByKind[node.kind];
@@ -183,7 +236,8 @@ function portButton(node,port,grouped){
   const missing=port.direction==="input"&&!connected&&(port.cardinality==="one"||portDiagnostics.some(item=>item.code.includes("input")));
   const compatible=connecting&&port.direction==="input"&&compatibleTargets(pipeline,connecting.node_id,connecting.port_id,discovery).some(target=>target.node_id===node.id&&target.port_id===port.id);
   button.className=`port${missing?" missing":""}${compatible?" compatible":""}`;button.dataset.type=port.value_type;
-  button.innerHTML=`<span class="port-dot"></span><span>${escapeHtml(port.label)}<small>${escapeHtml(port.value_type)} · ${escapeHtml(port.cardinality)}</small></span><span>${connected?"●":missing?"○":"·"}</span>`;
+  const delivery=port.streaming?"stream":port.cardinality;
+  button.innerHTML=`<span class="port-dot"></span><span>${escapeHtml(port.label)}<small>${escapeHtml(port.value_type)} · ${escapeHtml(delivery)}</small></span><span>${connected?"●":missing?"○":"·"}</span>`;
   const diagnostics=portDiagnostics;
   button.setAttribute("aria-label",`${port.direction} ${port.label}, type ${port.value_type}, ${connected?"connected":missing?"required and missing":"not connected"}${diagnostics.length?`. ${diagnostics.flatMap(item=>[item.message,...(item.suggestions??[])]).join(". ")}`:""}`);
   button.onclick=()=>{
@@ -207,7 +261,11 @@ function renderConfig(node,schema){
   byId("config-fields").replaceChildren(...entries.map(([name,spec])=>{
     const label=document.createElement("label");label.textContent=`${spec.title??name}${required.has(name)?" *":""}`;
     let input;if(spec.enum){input=document.createElement("select");input.replaceChildren(...spec.enum.map(value=>new Option(String(value),String(value))));}
-    else{input=document.createElement(spec.type==="string"&&spec.format==="multiline"?"textarea":"input");input.type=spec.type==="number"||spec.type==="integer"?"number":spec.type==="boolean"?"checkbox":"text";if(spec.minimum!=null)input.min=spec.minimum;if(spec.maximum!=null)input.max=spec.maximum;}
+    else{
+      input=document.createElement(spec.type==="string"&&spec.format==="multiline"?"textarea":"input");
+      if(input.tagName==="INPUT")input.type=spec.type==="number"||spec.type==="integer"?"number":spec.type==="boolean"?"checkbox":spec.format==="uri"?"url":"text";
+      if(spec.minimum!=null)input.min=spec.minimum;if(spec.maximum!=null)input.max=spec.maximum;
+    }
     input.dataset.config=name;const value=node.config?.[name]??spec.default;
     if(input.type==="checkbox")input.checked=Boolean(value);else if(value!=null)input.value=typeof value==="object"?JSON.stringify(value):String(value);
     if(spec.description){input.title=spec.description;if(input.tagName==="TEXTAREA"||input.type==="text")input.placeholder=spec.description;}

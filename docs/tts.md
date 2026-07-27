@@ -313,13 +313,15 @@ cargo run --bin tongues -- models install \
 ```
 
 `models fetch` remains a compatibility alias for the default runtime bundles,
-while `models fetch --all` installs every registered bundle, including every
-Piper ONNX voice. `just fetch` uses the latter after fetching the pronunciation
-lexicons. Cataloged speech models use the same verified installer. Downloads
-are resumable in `*.part` files, checked for the exact size and SHA-256 before
-an atomic cache rename, then installed atomically. Archive extraction is
-limited to registered normalized members. Installed records checksum every
-runtime file, and the CLI and server refuse corrupt or mismatched artifacts.
+while `models fetch --all` installs every manifest bundle and every entry in
+the merged default catalog, including every Piper ONNX voice and the full MMS
+inventory. Catalogs named by `TONGUES_MODEL_CATALOGS` are included as well.
+`just fetch` uses the latter after fetching the pronunciation lexicons.
+Cataloged speech models use the same verified installer. Downloads are
+resumable in `*.part` files, checked for the exact size and SHA-256 before an
+atomic cache rename, then installed atomically. Archive extraction is limited
+to registered normalized members. Installed records checksum every runtime
+file, and the CLI and server refuse corrupt or mismatched artifacts.
 
 Paths and offline behavior are explicit:
 

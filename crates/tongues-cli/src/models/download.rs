@@ -222,7 +222,7 @@ pub fn fetch_all_models(force: bool) -> Result<()> {
             ensure_styletts2_reference_audio_extracted()?;
         }
     }
-    fetch_default_mms_models(force)?;
+    fetch_all_catalog_models(force)?;
     Ok(())
 }
 
@@ -242,7 +242,7 @@ fn fetch_all_runtime_bundles(force: bool) -> Result<()> {
 }
 
 fn fetch_default_mms_models(force: bool) -> Result<()> {
-    let catalog = tongues_tts::ModelCatalog::embedded()?;
+    let catalog = configured_model_catalog()?;
     let store = licensed_model_store()?;
     for id in DEFAULT_MMS_SPEECH_MODEL_IDS {
         let entry = catalog
@@ -251,6 +251,63 @@ fn fetch_default_mms_models(force: bool) -> Result<()> {
         store.install(entry, force)?;
     }
     Ok(())
+}
+
+fn fetch_all_catalog_models(force: bool) -> Result<()> {
+    let catalog = configured_model_catalog()?;
+    let store = licensed_model_store()?;
+    let entries = catalog
+        .entries
+        .iter()
+        .filter(|entry| find_bundle(&entry.id).is_none())
+        .collect::<Vec<_>>();
+    let total = entries.len();
+    for (index, entry) in entries.into_iter().enumerate() {
+        eprintln!(
+            "catalog fetch: {}/{} {} ({} artifact{})",
+            index + 1,
+            total,
+            entry.id,
+            entry.artifacts.len(),
+            if entry.artifacts.len() == 1 { "" } else { "s" },
+        );
+        let mut last_download_bucket = None;
+        store
+            .install_with_progress(entry, force, |event| match event {
+                tongues_tts::ModelInstallProgress::Downloading {
+                    downloaded,
+                    total,
+                    part_path,
+                    ..
+                } => {
+                    const REPORT_INTERVAL_BYTES: u64 = 64 * 1024 * 1024;
+                    let bucket = downloaded / REPORT_INTERVAL_BYTES;
+                    if last_download_bucket != Some(bucket) || downloaded == total {
+                        eprintln!(
+                            "catalog fetch: {downloaded}/{total} bytes -> {}",
+                            part_path.display()
+                        );
+                        last_download_bucket = Some(bucket);
+                    }
+                }
+                tongues_tts::ModelInstallProgress::Verifying { path } => {
+                    eprintln!("catalog fetch: verifying {}", path.display());
+                }
+                tongues_tts::ModelInstallProgress::Installing { path } => {
+                    eprintln!("catalog fetch: installing {}", path.display());
+                }
+                tongues_tts::ModelInstallProgress::CheckingCache { .. }
+                | tongues_tts::ModelInstallProgress::Complete { .. } => {}
+            })
+            .with_context(|| format!("fetching catalog model `{}`", entry.id))?;
+    }
+    Ok(())
+}
+
+fn configured_model_catalog() -> Result<tongues_tts::ModelCatalog> {
+    tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )
 }
 
 fn default_runtime_bundles() -> Result<Vec<&'static ModelBundle>> {
@@ -304,7 +361,7 @@ fn ensure_bundle_available(bundle: &ModelBundle) -> Result<()> {
 }
 
 fn licensed_catalog_entry(model: &str) -> Result<Option<tongues_tts::ModelCatalogEntry>> {
-    let catalog = tongues_tts::ModelCatalog::embedded()?;
+    let catalog = configured_model_catalog()?;
     Ok(catalog.find(model).cloned())
 }
 
@@ -693,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn all_catalog_fetch_includes_every_registered_piper_voice() {
+    fn all_manifest_fetch_includes_every_registered_piper_voice() {
         let mut voice_ids = all_catalog_bundles()
             .filter(|bundle| bundle.kind == ModelKind::VoiceModel)
             .map(|bundle| bundle.id)
@@ -707,6 +764,22 @@ mod tests {
         ];
         expected.sort_unstable();
         assert_eq!(voice_ids, expected);
+    }
+
+    #[test]
+    fn all_fetch_catalog_contains_every_embedded_artifact() {
+        let catalog = tongues_tts::ModelCatalog::embedded().expect("embedded model catalog");
+        assert!(
+            catalog.entries.len() > 1_000,
+            "the default catalog should expose the full multilingual inventory"
+        );
+        assert!(catalog
+            .entries
+            .iter()
+            .all(|entry| !entry.artifacts.is_empty()));
+        assert!(catalog.find("fairseq-mms-vits-eng").is_some());
+        assert!(catalog.find("fairseq-mms-vits-ckt").is_some());
+        assert!(catalog.find("fairseq-mms-vits-spa").is_some());
     }
 
     #[test]

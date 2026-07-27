@@ -15,6 +15,11 @@ export function buildCatalog(discovery) {
   return nodes.sort((a,b)=>a.group.localeCompare(b.group)||a.label.localeCompare(b.label));
 }
 
+export function catalogEntryForNode(node,catalog) {
+  const componentId=node?.component_id??null;
+  return catalog.find(item=>item.kind===node?.kind&&(item.component_id??null)===componentId);
+}
+
 function catalogEntry(kind, component=null) {
   return {
     id:component?`component:${component.id}`:`kind:${kind.kind}`,
@@ -37,7 +42,7 @@ function capabilityGroup(kind) {
   const portTypes=(kind.ports??[]).map(port=>port.value_type);
   if (kind.adapter) return "Audio & linguistic processing";
   if (kind.merge) return "Inspection & control";
-  if (["microphone","audio_file","text_source","control_source"].includes(kind.kind)) return "Sources";
+  if (["microphone","audio_file","text_source","text_file","text_url","control_source"].includes(kind.kind)) return "Sources";
   if (kind.kind==="asr") return "Recognition";
   if (kind.kind==="diarization") return "Language & speaker analysis";
   if (["linguistic","interpretation"].includes(kind.kind)) return "Linguistic processing";
@@ -109,7 +114,8 @@ export function insertSubgraph(pipeline,template,origin={x:80,y:80}) {
   copy.nodes.forEach((node,index)=>{
     const old=node.id;node.id=`node:${cryptoId()}`;idMap.set(old,node.id);
     pipeline.nodes.push(node);
-    setNodePosition(pipeline,node.id,{x:origin.x+(index%3)*230,y:origin.y+Math.floor(index/3)*170});
+    const row=Math.floor(index/3),column=row%2===0?index%3:2-(index%3);
+    setNodePosition(pipeline,node.id,{x:origin.x+column*290,y:origin.y+row*220});
   });
   copy.edges.forEach(edge=>{
     edge.id=`edge:${cryptoId()}`;edge.from.node_id=idMap.get(edge.from.node_id);
@@ -189,7 +195,7 @@ export function bypassNode(pipeline,id,discovery) {
 }
 
 export function nodeLabel(node,catalog) {
-  return catalog.find(item=>item.kind===node?.kind&&item.component_id===node?.component_id)?.label??node?.kind??"Unknown node";
+  return catalogEntryForNode(node,catalog)?.label??node?.kind??"Unknown node";
 }
 
 export function readLayout(pipeline) {
@@ -203,7 +209,10 @@ export function setNodePosition(pipeline,id,position){const layout=readLayout(pi
 
 export function ensureLayout(pipeline) {
   const layout=readLayout(pipeline);
-  pipeline.nodes.forEach((node,index)=>{layout[node.id]??={x:80+(index%4)*240,y:80+Math.floor(index/4)*180};});
+  pipeline.nodes.forEach((node,index)=>{
+    const row=Math.floor(index/3),column=row%2===0?index%3:2-(index%3);
+    layout[node.id]??={x:130+column*290,y:140+row*220};
+  });
   writeLayout(pipeline,layout);return layout;
 }
 

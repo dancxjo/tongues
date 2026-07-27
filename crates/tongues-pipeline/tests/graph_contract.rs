@@ -49,6 +49,58 @@ fn text_source_configuration_round_trips_and_executes_verbatim() {
 }
 
 #[test]
+fn text_sources_declare_stream_delivery_and_source_specific_configuration() {
+    let catalog = fixture_catalog();
+    for (kind, field, format) in [
+        ("text_source", "text", "multiline"),
+        ("text_file", "path", "path"),
+        ("text_url", "url", "uri"),
+    ] {
+        let source = catalog.node_kinds.get(kind).unwrap();
+        let output = source.ports.iter().find(|port| port.id == "out").unwrap();
+        assert_eq!(output.value_type, ValueType::Text);
+        assert_eq!(output.cardinality, Cardinality::Many);
+        assert!(output.streaming, "{kind} must declare stream delivery");
+        assert_eq!(
+            source.configuration_schema["properties"][field]["format"],
+            format
+        );
+        assert!(
+            source.configuration_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|required| required == field)
+        );
+    }
+}
+
+#[test]
+fn file_and_url_text_sources_compile_as_text_stream_producers() {
+    let catalog = fixture_catalog();
+    for (kind, field, value) in [
+        ("text_file", "path", "docs/speech-dataflow.md"),
+        ("text_url", "url", "https://example.com/source.txt"),
+    ] {
+        let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+        let source = graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.kind == "text_source")
+            .unwrap();
+        source.kind = kind.into();
+        source.config = serde_json::Map::from_iter([(field.into(), json!(value))]);
+        let plan = compile_graph(&graph, &catalog).unwrap();
+        assert!(plan.steps.iter().any(|step| step.node_kind == kind));
+        assert!(plan.channels.iter().any(|channel| {
+            channel.from == Endpoint::new("text", "out")
+                && channel.value_type == ValueType::Text
+                && channel.streaming
+        }));
+    }
+}
+
+#[test]
 fn configured_sources_reject_empty_saved_values() {
     let catalog = fixture_catalog();
     for (starter, kind, field) in [

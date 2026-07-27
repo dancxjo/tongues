@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   adapterPaths,addNode,applyNodeConfig,buildCatalog,bypassNode,compatibleTargets,connectPorts,consumeNdjson,createPipeline,
-  diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,requiredPortState,
+  catalogEntryForNode,diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,nodeLabel,requiredPortState,
 } from "./speech-dataflow-model.mjs";
 
 const discovery={node_kinds:{
-  text_source:{kind:"text_source",label:"Text source",requires_component:false,default_config:{text:"Hello from Tongues."},configuration_schema:{
+  text_source:{kind:"text_source",label:"Inline text",requires_component:false,default_config:{text:"Hello from Tongues."},configuration_schema:{
     type:"object",properties:{text:{type:"string",title:"Text",format:"multiline",minLength:1}},required:["text"]},ports:[
-    {id:"out",direction:"output",value_type:"text",cardinality:"many"}]},
+    {id:"out",direction:"output",value_type:"text",cardinality:"many",streaming:true}]},
   microphone:{kind:"microphone",label:"Microphone",requires_component:false,default_config:{},ports:[
     {id:"out",direction:"output",value_type:"audio_stream",cardinality:"many"}]},
   asr:{kind:"asr",label:"ASR",requires_component:true,required_capabilities:["asr"],ports:[
@@ -29,6 +29,17 @@ test("catalog groups inventory and ports derived from backend discovery",()=>{
   assert.equal(catalog.find(node=>node.id==="component:fixture").group,"Recognition");
   assert.equal(catalog.find(node=>node.id==="kind:microphone").ports[0].value_type,"audio_stream");
   assert.ok(!catalog.some(node=>node.label.includes("Whisper")));
+});
+
+test("componentless starter nodes resolve catalog configuration when component_id is omitted",()=>{
+  const catalog=buildCatalog(discovery);
+  const starterNode={id:"text",kind:"text_source",config:{}};
+  const item=catalogEntryForNode(starterNode,catalog);
+  assert.equal(item.readiness,"ready");
+  assert.deepEqual(item.schema.properties.text,{
+    type:"string",title:"Text",format:"multiline",minLength:1,
+  });
+  assert.equal(nodeLabel(starterNode,catalog),"Inline text");
 });
 
 test("explicit ports support fan-out but replace a one-cardinality input",()=>{
@@ -139,4 +150,13 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
   assert.match(browserSource,/input\.checkValidity\(\)/);
   assert.match(browserSource,/event\.output.*event\.output\.port_id/);
   assert.doesNotMatch(browserSource,/Whisper|FastPitch|OpenAI|Anthropic/);
+});
+
+test("canvas nodes use readable cards and humanized port types",()=>{
+  assert.match(browserSource,/"width":228,"height":126/);
+  assert.match(browserSource,/"font-size":14/);
+  assert.match(browserSource,/"text-justification":"left"/);
+  assert.match(browserSource,/transcript_committed:"committed transcript"/);
+  assert.match(browserSource,/\["error","cancellation"\]/);
+  assert.match(browserSource,/NODE_THEMES\[item\?\.group\]/);
 });

@@ -44,6 +44,12 @@ pub struct PortSpec {
     pub cardinality: Cardinality,
     #[serde(default)]
     pub must_consume: bool,
+    /// Whether the port carries an incrementally produced sequence of values.
+    ///
+    /// Cardinality describes graph connections, not the number of values a
+    /// producer may emit during one run.
+    #[serde(default)]
+    pub streaming: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -161,7 +167,20 @@ fn port(
         value_type,
         cardinality,
         must_consume,
+        streaming: false,
     }
+}
+
+fn stream_port(
+    id: &str,
+    direction: PortDirection,
+    value_type: ValueType,
+    cardinality: Cardinality,
+    must_consume: bool,
+) -> PortSpec {
+    let mut spec = port(id, direction, value_type, cardinality, must_consume);
+    spec.streaming = true;
+    spec
 }
 
 fn node(kind: &str, label: &str, ports: Vec<PortSpec>) -> NodeKindSpec {
@@ -310,14 +329,44 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
         ),
         configured_source(
             "text_source",
-            "Text source",
-            vec![port("out", Output, Text, Many, true)],
+            "Inline text",
+            vec![stream_port("out", Output, Text, Many, true)],
             ConfiguredStringField {
                 name: "text",
                 title: "Text",
-                description: "Text emitted from out(text) when the graph runs.",
+                description: "Text emitted as one event on the text stream when the graph runs.",
                 format: Some("multiline"),
                 default: "Hello from Tongues.",
+            },
+        ),
+        configured_source(
+            "text_file",
+            "Text file",
+            vec![
+                stream_port("out", Output, Text, Many, true),
+                port("error", Output, Error, Many, false),
+            ],
+            ConfiguredStringField {
+                name: "path",
+                title: "Workspace text file",
+                description: "Workspace-relative UTF-8 file emitted incrementally on the text stream.",
+                format: Some("path"),
+                default: "",
+            },
+        ),
+        configured_source(
+            "text_url",
+            "Text URL",
+            vec![
+                stream_port("out", Output, Text, Many, true),
+                port("error", Output, Error, Many, false),
+            ],
+            ConfiguredStringField {
+                name: "url",
+                title: "HTTP(S) text URL",
+                description: "HTTP(S) URL whose UTF-8 response body is emitted incrementally on the text stream.",
+                format: Some("uri"),
+                default: "",
             },
         ),
         node(

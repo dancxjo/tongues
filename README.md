@@ -172,7 +172,7 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 
 | Command | Purpose |
 |---|---|
-| `just fetch` | Fetch pronunciation lexicons and every registered model/voice bundle, including English and Chukchi MMS. |
+| `just fetch` | Fetch pronunciation lexicons and every artifact in the manifest and configured model catalogs, including the full MMS inventory. |
 | `just prepare` | Prepare default OpenEPD G2P2G data. |
 | `just run ...` | Forward directly to `cargo run --bin tongues -- ...`. |
 | `just train` | Train the default `g2p2g` model. |

@@ -362,7 +362,10 @@ test('catalog defaults to runnable pipelines and keeps installable and component
     assert.match(studioSource, /catalog-family/);
     assert.match(studioSource, /catalog-license/);
     assert.match(studioSource, /refreshCatalog/);
-    assert.match(studioSource, /Load more models/);
+    assert.doesNotMatch(studioSource, /Load more models/);
+    assert.match(studioSource, /Loading catalog models automatically/);
+    assert.match(studioSource, /tongues\.speech\.catalog\.v4/);
+    assert.match(studioSource, /browser\.caches\.open\(CATALOG_CACHE_NAME\)/);
 });
 
 test('uses calm metadata wording and clears stale duplex results during synthesis', () => {

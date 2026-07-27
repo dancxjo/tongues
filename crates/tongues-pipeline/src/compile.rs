@@ -706,6 +706,8 @@ pub struct PlanChannel {
     pub from: Endpoint,
     pub to: Endpoint,
     pub value_type: ValueType,
+    #[serde(default)]
+    pub streaming: bool,
     pub capacity: usize,
     pub backpressure: String,
     pub producer_owns_close: bool,
@@ -816,6 +818,7 @@ pub fn compile_graph(
                 from: edge.from.clone(),
                 to: edge.to.clone(),
                 value_type: port.value_type,
+                streaming: port.streaming,
                 capacity: edge.capacity,
                 backpressure: "block_producer_until_capacity_or_cancellation".into(),
                 producer_owns_close: true,

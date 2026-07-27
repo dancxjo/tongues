@@ -53,12 +53,20 @@ not change runtime routing. Disabled nodes and structurally bypassed nodes
 remain visible in the saved document but do not enter the execution plan;
 their old edges are removed explicitly rather than silently rerouted.
 
-Configuration-backed sources are catalog contracts too. `text_source` exposes
-a required multiline `text` value and the Text-to-speech starter supplies
-helpful sample text; its contract-run output event contains that exact saved
-value on `out`. `audio_file` likewise requires a non-empty `path`. Applying
-either configuration mutates only the node configuration, so saved edges,
-node duplication, graph duplication, and JSON persistence keep their existing
+Configuration-backed sources are catalog contracts too. Text sources expose a
+streaming `out(text)` port; the port's `streaming` flag describes incremental
+delivery, while its `many` cardinality continues to mean that the output may
+fan out to multiple graph edges. `text_source` is the inline form: it exposes a
+required multiline `text` value and emits that value as one event on the
+stream. `text_file` reads a workspace-relative UTF-8 file incrementally,
+preserving line endings. `text_url` incrementally reads a public HTTP(S) UTF-8
+response, follows only revalidated redirects, and enforces timeout and bounded
+size limits. Source failures produce a failed lifecycle event rather than a
+fabricated output.
+
+`audio_file` likewise requires a non-empty `path`. Applying source
+configuration mutates only the node configuration, so saved edges, node
+duplication, graph duplication, and JSON persistence keep their existing
 relationships and values. Live microphone and control sources remain driven
 by runtime events rather than pretending that live input is saved config.
 
@@ -77,7 +85,9 @@ model produces a node-keyed diagnostic instead of silently changing providers.
 Port values distinguish streaming audio, buffered audio, text,
 partial/revised/committed transcripts, language, speaker assignments, utterance
 plans, control, cancellation, artifacts, and errors. Incompatible values are
-never coerced. The catalog currently exposes explicit buffered-audio-to-stream
+never coerced. Streaming delivery is an independent port contract because a
+stream carries a bounded sequence of typed values; it is not the same as edge
+cardinality. The catalog currently exposes explicit buffered-audio-to-stream
 and committed-transcript-to-text adapters.
 
 Ordinary inputs accept one edge and fan-in inputs exist only on explicit merge
@@ -96,7 +106,8 @@ mistyped required configuration, and disconnected selected sinks.
 Compilation topologically orders otherwise-independent nodes by stable node ID,
 sorts edge-derived channels by saved edge order, and records:
 
-- bounded capacity and producer-blocking backpressure for every edge;
+- bounded capacity, explicit stream delivery, and producer-blocking
+  backpressure for every edge;
 - the node that owns each runtime resource and channel close;
 - explicit merge strategy;
 - cancellation propagation to every upstream/downstream resource owner;
