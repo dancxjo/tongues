@@ -11064,6 +11064,28 @@ mod tests {
     }
 
     #[test]
+    fn phonetic_segmentation_acceptance_fixture_is_a_valid_durable_session() {
+        let record: TimelineSessionRecord = serde_json::from_str(include_str!(
+            "../../../fixtures/timeline/phonetic-segmentation-inspection-v1.json"
+        ))
+        .expect("parse phonetic segmentation acceptance fixture");
+        record.session.validate().expect("valid timeline session");
+        let projection = record.session.project().expect("replay fixture");
+
+        assert_eq!(record.context.run_id.as_deref(), Some("run:phonetic-v1"));
+        assert_eq!(record.session.attachments.len(), 2);
+        assert!(record.session.evidence.iter().any(|span| {
+            span.modality == speaking::timeline::SpanModality::Phone
+                && span.metadata["symbol"] == "ʃ"
+        }));
+        assert!(record.session.evidence.iter().any(|span| {
+            span.modality == speaking::timeline::SpanModality::Phoneme
+                && span.metadata["symbol"] == "ʃa"
+        }));
+        assert_eq!(projection.original, projection.edited);
+    }
+
+    #[test]
     fn every_server_exposure_resolves_to_one_current_clap_leaf() {
         let schema = tongues_cli::web_cli_schema(WEB_EXPOSED_COMMAND_IDS);
         let mut routes = std::collections::BTreeSet::new();

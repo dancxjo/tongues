@@ -75,6 +75,19 @@ provider/model, graph node, upstream sources, and downstream consumers. The
 WaveDeck handoff carries the same `span`, `start_ms`, and `end_ms`; WaveDeck
 restores the matching evidence interval without changing it.
 
+Phone and phoneme selections use the same query contract. Tracks and WaveDeck
+write the focused evidence ID and interval back into the current URL whenever
+selection changes, so refresh/bookmark/back-to-run restores the same span.
+Timeline alignment edges highlight the selected phone's word, transcript,
+anonymous speaker, and source-audio parents, or the related phones when a
+parent is selected. The selection inspector shows the attached artifact,
+algorithm/version, alignment provider/model/version, boundary origin,
+confidence, recipe, graph, owning run, and source-audio identity.
+
+If no `phonetic_segmentation` attachment exists, both surfaces say that no
+alignment is claimed. Partial/unsupported artifacts report untimed issue rows
+from their immutable payload and never draw them as authoritative spans.
+
 Microphone and file audio stays in browser memory for monitoring and permitted
 interval playback. Durable session writes remove raw audio payloads and
 speaker/voice embeddings while retaining non-biometric levels, timestamps,

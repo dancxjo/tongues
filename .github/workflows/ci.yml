@@ -85,6 +85,7 @@ jobs:
           node --test crates/tongues-server/public/speech-studio.test.cjs
           node --test crates/tongues-server/public/command-workbench.test.cjs
           node --test crates/tongues-server/public/wavedeck-model.test.mjs
+          node --test crates/tongues-server/public/run-tracks-model.test.mjs
           node --test crates/tongues-server/public/speech-dataflow-model.test.mjs
           node --test crates/tongues-server/public/live-conversation-model.test.mjs
       - name: Install Graph Studio browser test

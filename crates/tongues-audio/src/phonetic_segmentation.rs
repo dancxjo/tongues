@@ -349,9 +349,18 @@ impl PhoneticSegmentArtifact {
                     "status".into(),
                     serde_json::to_value(segment.status).unwrap_or_default(),
                 ),
-                ("expected_index".into(), serde_json::json!(segment.expected_index)),
-                ("language_tag".into(), serde_json::json!(segment.language_tag)),
-                ("inventory_id".into(), serde_json::json!(segment.inventory_id)),
+                (
+                    "expected_index".into(),
+                    serde_json::json!(segment.expected_index),
+                ),
+                (
+                    "language_tag".into(),
+                    serde_json::json!(segment.language_tag),
+                ),
+                (
+                    "inventory_id".into(),
+                    serde_json::json!(segment.inventory_id),
+                ),
                 (
                     "pronunciation_source".into(),
                     serde_json::json!(segment.pronunciation_source),
@@ -366,9 +375,15 @@ impl PhoneticSegmentArtifact {
                     serde_json::json!(self.audio_artifact_id),
                 ),
                 ("audio_sha256".into(), serde_json::json!(self.audio_sha256)),
-                ("recipe_sha256".into(), serde_json::json!(self.recipe_sha256)),
+                (
+                    "recipe_sha256".into(),
+                    serde_json::json!(self.recipe_sha256),
+                ),
                 ("graph_id".into(), serde_json::json!(self.graph.graph_id)),
-                ("graph_revision".into(), serde_json::json!(self.graph.graph_revision)),
+                (
+                    "graph_revision".into(),
+                    serde_json::json!(self.graph.graph_revision),
+                ),
                 ("recipe_id".into(), serde_json::json!(self.graph.recipe_id)),
                 (
                     "execution_record_id".into(),
@@ -394,9 +409,15 @@ impl PhoneticSegmentArtifact {
                 );
             }
             if let Some(source) = &segment.alignment_source {
-                metadata.insert("alignment_provider".into(), serde_json::json!(source.provider));
+                metadata.insert(
+                    "alignment_provider".into(),
+                    serde_json::json!(source.provider),
+                );
                 metadata.insert("alignment_model".into(), serde_json::json!(source.model));
-                metadata.insert("alignment_version".into(), serde_json::json!(source.version));
+                metadata.insert(
+                    "alignment_version".into(),
+                    serde_json::json!(source.version),
+                );
                 if let Some(source_artifact_id) = &source.artifact_id {
                     metadata.insert(
                         "alignment_artifact_id".into(),
@@ -412,9 +433,9 @@ impl PhoneticSegmentArtifact {
                     SegmentKind::Phone | SegmentKind::Silence | SegmentKind::Pause => {
                         SpanModality::Phone
                     }
-                    SegmentKind::Phoneme
-                    | SegmentKind::WordBoundary
-                    | SegmentKind::Unknown => SpanModality::Phoneme,
+                    SegmentKind::Phoneme | SegmentKind::WordBoundary | SegmentKind::Unknown => {
+                        SpanModality::Phoneme
+                    }
                 },
                 metadata,
             });
@@ -1117,7 +1138,8 @@ mod tests {
             metadata: BTreeMap::new(),
         })
         .collect();
-        let mut session = SpeechTimelineSession::new("session:phonetic", spans, Vec::new()).unwrap();
+        let mut session =
+            SpeechTimelineSession::new("session:phonetic", spans, Vec::new()).unwrap();
         let artifact_id = artifact.attach_to_timeline(&mut session).unwrap();
 
         assert_eq!(session.attachments.len(), 1);

@@ -580,15 +580,11 @@ fn apply_projection_operation(
 
 fn mark_corrected(span: &mut TimelineSpan, operation: &TimelineOperation, correction: &str) {
     if correction == "boundary" {
-        span.metadata.insert(
-            "boundary_origin".into(),
-            Value::String("corrected".into()),
-        );
+        span.metadata
+            .insert("boundary_origin".into(), Value::String("corrected".into()));
     }
-    span.metadata.insert(
-        "correction_kind".into(),
-        Value::String(correction.into()),
-    );
+    span.metadata
+        .insert("correction_kind".into(), Value::String(correction.into()));
     span.metadata.insert(
         "correction_operation_id".into(),
         Value::String(operation.operation_id.clone()),
@@ -769,7 +765,8 @@ mod tests {
                 ("boundary_origin".into(), Value::String("inferred".into())),
             ]),
         };
-        let mut session = SpeechTimelineSession::new("phonetic:1", vec![phone], Vec::new()).unwrap();
+        let mut session =
+            SpeechTimelineSession::new("phonetic:1", vec![phone], Vec::new()).unwrap();
         session
             .append_operation(TimelineOperation {
                 operation_id: "op:symbol".into(),
@@ -797,8 +794,14 @@ mod tests {
         assert_eq!(session.evidence[0].start_ms, 100);
         assert_eq!(projection.edited[0].metadata["symbol"], "ɕ");
         assert_eq!(projection.edited[0].start_ms, 95);
-        assert_eq!(projection.edited[0].metadata["boundary_origin"], "corrected");
-        assert_eq!(projection.edited[0].metadata["correction_actor"], "operator");
+        assert_eq!(
+            projection.edited[0].metadata["boundary_origin"],
+            "corrected"
+        );
+        assert_eq!(
+            projection.edited[0].metadata["correction_actor"],
+            "operator"
+        );
         assert_eq!(
             projection.edited[0].metadata["correction_operation_id"],
             "op:boundary"
