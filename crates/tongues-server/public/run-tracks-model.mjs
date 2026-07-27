@@ -151,7 +151,7 @@ export function projectSessionTracks(source) {
     const metadata = span.metadata ?? {};
     const track = evidenceTrack(span);
     if (!track) continue;
-    const label = metadata.text ?? metadata.language ?? metadata.label ?? span.modality;
+    const label = metadata.symbol ?? metadata.text ?? metadata.language ?? metadata.label ?? span.modality;
     if (tracks.get(track).spans.some(existing =>
       existing.start_ms === span.start_ms && existing.end_ms === span.end_ms && existing.label === label)) {
       continue;
@@ -256,6 +256,27 @@ export function waveDeckHandoff(sessionId, span) {
     end_ms: String(span.end_ms),
   });
   return `/sessions/${encodeURIComponent(sessionId)}/correct?${query}`;
+}
+
+export function focusedSpan(projected, search = "") {
+  const params = new URLSearchParams(search);
+  const requested = params.get("span");
+  const start = Number(params.get("start_ms"));
+  const end = Number(params.get("end_ms"));
+  const spans = projected.tracks.flatMap(track => track.spans);
+  return spans.find(span => span.id === requested || span.segment_id === requested)
+    ?? spans.find(span => Number.isFinite(start) && Number.isFinite(end)
+      && span.start_ms < end && span.end_ms > start)
+    ?? null;
+}
+
+export function focusQuery(span) {
+  if (!span) return "";
+  return new URLSearchParams({
+    span: span.id,
+    start_ms: String(span.start_ms),
+    end_ms: String(span.end_ms),
+  }).toString();
 }
 
 function eventEntries(values) {

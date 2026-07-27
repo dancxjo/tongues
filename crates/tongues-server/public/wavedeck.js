@@ -1,5 +1,6 @@
 import {
-  appendOperation, projectSession, redo, sessionFromEvents, undo, validateSession,
+  appendOperation, projectSession, redo, relatedSpanIds, segmentationState, sessionFromEvents,
+  undo, validateSession, waveformPolylinePoints,
 } from "./wavedeck-model.mjs";
 
 let session = null;
@@ -37,6 +38,32 @@ function renderContext() {
   byId("session-context").textContent = context.source
     ? `Source: ${context.source}. Original evidence is immutable; edits remain a replayable interpretation.`
     : "Original evidence remains immutable. Edits are a separate replayable interpretation.";
+  renderSegmentation();
+}
+
+function renderSegmentation() {
+  const state = segmentationState(session);
+  const panel = byId("segmentation-state");
+  panel.dataset.readiness = state.readiness;
+  byId("segmentation-message").textContent = state.message;
+  const selectedArtifact = state.artifacts.find(artifact =>
+    selectedSpan()?.metadata?.artifact_id === artifact.artifact_id) ?? state.artifacts[0];
+  if (!selectedArtifact) {
+    byId("segmentation-provenance").replaceChildren();
+    return;
+  }
+  const rows = [
+    ["Algorithm", selectedArtifact.algorithm_version],
+    ["Artifact", selectedArtifact.artifact_id],
+    ["Recipe", selectedArtifact.recipe_id ?? "Not linked"],
+    ["Readiness", selectedArtifact.readiness],
+    ["Untimed rows", String(selectedArtifact.missing_segments.length)],
+    ["Issues", String(selectedArtifact.issues.length)],
+  ];
+  byId("segmentation-provenance").replaceChildren(...rows.flatMap(([term, value]) => {
+    const dt = document.createElement("dt"), dd = document.createElement("dd");
+    dt.textContent = term; dd.textContent = value; return [dt, dd];
+  }));
 }
 
 async function persistSession() {
@@ -47,7 +74,9 @@ async function persistSession() {
     body: JSON.stringify({schema_version: 1, session, context}),
   });
   context = record.context || context;
-  history.replaceState({session_id: session.session_id}, "", `/sessions/${encodeURIComponent(session.session_id)}/correct`);
+  const focus = selectedSpan();
+  const query = focus ? `?${new URLSearchParams({span:focus.id,start_ms:String(focus.start_ms),end_ms:String(focus.end_ms)})}` : "";
+  history.replaceState({session_id: session.session_id,span_id:focus?.id}, "", `/sessions/${encodeURIComponent(session.session_id)}/correct${query}`);
   renderContext();
   announce(`Saved corrected projection for ${session.session_id}; original evidence remains unchanged.`);
 }
@@ -108,21 +137,35 @@ function render() {
   }
   renderLane(byId("original"), projection.original, false);
   renderLane(byId("edited"), projection.edited, true);
+  renderSegmentation();
   byId("session-name").textContent = session.session_id;
   byId("operation-count").textContent = `${session.operations.length} replayable operations`;
   announce(`Timeline ready. ${projection.edited.length} spans; ${session.operations.length} operations.`);
 }
 
 function renderLane(target, spans, editable) {
+  const related = relatedSpanIds(session, selected);
   target.replaceChildren(...spans.map((span, index) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `span span-${span.modality}${selected === span.id ? " selected" : ""}`;
+    button.className = `span span-${span.modality}${selected === span.id ? " selected" : ""}${selected !== span.id && related.has(span.id) ? " related" : ""}`;
     button.dataset.spanId = span.id;
     button.dataset.index = index;
-    button.innerHTML = `<strong>${escapeHtml(span.metadata?.text ?? span.modality)}</strong>
-      <small>${span.start_ms}–${span.end_ms} ms · ${escapeHtml(span.id)}</small>`;
-    button.onclick = () => { selected = span.id; render(); announce(`Selected ${span.id}.`); };
+    button.dataset.boundaryOrigin = span.metadata?.boundary_origin ?? "";
+    const label = span.metadata?.symbol ?? span.metadata?.text ?? span.modality;
+    const waveform = span.modality === "audio" && Array.isArray(span.metadata?.waveform_peaks)
+      ? `<svg class="waveform" viewBox="0 0 240 36" role="img" aria-label="Waveform summary"><polyline points="${waveformPolylinePoints(span.metadata.waveform_peaks)}"></polyline><polyline transform="translate(0 36) scale(1 -1)" points="${waveformPolylinePoints(span.metadata.waveform_peaks)}"></polyline></svg>`
+      : "";
+    button.innerHTML = `<strong>${escapeHtml(label)}</strong>${waveform}
+      <small>${span.start_ms}–${span.end_ms} ms · ${escapeHtml(span.id)}${span.metadata?.boundary_origin ? ` · ${escapeHtml(span.metadata.boundary_origin)}` : ""}</small>`;
+    button.onclick = () => {
+      selected = span.id;
+      const url = new URL(location.href);
+      url.search = new URLSearchParams({span:span.id,start_ms:String(span.start_ms),end_ms:String(span.end_ms)});
+      history.replaceState({session_id:session.session_id,span_id:span.id}, "", url);
+      render();
+      announce(`Selected ${span.id}; ${relatedSpanIds(session, span.id).size - 1} linked evidence spans highlighted.`);
+    };
     button.ondblclick = () => editable && replaceSelected();
     return button;
   }));
@@ -134,10 +177,15 @@ function selectedSpan() {
 
 function replaceSelected() {
   const span = selectedSpan();
-  if (!span || !["transcript", "word"].includes(span.modality)) return announce("Select a transcript or word span.");
-  const text = prompt("Corrected text", span.metadata?.text ?? "");
+  if (!span || !["transcript", "word", "phone", "phoneme"].includes(span.modality)) return announce("Select a transcript, word, phone, or phoneme span.");
+  const phonetic = ["phone", "phoneme"].includes(span.modality);
+  const text = prompt(phonetic ? "Corrected phone/phoneme symbol" : "Corrected text", phonetic ? span.metadata?.symbol ?? "" : span.metadata?.text ?? "");
   if (text === null) return;
-  appendOperation(session, "transcript_replace", {span_id: span.id, text, reason: "operator correction"});
+  appendOperation(session, phonetic ? "phonetic_symbol_replace" : "transcript_replace", {
+    span_id: span.id,
+    ...(phonetic ? {symbol:text} : {text}),
+    reason: phonetic ? "operator phonetic correction proposal" : "operator correction",
+  });
   render();
   persistSession().catch(error => announce(`Correction is only in this page: ${error.message}`));
 }
@@ -180,7 +228,7 @@ async function openFile(file) {
 function download(kind) {
   const projection = projectSession(session);
   const payload = kind === "evidence" ? session.evidence
-    : kind === "corrected" ? projection.edited.filter(span => ["transcript", "word"].includes(span.modality))
+    : kind === "corrected" ? projection.edited.filter(span => ["transcript", "word", "phone", "phoneme"].includes(span.modality))
     : kind === "operations" ? session.operations
     : {session, projection, evidence_authority: "observed", edit_authority: "corrected_interpretation"};
   const link = document.createElement("a");

@@ -8,7 +8,23 @@
 .wavedeck-page .span { display: grid; gap: .2rem; text-align: left; width: 100%; }
 .wavedeck-page .span small { color: var(--ui-text-muted); }
 .wavedeck-page .span.selected { border-color: var(--ui-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-focus) 45%, transparent); }
+.wavedeck-page .span.related { border-color: var(--ui-focus); }
+.wavedeck-page .span-phone,
+.wavedeck-page .span-phoneme { font-family: var(--ui-font-mono); margin-left: 2rem; width: calc(100% - 2rem); }
+.wavedeck-page .span[data-boundary-origin=inferred] { border-style: dashed; }
+.wavedeck-page .span[data-boundary-origin=source_provided] { border-color: var(--ui-success); }
+.wavedeck-page .span[data-boundary-origin=corrected] { border-color: var(--ui-focus); box-shadow: inset 4px 0 var(--ui-focus); }
 .span-word { margin-left: 1.5rem; width: calc(100% - 1.5rem); }
+.segmentation-state { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: .65rem 1rem; }
+.segmentation-state h3 { margin: 0; }
+.segmentation-state[data-readiness=missing] { border-style: dashed; color: var(--ui-text-muted); }
+.segmentation-state[data-readiness=partial],
+.segmentation-state[data-readiness=unsupported] { border-color: var(--ui-warning); }
+.segmentation-state[data-readiness=ready] { border-color: var(--ui-success); }
+.segmentation-state dl { display: grid; gap: .25rem .6rem; grid-template-columns: max-content 1fr; margin: .5rem 0 0; }
+.segmentation-state dd { margin: 0; overflow-wrap: anywhere; }
+.waveform { height: 2.25rem; width: min(100%, 15rem); }
+.waveform polyline { fill: none; stroke: currentColor; stroke-width: 1.5; }
 #status { color: var(--ui-success); min-height: 1.5rem; }
 
 @media (max-width: 700px) {

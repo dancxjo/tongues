@@ -24,6 +24,14 @@
 .tracks-page .span { background: #1a6079; border: 1px solid #72bad3; border-radius: 4px; color: #fff; font-size: .78rem; height: 2.35rem; min-width: 3px; overflow: hidden; padding: .28rem .38rem; position: absolute; text-align: left; text-overflow: ellipsis; top: .35rem; white-space: nowrap; }
 .tracks-page .span[data-status=provisional] { border-style: dashed; opacity: .82; }
 .tracks-page .span[data-status=revised] { background: #6a4e8d; }
+.tracks-page .span[data-status=low_confidence],
+.tracks-page .span[data-status=missing_evidence],
+.tracks-page .span[data-status=unknown_symbol] { background: #67592e; border-style: dashed; }
+.tracks-page .span[data-boundary-origin=source_provided] { border-color: #a8f4df; }
+.tracks-page .span[data-boundary-origin=corrected] { background: #6a4e8d; border-color: #f2c9ff; }
+.tracks-page .span[data-related=true] { box-shadow: inset 0 0 0 2px var(--ui-focus); }
+.tracks-page .span[data-density=tick] { color: transparent; padding-inline: 0; }
+.tracks-page .span[data-density=symbol] { padding-inline: .15rem; }
 .tracks-page .span[data-status=cancelled],
 .tracks-page .span[data-status=error] { background: #8e3542; }
 .tracks-page .span[data-overlap=true] { box-shadow: inset 0 -4px var(--ui-warning); }
@@ -33,6 +41,13 @@
 .selection dd { margin: 0; overflow-wrap: anywhere; }
 .privacy { border: 1px solid var(--ui-border); border-radius: var(--ui-radius); margin-bottom: 1rem; padding: .65rem; }
 .privacy strong { color: var(--ui-success); }
+.segmentation-state { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); margin-bottom: 1rem; padding: .65rem 1rem; }
+.segmentation-state h2 { font-size: 1rem; margin: 0; }
+.segmentation-state p { margin: .35rem 0; }
+.segmentation-state[data-readiness=ready] { border-color: var(--ui-success); }
+.segmentation-state[data-readiness=partial],
+.segmentation-state[data-readiness=unsupported] { border-color: var(--ui-warning); }
+.segmentation-state[data-readiness=missing] { border-style: dashed; color: var(--ui-text-muted); }
 .tracks-page fieldset { border: 1px solid var(--ui-border); border-radius: var(--ui-radius); margin: .8rem 0; }
 .track-filters { display: grid; gap: .25rem; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
 .empty { color: var(--ui-text-muted); padding: 1.5rem; }

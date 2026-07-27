@@ -1,4 +1,7 @@
-import {boundedVisibleSpans, projectSessionTracks, selectionProvenance, waveDeckHandoff} from "./run-tracks-model.mjs";
+import {
+  boundedVisibleSpans, focusQuery, focusedSpan, projectSessionTracks, relatedSelectionIds,
+  selectionProvenance, spanDensity, waveDeckHandoff,
+} from "./run-tracks-model.mjs";
 import {sessionFromEvents} from "./wavedeck-model.mjs";
 
 const byId = id => document.getElementById(id);
@@ -55,11 +58,16 @@ function renderRecord(record) {
   byId("status-badge").dataset.state = state.projected.status;
   byId("cancel-live").hidden = !state.socket;
   renderPrivacy();
+  renderSegmentation();
   renderFilters();
   updateViewport(state.follow);
   scheduleRender();
   const terminal = ["completed","cancelled","failed"].includes(state.projected.status);
   announce(`${byId("run-name").textContent} is ${state.projected.status}; ${spanCount()} aligned spans are available.${terminal ? " Stream is terminal." : ""}`);
+  if (!state.selected) {
+    const focused = focusedSpan(state.projected, location.search);
+    if (focused) selectSpan(focused, {updateUrl:false, focusHeading:false});
+  }
 }
 
 function renderPrivacy() {
@@ -68,6 +76,19 @@ function renderPrivacy() {
     <span>Raw audio retained: ${privacy.raw_audio_retained ? "yes" : "no"}</span>
     <span>Biometric speaker data retained: ${privacy.biometric_speaker_data_retained ? "yes" : "no"}</span>
     <span>${escapeHtml(privacy.policy)}</span>`;
+}
+
+function renderSegmentation() {
+  const segmentation = state.projected.segmentation;
+  const panel = byId("segmentation-state");
+  panel.dataset.readiness = segmentation.readiness;
+  byId("segmentation-message").textContent = segmentation.message;
+  byId("segmentation-artifacts").replaceChildren(...segmentation.artifacts.map(artifact => {
+    const detail = document.createElement("p");
+    const missing = artifact.missing_segments.length;
+    detail.textContent = `${artifact.algorithm_version} · recipe ${artifact.recipe_id ?? "not linked"} · ${artifact.readiness}${missing ? ` · ${missing} untimed rows` : ""}`;
+    return detail;
+  }));
 }
 
 function renderFilters() {
@@ -150,7 +171,10 @@ function renderSpan(span, range) {
   button.style.left = `${Math.max(0, (span.start_ms - range.start_ms) / width * 100)}%`;
   button.style.width = `${Math.max(.35, (Math.min(span.end_ms, range.end_ms) - Math.max(span.start_ms, range.start_ms)) / width * 100)}%`;
   button.dataset.status = span.status; button.dataset.overlap = String(span.overlap);
-  button.textContent = span.label;
+  button.dataset.boundaryOrigin = span.metadata?.boundary_origin ?? "";
+  button.dataset.density = spanDensity(span, range);
+  button.dataset.related = String(state.selected ? relatedSelectionIds(state.projected, state.selected).has(span.id) : false);
+  button.textContent = button.dataset.density === "tick" ? "" : span.label;
   button.title = `${span.label} · ${formatTime(span.start_ms)}–${formatTime(span.end_ms)}`;
   button.setAttribute("aria-label", button.title);
   if (state.selected?.id === span.id && state.selected?.track === span.track) button.setAttribute("aria-current", "true");
@@ -158,7 +182,7 @@ function renderSpan(span, range) {
   return button;
 }
 
-function selectSpan(span) {
+function selectSpan(span, {updateUrl = true, focusHeading = true} = {}) {
   state.selected = span;
   const provenance = selectionProvenance(state.projected, span);
   byId("selection-empty").hidden = true;
@@ -166,7 +190,13 @@ function selectSpan(span) {
   const values = [
     ["Interval", `${formatTime(span.start_ms)}–${formatTime(span.end_ms)}`],
     ["State", span.status], ["Speaker", span.speaker ?? "—"], ["Source event", provenance.event_id ?? "—"],
-    ["Provider / model", [provenance.provider, provenance.model].filter(Boolean).join(" / ") || "Not declared"],
+    ["Provider / model / version", [provenance.provider, provenance.model, provenance.version].filter(Boolean).join(" / ") || "Not declared"],
+    ["Boundary origin", provenance.boundary_origin ?? "Not a phonetic boundary"],
+    ["Confidence", Number.isFinite(provenance.confidence) ? provenance.confidence.toFixed(3) : "Not declared"],
+    ["Algorithm", provenance.algorithm_version ?? "Not a segmentation span"],
+    ["Artifact", provenance.artifact_id ?? "—"], ["Recipe", provenance.recipe_id ?? "—"],
+    ["Owning execution", provenance.execution_record_id ?? state.projected.run_id ?? "—"],
+    ["Source audio", provenance.audio_artifact_id ?? "—"],
     ["Graph node", provenance.graph_node_id ?? "Not linked"], ["Sources", provenance.sources.map(source => scalar(source.event_id)).join(", ") || "Direct"],
     ["Downstream", provenance.downstream_event_ids.join(", ") || "None recorded"], ["Authority", provenance.authority],
   ];
@@ -175,11 +205,18 @@ function selectSpan(span) {
     dt.textContent = term; dd.textContent = value; return [dt,dd];
   }));
   byId("graph-link").href = graphRoute(state.projected.graph_id, provenance.graph_node_id);
+  const owningRun = provenance.execution_record_id ?? state.projected.run_id;
+  byId("run-link").href = owningRun ? `/runs/${encodeURIComponent(owningRun)}/tracks?${focusQuery(span)}` : "/runs";
   const sessionId = state.projected.session_id;
   byId("session-link").hidden = !sessionId;
   if (sessionId) byId("session-link").href = waveDeckHandoff(sessionId, span);
   byId("play-selection").disabled = !state.audioUrl;
-  byId("selection-heading").focus();
+  if (updateUrl) {
+    const url = new URL(location.href);
+    url.search = focusQuery(span);
+    history.replaceState({span_id:span.id}, "", url);
+  }
+  if (focusHeading) byId("selection-heading").focus();
   announce(`Selected ${span.label}; provenance and handoff controls are available.`);
   scheduleRender();
 }

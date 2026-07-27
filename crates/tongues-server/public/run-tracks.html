@@ -52,6 +52,11 @@
         <a class="ui-button" href="/runs">Recent runs</a>
       </div>
       <div id="privacy" class="privacy" aria-label="Privacy and retention state"></div>
+      <section id="segmentation-state" class="segmentation-state" aria-labelledby="segmentation-heading">
+        <h2 id="segmentation-heading">Phonetic segmentation</h2>
+        <p id="segmentation-message">Checking attached evidence…</p>
+        <div id="segmentation-artifacts"></div>
+      </section>
       <details class="panel">
         <summary>Track filters</summary>
         <div id="track-filters" class="track-filters"></div>
@@ -74,6 +79,7 @@
             <button id="play-selection" disabled>Play interval</button>
             <label><input id="loop-selection" type="checkbox"> Loop</label>
             <a id="graph-link" class="ui-button" href="/studio/graphs/new">Graph node/config</a>
+            <a id="run-link" class="ui-button" href="/runs">Owning run</a>
             <a id="session-link" class="ui-button" hidden href="/sessions/new/correct">Open in WaveDeck</a>
           </div>
         </aside>

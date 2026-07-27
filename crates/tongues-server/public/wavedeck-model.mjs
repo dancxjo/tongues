@@ -15,6 +15,16 @@ export function validateSession(value) {
     if (ids.has(span.id)) throw new Error(`Duplicate evidence span ${span.id}.`);
     ids.add(span.id);
   }
+  const attachmentIds = new Set();
+  for (const attachment of value.attachments ?? []) {
+    if (!attachment?.artifact_id || attachment.kind !== "phonetic_segmentation" || !attachment.payload) {
+      throw new Error("Timeline contains an invalid phonetic segmentation attachment.");
+    }
+    if (attachmentIds.has(attachment.artifact_id)) {
+      throw new Error(`Duplicate timeline attachment ${attachment.artifact_id}.`);
+    }
+    attachmentIds.add(attachment.artifact_id);
+  }
   return value;
 }
 
@@ -46,6 +56,7 @@ export function projectSession(session) {
     original: structuredClone(session.evidence),
     edited: [...edited.values()].sort((a, b) => a.start_ms - b.start_ms || a.id.localeCompare(b.id)),
     alignments: structuredClone(session.alignments ?? []),
+    attachments: structuredClone(session.attachments ?? []),
     applied_operation_ids,
     audio_region_edits,
   };
@@ -58,11 +69,19 @@ function applyOperation(spans, op, audioEdits) {
     case "transcript_replace":
       if (!["transcript", "word"].includes(span.modality)) throw new Error("Transcript edits require text spans.");
       span.metadata = {...span.metadata, text: String(op.text ?? "")};
+      markCorrected(span, op, "transcript");
+      break;
+    case "phonetic_symbol_replace":
+      if (!["phone", "phoneme"].includes(span.modality)) throw new Error("Phonetic symbol edits require phone or phoneme spans.");
+      if (!String(op.symbol ?? "").trim()) throw new Error("A corrected phone/phoneme symbol is required.");
+      span.metadata = {...span.metadata, symbol: String(op.symbol)};
+      markCorrected(span, op, "symbol");
       break;
     case "alignment_move_boundary":
       if (op.boundary === "start" && op.new_time_ms < span.end_ms) span.start_ms = op.new_time_ms;
       else if (op.boundary === "end" && op.new_time_ms > span.start_ms) span.end_ms = op.new_time_ms;
       else throw new Error("Boundary edit would create a zero-duration span.");
+      markCorrected(span, op, "boundary");
       break;
     case "annotate":
       span.metadata = {...span.metadata, [`annotation:${op.key}`]: op.value};
@@ -81,6 +100,17 @@ function applyOperation(spans, op, audioEdits) {
     default:
       throw new Error(`Unsupported operation ${op.kind}.`);
   }
+}
+
+function markCorrected(span, op, correctionKind) {
+  span.metadata = {
+    ...span.metadata,
+    ...(correctionKind === "boundary" ? {boundary_origin: "corrected"} : {}),
+    correction_kind: correctionKind,
+    correction_operation_id: op.operation_id,
+    correction_actor: op.provenance?.actor ?? "unknown",
+    correction_at_ms: op.provenance?.at_ms ?? null,
+  };
 }
 
 export function appendOperation(session, kind, fields, actor = "browser-operator") {
@@ -152,7 +182,60 @@ export function sessionFromEvents(sessionId, events) {
     session_id: sessionId,
     evidence,
     alignments: [],
+    attachments: [],
     source_events: events.map(item => item.event ?? item),
     operations: [],
   });
+}
+
+export function relatedSpanIds(session, spanId) {
+  const related = new Set([spanId]);
+  for (const alignment of session?.alignments ?? []) {
+    if (alignment.source_span_id === spanId) related.add(alignment.target_span_id);
+    if (alignment.target_span_id === spanId) related.add(alignment.source_span_id);
+  }
+  return related;
+}
+
+export function segmentationState(session) {
+  const artifacts = (session?.attachments ?? [])
+    .filter(attachment => attachment.kind === "phonetic_segmentation")
+    .map(attachment => ({
+      artifact_id: attachment.artifact_id,
+      readiness: attachment.payload?.readiness ?? "unsupported",
+      algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
+      recipe_id: attachment.payload?.graph?.recipe_id ?? null,
+      issues: attachment.payload?.issues ?? [],
+      missing_segments: (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
+    }));
+  if (!artifacts.length) {
+    return {
+      available: false,
+      readiness: "missing",
+      message: "No segmentation artifact is attached; this session does not claim phone-level alignment.",
+      artifacts,
+    };
+  }
+  const readiness = artifacts.some(artifact => artifact.readiness === "partial")
+    ? "partial"
+    : artifacts.every(artifact => artifact.readiness === "ready") ? "ready" : "unsupported";
+  return {
+    available: true,
+    readiness,
+    message: readiness === "ready"
+      ? "Attached phone/phoneme timing is inspectable as immutable evidence."
+      : `${readiness} segmentation stays explicit; untimed rows are not rendered as authoritative boundaries.`,
+    artifacts,
+  };
+}
+
+export function waveformPolylinePoints(peaks, width = 240, height = 36) {
+  if (!Array.isArray(peaks) || !peaks.length) return "";
+  const center = height / 2;
+  const step = peaks.length === 1 ? 0 : width / (peaks.length - 1);
+  return peaks.map((peak, index) => {
+    const amplitude = Math.max(0, Math.min(1, Number(peak) || 0));
+    const y = center - amplitude * (center - 1);
+    return `${(index * step).toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
 }

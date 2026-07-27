@@ -579,10 +579,12 @@ fn apply_projection_operation(
 }
 
 fn mark_corrected(span: &mut TimelineSpan, operation: &TimelineOperation, correction: &str) {
-    span.metadata.insert(
-        "boundary_origin".into(),
-        Value::String("corrected".into()),
-    );
+    if correction == "boundary" {
+        span.metadata.insert(
+            "boundary_origin".into(),
+            Value::String("corrected".into()),
+        );
+    }
     span.metadata.insert(
         "correction_kind".into(),
         Value::String(correction.into()),
