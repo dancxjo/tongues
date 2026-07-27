@@ -31,6 +31,7 @@ pub struct AudioInputCapabilities {
     pub device_discovery_error: Option<String>,
     pub bounded_queues: bool,
     pub explicit_discontinuities: bool,
+    pub cleanup_stages: Vec<crate::CleanupCapability>,
 }
 
 pub fn input_device_inventory() -> Result<Vec<InputDeviceInfo>> {
@@ -79,6 +80,7 @@ pub fn input_capabilities() -> AudioInputCapabilities {
         device_discovery_error,
         bounded_queues: true,
         explicit_discontinuities: true,
+        cleanup_stages: crate::CleanupPipeline::capabilities(),
     }
 }
 
