@@ -21,8 +21,8 @@ jobs:
     name: Locked dependency graph
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.100.0
       - name: Require an unchanged lockfile
         run: cargo metadata --locked --format-version 1 > /dev/null
 
@@ -30,8 +30,8 @@ jobs:
     name: RustSec advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.1
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.100.0
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       - name: Check RustSec advisories
@@ -41,7 +41,7 @@ jobs:
     name: Licenses, sources, bans, and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
