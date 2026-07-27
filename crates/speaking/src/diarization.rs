@@ -18,6 +18,31 @@ pub enum VoiceRetentionScope {
     PersistentOptIn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceRetentionPolicy {
+    pub retain_for_session: bool,
+    pub retain_persistently: bool,
+}
+
+impl Default for VoiceRetentionPolicy {
+    fn default() -> Self {
+        Self {
+            retain_for_session: true,
+            retain_persistently: false,
+        }
+    }
+}
+
+impl VoiceRetentionPolicy {
+    pub fn permits(self, scope: VoiceRetentionScope) -> bool {
+        match scope {
+            VoiceRetentionScope::Segment => true,
+            VoiceRetentionScope::Session => self.retain_for_session,
+            VoiceRetentionScope::PersistentOptIn => self.retain_persistently,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeakerEmbedding {
     pub values: Vec<f32>,
@@ -57,6 +82,24 @@ pub struct VoiceFamiliarityEvidence {
     pub similarity: f32,
     pub model_id: String,
     pub retention: VoiceRetentionScope,
+}
+
+impl VoiceFamiliarityEvidence {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.current_signature_id != self.prior_signature_id,
+            "voice familiarity requires two distinct observations"
+        );
+        anyhow::ensure!(
+            self.similarity.is_finite() && (-1.0..=1.0).contains(&self.similarity),
+            "voice familiarity similarity is invalid"
+        );
+        anyhow::ensure!(
+            !self.model_id.is_empty(),
+            "voice familiarity model is unnamed"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +179,34 @@ pub trait SpeakerDiarizer {
     fn finish(&mut self) -> anyhow::Result<Vec<DiarizationEvent>>;
 }
 
+#[derive(Debug, Default)]
+pub struct NoopSpeakerDiarizer;
+
+impl SpeakerDiarizer for NoopSpeakerDiarizer {
+    fn process(
+        &mut self,
+        _observation: SpeakerObservation,
+    ) -> anyhow::Result<Vec<DiarizationEvent>> {
+        Ok(Vec::new())
+    }
+
+    fn finish(&mut self) -> anyhow::Result<Vec<DiarizationEvent>> {
+        Ok(Vec::new())
+    }
+}
+
+pub fn diarize_offline(
+    diarizer: &mut dyn SpeakerDiarizer,
+    observations: impl IntoIterator<Item = SpeakerObservation>,
+) -> anyhow::Result<Vec<DiarizationEvent>> {
+    let mut events = Vec::new();
+    for observation in observations {
+        events.extend(diarizer.process(observation)?);
+    }
+    events.extend(diarizer.finish()?);
+    Ok(events)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AnonymousDiarizationConfig {
     pub match_threshold: f32,
@@ -156,6 +227,7 @@ struct AnonymousCluster {
     id: SpeakerClusterId,
     centroid: Vec<f32>,
     observations: u64,
+    model_id: String,
 }
 
 pub struct AnonymousSpeakerClusterer {
@@ -214,14 +286,20 @@ impl AnonymousSpeakerClusterer {
         Ok(events)
     }
 
-    fn assign(&mut self, embedding: SpeakerEmbedding) -> anyhow::Result<(SpeakerClusterId, f32)> {
+    fn assign(
+        &mut self,
+        embedding: SpeakerEmbedding,
+    ) -> anyhow::Result<Option<(SpeakerClusterId, f32)>> {
         embedding.validate()?;
-        if self
-            .clusters
-            .first()
-            .is_some_and(|cluster| cluster.centroid.len() != embedding.values.len())
-        {
-            anyhow::bail!("speaker embedding dimensions changed within the stream");
+        if let Some(cluster) = self.clusters.first() {
+            anyhow::ensure!(
+                cluster.centroid.len() == embedding.values.len(),
+                "speaker embedding dimensions changed within the stream"
+            );
+            anyhow::ensure!(
+                cluster.model_id == embedding.model_id,
+                "speaker embedding model changed within the stream"
+            );
         }
         let best = self
             .clusters
@@ -233,18 +311,19 @@ impl AnonymousSpeakerClusterer {
             && similarity >= self.config.match_threshold
         {
             update_centroid(&mut self.clusters[index], &embedding.values);
-            return Ok((self.clusters[index].id.clone(), similarity));
+            return Ok(Some((self.clusters[index].id.clone(), similarity)));
         }
         if self.clusters.len() >= self.config.maximum_clusters {
-            return Ok((SpeakerClusterId("speaker:unknown".into()), 0.0));
+            return Ok(None);
         }
         let id = SpeakerClusterId(format!("speaker:{}", self.clusters.len()));
         self.clusters.push(AnonymousCluster {
             id: id.clone(),
             centroid: normalized(embedding.values),
             observations: 1,
+            model_id: embedding.model_id,
         });
-        Ok((id, 1.0))
+        Ok(Some((id, 1.0)))
     }
 }
 
@@ -268,7 +347,13 @@ impl SpeakerDiarizer for AnonymousSpeakerClusterer {
             }]);
         };
         let model_id = embedding.model_id.clone();
-        let (cluster_id, similarity) = self.assign(embedding)?;
+        let Some((cluster_id, similarity)) = self.assign(embedding)? else {
+            return Ok(vec![DiarizationEvent::UnknownSpeaker {
+                segment_id: observation.segment_id,
+                segment_sequence: observation.segment_sequence,
+                reason: "cluster_capacity_exhausted".into(),
+            }]);
+        };
         let mut events = vec![DiarizationEvent::SpeakerAssigned {
             segment_id: observation.segment_id.clone(),
             segment_sequence: observation.segment_sequence,
@@ -280,7 +365,9 @@ impl SpeakerDiarizer for AnonymousSpeakerClusterer {
         if !observation.overlapping_embeddings.is_empty() {
             let mut clusters = vec![cluster_id];
             for embedding in observation.overlapping_embeddings {
-                clusters.push(self.assign(embedding)?.0);
+                if let Some((cluster_id, _)) = self.assign(embedding)? {
+                    clusters.push(cluster_id);
+                }
             }
             clusters.dedup();
             events.push(DiarizationEvent::Overlap {
@@ -294,6 +381,165 @@ impl SpeakerDiarizer for AnonymousSpeakerClusterer {
 
     fn finish(&mut self) -> anyhow::Result<Vec<DiarizationEvent>> {
         Ok(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VoiceFamiliarityConfig {
+    pub match_threshold: f32,
+    pub retention: VoiceRetentionPolicy,
+}
+
+impl Default for VoiceFamiliarityConfig {
+    fn default() -> Self {
+        Self {
+            match_threshold: 0.80,
+            retention: VoiceRetentionPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FamiliarVoice {
+    signature_id: VoiceSignatureId,
+    embedding: Vec<f32>,
+    model_id: String,
+    retention: VoiceRetentionScope,
+}
+
+pub trait VoiceFamiliarityMatcher {
+    fn observe(
+        &mut self,
+        signature_id: VoiceSignatureId,
+        embedding: SpeakerEmbedding,
+    ) -> anyhow::Result<Vec<VoiceFamiliarityEvidence>>;
+    fn clear_session(&mut self);
+}
+
+#[derive(Debug)]
+pub struct InMemoryVoiceFamiliarityMatcher {
+    config: VoiceFamiliarityConfig,
+    observations: Vec<FamiliarVoice>,
+}
+
+impl InMemoryVoiceFamiliarityMatcher {
+    pub fn new(config: VoiceFamiliarityConfig) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            config.match_threshold.is_finite() && (-1.0..=1.0).contains(&config.match_threshold),
+            "invalid voice familiarity threshold"
+        );
+        Ok(Self {
+            config,
+            observations: Vec::new(),
+        })
+    }
+}
+
+impl VoiceFamiliarityMatcher for InMemoryVoiceFamiliarityMatcher {
+    fn observe(
+        &mut self,
+        signature_id: VoiceSignatureId,
+        embedding: SpeakerEmbedding,
+    ) -> anyhow::Result<Vec<VoiceFamiliarityEvidence>> {
+        embedding.validate()?;
+        anyhow::ensure!(
+            self.config.retention.permits(embedding.retention),
+            "voice embedding retention scope is not permitted"
+        );
+
+        let mut evidence = Vec::new();
+        for prior in &self.observations {
+            anyhow::ensure!(
+                prior.embedding.len() == embedding.values.len(),
+                "speaker embedding dimensions changed within familiarity scope"
+            );
+            if prior.model_id != embedding.model_id {
+                continue;
+            }
+            let similarity = cosine(&prior.embedding, &embedding.values);
+            if similarity >= self.config.match_threshold {
+                let item = VoiceFamiliarityEvidence {
+                    current_signature_id: signature_id.clone(),
+                    prior_signature_id: prior.signature_id.clone(),
+                    similarity,
+                    model_id: embedding.model_id.clone(),
+                    retention: prior.retention,
+                };
+                item.validate()?;
+                evidence.push(item);
+            }
+        }
+
+        if embedding.retention != VoiceRetentionScope::Segment {
+            self.observations.push(FamiliarVoice {
+                signature_id,
+                embedding: normalized(embedding.values),
+                model_id: embedding.model_id,
+                retention: embedding.retention,
+            });
+        }
+        Ok(evidence)
+    }
+
+    fn clear_session(&mut self) {
+        self.observations
+            .retain(|voice| voice.retention == VoiceRetentionScope::PersistentOptIn);
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct DiarizationProjection {
+    assignments: std::collections::HashMap<SegmentId, SpeakerClusterId>,
+}
+
+impl DiarizationProjection {
+    pub fn observe(&mut self, event: &DiarizationEvent) {
+        match event {
+            DiarizationEvent::SpeakerAssigned {
+                segment_id,
+                cluster_id,
+                ..
+            } => {
+                self.assignments
+                    .insert(segment_id.clone(), cluster_id.clone());
+            }
+            DiarizationEvent::SpeakerRevised {
+                segment_id,
+                to_cluster,
+                ..
+            } => {
+                self.assignments
+                    .insert(segment_id.clone(), to_cluster.clone());
+            }
+            _ => {}
+        }
+    }
+
+    pub fn project(&self, event: StreamEvent) -> StreamEvent {
+        match event {
+            StreamEvent::CommittedSegment {
+                role,
+                segment_id,
+                text,
+                words,
+                language,
+                speaker_id,
+                confidence,
+            } => StreamEvent::CommittedSegment {
+                role,
+                speaker_id: self
+                    .assignments
+                    .get(&segment_id)
+                    .map(|speaker| speaker.0.clone())
+                    .or(speaker_id),
+                segment_id,
+                text,
+                words,
+                language,
+                confidence,
+            },
+            event => event,
+        }
     }
 }
 
@@ -449,5 +695,178 @@ mod tests {
         let encoded = serde_json::to_string(&event).unwrap();
         assert!(encoded.contains("voice_familiarity"));
         assert!(!encoded.contains("person_label"));
+    }
+
+    #[test]
+    fn noop_and_offline_paths_share_the_streaming_interface() {
+        let observations = [observation(0, &[1.0, 0.0]), observation(1, &[0.0, 1.0])];
+        assert!(
+            diarize_offline(&mut NoopSpeakerDiarizer, observations.clone())
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut diarizer =
+            AnonymousSpeakerClusterer::new(AnonymousDiarizationConfig::default()).unwrap();
+        let events = diarize_offline(&mut diarizer, observations).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn cluster_capacity_exhaustion_is_unknown_not_an_identity() {
+        let mut diarizer = AnonymousSpeakerClusterer::new(AnonymousDiarizationConfig {
+            match_threshold: 0.8,
+            maximum_clusters: 1,
+        })
+        .unwrap();
+        diarizer.process(observation(0, &[1.0, 0.0])).unwrap();
+        let events = diarizer.process(observation(1, &[0.0, 1.0])).unwrap();
+        assert!(matches!(
+            &events[0],
+            DiarizationEvent::UnknownSpeaker { reason, .. }
+                if reason == "cluster_capacity_exhausted"
+        ));
+    }
+
+    #[test]
+    fn embedding_models_cannot_change_silently_within_a_stream() {
+        let mut diarizer =
+            AnonymousSpeakerClusterer::new(AnonymousDiarizationConfig::default()).unwrap();
+        diarizer.process(observation(0, &[1.0, 0.0])).unwrap();
+        let mut changed = observation(1, &[1.0, 0.0]);
+        changed.embedding.as_mut().unwrap().model_id = "other-model".into();
+        assert!(
+            diarizer
+                .process(changed)
+                .unwrap_err()
+                .to_string()
+                .contains("model changed")
+        );
+    }
+
+    #[test]
+    fn committed_transcript_projection_preserves_speaker_after_revision() {
+        let segment_id = SegmentId("segment:7".into());
+        let mut projection = DiarizationProjection::default();
+        projection.observe(&DiarizationEvent::SpeakerAssigned {
+            segment_id: segment_id.clone(),
+            segment_sequence: 7,
+            cluster_id: SpeakerClusterId("speaker:1".into()),
+            provisional: true,
+            similarity: Some(0.82),
+            model_id: Some("fixture-embedding".into()),
+        });
+        projection.observe(&DiarizationEvent::SpeakerRevised {
+            segment_id: segment_id.clone(),
+            segment_sequence: 7,
+            from_cluster: SpeakerClusterId("speaker:1".into()),
+            to_cluster: SpeakerClusterId("speaker:0".into()),
+            reason: "clusters_merged".into(),
+        });
+
+        let projected = projection.project(StreamEvent::CommittedSegment {
+            role: crate::TextRole::Recognition,
+            segment_id: segment_id.clone(),
+            text: "hello".into(),
+            words: Vec::new(),
+            language: None,
+            speaker_id: None,
+            confidence: None,
+        });
+        assert!(matches!(
+            projected,
+            StreamEvent::CommittedSegment {
+                segment_id: projected_id,
+                speaker_id: Some(speaker),
+                ..
+            } if projected_id == segment_id && speaker == "speaker:0"
+        ));
+    }
+
+    #[test]
+    fn familiarity_operates_without_enrollment_or_names() {
+        let mut matcher =
+            InMemoryVoiceFamiliarityMatcher::new(VoiceFamiliarityConfig::default()).unwrap();
+        assert!(
+            matcher
+                .observe(
+                    VoiceSignatureId("voice:first".into()),
+                    embedding(&[1.0, 0.0])
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let evidence = matcher
+            .observe(
+                VoiceSignatureId("voice:second".into()),
+                embedding(&[0.99, 0.01]),
+            )
+            .unwrap();
+        assert_eq!(evidence.len(), 1);
+        let encoded = serde_json::to_string(&evidence).unwrap();
+        assert!(encoded.contains("fixture-embedding"));
+        assert!(!encoded.contains("person"));
+        assert!(!encoded.contains("enrollment"));
+    }
+
+    #[test]
+    fn persistent_voice_retention_requires_explicit_opt_in() {
+        let mut matcher =
+            InMemoryVoiceFamiliarityMatcher::new(VoiceFamiliarityConfig::default()).unwrap();
+        let mut persistent = embedding(&[1.0, 0.0]);
+        persistent.retention = VoiceRetentionScope::PersistentOptIn;
+        assert!(
+            matcher
+                .observe(VoiceSignatureId("voice:persistent".into()), persistent)
+                .unwrap_err()
+                .to_string()
+                .contains("not permitted")
+        );
+
+        let mut opted_in = InMemoryVoiceFamiliarityMatcher::new(VoiceFamiliarityConfig {
+            match_threshold: 0.8,
+            retention: VoiceRetentionPolicy {
+                retain_for_session: true,
+                retain_persistently: true,
+            },
+        })
+        .unwrap();
+        let mut persistent = embedding(&[1.0, 0.0]);
+        persistent.retention = VoiceRetentionScope::PersistentOptIn;
+        opted_in
+            .observe(VoiceSignatureId("voice:persistent".into()), persistent)
+            .unwrap();
+        opted_in.clear_session();
+        let mut next = embedding(&[1.0, 0.0]);
+        next.retention = VoiceRetentionScope::PersistentOptIn;
+        assert_eq!(
+            opted_in
+                .observe(VoiceSignatureId("voice:next".into()), next)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn clearing_a_session_forgets_session_scoped_familiarity() {
+        let mut matcher =
+            InMemoryVoiceFamiliarityMatcher::new(VoiceFamiliarityConfig::default()).unwrap();
+        matcher
+            .observe(
+                VoiceSignatureId("voice:first".into()),
+                embedding(&[1.0, 0.0]),
+            )
+            .unwrap();
+        matcher.clear_session();
+        assert!(
+            matcher
+                .observe(
+                    VoiceSignatureId("voice:second".into()),
+                    embedding(&[1.0, 0.0])
+                )
+                .unwrap()
+                .is_empty()
+        );
     }
 }
