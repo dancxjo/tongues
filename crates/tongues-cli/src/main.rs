@@ -1921,7 +1921,8 @@ fn format_panic_payload(payload: &(dyn Any + Send)) -> String {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 pub use web_cli_schema::{
-    WebCliArgument, WebCliArgumentKind, WebCliCardinality, WebCliCommand, WebCliSchema,
+    WebCliArgument, WebCliArgumentKind, WebCliCardinality, WebCliCommand, WebCliPresentation,
+    WebCliSchema,
 };
 
 /// Build a machine-readable browser catalog from the real Clap command tree.
@@ -1933,6 +1934,7 @@ pub fn web_cli_schema(exposed_command_ids: &[&str]) -> WebCliSchema {
 }
 
 fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     let cli = Cli::parse();
 
     let command = cli.command.unwrap_or_else(|| Commands::G2p2g {

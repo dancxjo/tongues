@@ -83,6 +83,7 @@ jobs:
           node --check crates/tongues-server/public/app.js
           node --check crates/tongues-server/public/speech-studio.js
           node --test crates/tongues-server/public/speech-studio.test.cjs
+          node --test crates/tongues-server/public/command-workbench.test.cjs
           node --test crates/tongues-server/public/wavedeck-model.test.mjs
           node --test crates/tongues-server/public/speech-dataflow-model.test.mjs
           node --test crates/tongues-server/public/live-conversation-model.test.mjs

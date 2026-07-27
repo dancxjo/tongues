@@ -159,6 +159,7 @@ impl fmt::Display for StartupError {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     if let Err(error) = run_server().await {
         eprintln!("{error}");
         std::process::exit(1);
@@ -345,6 +346,9 @@ fn build_app(state: AppState) -> Router {
         .route("/speech", get(serve_app_index))
         .route("/speech/", get(serve_app_index))
         .route("/speech/{*path}", get(serve_app_index))
+        .route("/commands", get(serve_app_index))
+        .route("/commands/", get(serve_app_index))
+        .route("/commands/{*path}", get(serve_app_index))
         .route("/jobs", get(serve_app_index))
         .route("/jobs/", get(serve_app_index))
         .route("/pronunciation-demo", get(serve_app_index))
@@ -3503,29 +3507,30 @@ fn resolve_existing_artifact_path(
     relative: &FsPath,
 ) -> Result<PathBuf, String> {
     validate_artifact_relative_path(workspace_root, relative)?;
-    let workspace = canonical_workspace_root(workspace_root)?;
     let path = workspace_root.join(relative);
     let resolved = path
         .canonicalize()
         .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
-    if !resolved.starts_with(&workspace) {
-        return Err("paths must stay inside approved artifact roots".into());
+    if relative.as_os_str().is_empty() || is_allowed_root_artifact_file(relative) {
+        let workspace = canonical_workspace_root(workspace_root)?;
+        if !resolved.starts_with(&workspace) {
+            return Err("paths must stay inside the Tongues workspace".into());
+        }
+    } else {
+        let root = artifact_root_name(relative)
+            .ok_or_else(|| "paths must stay inside approved artifact roots".to_string())?;
+        let root_path = workspace_root.join(root);
+        let resolved_root = root_path
+            .canonicalize()
+            .map_err(|error| format!("failed to resolve {}: {error}", root_path.display()))?;
+        if !resolved.starts_with(&resolved_root) {
+            return Err("paths must stay inside approved artifact roots".into());
+        }
     }
     let metadata = std::fs::metadata(&resolved)
         .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
     if !is_visible_artifact_path(relative, metadata.is_dir()) {
         return Err("requested path is not exposed by the local server".into());
-    }
-    if let Some(root) = artifact_root_name(relative) {
-        let root_path = workspace_root.join(root);
-        if root_path.exists() {
-            let resolved_root = root_path
-                .canonicalize()
-                .map_err(|error| format!("failed to resolve {}: {error}", root_path.display()))?;
-            if !resolved.starts_with(&resolved_root) {
-                return Err("paths must stay inside approved artifact roots".into());
-            }
-        }
     }
     Ok(resolved)
 }
@@ -3547,7 +3552,31 @@ fn validate_artifact_relative_path(
     if !ALLOWED_ARTIFACT_ROOTS.contains(&root) {
         return Err("paths must stay inside approved artifact roots".into());
     }
-    validate_existing_ancestor_within_workspace(workspace_root, relative)
+    validate_existing_ancestor_within_artifact_root(workspace_root, relative, root)
+}
+
+fn validate_existing_ancestor_within_artifact_root(
+    workspace_root: &FsPath,
+    relative: &FsPath,
+    root: &str,
+) -> Result<(), String> {
+    let root_path = workspace_root.join(root);
+    if !root_path.exists() {
+        return validate_existing_ancestor_within_workspace(workspace_root, relative);
+    }
+    let resolved_root = root_path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", root_path.display()))?;
+    let absolute = workspace_root.join(relative);
+    let anchor = deepest_existing_path(&absolute)
+        .ok_or_else(|| format!("path is not available: {}", path_to_web(relative)))?;
+    let resolved_anchor = anchor
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {}: {error}", anchor.display()))?;
+    if !resolved_anchor.starts_with(&resolved_root) {
+        return Err("paths must stay inside approved artifact roots".into());
+    }
+    Ok(())
 }
 
 fn validate_existing_ancestor_within_workspace(
@@ -9534,6 +9563,9 @@ mod tests {
         assert!(routes.contains("/sentence-parser/train"));
         assert!(routes.contains("/cli/speak"));
         assert!(routes.contains("/cli/predict"));
+        let speak = find_web_cli_command(&schema.commands, "speak").expect("speak schema");
+        assert_eq!(speak.capability_href, "/commands/speak");
+        assert_eq!(speak.studio_template.as_deref(), Some("text_to_speech"));
     }
 
     #[test]
@@ -10801,6 +10833,40 @@ mod tests {
         }
 
         std::fs::remove_dir_all(workspace).expect("remove artifact workspace");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_paths_allow_symlink_backed_approved_roots_without_allowing_child_escape() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = test_workspace("symlinked-artifacts");
+        let parent = workspace.parent().expect("workspace parent");
+        let external_models = parent.join(format!("models-{}", uuid::Uuid::new_v4()));
+        let outside = parent.join(format!("outside-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&external_models).expect("create external models");
+        std::fs::write(external_models.join("model.bin"), "model").expect("write model");
+        std::fs::write(&outside, "escape").expect("write outside file");
+        symlink(&external_models, workspace.join("models")).expect("link models root");
+
+        let resolved = resolve_existing_artifact_path(&workspace, FsPath::new("models/model.bin"))
+            .expect("resolve model under symlink-backed approved root");
+        assert_eq!(
+            resolved,
+            external_models
+                .join("model.bin")
+                .canonicalize()
+                .expect("canonical model")
+        );
+
+        symlink(&outside, external_models.join("escape.txt")).expect("create child escape");
+        assert!(
+            resolve_existing_artifact_path(&workspace, FsPath::new("models/escape.txt")).is_err()
+        );
+
+        std::fs::remove_dir_all(workspace).expect("remove artifact workspace");
+        std::fs::remove_dir_all(external_models).expect("remove external models");
+        std::fs::remove_file(outside).expect("remove outside file");
     }
 
     #[test]

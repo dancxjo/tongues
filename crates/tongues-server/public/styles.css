@@ -236,6 +236,121 @@ a {
     margin: 0;
 }
 
+.workbench-toolbar {
+    display: grid;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.workbench-toolbar label,
+.workbench-output-header label {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.workbench-tabs,
+.command-links,
+.copy-field,
+.workbench-output-header {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.workbench-tabs .active {
+    background: var(--primary);
+    color: #ffffff;
+}
+
+.workbench-layout {
+    align-items: start;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.6fr);
+}
+
+.command-catalogue {
+    max-height: calc(100vh - 290px);
+    overflow: auto;
+    padding: 0.75rem;
+    position: sticky;
+    top: 1rem;
+}
+
+.command-results,
+.recent-commands,
+#recent-commands {
+    display: grid;
+    gap: 0.45rem;
+}
+
+.command-result,
+#recent-commands a {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.7rem;
+}
+
+.command-result:hover,
+.command-result.active,
+#recent-commands a:hover {
+    background: var(--panel-soft);
+    border-color: var(--panel-border);
+}
+
+.command-result small,
+.command-result span,
+#recent-commands code {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.recent-commands {
+    border-top: 1px solid var(--panel-border);
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+}
+
+.recent-commands h2 {
+    font-size: 0.9rem;
+}
+
+.copy-field {
+    flex-wrap: nowrap;
+}
+
+.copy-field input {
+    flex: 1;
+    min-width: 0;
+}
+
+.command-links {
+    border-top: 1px solid var(--panel-border);
+    margin-top: 1rem;
+    padding-top: 1rem;
+}
+
+.command-links a {
+    font-weight: 800;
+}
+
+.workbench-output-header {
+    border-top: 1px solid var(--panel-border);
+    justify-content: space-between;
+    margin-top: 1rem;
+    padding-top: 1rem;
+}
+
+#workbench-output {
+    min-height: 180px;
+}
+
 .side-panel {
     background: var(--panel-bg);
     border: 1px solid var(--panel-border);
@@ -1851,8 +1966,14 @@ audio::-webkit-media-controls-panel {
 
     .page-header,
     .skeleton-layout,
+    .workbench-layout,
     .jobs-layout {
         grid-template-columns: 1fr;
+    }
+
+    .command-catalogue {
+        max-height: 360px;
+        position: static;
     }
 
     .job-list {

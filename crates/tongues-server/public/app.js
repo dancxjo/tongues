@@ -2,6 +2,14 @@ const byId = (id) => document.getElementById(id);
 
 const customPages = [
     {
+        title: 'Command Workbench',
+        path: '/commands',
+        group: 'Commands',
+        summary: 'Discover, configure, run, cancel, and inspect browser-safe CLI commands.',
+        capabilityIds: ['server-delivered Clap schema'],
+        page: 'command-workbench',
+    },
+    {
         title: 'Speech Studio',
         path: '/speech',
         aliases: ['/styletts2'],
@@ -21,18 +29,22 @@ const customPages = [
 ];
 
 let commandPages = [];
+let cliCommands = [];
 let activePage = null;
 let activeJobId = null;
 let activeJobSource = null;
 let jobOutputLines = [];
 let jobArtifacts = [];
+let commandLevel = 'workflow';
+const RECENT_COMMANDS_KEY = 'tongues.command-workbench.recent.v1';
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         const response = await fetch('/api/cli/schema');
         if (!response.ok) throw new Error(await response.text());
         const schema = await response.json();
-        commandPages = [...customPages, ...flattenCommands(schema.commands)];
+        cliCommands = flattenCommands(schema.commands);
+        commandPages = [...customPages, ...cliCommands];
     } catch (error) {
         console.error('Unable to load the Clap Web CLI schema', error);
         commandPages = [...customPages];
@@ -83,28 +95,15 @@ function titleCase(value) {
 function renderNavigation() {
     const nav = byId('primary-nav');
     const primaryPages = commandPages.filter((page) => page.page !== 'command');
-    const commandOnlyPages = commandPages.filter((page) => page.page === 'command');
-    const groups = [...new Set(commandOnlyPages.map((page) => page.group))];
     nav.innerHTML = `
         <div class="nav-group">
             <div class="nav-heading">Workspaces</div>
             ${primaryPages.map(navLink).join('')}
         </div>
-        <details class="nav-advanced">
-            <summary>Commands &amp; Advanced</summary>
-            <div class="nav-advanced-body">
-                ${groups.map((group) => `
-                    <div class="nav-group">
-                        <div class="nav-heading">${escapeHtml(group)}</div>
-                        ${commandOnlyPages.filter((page) => page.group === group).map(navLink).join('')}
-                    </div>
-                `).join('')}
-                <div class="nav-group">
-                    <div class="nav-heading">Runtime</div>
-                    <a href="/jobs" data-route="/jobs">Background Jobs</a>
-                </div>
-            </div>
-        </details>`;
+        <div class="nav-group">
+            <div class="nav-heading">Runtime</div>
+            <a href="/jobs" data-route="/jobs">Background Jobs</a>
+        </div>`;
     nav.addEventListener('click', activateRouteLink);
 }
 
@@ -120,8 +119,8 @@ function activateRouteLink(event) {
 }
 
 function shouldHandleClientNavigation(event, link) {
+    if (event.button !== 0) return false;
     return !event.defaultPrevented
-        && event.button === 0
         && !event.metaKey
         && !event.ctrlKey
         && !event.shiftKey
@@ -130,7 +129,7 @@ function shouldHandleClientNavigation(event, link) {
 }
 
 function navigateTo(path) {
-    if (!path || normalizePath(window.location.pathname) === normalizePath(path)) return;
+    if (!path || `${window.location.pathname}${window.location.search}` === path) return;
     history.pushState({}, '', path);
     renderRoute();
 }
@@ -138,20 +137,29 @@ function navigateTo(path) {
 function renderRoute() {
     const path = normalizePath(window.location.pathname);
     const jobsRoute = path === '/jobs';
-    const page = commandPages.find((candidate) => candidate.path === path)
+    const workbenchRoute = path === '/commands' || path.startsWith('/commands/');
+    const commandId = workbenchRoute ? decodeURIComponent(path.slice('/commands/'.length)) : '';
+    const selectedCommand = commandId
+        ? cliCommands.find((candidate) => candidate.id === commandId)
+        : null;
+    const page = selectedCommand
+        || commandPages.find((candidate) => candidate.path === path)
         || commandPages.find((candidate) => (candidate.aliases || []).includes(path))
         || commandPages.find((candidate) => candidate.page === 'speech' && path.startsWith('/speech/'));
     const speechRoute = page?.page === 'speech';
     const pronunciationRoute = page?.page === 'pronunciation-demo';
-    const commandRoute = page?.page === 'command';
+    const commandRoute = page?.page === 'command' || workbenchRoute;
 
     byId('speech-page').classList.toggle('hidden', !speechRoute);
     byId('pronunciation-demo-page').classList.toggle('hidden', !pronunciationRoute);
-    byId('dashboard-page').classList.toggle('hidden', jobsRoute || Boolean(page));
-    byId('skeleton-page').classList.toggle('hidden', !commandRoute);
+    byId('dashboard-page').classList.toggle('hidden', jobsRoute || Boolean(page) || workbenchRoute);
+    byId('command-workbench-page').classList.toggle('hidden', !commandRoute);
     byId('jobs-page').classList.toggle('hidden', !jobsRoute);
     document.querySelectorAll('[data-route]').forEach((link) => {
-        link.classList.toggle('active', link.dataset.route === page?.path || (jobsRoute && link.dataset.route === '/jobs'));
+        link.classList.toggle('active',
+            link.dataset.route === page?.path
+            || (workbenchRoute && link.dataset.route === '/commands')
+            || (jobsRoute && link.dataset.route === '/jobs'));
     });
 
     if (jobsRoute) {
@@ -161,6 +169,12 @@ function renderRoute() {
         return;
     }
     if (!page) {
+        if (workbenchRoute) {
+            activePage = cliCommands[0] || null;
+            setHeader('Command Workbench', 'Commands', 'Browser-safe commands from the current Clap schema.', 'tongues');
+            renderWorkbench(activePage);
+            return;
+        }
         activePage = null;
         setHeader('Command surface', 'Tongues Web', 'Pick a workflow backed by the current CLI schema.', 'tongues');
         renderDashboard();
@@ -170,10 +184,12 @@ function renderRoute() {
     if (speechRoute) {
         setHeader('Speech Studio', 'Speak', page.summary, 'tongues speak');
         window.SpeechStudio?.setWorkflow(path, { focus: false });
+    } else if (commandRoute) {
+        setHeader('Command Workbench', page.title || 'Commands', page.summary || 'Browser-safe commands from Clap.', `tongues ${(page.command || []).join(' ')}`);
     } else {
         setHeader(page.group, page.title, page.summary, `tongues ${(page.command || []).join(' ')}`);
     }
-    if (commandRoute) renderCommandPage(page);
+    if (commandRoute) renderWorkbench(page.page === 'command' ? page : cliCommands[0]);
 }
 
 function setHeader(kicker, title, summary, command) {
@@ -184,7 +200,7 @@ function setHeader(kicker, title, summary, command) {
 }
 
 function renderDashboard() {
-    byId('dashboard-grid').innerHTML = commandPages.map((page) => `
+    byId('dashboard-grid').innerHTML = commandPages.filter((page) => page.page !== 'command').map((page) => `
         <a class="command-card" href="${page.path}" data-route="${page.path}">
             <span>${escapeHtml(page.group)}</span>
             <strong>${escapeHtml(page.title)}</strong>
@@ -195,34 +211,110 @@ function renderDashboard() {
     byId('dashboard-grid').onclick = activateRouteLink;
 }
 
+function renderWorkbench(page) {
+    const capabilityQuery = new URLSearchParams(window.location.search).get('capability');
+    if (capabilityQuery && !byId('command-search').value) {
+        byId('command-search').value = capabilityQuery;
+        commandLevel = 'all';
+    }
+    renderCommandResults();
+    renderRecentCommands();
+    if (page) renderCommandPage(page);
+}
+
+function renderCommandResults() {
+    const query = byId('command-search').value.trim().toLowerCase();
+    const matches = cliCommands.filter((page) => {
+        if (commandLevel !== 'all' && page.presentation !== commandLevel) return false;
+        return !query || [
+            page.id, page.title, page.summary, ...(page.aliases || []),
+            ...(page.arguments || []).flatMap((argument) => [argument.name, argument.help, ...argument.aliases]),
+        ].join(' ').toLowerCase().includes(query);
+    });
+    byId('command-results').innerHTML = matches.length ? matches.map((page) => `
+        <a href="${page.capability_href}" data-route="${page.capability_href}"
+            class="command-result${page.id === activePage?.id ? ' active' : ''}">
+            <strong>${escapeHtml(page.title)}</strong>
+            <small>${escapeHtml(page.id)} · ${escapeHtml(page.presentation)}</small>
+            <span>${escapeHtml(page.summary)}</span>
+        </a>`).join('') : '<p class="empty-controls">No exposed command matches this search.</p>';
+    byId('command-results').onclick = activateRouteLink;
+}
+
+function readRecentCommands() {
+    try {
+        return JSON.parse(localStorage.getItem(RECENT_COMMANDS_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+function rememberCommand(page) {
+    const recent = [{ id: page.id, command: commandFromControls(page).join(' ') }]
+        .concat(readRecentCommands().filter((item) => item.id !== page.id))
+        .slice(0, 8);
+    localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(recent));
+    renderRecentCommands();
+}
+
+function renderRecentCommands() {
+    const recent = readRecentCommands().filter((item) => cliCommands.some((page) => page.id === item.id));
+    byId('recent-commands').innerHTML = recent.length ? recent.map((item) => `
+        <a href="/commands/${escapeHtml(item.id)}" data-route="/commands/${escapeHtml(item.id)}">
+            <strong>${escapeHtml(item.id)}</strong><code>${escapeHtml(item.command)}</code>
+        </a>`).join('') : '<small>No commands run in this browser yet.</small>';
+    byId('recent-commands').onclick = activateRouteLink;
+}
+
 function renderCommandPage(page) {
+    activePage = page;
     const arguments_ = page.arguments || [];
     const primary = arguments_.filter((argument) => !argument.global);
     const advanced = arguments_.filter((argument) => argument.global);
     byId('command-preview').value = commandExample(page);
     byId('skeleton-doc').innerHTML = `
         <p>${escapeHtml(page.summary)}</p>
-        <p class="cli-equivalent">CLI capability: <code>${escapeHtml(page.id)}</code></p>`;
-    byId('side-panel-title').textContent = 'Schema owned';
-    byId('side-panel-body').innerHTML = `
-        <p>Controls, defaults, aliases, conflicts, and allowed values come directly from Clap.</p>`;
+        <p class="cli-equivalent">
+            <strong>${page.exposed ? 'Browser-safe exposure' : 'Documentation only'}</strong>
+            · hierarchy <code>${escapeHtml(page.command.join(' → '))}</code>
+            ${page.aliases?.length ? ` · aliases <code>${escapeHtml(page.aliases.join(', '))}</code>` : ''}
+        </p>`;
     byId('skeleton-fields').innerHTML = primary.length
         ? primary.map(renderControl).join('')
         : '<p class="empty-controls">This command has no command-specific controls.</p>';
     byId('skeleton-advanced-fields').innerHTML = advanced.map(renderControl).join('');
     byId('skeleton-advanced').classList.toggle('hidden', advanced.length === 0);
-    byId('skeleton-notes').value = `${commandExample(page)}\n\n${page.summary}`;
-    document.querySelectorAll('#skeleton-page [data-control]').forEach((node) => {
+    byId('command-capability-link').href = page.capability_href;
+    byId('command-model-link').classList.toggle('hidden', !page.model_href);
+    if (page.model_href) byId('command-model-link').href = page.model_href;
+    byId('command-studio-link').classList.toggle('hidden', !page.studio_template);
+    if (page.studio_template) {
+        byId('command-studio-link').href = `/speech-dataflow.html?starter=${encodeURIComponent(page.studio_template)}`;
+    }
+    document.querySelectorAll('#command-workbench-page [data-control]').forEach((node) => {
         node.addEventListener('input', () => {
             syncConflicts(page);
             byId('command-preview').value = commandFromControls(page).join(' ');
+            saveFormState(page);
         });
     });
+    restoreFormState(page);
     syncConflicts(page);
+    byId('command-preview').value = commandFromControls(page).join(' ');
+    renderCommandResults();
 }
 
 function renderControl(argument) {
-    const description = `<small>${escapeHtml(argument.help || 'CLI argument.')}</small>`;
+    const metadata = [
+        argument.aliases?.length ? `aliases ${argument.aliases.join(', ')}` : '',
+        argument.defaults?.length ? `default ${argument.defaults.join(', ')}` : '',
+        argument.conflicts?.length ? `conflicts with ${argument.conflicts.join(', ')}` : '',
+        argument.required ? 'required' : 'optional',
+        argument.cardinality?.repeatable ? 'repeatable' : '',
+    ].filter(Boolean).join(' · ');
+    const description = `
+        <small>${escapeHtml(argument.help || 'CLI argument.')}</small>
+        <small class="control-contract">${escapeHtml(`${argument.value_type} · ${metadata}`)}</small>`;
     const required = argument.required ? ' required' : '';
     if (argument.kind === 'flag') {
         return `
@@ -261,12 +353,12 @@ function renderControl(argument) {
 
 function syncConflicts(page) {
     const activeIds = new Set(
-        [...document.querySelectorAll('#skeleton-page [data-arg-id]')]
+        [...document.querySelectorAll('#command-workbench-page [data-arg-id]')]
             .filter(hasControlValue)
             .map((node) => node.dataset.argId),
     );
     for (const argument of page.arguments || []) {
-        const node = document.querySelector(`#skeleton-page [data-arg-id="${cssEscape(argument.id)}"]`);
+        const node = document.querySelector(`#command-workbench-page [data-arg-id="${cssEscape(argument.id)}"]`);
         if (!node || hasControlValue(node)) continue;
         node.disabled = argument.conflicts.some((id) => activeIds.has(id));
     }
@@ -293,7 +385,7 @@ function commandFromControls(page) {
     const options = [];
     const positional = [];
     for (const argument of page.arguments || []) {
-        const node = document.querySelector(`#skeleton-page [data-arg-id="${cssEscape(argument.id)}"]`);
+        const node = document.querySelector(`#command-workbench-page [data-arg-id="${cssEscape(argument.id)}"]`);
         if (!node || node.disabled) continue;
         const values = node.type === 'checkbox'
             ? (node.checked ? [''] : [])
@@ -316,10 +408,56 @@ function buildJobRequest(page) {
     };
 }
 
+function formState(page) {
+    return Object.fromEntries((page.arguments || []).flatMap((argument) => {
+        const node = document.querySelector(`#command-workbench-page [data-arg-id="${cssEscape(argument.id)}"]`);
+        if (!node) return [];
+        const value = node.type === 'checkbox' ? node.checked : node.value;
+        return value === '' || value === false ? [] : [[argument.id, value]];
+    }));
+}
+
+function saveFormState(page) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    for (const [id, value] of Object.entries(formState(page))) {
+        url.searchParams.set(`arg.${id}`, String(value));
+    }
+    history.replaceState({}, '', `${url.pathname}${url.search}`);
+}
+
+function restoreFormState(page) {
+    const query = new URLSearchParams(window.location.search);
+    for (const argument of page.arguments || []) {
+        const value = query.get(`arg.${argument.id}`);
+        if (value === null) continue;
+        const node = document.querySelector(`#command-workbench-page [data-arg-id="${cssEscape(argument.id)}"]`);
+        if (!node) continue;
+        if (node.type === 'checkbox') node.checked = value === 'true';
+        else node.value = value;
+    }
+}
+
 function initJobs() {
     byId('run-command').addEventListener('click', startCurrentPageJob);
+    byId('cancel-command').addEventListener('click', cancelActiveJob);
     byId('refresh-jobs').addEventListener('click', loadJobs);
     byId('cancel-job').addEventListener('click', cancelActiveJob);
+    byId('copy-command').addEventListener('click', async (event) => {
+        await navigator.clipboard.writeText(byId('command-preview').value);
+        event.currentTarget.textContent = 'Copied';
+    });
+    byId('command-search').addEventListener('input', renderCommandResults);
+    document.querySelectorAll('[data-command-level]').forEach((button) => {
+        button.addEventListener('click', () => {
+            commandLevel = button.dataset.commandLevel;
+            document.querySelectorAll('[data-command-level]').forEach((candidate) => {
+                candidate.classList.toggle('active', candidate === button);
+            });
+            renderCommandResults();
+        });
+    });
+    byId('output-mode').addEventListener('change', renderWorkbenchOutput);
     loadJobs();
 }
 
@@ -333,6 +471,11 @@ async function startCurrentPageJob() {
     });
     if (!response.ok) return alert(await response.text());
     const data = await response.json();
+    rememberCommand(activePage);
+    byId('workbench-job-status').textContent = `Running ${data.job_id}`;
+    byId('cancel-command').classList.remove('hidden');
+    jobOutputLines = [];
+    jobArtifacts = [];
     await loadJobs();
     selectJob(data.job_id);
 }
@@ -365,14 +508,19 @@ async function selectJob(jobId) {
 }
 
 function applyJobEvent(event) {
-    if (event.type === 'snapshot') renderJobDetail(event.summary, event.output || [], jobArtifacts);
+    if (event.type === 'snapshot') {
+        renderJobDetail(event.summary, event.output || [], jobArtifacts);
+        renderWorkbenchStatus(event.summary);
+    }
     if (event.type === 'output') {
         jobOutputLines.push(event);
         renderJobOutput();
+        renderWorkbenchOutput();
     }
     if (event.type === 'progress') renderProgress(event.progress);
     if (event.type === 'status') {
         renderJobSummary(event.summary);
+        renderWorkbenchStatus(event.summary);
         loadJobs();
     }
 }
@@ -382,6 +530,8 @@ function renderJobDetail(summary, output, artifacts) {
     jobArtifacts = artifacts;
     renderJobSummary(summary);
     renderJobOutput();
+    renderWorkbenchStatus(summary);
+    renderWorkbenchOutput();
     byId('job-artifacts').innerHTML = artifacts.length
         ? artifacts.map((artifact) => `<div class="artifact-row">${escapeHtml(artifact.path)}</div>`).join('')
         : '<div class="artifact-empty">Output files will appear here.</div>';
@@ -409,6 +559,38 @@ function renderJobOutput() {
     byId('job-output').textContent = jobOutputLines
         .slice(-500)
         .map((line) => `[${line.stream}] ${line.line}`)
+        .join('\n');
+}
+
+function renderWorkbenchStatus(summary) {
+    byId('workbench-job-status').textContent = `${summary.label}: ${summary.status} · ${summary.progress.phase}`;
+    byId('cancel-command').classList.toggle('hidden', summary.status !== 'running');
+}
+
+function renderWorkbenchOutput() {
+    const mode = byId('output-mode').value;
+    const raw = jobOutputLines.map((line) => line.line).join('\n');
+    if (mode === 'raw') {
+        byId('workbench-output').textContent = raw;
+        return;
+    }
+    if (mode === 'jsonl') {
+        byId('workbench-output').textContent = jobOutputLines.map((line) => JSON.stringify(line)).join('\n');
+        return;
+    }
+    if (mode === 'json') {
+        const parsed = jobOutputLines.map((line) => {
+            try {
+                return JSON.parse(line.line);
+            } catch {
+                return { stream: line.stream, text: line.line };
+            }
+        });
+        byId('workbench-output').textContent = JSON.stringify(parsed, null, 2);
+        return;
+    }
+    byId('workbench-output').textContent = jobOutputLines
+        .map((line) => JSON.stringify({ type: 'output', stream: line.stream, line: line.line, at_ms: line.at_ms }))
         .join('\n');
 }
 

@@ -20,8 +20,24 @@ pub struct WebCliCommand {
     pub aliases: Vec<String>,
     pub help: String,
     pub exposed: bool,
+    /// Presentation tier for the browser without duplicating command semantics
+    /// in JavaScript.
+    pub presentation: WebCliPresentation,
+    /// Stable browser documentation link for this command.
+    pub capability_href: String,
+    /// Stable model/capability inventory link when the command uses models.
+    pub model_href: Option<String>,
+    /// A meaningful Speech Studio starter, when this command has a graph form.
+    pub studio_template: Option<String>,
     pub arguments: Vec<WebCliArgument>,
     pub subcommands: Vec<WebCliCommand>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebCliPresentation {
+    Workflow,
+    Component,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -100,6 +116,10 @@ fn command_schema(
         aliases: command.get_all_aliases().map(str::to_string).collect(),
         help: styled(command.get_long_about().or_else(|| command.get_about())),
         exposed: directly_exposed,
+        presentation: presentation_for(&id),
+        capability_href: format!("/commands/{id}"),
+        model_href: model_href_for(&id).map(str::to_string),
+        studio_template: studio_template_for(&id).map(str::to_string),
         arguments: command
             .get_arguments()
             .filter(|argument| !argument.is_hide_set())
@@ -116,6 +136,30 @@ fn command_schema(
             .collect(),
         subcommands,
     })
+}
+
+fn presentation_for(id: &str) -> WebCliPresentation {
+    if matches!(id, "speak" | "speaking" | "predict" | "phonemes" | "phones") {
+        WebCliPresentation::Workflow
+    } else {
+        WebCliPresentation::Component
+    }
+}
+
+fn model_href_for(id: &str) -> Option<&'static str> {
+    (!matches!(
+        id,
+        "discrepancies" | "fetch-cmudict" | "fetch-corpora" | "phonemes" | "phones"
+    ))
+    .then_some("/speech/catalog")
+}
+
+fn studio_template_for(id: &str) -> Option<&'static str> {
+    match id {
+        "speak" => Some("text_to_speech"),
+        "interpretation/stream" => Some("interpretation"),
+        _ => None,
+    }
 }
 
 fn argument_schema(command: &Command, argument: &Arg) -> WebCliArgument {
@@ -269,6 +313,9 @@ mod tests {
         let run = &family.subcommands[0];
         assert_eq!(run.id, "family/run");
         assert_eq!(run.route, "/cli/family/run");
+        assert_eq!(run.capability_href, "/commands/family/run");
+        assert_eq!(run.presentation, WebCliPresentation::Component);
+        assert_eq!(run.studio_template, None);
         let mode = run.arguments.iter().find(|arg| arg.id == "mode").unwrap();
         assert_eq!(mode.defaults, ["safe"]);
         assert_eq!(mode.value_enum, ["safe", "fast"]);

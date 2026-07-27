@@ -23,7 +23,11 @@ async function discover(){
   [discovery,{graphs:starters}]=await Promise.all([request("/api/pipeline/catalog"),request("/api/pipeline/starters")]);
   catalog=buildCatalog(discovery);renderPalette();renderTemplates();
   byId("template").replaceChildren(...starters.map(graph=>new Option(graph.metadata.name,graph.graph_id)));
-  initCanvas();loadGraph(starters[0]??createPipeline());
+  const requestedStarter=new URLSearchParams(location.search).get("starter");
+  const selectedStarter=starters.find(graph=>graph.graph_id===`starter:${requestedStarter}`)
+    ??starters.find(graph=>graph.graph_id===requestedStarter)
+    ??starters[0];
+  initCanvas();loadGraph(selectedStarter??createPipeline());
   announce(`Loaded ${catalog.length} backend-discovered choices and ${starters.length} starter graphs.`);
 }
 
@@ -132,6 +136,9 @@ function renderInspector(){
 function renderNodeInspector(node){
   const item=catalog.find(entry=>entry.kind===node.kind&&entry.component_id===node.component_id);
   byId("node-title").textContent=nodeLabel(node,catalog);byId("node-detail").textContent=item?.detail??node.kind;
+  const commandByKind={tts:"speak",interpretation:"interpretation/stream"};
+  const commandId=commandByKind[node.kind];
+  byId("node-docs").href=commandId?`/commands/${commandId}`:`/commands?capability=${encodeURIComponent(node.kind)}`;
   byId("disable").textContent=node.disabled?"Enable":"Disable";
   byId("node-readiness").textContent=`Readiness: ${item?.readiness??"unknown"}`;byId("node-readiness").className=item?.readiness==="ready"?"ready":"error";
   const grouped=diagnosticsByTarget(validation);

@@ -37,33 +37,59 @@
                     <div id="dashboard-grid" class="command-grid"></div>
                 </section>
 
-                <section id="skeleton-page" class="page-view hidden">
-                    <div class="skeleton-layout">
+                <section id="command-workbench-page" class="page-view hidden">
+                    <div class="workbench-toolbar glass-panel">
+                        <label for="command-search">Find a browser-safe command</label>
+                        <input id="command-search" type="search" placeholder="Name, alias, argument, or help text">
+                        <div class="workbench-tabs" role="group" aria-label="Command level">
+                            <button type="button" class="secondary-button active" data-command-level="workflow">Friendly workflows</button>
+                            <button type="button" class="secondary-button" data-command-level="component">Component commands</button>
+                            <button type="button" class="secondary-button" data-command-level="all">All safe commands</button>
+                        </div>
+                    </div>
+                    <div class="workbench-layout">
+                        <aside class="glass-panel command-catalogue" aria-label="Available commands">
+                            <div id="command-results" class="command-results"></div>
+                            <div class="recent-commands">
+                                <h2>Recent commands</h2>
+                                <div id="recent-commands"></div>
+                            </div>
+                        </aside>
                         <form class="glass-panel command-form">
                             <div id="skeleton-doc" class="page-doc"></div>
                             <div class="form-group">
                                 <label for="command-preview">CLI Command</label>
-                                <input id="command-preview" type="text" readonly>
+                                <div class="copy-field">
+                                    <input id="command-preview" type="text" readonly>
+                                    <button id="copy-command" type="button" class="secondary-button">Copy</button>
+                                </div>
                             </div>
                             <div id="skeleton-fields" class="controls-grid"></div>
                             <details id="skeleton-advanced" class="advanced-section">
                                 <summary>Advanced Controls</summary>
                                 <div id="skeleton-advanced-fields" class="controls-grid"></div>
                             </details>
-                            <div class="form-group">
-                                <label for="skeleton-notes">Notes</label>
-                                <textarea id="skeleton-notes" placeholder="Run output and command status will appear here once this page is wired." readonly></textarea>
+                            <div class="command-links">
+                                <a id="command-capability-link" href="/commands">Canonical command documentation</a>
+                                <a id="command-model-link" class="hidden" href="/speech/catalog">Capability and model details</a>
+                                <a id="command-studio-link" class="hidden" href="/speech-dataflow.html">Create graph from workflow</a>
                             </div>
                             <div class="action-bar">
                                 <button id="run-command" type="button">Start Job</button>
+                                <button id="cancel-command" type="button" class="danger-button hidden">Cancel</button>
                             </div>
+                            <div class="workbench-output-header">
+                                <strong id="workbench-job-status">Not run</strong>
+                                <label for="output-mode">Inspect output as</label>
+                                <select id="output-mode">
+                                    <option value="stream">Event stream</option>
+                                    <option value="jsonl">JSONL</option>
+                                    <option value="json">JSON</option>
+                                    <option value="raw">Raw</option>
+                                </select>
+                            </div>
+                            <pre id="workbench-output" class="job-output" aria-live="polite"></pre>
                         </form>
-                        <aside class="side-panel">
-                            <div id="side-panel-title" class="section-title">First Run</div>
-                            <div id="side-panel-body">
-                                <p>Use the defaults first, then tune the advanced controls once the basic command is working.</p>
-                            </div>
-                        </aside>
                     </div>
                 </section>
 

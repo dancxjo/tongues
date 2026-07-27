@@ -1,4 +1,5 @@
 set positional-arguments
+set dotenv-load := true
 
 default:
     @just --list
