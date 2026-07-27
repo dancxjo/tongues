@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  adapterPaths,addNode,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,createEditHistory,createPipeline,
-  catalogEntryForNode,connectionCompatibility,diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,migrateReplacementConfig,nodeLabel,
-  planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,undoEdit,validateSchemaValue,
+  adapterPaths,addNode,alignGraphSelection,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
+  catalogEntryForNode,connectionCompatibility,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
+  pasteGraphSelection,planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,tidyGraphSelection,undoEdit,validateSchemaValue,
 } from "./speech-dataflow-model.mjs";
 
 const replacement=(family,extra={})=>({family,configuration_schema_id:`fixture.${family}.config`,configuration_schema_version:1,port_aliases:{},configuration_aliases:{},disconnect_ports:[],...extra});
@@ -143,6 +143,48 @@ test("layout and reusable subgraph insertion survive JSON persistence",()=>{
   const ids=insertSubgraph(graph,template,{x:140,y:90});
   assert.equal(ids.length,2);assert.equal(graph.edges.length,1);
   assert.deepEqual(Object.keys(ensureLayout(JSON.parse(JSON.stringify(graph)))).sort(),ids.sort());
+});
+
+test("copy and paste mint fresh identities and retain only selected internal topology",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const mic=addNode(graph,catalog.find(node=>node.kind==="microphone"),null,{x:100,y:100});
+  const asr=addNode(graph,catalog.find(node=>node.kind==="asr"),null,{x:400,y:100});
+  const sink=addNode(graph,catalog.find(node=>node.kind==="transcript_sink"),null,{x:700,y:100});
+  connectPorts(graph,mic.id,"out",asr.id,"audio",discovery);
+  connectPorts(graph,asr.id,"committed",sink.id,"in",discovery);
+  const copied=copyGraphSelection(graph,[mic.id,asr.id]);
+  assert.deepEqual(copied.nodes.map(node=>node.id),[mic.id,asr.id]);
+  assert.equal(copied.edges.length,1);assert.equal(copied.edges[0].to.node_id,asr.id);
+  const pasted=pasteGraphSelection(graph,copied,{x:50,y:75});
+  assert.equal(pasted.length,2);assert.ok(pasted.every(id=>![mic.id,asr.id].includes(id)));
+  const pastedEdge=graph.edges.at(-1);
+  assert.ok(pasted.includes(pastedEdge.from.node_id));assert.ok(pasted.includes(pastedEdge.to.node_id));
+  assert.notEqual(pastedEdge.id,copied.edges[0].id);
+  assert.equal(graph.edges.filter(edge=>edge.to.node_id===sink.id).length,1,"external topology is not fabricated");
+  const layout=ensureLayout(graph);
+  assert.deepEqual(layout[pasted[0]],{x:150,y:175});assert.deepEqual(layout[pasted[1]],{x:450,y:175});
+});
+
+test("multi-object delete and presentation arrangement are atomic and semantics-safe",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const nodes=[
+    addNode(graph,catalog.find(node=>node.kind==="microphone"),null,{x:100,y:100}),
+    addNode(graph,catalog.find(node=>node.kind==="asr"),null,{x:340,y:180}),
+    addNode(graph,catalog.find(node=>node.kind==="transcript_sink"),null,{x:760,y:360}),
+  ];
+  connectPorts(graph,nodes[0].id,"out",nodes[1].id,"audio",discovery);
+  connectPorts(graph,nodes[1].id,"committed",nodes[2].id,"in",discovery);
+  const semantic=()=>graph.edges.map(edge=>structuredClone({id:edge.id,from:edge.from,to:edge.to,capacity:edge.capacity}));
+  const before=semantic(),revision=graph.revision;
+  assert.equal(moveGraphSelection(graph,nodes.map(node=>node.id),{x:13,y:29},{snap:24}),true);
+  assert.equal(alignGraphSelection(graph,nodes.map(node=>node.id),"y","start"),true);
+  assert.equal(distributeGraphSelection(graph,nodes.map(node=>node.id),"x"),true);
+  assert.equal(tidyGraphSelection(graph,nodes.map(node=>node.id),{columns:2}),true);
+  assert.deepEqual(semantic(),before);assert.equal(graph.revision,revision+4);
+  const edgeId=graph.edges[0].id;
+  assert.equal(deleteGraphSelection(graph,[nodes[1].id],[edgeId]),true);
+  assert.deepEqual(graph.nodes.map(node=>node.id),[nodes[0].id,nodes[2].id]);
+  assert.equal(graph.edges.length,0);
 });
 
 test("bypass is explicit structural rewiring and preserves compatible fan-out",()=>{

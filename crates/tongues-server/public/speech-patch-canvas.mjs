@@ -92,6 +92,7 @@ export function createPatchCanvas(options) {
     getCatalog,
     nodeLabel,
     getSelectedEdgeId,
+    isEdgeSelected = id => getSelectedEdgeId() === id,
     onSelectNode,
     onSelectEdge,
     onGraphEdit,
@@ -157,7 +158,7 @@ export function createPatchCanvas(options) {
       const visible = svgElement(document, "path", {
         d: path,
         "data-edge-id": edge.id,
-        class: `patch-cable signal-${signalFamily(output?.value_type)}${getSelectedEdgeId() === edge.id ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
+        class: `patch-cable signal-${signalFamily(output?.value_type)}${isEdgeSelected(edge.id) ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
       });
       hit.addEventListener("pointerdown", event => {
         event.stopPropagation();

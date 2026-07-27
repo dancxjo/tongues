@@ -67,6 +67,7 @@ function cytoscapeStub(){
     };
     return{
       on:noop,off:noop,fit:noop,panBy:noop,extent:()=>({x1:0,y1:0,x2:840,y2:560}),
+      collection:items=>items,
       add:items=>items.forEach(item=>elements.set(item.data.id,item)),
       elements:()=>({remove:()=>elements.clear(),unselect:noop}),
       nodes:()=>({removeClass:noop}),
@@ -239,4 +240,60 @@ test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persi
   await save();
   expect(savedGraph.edges.some(edge=>edge.id===audioEdge.id)).toBe(false);
   expect(savedGraph.edges).toHaveLength(2);
+});
+
+test("multi-selection copy, paste, arrange, delete, undo, redo, and branch clearing preserve internal topology",async({page})=>{
+  const jack=(nodeId,direction)=>page.locator(`[data-patch-jack][data-node-id="${nodeId}"][data-direction="${direction}"]`);
+  const save=async()=>{
+    savedGraph=null;
+    await page.locator("#status").evaluate(element=>{element.textContent="";});
+    await page.getByRole("button",{name:"Save"}).click();
+    await expect.poll(()=>savedGraph).not.toBeNull();
+    await expect(page.locator("#status")).toContainText("Saved Browser fixture");
+  };
+  const originalIds=new Set(graph.nodes.map(node=>node.id));
+
+  await jack("node:mic-1","output").focus();await jack("node:mic-1","output").press("Enter");
+  await jack("node:asr","input").focus();await jack("node:asr","input").press("Enter");
+  const outline=page.locator("#graph-outline button");
+  await outline.nth(0).dispatchEvent("click");
+  await outline.nth(1).dispatchEvent("click",{shiftKey:true});
+  await expect(outline.nth(0)).toHaveAttribute("aria-pressed","true");
+  await expect(outline.nth(1)).toHaveAttribute("aria-pressed","true");
+
+  await page.getByRole("button",{name:"Copy",exact:true}).click();
+  await page.getByRole("button",{name:"Paste",exact:true}).click();
+  await expect(page.locator(".patch-cable")).toHaveCount(2);
+  await save();
+  const pastedIds=savedGraph.nodes.map(node=>node.id).filter(id=>!originalIds.has(id));
+  expect(pastedIds).toHaveLength(2);expect(new Set(savedGraph.nodes.map(node=>node.id)).size).toBe(7);
+  const pastedEdge=savedGraph.edges.find(edge=>pastedIds.includes(edge.from.node_id)||pastedIds.includes(edge.to.node_id));
+  expect(pastedIds).toContain(pastedEdge.from.node_id);expect(pastedIds).toContain(pastedEdge.to.node_id);
+
+  await page.getByRole("button",{name:"Undo"}).click();await save();
+  expect(savedGraph.nodes).toHaveLength(5);expect(savedGraph.edges).toHaveLength(1);
+  await page.getByRole("button",{name:"Redo"}).click();await save();
+  expect(savedGraph.nodes).toHaveLength(7);expect(savedGraph.edges).toHaveLength(2);
+
+  await page.getByRole("button",{name:"Snap off"}).click();
+  await expect(page.getByRole("button",{name:"Snap on"})).toHaveAttribute("aria-pressed","true");
+  await outline.last().focus();await outline.last().press("ArrowRight");await save();
+  const snapped=JSON.parse(savedGraph.metadata.labels["studio.layout.v1"]);
+  expect(pastedIds.every(id=>snapped[id].x%24===0&&snapped[id].y%24===0)).toBe(true);
+  await page.getByRole("button",{name:"Undo"}).click();
+  await page.getByRole("button",{name:"Fit selection"}).click();
+
+  await page.getByRole("button",{name:"Align top"}).click();await save();
+  const layout=JSON.parse(savedGraph.metadata.labels["studio.layout.v1"]);
+  expect(new Set(pastedIds.map(id=>layout[id].y)).size).toBe(1);
+  await page.getByRole("button",{name:"Undo"}).click();
+  await page.getByRole("button",{name:"Tidy"}).click();
+  await expect(page.getByRole("button",{name:"Redo"})).toBeDisabled();
+
+  await page.locator("#duplicate-selection").click();
+  await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(3);
+  await page.getByRole("button",{name:"Delete selection"}).click();
+  await save();expect(savedGraph.nodes).toHaveLength(7);expect(savedGraph.edges).toHaveLength(2);
+  await page.getByRole("button",{name:"Undo"}).click();
+  await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(3);
 });

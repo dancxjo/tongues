@@ -512,6 +512,77 @@ function writeLayout(pipeline,layout) {
 export function nodePosition(pipeline,id){return readLayout(pipeline)[id]??null;}
 export function setNodePosition(pipeline,id,position){const layout=readLayout(pipeline);layout[id]={x:Math.round(position.x),y:Math.round(position.y)};writeLayout(pipeline,layout);}
 
+export function copyGraphSelection(pipeline,nodeIds) {
+  const selected=new Set(nodeIds),layout=readLayout(pipeline);
+  return{
+    schema_version:1,
+    nodes:pipeline.nodes.filter(node=>selected.has(node.id)).map(node=>structuredClone(node)),
+    edges:pipeline.edges.filter(edge=>selected.has(edge.from.node_id)&&selected.has(edge.to.node_id)).map(edge=>structuredClone(edge)),
+    positions:Object.fromEntries([...selected].filter(id=>layout[id]).map(id=>[id,structuredClone(layout[id])])),
+  };
+}
+
+export function pasteGraphSelection(pipeline,selection,offset={x:36,y:36}) {
+  const idMap=new Map(),layout=readLayout(pipeline),pasted=[];
+  for(const source of selection?.nodes??[]){
+    const node={...structuredClone(source),id:`node:${cryptoId()}`};
+    idMap.set(source.id,node.id);pipeline.nodes.push(node);pasted.push(node.id);
+    const position=selection.positions?.[source.id]??{x:100,y:100};
+    layout[node.id]={x:Math.round(position.x+offset.x),y:Math.round(position.y+offset.y)};
+  }
+  for(const source of selection?.edges??[]){
+    const from=idMap.get(source.from.node_id),to=idMap.get(source.to.node_id);
+    if(!from||!to)continue;
+    pipeline.edges.push({...structuredClone(source),id:`edge:${cryptoId()}`,from:{...source.from,node_id:from},to:{...source.to,node_id:to}});
+  }
+  if(!pasted.length)return[];
+  writeLayout(pipeline,layout);touch(pipeline);return pasted;
+}
+
+export function deleteGraphSelection(pipeline,nodeIds,edgeIds=[]) {
+  const nodes=new Set(nodeIds),edges=new Set(edgeIds);
+  if(!nodes.size&&!edges.size)return false;
+  pipeline.nodes=pipeline.nodes.filter(node=>!nodes.has(node.id));
+  pipeline.edges=pipeline.edges.filter(edge=>!edges.has(edge.id)&&!nodes.has(edge.from.node_id)&&!nodes.has(edge.to.node_id));
+  pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>!nodes.has(sink.node_id));
+  const layout=readLayout(pipeline);nodes.forEach(id=>delete layout[id]);writeLayout(pipeline,layout);touch(pipeline);
+  return true;
+}
+
+export function moveGraphSelection(pipeline,nodeIds,delta,{snap=0}={}) {
+  const layout=readLayout(pipeline),ids=[...new Set(nodeIds)].filter(id=>layout[id]);
+  if(!ids.length||(delta.x===0&&delta.y===0))return false;
+  const rounded=value=>snap>0?Math.round(value/snap)*snap:Math.round(value);
+  ids.forEach(id=>{layout[id]={x:rounded(layout[id].x+delta.x),y:rounded(layout[id].y+delta.y)};});
+  writeLayout(pipeline,layout);touch(pipeline);return true;
+}
+
+export function alignGraphSelection(pipeline,nodeIds,axis,mode="start") {
+  const layout=readLayout(pipeline),ids=[...new Set(nodeIds)].filter(id=>layout[id]);
+  if(ids.length<2||!["x","y"].includes(axis))return false;
+  const values=ids.map(id=>layout[id][axis]);
+  const target=mode==="end"?Math.max(...values):mode==="center"?values.reduce((sum,value)=>sum+value,0)/values.length:Math.min(...values);
+  ids.forEach(id=>{layout[id][axis]=Math.round(target);});
+  writeLayout(pipeline,layout);touch(pipeline);return true;
+}
+
+export function distributeGraphSelection(pipeline,nodeIds,axis) {
+  if(!["x","y"].includes(axis))return false;
+  const layout=readLayout(pipeline),ids=[...new Set(nodeIds)].filter(id=>layout[id]).sort((left,right)=>layout[left][axis]-layout[right][axis]);
+  if(ids.length<3)return false;
+  const start=layout[ids[0]][axis],end=layout[ids.at(-1)][axis],step=(end-start)/(ids.length-1);
+  ids.forEach((id,index)=>{layout[id][axis]=Math.round(start+step*index);});
+  writeLayout(pipeline,layout);touch(pipeline);return true;
+}
+
+export function tidyGraphSelection(pipeline,nodeIds,{columns=3,gapX=290,gapY=220}={}) {
+  const layout=readLayout(pipeline),ids=[...new Set(nodeIds)].filter(id=>layout[id]);
+  if(ids.length<2)return false;
+  const origin={x:Math.min(...ids.map(id=>layout[id].x)),y:Math.min(...ids.map(id=>layout[id].y))};
+  ids.forEach((id,index)=>{layout[id]={x:origin.x+(index%columns)*gapX,y:origin.y+Math.floor(index/columns)*gapY};});
+  writeLayout(pipeline,layout);touch(pipeline);return true;
+}
+
 export function ensureLayout(pipeline) {
   const layout=readLayout(pipeline);
   pipeline.nodes.forEach((node,index)=>{
