@@ -252,8 +252,10 @@ async function renderedBoundaryMetrics(page){
       const start=path.getPointAtLength(0),end=path.getPointAtLength(length);
       return{id:path.dataset.edgeId,start:{x:start.x,y:start.y},end:{x:end.x,y:end.y},bounds:relative(path)};
     });
+    const host=document.querySelector(".patch-overlay-host");
     const layers=[...document.querySelectorAll(".patch-organization,.patch-cables,.patch-jacks,.patch-node-cards")].map(layer=>({
       className:layer.getAttribute("class"),bounds:relative(layer),overflow:getComputedStyle(layer).overflow,
+      parentClass:layer.parentElement?.className??null,
     }));
     const probe=selector=>{
       const element=document.querySelector(selector),bounds=element.getBoundingClientRect();
@@ -265,7 +267,10 @@ async function renderedBoundaryMetrics(page){
       };
     };
     return{
-      viewport:hooks.viewportBounds(),nodes,jacks,cables,layers,
+      viewport:hooks.viewportBounds(),host:{
+        bounds:relative(host),overflow:getComputedStyle(host).overflow,
+        childClasses:[...host.children].map(child=>child.className?.baseVal??child.className),
+      },nodes,jacks,cables,layers,
       probes:[probe("#inspector-panel"),probe(".toolbar")],
     };
   });
@@ -304,8 +309,9 @@ function renderedBoundaryViolations(metrics){
     }
   }
   for(const layer of metrics.layers){
-    if(!enclosed(layer.bounds,metrics.viewport)||layer.overflow!=="hidden")violations.push(`overlay ${layer.className}: bounds=${JSON.stringify(layer.bounds)} overflow=${layer.overflow} viewport=${JSON.stringify(metrics.viewport)}`);
+    if(!enclosed(layer.bounds,metrics.viewport)||layer.overflow!=="hidden"||layer.parentClass!=="patch-overlay-host")violations.push(`overlay ${layer.className}: bounds=${JSON.stringify(layer.bounds)} overflow=${layer.overflow} parent=${layer.parentClass} viewport=${JSON.stringify(metrics.viewport)}`);
   }
+  if(!enclosed(metrics.host.bounds,metrics.viewport)||!["clip","hidden"].includes(metrics.host.overflow))violations.push(`overlay host: bounds=${JSON.stringify(metrics.host.bounds)} overflow=${metrics.host.overflow} viewport=${JSON.stringify(metrics.viewport)}`);
   for(const probe of metrics.probes)if(probe.top)violations.push(`hit-test ${probe.selector}: overlay=${probe.top} stack=${JSON.stringify(probe.stack)} viewport=${JSON.stringify(metrics.viewport)}`);
   return violations;
 }
@@ -552,6 +558,7 @@ test("rendered boundary contract contains faceplates, cables, hit targets, and f
     const {graphStudioTestHooks:hooks}=await import("/speech-dataflow.js");
     hooks.teardownAndReinitialize();
   });
+  await expect(page.locator(".patch-overlay-host")).toHaveCount(1);
   await expect(page.locator(".patch-cables")).toHaveCount(1);
   await expect(page.locator(".patch-node-cards")).toHaveCount(1);
   await assertGeometry("teardown and reinitialize");

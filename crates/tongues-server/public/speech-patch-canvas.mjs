@@ -75,12 +75,13 @@ function injectStyles(document) {
   const style = document.createElement("style");
   style.dataset.speechPatchCanvas = "";
   style.textContent = `
-    .patch-cables,.patch-jacks{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden}
+    .patch-overlay-host{position:absolute;inset:0;z-index:1;overflow:hidden;overflow:clip;pointer-events:none}
+    .patch-cables,.patch-jacks{position:absolute;inset:0;pointer-events:none;overflow:hidden}
     .patch-organization{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
     .patch-frame{position:absolute;border:2px solid var(--frame-color,#527084);background:color-mix(in srgb,var(--frame-color,#527084) 12%,transparent);border-radius:.65rem;color:#edf5ff;padding:.45rem;font-weight:700}
     .patch-note{position:absolute;max-width:15rem;padding:.45rem .6rem;border:1px solid #8f8050;border-radius:.35rem;background:var(--note-color,#594c2c);color:#fff7d8;white-space:pre-wrap;box-shadow:0 5px 12px #0007}
     .patch-subpatch-summary{position:absolute;transform:translate(-50%,-50%);min-width:15rem;padding:.65rem;border:2px solid #dca3ff;border-radius:.65rem;background:#241d36ee;color:#fff;box-shadow:0 8px 20px #000a}.patch-subpatch-summary small{display:block;color:#cabce0;margin-top:.2rem}
-    .patch-cables{width:100%;height:100%}
+    .patch-cables{z-index:2;width:100%;height:100%}
     .patch-cable{fill:none;stroke:#8da4ba;stroke-width:4;pointer-events:none}
     .patch-cable-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
     .patch-reroute{fill:#101923;stroke:#f7fffd;stroke-width:2;pointer-events:all;cursor:move}
@@ -97,7 +98,7 @@ function injectStyles(document) {
     .patch-cable.selected{stroke:#f7fffd;stroke-width:7;filter:drop-shadow(0 0 5px #76e2ce)}
     .patch-cable.invalid{stroke:#ffc86b}
     .patch-cable-preview{fill:none;stroke:#f7fffd;stroke-width:4;stroke-dasharray:8 5;pointer-events:none}
-    .patch-node-cards{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+    .patch-node-cards{position:absolute;inset:0;z-index:3;pointer-events:none;overflow:hidden}
     .patch-node-card{position:absolute;transform:translate(-50%,-50%) scale(var(--patch-node-card-scale,1));transform-origin:center;width:var(--patch-node-card-width,${NODE_WIDTH}px);box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
     .patch-node-card[data-state=collapsed]{height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px);max-height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px)}
     .patch-node-card[data-state=expanded]{max-height:22rem}
@@ -142,6 +143,7 @@ function injectStyles(document) {
     .patch-jack.signal-artifact{border-color:#72b7ff}.patch-jack.compatible{outline:4px solid #76e2ce;outline-offset:3px}
     .patch-jack.incompatible{opacity:.48}.patch-jack.drag-origin{outline:4px solid #f7fffd;outline-offset:3px}
     .patch-jack:focus,.patch-jack:focus-visible{outline:4px solid #76e2ce;outline-offset:3px;opacity:1}
+    .patch-jacks{z-index:4}
     @media (pointer:coarse),(max-width:620px){.patch-jack-wrap{--patch-jack-size:2.75rem}.patch-jack{width:var(--patch-jack-size);height:var(--patch-jack-size);min-width:var(--patch-jack-size)}.patch-jack-label{font-size:.75rem}}
     .patch-connection-list{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
     #canvas[data-patching=true]{box-shadow:inset 0 0 0 3px #76e2ce}
@@ -191,6 +193,10 @@ export function createPatchCanvas(options) {
   const window = document.defaultView;
   injectStyles(document);
 
+  const overlayHost = document.createElement("div");
+  overlayHost.className = "patch-overlay-host";
+  overlayHost.dataset.patchOverlayHost = "";
+  overlayHost.setAttribute("aria-label", "Graph canvas overlays");
   const svg = svgElement(document, "svg", {
     class: "patch-cables",
     "aria-hidden": "true",
@@ -204,7 +210,9 @@ export function createPatchCanvas(options) {
   const connectionList = document.createElement("ol");
   connectionList.className = "patch-connection-list";
   connectionList.setAttribute("aria-label", "Graph connections");
-  container.parentElement.append(organizationLayer,svg, jackLayer, cardLayer, connectionList);
+  overlayHost.append(organizationLayer, svg, cardLayer, jackLayer, connectionList);
+  container.insertAdjacentElement("afterend", overlayHost);
+  const overlayBounds = () => overlayHost.getBoundingClientRect();
 
   let gesture = null;
   let previewPoint = null;
@@ -602,7 +610,7 @@ export function createPatchCanvas(options) {
       if (!card) continue;
       const collapsed = card.dataset.state === "collapsed";
       cardLayer.append(card);
-      const viewport = container.getBoundingClientRect();
+      const viewport = overlayBounds();
       const bounds = card.getBoundingClientRect();
       card.inert = (
         bounds.right <= viewport.left
@@ -777,9 +785,9 @@ export function createPatchCanvas(options) {
           const viewportPadding = window.matchMedia("(pointer: coarse), (max-width: 620px)").matches ? 22 : 11;
           const insideViewport = (
             position.x >= viewportPadding
-            && position.x <= container.clientWidth - viewportPadding
+            && position.x <= overlayHost.clientWidth - viewportPadding
             && position.y >= viewportPadding
-            && position.y <= container.clientHeight - viewportPadding
+            && position.y <= overlayHost.clientHeight - viewportPadding
           );
           button.tabIndex = insideViewport ? 0 : -1;
           button.setAttribute("aria-label", jackDescription(node, port, connections));
@@ -980,7 +988,7 @@ export function createPatchCanvas(options) {
   }
 
   function autoPan(clientX, clientY) {
-    const bounds = container.getBoundingClientRect();
+    const bounds = overlayBounds();
     let x = 0;
     let y = 0;
     if (clientX < bounds.left + AUTO_PAN_MARGIN) x = 12;
@@ -992,7 +1000,7 @@ export function createPatchCanvas(options) {
 
   function pointerMove(event) {
     if (!gesture || event.pointerId !== pointerId) return;
-    const bounds = container.getBoundingClientRect();
+    const bounds = overlayBounds();
     previewPoint = {x: event.clientX - bounds.left, y: event.clientY - bounds.top};
     autoPan(event.clientX, event.clientY);
     render();
@@ -1050,7 +1058,7 @@ export function createPatchCanvas(options) {
     event.stopPropagation();
     pointerId = event.pointerId;
     startGesture(node, port);
-    const bounds = container.getBoundingClientRect();
+    const bounds = overlayBounds();
     previewPoint = {x: event.clientX - bounds.left, y: event.clientY - bounds.top};
     render();
   }
@@ -1081,6 +1089,10 @@ export function createPatchCanvas(options) {
   document.addEventListener("pointerup", pointerUp);
   document.addEventListener("keydown", keydown);
   cy.on("pan zoom resize position", render);
+  const resizeObserver = typeof window.ResizeObserver === "function"
+    ? new window.ResizeObserver(() => render())
+    : null;
+  resizeObserver?.observe(container);
 
   render();
   return {
@@ -1094,14 +1106,11 @@ export function createPatchCanvas(options) {
       document.removeEventListener("pointerup", pointerUp);
       document.removeEventListener("keydown", keydown);
       cy.off("pan zoom resize position", render);
+      resizeObserver?.disconnect();
       pauseCardRendering();
       cardLayer.removeEventListener("focusin", pauseCardRendering);
       cardLayer.removeEventListener("focusout", resumeCardRendering);
-      svg.remove();
-      jackLayer.remove();
-      cardLayer.remove();
-      connectionList.remove();
-      organizationLayer.remove();
+      overlayHost.remove();
     },
   };
 }
