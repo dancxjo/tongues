@@ -5,14 +5,17 @@ import {
   portsFor,
   reconnectEdge,
   removeEdge,
+  NODE_FACEPLATE_GEOMETRY_DEFAULT,
 } from "./speech-dataflow-model.mjs";
 
-const NODE_WIDTH = 228;
-const NODE_HEIGHT = 126;
+const NODE_WIDTH = NODE_FACEPLATE_GEOMETRY_DEFAULT.width;
+const NODE_HEIGHT = NODE_FACEPLATE_GEOMETRY_DEFAULT.height;
 const PORT_SPACING = 22;
 const AUTO_PAN_MARGIN = 44;
 const CARD_RENDER_THROTTLE_MS = 90;
-const CARD_COLLAPSED_HEIGHT = "3.2rem";
+const CARD_COLLAPSED_HEIGHT = NODE_FACEPLATE_GEOMETRY_DEFAULT.collapsed_height;
+const NODE_GEOMETRY_LIMITS = {width:{min:120,max:1400},height:{min:48,max:2400},collapsedHeight:{min:28,max:2400}};
+const PORT_SPAN_PADDING = 34;
 
 export function signalFamily(valueType) {
   if (String(valueType).startsWith("audio")) return "audio";
@@ -28,12 +31,15 @@ export function cablePath(from, to) {
   return `M ${from.x} ${from.y} C ${from.x + distance} ${from.y}, ${to.x - distance} ${to.y}, ${to.x} ${to.y}`;
 }
 
-export function portAnchor(position, ports, index, direction) {
+export function portAnchor(position, ports, index, direction, geometry = NODE_FACEPLATE_GEOMETRY_DEFAULT, collapsed = false) {
+  const width = geometry?.width ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.width;
+  const height = collapsed ? (geometry?.collapsed_height ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.collapsed_height)
+    : (geometry?.height ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.height);
   const count = Math.max(1, ports.length);
-  const span = Math.min(NODE_HEIGHT - 34, (count - 1) * PORT_SPACING);
+  const span = Math.min(Math.max(0, height - PORT_SPAN_PADDING), (count - 1) * PORT_SPACING);
   const y = position.y - span / 2 + (count === 1 ? 0 : (span * index) / (count - 1));
   return {
-    x: position.x + (direction === "output" ? NODE_WIDTH / 2 : -NODE_WIDTH / 2),
+    x: position.x + (direction === "output" ? width / 2 : -width / 2),
     y,
   };
 }
@@ -74,8 +80,8 @@ function injectStyles(document) {
     .patch-cable.invalid{stroke:#ffc86b}
     .patch-cable-preview{fill:none;stroke:#f7fffd;stroke-width:4;stroke-dasharray:8 5;pointer-events:none}
     .patch-node-cards{position:absolute;inset:0;z-index:1;pointer-events:none}
-    .patch-node-card{position:absolute;transform:translate(-50%,-50%);width:${NODE_WIDTH}px;box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
-    .patch-node-card[data-state=collapsed]{height:${CARD_COLLAPSED_HEIGHT};max-height:${CARD_COLLAPSED_HEIGHT}}
+    .patch-node-card{position:absolute;transform:translate(-50%,-50%);width:var(--patch-node-card-width,${NODE_WIDTH}px);box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
+    .patch-node-card[data-state=collapsed]{height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px);max-height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px)}
     .patch-node-card[data-state=expanded]{max-height:22rem}
     .patch-node-card .patch-node-card-title{display:flex;align-items:start;justify-content:space-between;gap:.35rem}
     .patch-node-card .patch-node-card-title strong{font-size:.76rem;line-height:1.15}
@@ -138,25 +144,28 @@ export function createPatchCanvas(options) {
     getDiscovery,
     getCatalog,
     nodeLabel,
-  getSelectedEdgeId,
-  isEdgeSelected = id => getSelectedEdgeId() === id,
-  onSelectNode,
-  onSelectEdge,
-  onGraphEdit,
-  onDropEmpty,
-  onDropCatalogOnEdge,
-  onDropCatalogOnJack,
-  getNodeRuntimeState = () => null,
-  getEdgeRuntimeState = () => null,
-  getNodeControlState = () => ({}),
-  isNodeCollapsed = () => false,
-  onSetNodeCollapsed = () => {},
-  onNodeConfigChange = () => {},
-  canBypassNode = () => false,
-  onBypassNode = () => {},
-  onDisableNode = () => {},
-  isRunLocked = () => false,
-  onAnnounce,
+    nodeIcon = nodeLabel,
+    getSelectedEdgeId,
+    isEdgeSelected = id => getSelectedEdgeId() === id,
+    onSelectNode,
+    onSelectEdge,
+    onGraphEdit,
+    onDropEmpty,
+    onDropCatalogOnEdge,
+    onDropCatalogOnJack,
+    getNodeRuntimeState = () => null,
+    getEdgeRuntimeState = () => null,
+    getNodeControlState = () => ({}),
+    getNodeFaceplateGeometry = () => NODE_FACEPLATE_GEOMETRY_DEFAULT,
+    onSetNodeFaceplateGeometry = () => {},
+    isNodeCollapsed = () => false,
+    onSetNodeCollapsed = () => {},
+    onNodeConfigChange = () => {},
+    canBypassNode = () => false,
+    onBypassNode = () => {},
+    onDisableNode = () => {},
+    isRunLocked = () => false,
+    onAnnounce,
   } = options;
   const document = container.ownerDocument;
   const window = document.defaultView;
@@ -186,9 +195,74 @@ export function createPatchCanvas(options) {
   const discovery = () => getDiscovery();
   const catalog = () => getCatalog();
   const label = nodeId => nodeLabel(pipeline().nodes.find(node => node.id === nodeId), catalog());
+  const cardTitle = nodeId => {
+    const node = pipeline().nodes.find(node => node.id === nodeId);
+    return nodeIcon(node, catalog()) ?? "";
+  };
   const cardRuntime = nodeId => getNodeRuntimeState(nodeId);
   const cardControlState = nodeId => getNodeControlState(nodeId);
   const edgeRuntime = edgeId => getEdgeRuntimeState(edgeId);
+  const geometryState = new Map();
+
+  const clampNodeDimension = (value, limits) => {
+    if (!Number.isFinite(value)) return null;
+    return Math.max(limits.min, Math.min(limits.max, Math.round(value)));
+  };
+  const canonicalGeometry = (raw) => {
+    const width = clampNodeDimension(Number(raw?.width), NODE_GEOMETRY_LIMITS.width);
+    const height = clampNodeDimension(Number(raw?.height), NODE_GEOMETRY_LIMITS.height);
+    const collapsedHeight = clampNodeDimension(Number(raw?.collapsed_height), NODE_GEOMETRY_LIMITS.collapsedHeight);
+    return {
+      width: width ?? NODE_WIDTH,
+      height: height ?? NODE_HEIGHT,
+      collapsed_height: collapsedHeight ?? CARD_COLLAPSED_HEIGHT,
+    };
+  };
+  const geometryForNode = (nodeId, collapsed) => {
+    const raw = getNodeFaceplateGeometry(nodeId) ?? NODE_FACEPLATE_GEOMETRY_DEFAULT;
+    const geometry = canonicalGeometry(raw);
+    if (collapsed) geometry.height = geometry.collapsed_height;
+    return geometry;
+  };
+  const geometrySignature = (geometry, collapsed) => {
+    const candidate = collapsed
+      ? {width:geometry.width,height:geometry.collapsed_height}
+      : {width:geometry.width,height:geometry.height};
+    return JSON.stringify(candidate);
+  };
+  const geometryMatchesState = (nodeId, next, collapsed) => geometryState.get(nodeId) === geometrySignature(next, collapsed);
+  const rememberGeometry = (nodeId, geometry, collapsed) => {
+    geometryState.set(nodeId, geometrySignature(geometry, collapsed));
+  };
+  const pushNodeGeometryToCanvas = (nodeId, geometry, collapsed) => {
+    const node = cy.getElementById(nodeId);
+    if (!node?.length) return;
+    const width = Math.max(1, Math.round(geometry.width));
+    const height = Math.max(1, Math.round(collapsed ? geometry.collapsed_height : geometry.height));
+    node.data("width", width);
+    node.data("height", height);
+  };
+  const persistNodeGeometryFromCard = (node, card, collapsed) => {
+    const nodeId = node.id;
+    const rect = card.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const raw = getNodeFaceplateGeometry(nodeId);
+    const current = canonicalGeometry(raw);
+    const next = collapsed
+      ? {
+        ...current,
+        width: Math.max(1, Math.round(rect.width)),
+        collapsed_height: Math.max(1, Math.round(rect.height)),
+      }
+      : {
+        ...current,
+        width: Math.max(1, Math.round(rect.width)),
+        height: Math.max(1, Math.round(rect.height)),
+      };
+    if (!geometryMatchesState(nodeId, next, collapsed)) onSetNodeFaceplateGeometry(nodeId, next);
+    rememberGeometry(nodeId, next, collapsed);
+    pushNodeGeometryToCanvas(nodeId, next, collapsed);
+  };
 
   function nodePorts(node, direction) {
     return portsFor(node, direction, discovery());
@@ -320,9 +394,11 @@ export function createPatchCanvas(options) {
     const runtime = cardRuntime(node.id) ?? {};
     const collapsed = Boolean(isNodeCollapsed(node.id));
     const ports = discovery()?.node_kinds?.[node.kind]?.ports ?? [];
+    const geometry = geometryForNode(node.id, collapsed);
     const inputs = ports.filter(port => port.direction === "input");
     const outputs = ports.filter(port => port.direction === "output");
-    const nodeTitle = formatNodeRole(node, entry);
+    const cardDisplayTitle = cardTitle(node.id) ?? (entry?.label ? entry.label.split(" · ")[0] : node.kind);
+    const role = formatNodeRole(node, entry);
     const status = runtime?.status ?? (node.disabled ? "inactive" : node.bypassed ? "bypassed" : "ready");
     const card = document.createElement("article");
     card.dataset.nodeCard = node.id;
@@ -332,13 +408,15 @@ export function createPatchCanvas(options) {
     card.dataset.state = collapsed ? "collapsed" : "expanded";
     card.dataset.nodeBypassed = String(Boolean(node.bypassed));
     card.dataset.nodeDisabled = String(Boolean(node.disabled));
+    card.style.setProperty("--patch-node-card-width", `${Math.max(1, Math.round(geometry.width))}px`);
+    card.style.setProperty("--patch-node-card-collapsed-height", `${Math.max(1, Math.round(geometry.collapsed_height))}px`);
     card.style.left = `${cyNode.renderedPosition().x}px`;
     card.style.top = `${cyNode.renderedPosition().y}px`;
-    const position = nodeTitle ? nodeTitle : "";
+    const position = role ? role : "";
     const title = document.createElement("div");
     title.className = "patch-node-card-title";
     const name = document.createElement("strong");
-    name.textContent = entry?.label ? entry.label.split(" · ")[0] : node.kind;
+    name.textContent = cardDisplayTitle;
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "patch-node-card-toggle";
@@ -447,7 +525,10 @@ export function createPatchCanvas(options) {
     cardLayer.replaceChildren();
     for (const node of pipeline().nodes) {
       const card = renderNodeCard(node);
-      if (card) cardLayer.append(card);
+      if (!card) continue;
+      const collapsed = card.dataset.state === "collapsed";
+      cardLayer.append(card);
+      persistNodeGeometryFromCard(node, card, collapsed);
     }
   }
 
@@ -458,7 +539,8 @@ export function createPatchCanvas(options) {
     const ports = nodePorts(node, direction);
     const index = ports.findIndex(port => port.id === endpoint.port_id);
     if (index < 0) return null;
-    return portAnchor(element.renderedPosition(), ports, index, direction);
+    const collapsed = Boolean(isNodeCollapsed(endpoint.node_id));
+    return portAnchor(element.renderedPosition(), ports, index, direction, geometryForNode(endpoint.node_id, collapsed), collapsed);
   }
 
   function edgeDescription(edge) {
@@ -539,11 +621,12 @@ export function createPatchCanvas(options) {
       const cyNode = cy.getElementById(node.id);
       if (!cyNode?.length) continue;
       for (const direction of ["input", "output"]) {
-        const ports = nodePorts(node, direction);
-        ports.forEach((port, index) => {
-          const position = portAnchor(cyNode.renderedPosition(), ports, index, direction);
-          const connections = portConnections(node.id, port.id, direction);
-          const wrap = document.createElement("span");
+      const ports = nodePorts(node, direction);
+      ports.forEach((port, index) => {
+        const collapsed = Boolean(isNodeCollapsed(node.id));
+        const position = portAnchor(cyNode.renderedPosition(), ports, index, direction, geometryForNode(node.id, collapsed), collapsed);
+        const connections = portConnections(node.id, port.id, direction);
+        const wrap = document.createElement("span");
           wrap.className = `patch-jack-wrap ${direction}`;
           wrap.style.left = `${position.x}px`;
           wrap.style.top = `${position.y}px`;
@@ -593,9 +676,9 @@ export function createPatchCanvas(options) {
 
   function render() {
     if (destroyed) return;
+    renderNodeCards();
     renderConnections();
     renderJacks();
-    renderNodeCards();
   }
 
   function selectedEdgeForJack(node, port) {

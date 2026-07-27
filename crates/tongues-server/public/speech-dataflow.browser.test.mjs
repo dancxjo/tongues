@@ -42,10 +42,16 @@ const discovery={
 };
 const graph={
   schema_version:2,graph_id:"pipeline:browser-fixture",revision:7,
-  metadata:{name:"Browser fixture",description:"",allow_unsafe_execution:false,labels:{"studio.layout.v1":JSON.stringify({
-    "node:asr":{x:420,y:200},"node:mic-1":{x:120,y:150},"node:mic-2":{x:120,y:310},
-    "node:sink-1":{x:720,y:140},"node:sink-2":{x:720,y:300},
-  })}},
+  metadata:{name:"Browser fixture",description:"",allow_unsafe_execution:false,labels:{
+    "studio.layout.v1":JSON.stringify({
+      "node:asr":{x:420,y:200},"node:mic-1":{x:120,y:150},"node:mic-2":{x:120,y:310},
+      "node:sink-1":{x:720,y:140},"node:sink-2":{x:720,y:300},
+    }),
+    "studio.node-faceplate-geometry.v1":JSON.stringify({
+      "node:asr":{width:360,height:186,collapsed_height:74},
+      "node:mic-1":{width:210,height:130,collapsed_height:60},
+    }),
+  }},
   nodes:[
     {id:"node:asr",kind:"asr",component_id:"base",config:{language:"en",timestamps:true},disabled:false,bypassed:false},
     {id:"node:mic-1",kind:"microphone",component_id:null,config:{},disabled:false,bypassed:false},
@@ -167,6 +173,27 @@ test("dialog is keyboard-contained and becomes a full-width touch sheet on a nar
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("button",{name:"Replace"})).toBeFocused();
+});
+
+test("stored faceplate geometry controls card size and jack anchor position",async({page})=>{
+  const cardLocator=page.locator('.patch-node-card[data-node-id="node:asr"]');
+  await expect(cardLocator).toBeVisible();
+  const metrics=await cardLocator.evaluate(element=>{
+    const asrInput=document.querySelector('[data-patch-jack][data-node-id="node:asr"][data-direction="input"]');
+    const asrOutput=document.querySelector('[data-patch-jack][data-node-id="node:asr"][data-direction="output"]');
+    const cardLeft=parseFloat(getComputedStyle(element).left);
+    const width=parseFloat(getComputedStyle(element).getPropertyValue("--patch-node-card-width"));
+    const inputLeft=parseFloat(getComputedStyle(asrInput).left);
+    const outputLeft=parseFloat(getComputedStyle(asrOutput).left);
+    return{
+      cardLeft,inputLeft,outputLeft,width,
+      inputOffset:Math.round(inputLeft-cardLeft),
+      outputOffset:Math.round(outputLeft-cardLeft),
+    };
+  });
+  expect(metrics.width).toBe(360);
+  expect(metrics.inputOffset).toBe(-180);
+  expect(metrics.outputOffset).toBe(180);
 });
 
 test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persist without implicit graph edits",async({page})=>{

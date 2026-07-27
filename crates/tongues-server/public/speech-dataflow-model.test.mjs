@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   adapterPaths,addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,connectionIntentCandidates,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
-  catalogEntryForNode,connectionCompatibility,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
+  catalogEntryForNode,connectionCompatibility,deleteGraphSelection,deleteNodeFaceplateGeometry,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
   pasteGraphSelection,planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,tidyGraphSelection,undoEdit,validateSchemaValue,
+  readNodeFaceplateGeometry,setNodeFaceplateGeometry,NODE_FACEPLATE_GEOMETRY_DEFAULT,
 } from "./speech-dataflow-model.mjs";
 
 const replacement=(family,extra={})=>({family,configuration_schema_id:`fixture.${family}.config`,configuration_schema_version:1,port_aliases:{},configuration_aliases:{},disconnect_ports:[],...extra});
@@ -209,6 +210,34 @@ test("copy and paste mint fresh identities and retain only selected internal top
   assert.equal(graph.edges.filter(edge=>edge.to.node_id===sink.id).length,1,"external topology is not fabricated");
   const layout=ensureLayout(graph);
   assert.deepEqual(layout[pasted[0]],{x:150,y:175});assert.deepEqual(layout[pasted[1]],{x:450,y:175});
+});
+
+test("node faceplate geometry is clamped and follows duplicate/copy/paste graph metadata flows",()=>{
+  const catalog=buildCatalog(discovery),graph=createPipeline(),first=addNode(graph,catalog.find(node=>node.kind==="microphone"));
+  setNodeFaceplateGeometry(graph,first.id,{width:14,height:12,collapsed_height:1});
+  const clamped=readNodeFaceplateGeometry(graph,first.id);
+  assert.deepEqual(clamped,{width:120,height:48,collapsed_height:28});
+  const duplicate=duplicateNode(graph,first.id);
+  assert.deepEqual(readNodeFaceplateGeometry(graph,duplicate.id),clamped);
+  const copied=copyGraphSelection(graph,[first.id]);
+  assert.deepEqual(copied.faceplate_geometry[first.id],clamped);
+  const pasted=pasteGraphSelection(graph,copied,{x:22,y:11});
+  assert.equal(pasted.length,1);
+  assert.deepEqual(readNodeFaceplateGeometry(graph,pasted[0]),clamped);
+  assert.equal(Object.keys(JSON.parse(graph.metadata.labels["studio.node-faceplate-geometry.v1"])).length,3);
+});
+
+test("faceplate geometry metadata is removed when geometry and nodes are deleted",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery),first=addNode(graph,catalog.find(node=>node.kind==="microphone")),second=addNode(graph,catalog.find(node=>node.kind==="asr"));
+  setNodeFaceplateGeometry(graph,first.id,NODE_FACEPLATE_GEOMETRY_DEFAULT);
+  setNodeFaceplateGeometry(graph,second.id,{width:333,height:222,collapsed_height:77});
+  assert.ok(graph.metadata.labels["studio.node-faceplate-geometry.v1"]);
+  deleteNodeFaceplateGeometry(graph,first.id);
+  const metadata=JSON.parse(graph.metadata.labels["studio.node-faceplate-geometry.v1"]);
+  assert.equal(metadata[first.id],undefined);
+  assert.ok(metadata[second.id]);
+  deleteGraphSelection(graph,[second.id]);
+  assert.equal(graph.metadata.labels["studio.node-faceplate-geometry.v1"],undefined);
 });
 
 test("multi-object delete and presentation arrangement are atomic and semantics-safe",()=>{
@@ -424,7 +453,7 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
 });
 
 test("canvas nodes use readable cards and humanized port types",()=>{
-  assert.match(browserSource,/"width":228,"height":126/);
+  assert.match(browserSource,/"width":"data\\(width\\)","height":"data\\(height\\)"/);
   assert.match(browserSource,/"font-size":14/);
   assert.match(browserSource,/"text-justification":"left"/);
   assert.match(browserSource,/transcript_committed:"committed transcript"/);

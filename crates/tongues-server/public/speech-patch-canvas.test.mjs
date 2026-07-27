@@ -19,6 +19,14 @@ test("input and output jack anchors remain stable around a module face", () => {
   assert.ok(portAnchor({x: 300, y: 200}, ports, 2, "input").y > 200);
 });
 
+test("customized geometry shifts jack anchors consistently for both directions", () => {
+  const ports = [{id: "a"}, {id: "b"}, {id: "c"}];
+  const collapsed = portAnchor({x: 300, y: 200}, ports, 1, "input", {width: 320, height: 200, collapsed_height: 78}, true);
+  const expanded = portAnchor({x: 300, y: 200}, ports, 1, "output", {width: 320, height: 220, collapsed_height: 78}, false);
+  assert.deepEqual(expanded, {x: 460, y: 200});
+  assert.deepEqual(collapsed, {x: 140, y: 200});
+});
+
 test("cable geometry bends out of output and into input", () => {
   assert.equal(cablePath({x: 10, y: 20}, {x: 210, y: 90}), "M 10 20 C 100 20, 120 90, 210 90");
   assert.match(cablePath({x: 210, y: 20}, {x: 10, y: 90}), /^M 210 20 C 300 20, -80 90, 10 90$/);

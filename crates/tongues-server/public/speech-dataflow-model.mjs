@@ -1,6 +1,85 @@
 export const PIPELINE_SCHEMA_VERSION = 2;
 const LAYOUT_LABEL = "studio.layout.v1";
 const NODE_FACEPLATE_LABEL = "studio.node-faceplate.v1";
+const NODE_FACEPLATE_GEOMETRY_LABEL = "studio.node-faceplate-geometry.v1";
+export const NODE_FACEPLATE_GEOMETRY_DEFAULT = {
+  width: 228,
+  height: 126,
+  collapsed_height: 52,
+};
+const NODE_FACEPLATE_GEOMETRY_LIMITS = {
+  width: {min: 120, max: 1400},
+  height: {min: 48, max: 2400},
+  collapsedHeight: {min: 28, max: 2400},
+};
+
+const NODE_KIND_ICON = {
+  microphone: "🎤",
+  control_source: "🎛️",
+  audio_file: "🎵",
+  audio_source: "🎵",
+  text_source: "📝",
+  text_file: "📄",
+  text_url: "🔗",
+  asr: "🎙️",
+  tts: "🔊",
+  transcript_sink: "📤",
+  audio_sink: "📢",
+  audio_output: "🔊",
+  transcript_source: "📝",
+  adaptation: "🧩",
+  adapter: "🔀",
+};
+
+const NODE_GROUP_ICON = {
+  "Sources": "📥",
+  "Audio processing": "🎚️",
+  "Audio & linguistic processing": "🎚️",
+  "Recognition": "🎙️",
+  "Language & speaker analysis": "👥",
+  "Linguistic processing": "🧠",
+  "Response generation": "🧾",
+  "Synthesis": "🗣️",
+  "Inspection & control": "🧩",
+};
+
+function iconForKind(kind = "") {
+  const normalized = String(kind);
+  return NODE_KIND_ICON[normalized]
+    || (normalized.includes("microphone") ? "🎤" : null)
+    || (normalized.includes("tts") || normalized.includes("speak") ? "🔊" : null)
+    || (normalized.includes("asr") || normalized.includes("speech") ? "🎙️" : null)
+    || (normalized.includes("diarization") || normalized.includes("speaker") ? "👥" : null)
+    || (normalized.includes("transcript") || normalized.endsWith("_sink") || normalized.includes("output") ? "📝" : null)
+    || (normalized.includes("text") ? "🧾" : null)
+    || (normalized.includes("control") || normalized.includes("merge") || normalized.includes("adapter") ? "🧩" : null);
+}
+
+function iconForEntry(entry = {}) {
+  const kind = entry.kind ?? "";
+  const direct = iconForKind(kind);
+  if (direct) return direct;
+  const group = entry.group ?? "";
+  return NODE_GROUP_ICON[group] ?? "🧱";
+}
+
+function itemForNode(node, catalog) {
+  return catalogEntryForNode(node, catalog) ?? {kind: node?.kind ?? "node"};
+}
+
+export function nodeIcon(node, catalog) {
+  return iconForEntry(itemForNode(node, catalog));
+}
+
+export function catalogItemIcon(item) {
+  return iconForEntry(item);
+}
+
+export function nodeLabelWithIcon(node, catalog) {
+  const icon = nodeIcon(node, catalog);
+  const label = nodeLabel(node, catalog);
+  return `${icon} ${label}`;
+}
 
 export function buildCatalog(discovery) {
   const kinds = discovery.node_kinds ?? {};
@@ -73,7 +152,38 @@ function readNodeFaceplateMetadata(pipeline) {
   try{return JSON.parse(pipeline?.metadata?.labels?.[NODE_FACEPLATE_LABEL]??"{}");}catch{return{};}
 }
 function writeNodeFaceplateMetadata(pipeline,metadata) {
-  pipeline.metadata.labels??={};pipeline.metadata.labels[NODE_FACEPLATE_LABEL]=JSON.stringify(metadata);
+  pipeline.metadata.labels??={};
+  if(!metadata||Object.keys(metadata).length===0) {
+    delete pipeline.metadata.labels[NODE_FACEPLATE_LABEL];
+    return;
+  }
+  pipeline.metadata.labels[NODE_FACEPLATE_LABEL]=JSON.stringify(metadata);
+}
+function readNodeFaceplateGeometryMetadata(pipeline) {
+  try{return JSON.parse(pipeline?.metadata?.labels?.[NODE_FACEPLATE_GEOMETRY_LABEL]??"{}");}catch{return{};}
+}
+function writeNodeFaceplateGeometryMetadata(pipeline,metadata) {
+  pipeline.metadata.labels??={};
+  if(!metadata||Object.keys(metadata).length===0) {
+    delete pipeline.metadata.labels[NODE_FACEPLATE_GEOMETRY_LABEL];
+    return;
+  }
+  pipeline.metadata.labels[NODE_FACEPLATE_GEOMETRY_LABEL]=JSON.stringify(metadata);
+}
+function clampNodeFaceplateValue(value,limits) {
+  if (!Number.isFinite(value)) return null;
+  return Math.max(limits.min, Math.min(limits.max, Math.round(value)));
+}
+function normalizeFaceplateGeometryValue(raw) {
+  const width = clampNodeFaceplateValue(Number(raw?.width), NODE_FACEPLATE_GEOMETRY_LIMITS.width);
+  const height = clampNodeFaceplateValue(Number(raw?.height), NODE_FACEPLATE_GEOMETRY_LIMITS.height);
+  const collapsedHeight = clampNodeFaceplateValue(Number(raw?.collapsed_height), NODE_FACEPLATE_GEOMETRY_LIMITS.collapsedHeight);
+  if (width == null && height == null && collapsedHeight == null) return null;
+  return {
+    width: width ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.width,
+    height: height ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.height,
+    collapsed_height: collapsedHeight ?? NODE_FACEPLATE_GEOMETRY_DEFAULT.collapsed_height,
+  };
 }
 export function isNodeFaceplateCollapsed(pipeline,nodeId){
   return Boolean(readNodeFaceplateMetadata(pipeline)?.collapsed?.[nodeId]);
@@ -84,6 +194,46 @@ export function setNodeFaceplateCollapsed(pipeline,nodeId,collapsed){
   if(collapsed)metadata.collapsed[nodeId]=true;
   else delete metadata.collapsed[nodeId];
   writeNodeFaceplateMetadata(pipeline,metadata);
+}
+export function readNodeFaceplateGeometry(pipeline,nodeId){
+  const metadata=readNodeFaceplateGeometryMetadata(pipeline);
+  return metadata[nodeId] ? normalizeFaceplateGeometryValue(metadata[nodeId]) : {...NODE_FACEPLATE_GEOMETRY_DEFAULT};
+}
+export function setNodeFaceplateGeometry(pipeline,nodeId,geometry){
+  const normalized=normalizeFaceplateGeometryValue(geometry);
+  if(!normalized||!nodeId) return;
+  const metadata=readNodeFaceplateGeometryMetadata(pipeline);
+  const isDefault=geometryEquals(normalized,NODE_FACEPLATE_GEOMETRY_DEFAULT);
+  if(geometryEquals(metadata[nodeId],normalized)){
+    if(!isDefault) return;
+    delete metadata[nodeId];
+    writeNodeFaceplateGeometryMetadata(pipeline,metadata);
+    return;
+  }
+  if (isDefault && !metadata[nodeId]) return;
+  if (isDefault) delete metadata[nodeId];
+  else metadata[nodeId]=normalized;
+  writeNodeFaceplateGeometryMetadata(pipeline,metadata);
+}
+function geometryEquals(left,right){
+  if(!left||!right)return false;
+  return left.width===right.width&&left.height===right.height&&left.collapsed_height===right.collapsed_height;
+}
+export function deleteNodeFaceplateGeometry(pipeline,nodeId){
+  if(!nodeId)return;
+  const metadata=readNodeFaceplateGeometryMetadata(pipeline);
+  if(!metadata[nodeId]) return;
+  delete metadata[nodeId];
+  writeNodeFaceplateGeometryMetadata(pipeline,metadata);
+}
+function deleteNodeFaceplateState(pipeline,nodeId) {
+  const collapsed=readNodeFaceplateMetadata(pipeline);
+  const geometry=readNodeFaceplateGeometryMetadata(pipeline);
+  if (collapsed?.collapsed?.[nodeId]) delete collapsed.collapsed[nodeId];
+  if (Object.keys(collapsed?.collapsed ?? {}).length===0) delete collapsed.collapsed;
+  writeNodeFaceplateMetadata(pipeline,collapsed);
+  if (geometry[nodeId]) delete geometry[nodeId];
+  writeNodeFaceplateGeometryMetadata(pipeline,geometry);
 }
 
 function cryptoId() {
@@ -107,6 +257,7 @@ export function removeNode(pipeline,id) {
   pipeline.nodes=pipeline.nodes.filter(node=>node.id!==id);
   pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==id&&edge.to.node_id!==id);
   pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==id);
+  deleteNodeFaceplateState(pipeline,id);
   const layout=readLayout(pipeline);delete layout[id];writeLayout(pipeline,layout);touch(pipeline);
 }
 
@@ -117,6 +268,8 @@ export function duplicateNode(pipeline,id,offset={x:36,y:36}) {
   pipeline.nodes.splice(pipeline.nodes.indexOf(source)+1,0,copy);
   const position=nodePosition(pipeline,id);
   if(position)setNodePosition(pipeline,copy.id,{x:position.x+offset.x,y:position.y+offset.y});
+  const geometry=readNodeFaceplateGeometry(pipeline,id);
+  if(geometry)setNodeFaceplateGeometry(pipeline,copy.id,geometry);
   touch(pipeline);return copy;
 }
 
@@ -605,11 +758,13 @@ export function setNodePosition(pipeline,id,position){const layout=readLayout(pi
 
 export function copyGraphSelection(pipeline,nodeIds) {
   const selected=new Set(nodeIds),layout=readLayout(pipeline);
+  const geometry=readNodeFaceplateGeometryMetadata(pipeline);
   return{
     schema_version:1,
     nodes:pipeline.nodes.filter(node=>selected.has(node.id)).map(node=>structuredClone(node)),
     edges:pipeline.edges.filter(edge=>selected.has(edge.from.node_id)&&selected.has(edge.to.node_id)).map(edge=>structuredClone(edge)),
     positions:Object.fromEntries([...selected].filter(id=>layout[id]).map(id=>[id,structuredClone(layout[id])])),
+    faceplate_geometry:Object.fromEntries([...selected].filter(id=>geometry[id]).map(id=>[id,structuredClone(geometry[id])])),
   };
 }
 
@@ -620,6 +775,7 @@ export function pasteGraphSelection(pipeline,selection,offset={x:36,y:36}) {
     idMap.set(source.id,node.id);pipeline.nodes.push(node);pasted.push(node.id);
     const position=selection.positions?.[source.id]??{x:100,y:100};
     layout[node.id]={x:Math.round(position.x+offset.x),y:Math.round(position.y+offset.y)};
+    if(selection?.faceplate_geometry?.[source.id]) setNodeFaceplateGeometry(pipeline,node.id,selection.faceplate_geometry[source.id]);
   }
   for(const source of selection?.edges??[]){
     const from=idMap.get(source.from.node_id),to=idMap.get(source.to.node_id);
@@ -636,7 +792,14 @@ export function deleteGraphSelection(pipeline,nodeIds,edgeIds=[]) {
   pipeline.nodes=pipeline.nodes.filter(node=>!nodes.has(node.id));
   pipeline.edges=pipeline.edges.filter(edge=>!edges.has(edge.id)&&!nodes.has(edge.from.node_id)&&!nodes.has(edge.to.node_id));
   pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>!nodes.has(sink.node_id));
-  const layout=readLayout(pipeline);nodes.forEach(id=>delete layout[id]);writeLayout(pipeline,layout);touch(pipeline);
+  const layout=readLayout(pipeline),geometry=readNodeFaceplateGeometryMetadata(pipeline),collapsed=readNodeFaceplateMetadata(pipeline);
+  nodes.forEach(id=>{
+    delete layout[id];
+    delete geometry[id];
+    if(collapsed?.collapsed?.[id]) delete collapsed.collapsed[id];
+  });
+  if(collapsed?.collapsed&&Object.keys(collapsed.collapsed).length===0) delete collapsed.collapsed;
+  writeLayout(pipeline,layout);writeNodeFaceplateGeometryMetadata(pipeline,geometry);writeNodeFaceplateMetadata(pipeline,collapsed);touch(pipeline);
   return true;
 }
 

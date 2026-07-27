@@ -1,9 +1,10 @@
 import {
   addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,isNodeFaceplateCollapsed,nodeLabel,nodePosition,
   catalogEntryForNode,copyGraphSelection,createEditHistory,createPipeline,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,moveGraphSelection,
-  pasteGraphSelection,planNodeReplacement,portsFor,recordEdit,redoEdit,removeEdge,replacementCandidates,setNodePosition,
+  pasteGraphSelection,planNodeReplacement,portsFor,recordEdit,redoEdit,readNodeFaceplateGeometry,removeEdge,replacementCandidates,setNodeFaceplateGeometry,setNodePosition,
   connectionIntentCandidates,tidyGraphSelection,touch,undoEdit,validateSchemaValue,consumeNdjson,
   setNodeFaceplateCollapsed,
+  catalogItemIcon,nodeLabelWithIcon,
 } from "./speech-dataflow-model.mjs";
 import {createPatchCanvas} from "./speech-patch-canvas.mjs";
 
@@ -201,6 +202,15 @@ function nodePortSummary(node,ports,direction){
   });
   return `${visible.join("  ·  ")}${primary.length>visible.length?`  +${primary.length-visible.length}`:""}`;
 }
+
+function nodeTitle(node) {
+  return nodeLabelWithIcon(node, catalog);
+}
+
+function catalogTitle(item) {
+  return `${catalogItemIcon(item)} ${item?.label ?? "Unknown module"}`;
+}
+
 async function request(path,options={}){
   const response=await fetch(path,options),text=await response.text();
   let value={};try{value=text?JSON.parse(text):{};}catch{value={error:text};}
@@ -410,7 +420,7 @@ function initCanvas(){
     container:byId("canvas"),elements:[],wheelSensitivity:.18,boxSelectionEnabled:true,selectionType:"additive",
     style:[
       {selector:"node",style:{
-        "shape":"round-rectangle","width":228,"height":126,
+        "shape":"round-rectangle","width":"data(width)","height":"data(height)",
         "background-color":"data(surface)","border-width":3,"border-color":"data(accent)",
         "label":"data(label)","color":"#f7fbff","font-family":"system-ui, sans-serif","font-size":14,
         "font-weight":600,"line-height":1.35,"text-wrap":"wrap","text-max-width":194,
@@ -474,7 +484,13 @@ function renderPalette(){
     const summary=document.createElement("summary");summary.textContent=`${group} (${items.length})`;details.append(summary);
     const list=document.createElement("div");list.className="palette-list";
     items.forEach(item=>{const button=document.createElement("button");button.className="palette-node";button.dataset.readiness=item.readiness;
-      button.innerHTML=`${escapeHtml(item.label)}<small>${escapeHtml(item.kind)} · ${escapeHtml(item.readiness)}</small>`;
+      button.innerHTML=`
+        <span class="palette-node-title">
+          <span class="palette-node-icon" aria-hidden="true">${escapeHtml(catalogItemIcon(item))}</span>
+          <span>${escapeHtml(item.label)}</span>
+        </span>
+        <small>${escapeHtml(item.kind)} · ${escapeHtml(item.readiness)}</small>
+      `;
       button.title=item.detail;button.draggable=true;
       button.ondragstart=event=>event.dataTransfer.setData("application/x-tongues-catalog-id",item.id);
       button.onclick=()=>addCatalogNode(item);list.append(button);});
@@ -530,7 +546,15 @@ function renderQuickAdd(){
   byId("quick-add-results").replaceChildren(...options.slice(0,200).map(option=>{
     const button=document.createElement("button");button.type="button";button.className="quick-add-option";button.setAttribute("role","option");
     button.setAttribute("aria-disabled",String(!option.compatible));button.disabled=!option.compatible;
-    button.innerHTML=`<strong>${escapeHtml(option.candidate.label)}</strong><small>${escapeHtml(option.candidate.provider)} · ${escapeHtml(option.candidate.model)} · ${escapeHtml(option.reason)}</small>`;
+    button.innerHTML=`
+      <span class="quick-add-title">
+        <span class="quick-add-icon" aria-hidden="true">${escapeHtml(catalogItemIcon(option.candidate))}</span>
+        <span>
+          <strong>${escapeHtml(option.candidate.label)}</strong>
+          <small>${escapeHtml(option.candidate.provider)} · ${escapeHtml(option.candidate.model)} · ${escapeHtml(option.reason)}</small>
+        </span>
+      </span>
+    `;
     button.onclick=()=>applyQuickAdd(option);return button;
   }));
   if(!options.length)byId("quick-add-results").innerHTML='<p class="muted">No backend-discovered modules match this typed intent.</p>';
@@ -594,6 +618,7 @@ function ensurePatchCanvas(){
     container:byId("canvas"),cy,
     getPipeline:()=>pipeline,getDiscovery:()=>discovery,getCatalog:()=>catalog,
     nodeLabel,getSelectedEdgeId:()=>selectedEdge,
+    nodeIcon:nodeLabelWithIcon,
     isEdgeSelected:id=>selectedEdges.has(id),
     diagnosticsByEdge:()=>diagnosticsByTarget(validation).edges,
     onSelectNode:selectNode,onSelectEdge:selectEdge,
@@ -603,6 +628,8 @@ function ensurePatchCanvas(){
     getNodeRuntimeState:nodeId=>nodeRuntimeState[nodeId],
     getEdgeRuntimeState:edgeId=>edgeRuntimeState[edgeId],
     getNodeControlState:nodeId=>(diagnosticsByTarget(validation).nodes[nodeId] ?? {}),
+    getNodeFaceplateGeometry:nodeId=>readNodeFaceplateGeometry(pipeline,nodeId),
+    onSetNodeFaceplateGeometry:(nodeId,geometry)=>setNodeFaceplateGeometry(pipeline,nodeId,geometry),
     isNodeCollapsed:nodeId=>isNodeFaceplateCollapsed(pipeline,nodeId),
     onSetNodeCollapsed:toggleNodeFaceplateCollapsed,
     onNodeConfigChange:updateInlineNodeConfig,
@@ -620,9 +647,13 @@ function graphElements(){
     const item=catalogEntryForNode(node,catalog);
     const ports=discovery.node_kinds?.[node.kind]?.ports??[];
     const kind=discovery.node_kinds?.[node.kind],theme=NODE_THEMES[item?.group]??FALLBACK_NODE_THEME;
-    const label=kind?.label??nodeLabel(node,catalog);
+    const label=nodeTitle(node);
+    const geometry=readNodeFaceplateGeometry(pipeline,node.id);
+    const collapsed=isNodeFaceplateCollapsed(pipeline,node.id);
+    const width=Math.max(1,Math.round(geometry.width));
+    const height=Math.max(1,Math.round(collapsed?geometry.collapsed_height:geometry.height));
     const classes=[item?.readiness&&item.readiness!=="ready"?"unavailable":"",grouped.nodes[node.id]?.length?"invalid":"",node.disabled||node.bypassed?"inactive":""].filter(Boolean).join(" ");
-    return{group:"nodes",data:{id:node.id,label,accent:theme.accent,surface:theme.surface},position:nodePosition(pipeline,node.id),classes};
+    return{group:"nodes",data:{id:node.id,label,accent:theme.accent,surface:theme.surface,width,height},position:nodePosition(pipeline,node.id),classes};
   });
   const edges=pipeline.edges.map(edge=>{
     const source=pipeline.nodes.find(node=>node.id===edge.from.node_id);
@@ -641,7 +672,7 @@ function renderGraph(){
 function renderOutline(){
   byId("graph-outline").replaceChildren(...pipeline.nodes.map(node=>{
     const item=document.createElement("li"),button=document.createElement("button");
-    button.textContent=nodeLabel(node,catalog);
+    button.textContent=nodeTitle(node);
     button.setAttribute("aria-pressed",String(selectedNodes.has(node.id)));
     button.onclick=event=>{const additive=Boolean(event.shiftKey||event.ctrlKey||event.metaKey);selectNode(node.id,{additive,toggle:additive});};button.onkeydown=event=>{
       const deltas={ArrowLeft:[-20,0],ArrowRight:[20,0],ArrowUp:[0,-20],ArrowDown:[0,20]};
@@ -663,7 +694,8 @@ function selectNode(id,{additive=false,toggle=false}={}){
   }
   cy.elements().unselect();[...selectedNodes,...selectedEdges].forEach(selected=>cy.getElementById(selected).select());
   renderOutline();renderInspector();patchCanvas?.render();
-  announce(`${selectedNodes.size+selectedEdges.size} object${selectedNodes.size+selectedEdges.size===1?"":"s"} selected. ${nodeLabel(pipeline.nodes.find(node=>node.id===id),catalog)} is ${selectedNodes.has(id)?"included":"not included"}.`);
+  const selected=pipeline.nodes.find(node=>node.id===id);
+  announce(`${selectedNodes.size+selectedEdges.size} object${selectedNodes.size+selectedEdges.size===1?"":"s"} selected. ${selected?nodeTitle(selected):"Module"} is ${selectedNodes.has(id)?"included":"not included"}.`);
 }
 function selectEdge(id,{additive=false,toggle=false}={}){
   if(!additive)replaceEdgeSelection(id);
@@ -685,7 +717,7 @@ function renderInspector(){
 
 function renderNodeInspector(node){
   const item=catalogEntryForNode(node,catalog);
-  byId("node-title").textContent=nodeLabel(node,catalog);byId("node-detail").textContent=item?.detail??node.kind;
+  byId("node-title").textContent=nodeTitle(node);byId("node-detail").textContent=item?.detail??node.kind;
   const commandByKind={tts:"speak",interpretation:"interpretation/stream"};
   const commandId=commandByKind[node.kind];
   byId("node-docs").href=commandId?`/commands/${commandId}`:`/commands?capability=${encodeURIComponent(node.kind)}`;
@@ -696,7 +728,10 @@ function renderNodeInspector(node){
   byId("output-ports").replaceChildren(...portsFor(node,"output",discovery).map(port=>portButton(node,port,grouped)));
   renderConfig(node,item?.schema??{});renderDiagnostics(byId("node-diagnostics"),[...(grouped.nodes[node.id]??[]),...Object.entries(grouped.ports).filter(([key])=>key.startsWith(`${node.id}:`)).flatMap(([,items])=>items)]);
   byId("connection-panel").hidden=!connecting;byId("canvas").dataset.connecting=String(Boolean(connecting));
-  if(connecting)byId("connection-source").textContent=`Connecting ${nodeLabel(pipeline.nodes.find(n=>n.id===connecting.node_id),catalog)}.${connecting.port_id} (${connecting.value_type})`;
+  if(connecting){
+    const source=pipeline.nodes.find(n=>n.id===connecting.node_id);
+    byId("connection-source").textContent=`Connecting ${source?nodeTitle(source):"this module"}.${connecting.port_id} (${connecting.value_type})`;
+  }
 }
 
 function portButton(node,port,grouped){
@@ -761,7 +796,7 @@ function applyConfig(){
 function renderEdgeInspector(edge){
   const source=pipeline.nodes.find(node=>node.id===edge.from.node_id),target=pipeline.nodes.find(node=>node.id===edge.to.node_id);
   const port=portsFor(source,"output",discovery).find(item=>item.id===edge.from.port_id);
-  byId("edge-title").textContent=`${nodeLabel(source,catalog)} → ${nodeLabel(target,catalog)}`;
+  byId("edge-title").textContent=`${source?nodeTitle(source):"Unknown module"} → ${target?nodeTitle(target):"Unknown module"}`;
   byId("edge-type").textContent=`${edge.from.port_id} → ${edge.to.port_id} · ${port?.value_type??"unknown"}`;byId("edge-capacity").value=edge.capacity;
   renderDiagnostics(byId("edge-diagnostics"),diagnosticsByTarget(validation).edges[edge.id]??[]);
 }
@@ -776,7 +811,7 @@ function openReplacementPicker(){
   replacementOptions=replacementCandidates(pipeline,node.id,catalog);
   replacementSelected=null;replacementPlan=null;replacementOverrides={};replacementRenderLimit=100;
   replacementReturnFocus=document.activeElement;
-  byId("replacement-context").textContent=`Replacing ${nodeLabel(node,catalog)} (${node.component_id??node.kind}). The graph is unchanged until Apply.`;
+  byId("replacement-context").textContent=`Replacing ${nodeTitle(node)} (${node.component_id??node.kind}). The graph is unchanged until Apply.`;
   byId("replacement-search").value="";byId("replacement-provider").replaceChildren(new Option("All providers",""),...derivedReplacementOptions("provider"));
   byId("replacement-readiness").replaceChildren(new Option("All readiness states",""),...derivedReplacementOptions("readiness"));
   showReplacementPickerStep();renderReplacementCandidates();
@@ -806,7 +841,18 @@ function renderReplacementCandidates(){
     button.setAttribute("aria-selected",String(replacementSelected?.id===option.id));button.dataset.applicable=String(option.applyable);
     button.setAttribute("aria-description",option.applyable?option.reason:`Cannot apply: ${option.reason}`);
     button.dataset.compatible=String(option.compatibility!=="incompatible");
-    button.innerHTML=`<span><strong>${escapeHtml(option.label)}</strong><small>${escapeHtml(option.provider)} · ${escapeHtml(option.model)} · ${escapeHtml(option.component_id??option.kind)}</small>${option.detail?`<small>${escapeHtml(option.detail)}</small>`:""}<small>${escapeHtml(option.reason)}</small></span><span class="replacement-badge ${escapeHtml(option.readiness)}">${escapeHtml(replacementCompatibilityLabel(option))} · ${escapeHtml(option.readiness)}</span>`;
+    button.innerHTML=`
+      <span class="replacement-candidate-title">
+        <span class="replacement-candidate-icon" aria-hidden="true">${escapeHtml(catalogItemIcon(option))}</span>
+        <span>
+          <strong>${escapeHtml(option.label)}</strong>
+          <small>${escapeHtml(option.provider)} · ${escapeHtml(option.model)} · ${escapeHtml(option.component_id??option.kind)}</small>
+          ${option.detail?`<small>${escapeHtml(option.detail)}</small>`:""}
+          <small>${escapeHtml(option.reason)}</small>
+        </span>
+      </span>
+      <span class="replacement-badge ${escapeHtml(option.readiness)}">${escapeHtml(replacementCompatibilityLabel(option))} · ${escapeHtml(option.readiness)}</span>
+    `;
     button.onclick=()=>{replacementSelected=option;renderReplacementCandidates();byId("replacement-continue").disabled=!option.applyable;announce(`${option.label} selected. ${option.reason}`,!option.applyable);};
     button.onkeydown=event=>{
       if(!["ArrowDown","ArrowUp","Home","End"].includes(event.key))return;
