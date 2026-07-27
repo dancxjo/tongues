@@ -1424,6 +1424,534 @@ pub struct PlannedPhoneme {
     pub features: FeatureBundle,
 }
 
+struct ResolvedWordPronunciation {
+    selected_index: Option<usize>,
+    selected_candidate_id: Option<String>,
+    alternatives: Vec<PronunciationCandidateAlternative>,
+    resolution: Option<LinguisticClaimResolution>,
+}
+
+struct CandidateClaimContext {
+    provenance: EvidenceProvenance,
+    constraints: PronunciationCandidateConstraints,
+    priority: i32,
+    rationale: ClaimRationale,
+    supports: Vec<LinguisticClaimId>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_word_pronunciation(
+    artifact: &mut LinguisticEvidenceArtifact,
+    variety_id: &VarietyId,
+    variety: &LinguisticVariety,
+    words: &[WordToken],
+    boundaries: &[SpeechBoundaryToken],
+    syntax: &GrammarAnalysis,
+    style: &PhonemicizeStyle,
+    word_index: usize,
+    word: &WordToken,
+    pronunciation: &WordPronunciation,
+    context: TokenPronunciationContext,
+    manual_override: Option<&PronunciationOverride>,
+) -> Result<ResolvedWordPronunciation, PhonemicizeError> {
+    if pronunciation.candidates.is_empty() {
+        return Ok(ResolvedWordPronunciation {
+            selected_index: None,
+            selected_candidate_id: None,
+            alternatives: Vec::new(),
+            resolution: None,
+        });
+    }
+    let target = LinguisticTarget::new(
+        artifact.utterance_id.clone(),
+        LinguisticTargetScope::Pronunciation {
+            id: format!("word:{word_index}"),
+        },
+        Some(crate::event::TextRange {
+            start: word.span.start_char,
+            end: word.span.end_char,
+        }),
+    );
+    let candidate_ids = pronunciation
+        .candidates
+        .iter()
+        .map(|candidate| pronunciation_candidate_id(variety_id, word_index, candidate))
+        .collect::<Vec<_>>();
+    let claim_ids = candidate_ids
+        .iter()
+        .map(|id| LinguisticClaimId(format!("claim:pronunciation:{id}")))
+        .collect::<Vec<_>>();
+    let phrase_final = word_index + 1 == words.len()
+        || has_pause_boundary_after_word(boundaries, word_index);
+    let token = syntax.tokens.get(word_index);
+    let prosodically_prominent = token.is_some_and(|token| {
+        matches!(
+            token.prosodic_role,
+            crate::syntax::ProsodicRole::Contrastive | crate::syntax::ProsodicRole::Focus
+        ) || token
+            .syntactic_links
+            .contains(&crate::syntax::SyntacticLinkKind::ContrastPair)
+    });
+    let explicitly_strong = style
+        .emphasized_word_indices
+        .contains(&word_index)
+        || style.citation_word_indices.contains(&word_index);
+    let syntax_allows_reduction =
+        syntax.permits_irreversible_prosody(crate::syntax::GrammarRankingPolicy::default());
+
+    let mut alternatives = Vec::new();
+    for (candidate_index, candidate) in pronunciation.candidates.iter().enumerate() {
+        let phonemes = candidate
+            .iter()
+            .map(|planned| planned.phoneme.clone())
+            .collect::<Vec<_>>();
+        let mut claim_context = pronunciation_candidate_claim_context(
+            artifact,
+            variety_id,
+            variety,
+            words,
+            syntax,
+            word_index,
+            word,
+            candidate,
+            candidate_index,
+            pronunciation,
+            context,
+            manual_override,
+            phrase_final,
+            prosodically_prominent,
+            explicitly_strong,
+            syntax_allows_reduction,
+        )?;
+        let mut claim = LinguisticClaim::new(
+            claim_ids[candidate_index].clone(),
+            target.clone(),
+            LinguisticClaimKind::Pronunciation,
+            LinguisticClaimValue::Pronunciation {
+                phonemes: phonemes.clone(),
+            },
+            claim_context.provenance.clone(),
+            ClaimConfidence::new(
+                f64::from(confidence_for_status(pronunciation.status)),
+                Some("pronunciation-status-v1".into()),
+            )?,
+            claim_context.rationale.clone(),
+        )?
+        .with_priority(claim_context.priority);
+        for support in claim_context.supports.drain(..) {
+            if artifact.claim(&support).is_some() && !claim.supports.contains(&support) {
+                claim = claim.with_support(support);
+            }
+        }
+        for conflict in &claim_ids {
+            if conflict != &claim.id {
+                claim = claim.with_conflict(conflict.clone());
+            }
+        }
+        artifact.insert_claim(claim)?;
+        alternatives.push(PronunciationCandidateAlternative {
+            id: candidate_ids[candidate_index].clone(),
+            phonemes,
+            provenance: claim_context.provenance,
+            confidence: confidence_for_status(pronunciation.status),
+            constraints: claim_context.constraints,
+            selected: false,
+            claim_id: claim_ids[candidate_index].clone(),
+            explanation: claim_context.rationale.summary,
+        });
+    }
+    let resolution = artifact.resolve(
+        ClaimResolutionId(format!("resolution:pronunciation:word:{word_index}")),
+        &target,
+        LinguisticClaimKind::Pronunciation,
+    )?;
+    let selected_index = resolution
+        .winner
+        .as_ref()
+        .and_then(|winner| claim_ids.iter().position(|claim| claim == winner));
+    for alternative in &mut alternatives {
+        if let Some(candidate) = resolution
+            .candidates
+            .iter()
+            .find(|candidate| candidate.claim_id == alternative.claim_id)
+        {
+            alternative.selected = candidate.selected;
+            alternative.explanation =
+                format!("{}; {}", alternative.explanation, candidate.explanation);
+        }
+    }
+    Ok(ResolvedWordPronunciation {
+        selected_index,
+        selected_candidate_id: selected_index.map(|index| candidate_ids[index].clone()),
+        alternatives,
+        resolution: Some(resolution),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pronunciation_candidate_claim_context(
+    artifact: &mut LinguisticEvidenceArtifact,
+    variety_id: &VarietyId,
+    variety: &LinguisticVariety,
+    words: &[WordToken],
+    syntax: &GrammarAnalysis,
+    word_index: usize,
+    word: &WordToken,
+    candidate: &[PlannedPhoneme],
+    candidate_index: usize,
+    pronunciation: &WordPronunciation,
+    context: TokenPronunciationContext,
+    manual_override: Option<&PronunciationOverride>,
+    phrase_final: bool,
+    prosodically_prominent: bool,
+    explicitly_strong: bool,
+    syntax_allows_reduction: bool,
+) -> Result<CandidateClaimContext, PhonemicizeError> {
+    let mut constraints = PronunciationCandidateConstraints {
+        varieties: vec![variety_id.clone()],
+        ..PronunciationCandidateConstraints::default()
+    };
+    let mut supports = Vec::new();
+    let candidate_phonemes = candidate
+        .iter()
+        .map(|planned| planned.phoneme.clone())
+        .collect::<Vec<_>>();
+    let is_manual = manual_override
+        .is_some_and(|manual| manual.phonemes == candidate_phonemes);
+    let matching_weak_rules = variety
+        .weak_forms
+        .iter()
+        .filter(|rule| {
+            rule.lexical_item == word.normalized
+                && same_planned_candidate(candidate, &weak_form_candidate(rule, variety))
+        })
+        .collect::<Vec<_>>();
+    let is_reduction = !matching_weak_rules.is_empty();
+    let weak_rule_applies = matching_weak_rules.iter().any(|rule| {
+        weak_form_rule_applies(rule, &word.normalized, context)
+            && !phrase_final
+            && !prosodically_prominent
+            && !explicitly_strong
+            && !style_blocks_reduction(pronunciation, candidate, is_manual)
+            && syntax_allows_reduction
+    });
+    if is_reduction {
+        constraints.reduction = Some(true);
+        constraints.next_starts_with_vowelish = context.next_starts_with_vowelish;
+        constraints.careful_style = matching_weak_rules
+            .iter()
+            .any(|rule| rule.style == WeakFormStyleContext::CasualOnly)
+            .then_some(false);
+    } else {
+        constraints.reduction = Some(false);
+    }
+
+    let mut matching_selection_rules = Vec::new();
+    for rule in &variety.pronunciation_selection_rules {
+        if rule.lexical_item != word.normalized
+            || !candidate_matches_selection_rule(candidate, rule, variety)
+        {
+            continue;
+        }
+        if let Some(part_of_speech) = rule.part_of_speech {
+            constraints.parts_of_speech.push(part_of_speech);
+        }
+        if let Some(part_of_speech) = rule.next_part_of_speech {
+            constraints.next_parts_of_speech.push(part_of_speech);
+        }
+        constraints
+            .context_words
+            .extend(rule.context_words.iter().cloned());
+        if pronunciation_selection_rule_applies(rule, words, word_index, context) {
+            matching_selection_rules.push(rule);
+        }
+    }
+    constraints.parts_of_speech.sort_unstable_by_key(|pos| *pos as u8);
+    constraints.parts_of_speech.dedup();
+    constraints
+        .next_parts_of_speech
+        .sort_unstable_by_key(|pos| *pos as u8);
+    constraints.next_parts_of_speech.dedup();
+    constraints.context_words.sort();
+    constraints.context_words.dedup();
+
+    if !matching_selection_rules.is_empty() {
+        supports.extend(grammar_support_claims(
+            artifact,
+            syntax,
+            word_index,
+            context.part_of_speech,
+        ));
+        for rule in matching_selection_rules {
+            if !rule.context_words.is_empty()
+                && let Some(context_claim) = insert_context_word_claim(
+                    artifact,
+                    words,
+                    word_index,
+                    &rule.context_words,
+                )?
+            {
+                supports.push(context_claim);
+            }
+        }
+    }
+
+    let (provenance, priority, code, summary) = if is_manual {
+        (
+            EvidenceProvenance {
+                source: EvidenceSource::ManualOverride,
+                method: "explicit pronunciation override".into(),
+                version: Some("1".into()),
+            },
+            source_default_priority(&EvidenceSource::ManualOverride),
+            "pronunciation.manual_override",
+            "explicit user pronunciation override",
+        )
+    } else if explicitly_strong && !is_reduction {
+        (
+            EvidenceProvenance {
+                source: EvidenceSource::UserMarkup,
+                method: "emphasis or citation strong-form intent".into(),
+                version: Some("1".into()),
+            },
+            source_default_priority(&EvidenceSource::UserMarkup),
+            "pronunciation.strong_form.user_intent",
+            "emphasis or citation requires a conservative strong form",
+        )
+    } else if weak_rule_applies {
+        (
+            EvidenceProvenance {
+                source: EvidenceSource::Rule,
+                method: "variety weak-form context".into(),
+                version: Some("1".into()),
+            },
+            source_default_priority(&EvidenceSource::Lexicon) + 10,
+            "pronunciation.weak_form.context",
+            "weak form is licensed by phonetic onset, syntax, style, and phrase context",
+        )
+    } else if !matching_selection_rules.is_empty() {
+        (
+            pronunciation.provenance.clone(),
+            source_default_priority(&pronunciation.provenance.source) + 5,
+            "pronunciation.contextual_selection",
+            "candidate matches applicable grammatical or lexical context",
+        )
+    } else {
+        (
+            pronunciation.provenance.clone(),
+            source_default_priority(&pronunciation.provenance.source)
+                - i32::try_from(candidate_index.min(50)).unwrap_or(50),
+            if candidate_index == 0 {
+                "pronunciation.provider_rank_fallback"
+            } else {
+                "pronunciation.provider_alternative"
+            },
+            if candidate_index == 0 {
+                "provider-ranked candidate is the explicit fallback when contextual evidence ties"
+            } else {
+                "retained provider alternative has no stronger contextual support"
+            },
+        )
+    };
+    let rationale = ClaimRationale::new(code, summary)
+        .with_attribute("word_index", word_index.to_string())
+        .with_attribute("token", word.normalized.clone())
+        .with_attribute("candidate_index", candidate_index.to_string())
+        .with_attribute("phrase_final", phrase_final.to_string())
+        .with_attribute(
+            "syntax_allows_irreversible_prosody",
+            syntax_allows_reduction.to_string(),
+        );
+    Ok(CandidateClaimContext {
+        provenance,
+        constraints,
+        priority,
+        rationale,
+        supports,
+    })
+}
+
+fn style_blocks_reduction(
+    pronunciation: &WordPronunciation,
+    _candidate: &[PlannedPhoneme],
+    is_manual: bool,
+) -> bool {
+    is_manual || pronunciation.part_of_speech == Some(PartOfSpeech::Unknown)
+}
+
+fn candidate_matches_selection_rule(
+    candidate: &[PlannedPhoneme],
+    rule: &crate::variety::PronunciationSelectionRule,
+    variety: &LinguisticVariety,
+) -> bool {
+    let expected = planned_candidate_from_source_pronunciation(
+        variety,
+        &rule.source_pronunciation,
+        rule.source_pronunciation_notation.as_deref(),
+    );
+    same_planned_candidate(candidate, &expected)
+}
+
+fn pronunciation_selection_rule_applies(
+    rule: &crate::variety::PronunciationSelectionRule,
+    words: &[WordToken],
+    word_index: usize,
+    context: TokenPronunciationContext,
+) -> bool {
+    let pos_matches = rule
+        .part_of_speech
+        .map(canonical_pronunciation_pos)
+        .is_none_or(|expected| context.part_of_speech.map(canonical_pronunciation_pos) == Some(expected));
+    let next_pos_matches = rule
+        .next_part_of_speech
+        .is_none_or(|expected| context.next_part_of_speech == Some(expected));
+    let lexical_matches = rule.context_words.is_empty()
+        || words
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| index.abs_diff(word_index) <= 3 && *index != word_index)
+            .any(|(_, word)| rule.context_words.contains(&word.normalized));
+    pos_matches && next_pos_matches && lexical_matches
+}
+
+fn grammar_support_claims(
+    artifact: &LinguisticEvidenceArtifact,
+    syntax: &GrammarAnalysis,
+    word_index: usize,
+    part_of_speech: Option<PartOfSpeech>,
+) -> Vec<LinguisticClaimId> {
+    let Some(part_of_speech) = part_of_speech.filter(|pos| *pos != PartOfSpeech::Unknown) else {
+        return Vec::new();
+    };
+    let mut supports = artifact
+        .claims
+        .iter()
+        .filter(|claim| {
+            claim.provenance.source == EvidenceSource::Grammar
+                && claim.value == LinguisticClaimValue::PartOfSpeech(part_of_speech)
+                && matches!(
+                    &claim.target.scope,
+                    LinguisticTargetScope::Token { id } if id == &format!("token:{word_index}")
+                )
+        })
+        .map(|claim| claim.id.clone())
+        .collect::<Vec<_>>();
+    if let Some(parse) = syntax.best_parse() {
+        supports.extend(
+            artifact
+                .claims
+                .iter()
+                .filter(|claim| {
+                    matches!(
+                        claim.value,
+                        LinguisticClaimValue::DependencyLink { left, right, .. }
+                            if (left == word_index || right == word_index)
+                                && claim.id.0.contains(&parse.id.0)
+                    )
+                })
+                .map(|claim| claim.id.clone()),
+        );
+    }
+    supports.sort();
+    supports.dedup();
+    supports
+}
+
+fn insert_context_word_claim(
+    artifact: &mut LinguisticEvidenceArtifact,
+    words: &[WordToken],
+    word_index: usize,
+    context_words: &[String],
+) -> Result<Option<LinguisticClaimId>, PhonemicizeError> {
+    let Some((context_index, context_word)) = words
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index.abs_diff(word_index) <= 3 && *index != word_index)
+        .find(|(_, word)| context_words.contains(&word.normalized))
+    else {
+        return Ok(None);
+    };
+    let id = LinguisticClaimId(format!(
+        "claim:lexical-context:{word_index}:{context_index}:{}",
+        context_word.normalized
+    ));
+    if artifact.claim(&id).is_none() {
+        artifact.insert_claim(LinguisticClaim::lexicon(
+            id.clone(),
+            LinguisticTarget::new(
+                artifact.utterance_id.clone(),
+                LinguisticTargetScope::Word {
+                    id: format!("word:{context_index}"),
+                },
+                Some(crate::event::TextRange {
+                    start: context_word.span.start_char,
+                    end: context_word.span.end_char,
+                }),
+            ),
+            LinguisticClaimValue::LexicalIdentity {
+                lexeme_id: context_word.normalized.clone(),
+            },
+            1.0,
+            ClaimRationale::new(
+                "pronunciation.lexical_context",
+                "nearby lexical item supports a context-sensitive pronunciation",
+            ),
+        )?)?;
+    }
+    Ok(Some(id))
+}
+
+fn pronunciation_candidate_id(
+    variety: &VarietyId,
+    word_index: usize,
+    candidate: &[PlannedPhoneme],
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(variety.0.as_bytes());
+    digest.update([0]);
+    for phoneme in candidate {
+        digest.update(phoneme.phoneme.0.as_bytes());
+        digest.update([0]);
+    }
+    let fingerprint = digest
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("word-{word_index}:{fingerprint}")
+}
+
+fn phonemicize_utterance_id(variety: &VarietyId, normalized_text: &str) -> UtteranceId {
+    let mut digest = Sha256::new();
+    digest.update(variety.0.as_bytes());
+    digest.update([0]);
+    digest.update(normalized_text.as_bytes());
+    let fingerprint = digest
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    UtteranceId(format!("phonemicize:{fingerprint}"))
+}
+
+fn planned_candidate_from_phoneme_ids(
+    phonemes: &[PhonemeId],
+    variety: &LinguisticVariety,
+) -> Vec<PlannedPhoneme> {
+    phonemes
+        .iter()
+        .filter_map(|id| {
+            variety
+                .phonemes
+                .phonemes
+                .get(id)
+                .map(planned_phoneme_from_inventory)
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenPronunciationContext {
     pub next_starts_with_vowelish: Option<bool>,
