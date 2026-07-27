@@ -144,13 +144,18 @@ impl PronunciationAnalysis {
                     .map(|sequence| {
                         sequence
                             .iter()
-                            .map(|id| crate::phoneme_display_symbol(id))
+                            .map(crate::phoneme_display_symbol)
                             .collect::<Vec<_>>()
                             .join(" ")
                     })
                     .collect(),
                 confidence: candidate.confidence,
-                provenance: candidate.provenance.clone(),
+                provenance: candidate
+                    .alternatives
+                    .iter()
+                    .find(|alternative| alternative.selected)
+                    .map(|alternative| alternative.provenance.clone())
+                    .unwrap_or_else(|| candidate.provenance.clone()),
             })
             .collect::<Vec<_>>();
 
@@ -572,6 +577,7 @@ mod tests {
                 variety: VarietyId(case.variety.clone()),
                 style: case.careful_style.then_some(PhonemicizeStyle {
                     careful_style: true,
+                    ..PhonemicizeStyle::default()
                 }),
             })
             .unwrap_or_else(|error| panic!("{} could not be analyzed: {error}", case.id));

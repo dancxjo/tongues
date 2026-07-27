@@ -9559,6 +9559,7 @@ fn cmd_speaking_demo(
                     variety: VarietyId(variety.id.0.clone()),
                     style: sample.careful_style.then_some(PhonemicizeStyle {
                         careful_style: true,
+                        ..PhonemicizeStyle::default()
                     }),
                 })
                 .map_err(|err| {
@@ -10201,6 +10202,7 @@ fn canonical_pronunciation(
         variety: speaking::VarietyId(variety.to_string()),
         style: careful_style.then_some(speaking::PhonemicizeStyle {
             careful_style: true,
+            ..speaking::PhonemicizeStyle::default()
         }),
     })
     .map_err(|error| anyhow::anyhow!("Failed to analyze pronunciation: {error}"))

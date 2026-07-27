@@ -70,7 +70,7 @@ impl GrammarAnalysis {
             }
 
             for token in &token_facts {
-                let claim_id =
+                let pos_claim_id =
                     LinguisticClaimId(format!("{}:pos:{}", parse_claim_id.0, token.word_index));
                 let target = LinguisticTarget::new(
                     utterance_id.clone(),
@@ -80,8 +80,8 @@ impl GrammarAnalysis {
                     word_ranges.and_then(|ranges| ranges.get(token.word_index).cloned()),
                 );
                 let claim = LinguisticClaim::grammar(
-                    claim_id.clone(),
-                    target,
+                    pos_claim_id.clone(),
+                    target.clone(),
                     LinguisticClaimValue::PartOfSpeech(token.pos),
                     claim_probability(parse.confidence),
                     ClaimRationale::new(
@@ -91,7 +91,25 @@ impl GrammarAnalysis {
                     .with_attribute("parse_id", parse.id.0.clone()),
                 )?;
                 artifact.insert_claim(claim)?;
-                component_ids.push(claim_id);
+                component_ids.push(pos_claim_id);
+
+                let prosody_claim_id = LinguisticClaimId(format!(
+                    "{}:prosodic-role:{}",
+                    parse_claim_id.0, token.word_index
+                ));
+                let claim = LinguisticClaim::grammar(
+                    prosody_claim_id.clone(),
+                    target,
+                    LinguisticClaimValue::ProsodicRole(token.prosodic_role),
+                    claim_probability(parse.confidence),
+                    ClaimRationale::new(
+                        "grammar.parse.prosodic_role",
+                        format!("prosodic role asserted by grammar parse {}", parse.id.0),
+                    )
+                    .with_attribute("parse_id", parse.id.0.clone()),
+                )?;
+                artifact.insert_claim(claim)?;
+                component_ids.push(prosody_claim_id);
             }
 
             let mut parse_claim = LinguisticClaim::grammar(

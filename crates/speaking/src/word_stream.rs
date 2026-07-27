@@ -351,6 +351,7 @@ pub fn attach_pronunciations_for_variety(stream: &mut TimedWordStream, variety: 
             variety: variety.clone(),
             style: Some(PhonemicizeStyle {
                 careful_style: true,
+                ..PhonemicizeStyle::default()
             }),
         }) else {
             continue;

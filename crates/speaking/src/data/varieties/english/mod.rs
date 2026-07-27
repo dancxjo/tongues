@@ -556,16 +556,11 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
                 lexical_item: "bass".into(),
                 part_of_speech: Some(PartOfSpeech::Noun),
                 next_part_of_speech: None,
-                context_words: [
-                    "guitar", "line", "player", "clef", "note", "music", "drum",
-                ]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-                source_pronunciation: ["B", "EY1", "S"]
+                context_words: ["guitar", "line", "player", "clef", "note", "music", "drum"]
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
+                source_pronunciation: ["B", "EY1", "S"].into_iter().map(str::to_string).collect(),
                 source_pronunciation_notation: Some("arpabet".into()),
             },
             PronunciationSelectionRule {
@@ -576,10 +571,7 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
-                source_pronunciation: ["B", "AE1", "S"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
+                source_pronunciation: ["B", "AE1", "S"].into_iter().map(str::to_string).collect(),
                 source_pronunciation_notation: Some("arpabet".into()),
             },
         ])
@@ -736,6 +728,46 @@ fn weak_forms(variety_id: &str) -> Vec<WeakFormRule> {
             "english_weak_at",
             "at",
             &["AH0", "T"],
+            WeakFormFollowingContext::Any,
+            WeakFormStyleContext::Any,
+            variety_id,
+        ),
+        weak_form(
+            "english_weak_can",
+            "can",
+            &["K", "AH0", "N"],
+            WeakFormFollowingContext::Any,
+            WeakFormStyleContext::Any,
+            variety_id,
+        ),
+        weak_form(
+            "english_weak_have",
+            "have",
+            &["HH", "AH0", "V"],
+            WeakFormFollowingContext::Any,
+            WeakFormStyleContext::Any,
+            variety_id,
+        ),
+        weak_form(
+            "english_weak_was",
+            "was",
+            &["W", "AH0", "Z"],
+            WeakFormFollowingContext::Any,
+            WeakFormStyleContext::Any,
+            variety_id,
+        ),
+        weak_form(
+            "english_weak_were",
+            "were",
+            &["W", "ER0"],
+            WeakFormFollowingContext::Any,
+            WeakFormStyleContext::Any,
+            variety_id,
+        ),
+        weak_form(
+            "english_weak_will",
+            "will",
+            &["W", "AH0", "L"],
             WeakFormFollowingContext::Any,
             WeakFormStyleContext::Any,
             variety_id,

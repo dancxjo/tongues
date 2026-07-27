@@ -21,7 +21,7 @@ use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::{ProsodicLabel, ProsodicLabelKind, ProsodyTrack, Syllable};
 use crate::realize::{
     PhoneDecompositionPolicy, RealizationOptions, epenthetic_phones_after, realize_phoneme_at,
-    realize_phonemes,
+    realize_phonemes, token_stress,
 };
 use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunctuation};
 use crate::spec::Spec;
@@ -36,6 +36,7 @@ use crate::variety::{
 const WORD_BOUNDARY_ID: &str = "boundary.word";
 const LETTER_BOUNDARY_ID: &str = "boundary.letter";
 const NO_LETTER_INDEX: usize = usize::MAX;
+const MAX_HYPHENATED_PRONUNCIATION_CANDIDATES: usize = 64;
 
 type PhonemicizerFactory = fn() -> Box<dyn Phonemicizer>;
 pub type UnknownPronunciationFallback = fn(word: &str, variety: &str) -> Option<String>;
@@ -197,6 +198,7 @@ pub trait PronunciationPipeline {
         word_index: usize,
         pronunciation: &WordPronunciation,
         selected_candidate_index: Option<usize>,
+        selected_provenance: Option<&EvidenceProvenance>,
     ) -> Vec<PhonemeToken> {
         selected_candidate_index
             .and_then(|index| pronunciation.candidates.get(index))
@@ -222,7 +224,9 @@ pub trait PronunciationPipeline {
                     features,
                     realized_as: Vec::new(),
                     confidence: confidence_for_status(pronunciation.status),
-                    provenance: pronunciation.provenance.clone(),
+                    provenance: selected_provenance
+                        .cloned()
+                        .unwrap_or_else(|| pronunciation.provenance.clone()),
                 }
             })
             .collect()
@@ -315,11 +319,8 @@ pub trait PronunciationPipeline {
         let utterance_id = phonemicize_utterance_id(&canonical_variety, &normalized_text);
         let word_ranges = words
             .iter()
-            .map(|word| crate::event::TextRange {
-                start: word.span.start_char,
-                end: word.span.end_char,
-            })
-            .collect::<Vec<_>>();
+            .map(|word| evidence_text_range(&word.span))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut linguistic_evidence =
             syntax.to_linguistic_evidence(utterance_id, Some(&word_ranges))?;
 
@@ -383,6 +384,10 @@ pub trait PronunciationPipeline {
                 context,
                 manual_override,
             )?;
+            let selected_provenance = resolved
+                .selected_index
+                .and_then(|index| resolved.alternatives.get(index))
+                .map(|alternative| alternative.provenance.clone());
             lexical_candidates.push(LexicalPronunciationCandidates {
                 word_index,
                 token: word.normalized.clone(),
@@ -408,6 +413,7 @@ pub trait PronunciationPipeline {
                 word_index,
                 &pronunciation,
                 resolved.selected_index,
+                selected_provenance.as_ref(),
             );
             for phoneme in &mut word_phonemes {
                 phoneme.features.values.insert(
@@ -454,6 +460,13 @@ pub trait PronunciationPipeline {
             phones.append(&mut word_phones);
         }
         let syllables = syllabify_phones(&phones, &variety);
+        append_resolved_realization_claims(
+            &mut linguistic_evidence,
+            &lexical_candidates,
+            &phonemes,
+            &boundaries,
+            &word_ranges,
+        )?;
 
         Ok(PhonemicizeOutput {
             text: input.text.clone(),
@@ -478,17 +491,16 @@ pub trait PronunciationPipeline {
         word: &WordToken,
         variety: &LinguisticVariety,
     ) -> Option<bool> {
-        let pronunciation = self
-            .token_classifier(
-                word,
-                variety,
-                TokenPronunciationContext {
-                    next_starts_with_vowelish: None,
-                    careful_style: true,
-                    part_of_speech: None,
-                    next_part_of_speech: None,
-                },
-            );
+        let pronunciation = self.token_classifier(
+            word,
+            variety,
+            TokenPronunciationContext {
+                next_starts_with_vowelish: None,
+                careful_style: true,
+                part_of_speech: None,
+                next_part_of_speech: None,
+            },
+        );
         let starts = pronunciation
             .candidates
             .iter()
@@ -508,7 +520,7 @@ pub struct PhonemicizeRequest {
     pub style: Option<PhonemicizeStyle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhonemicizeStyle {
     #[serde(default)]
     pub careful_style: bool,
@@ -521,17 +533,6 @@ pub struct PhonemicizeStyle {
     /// Explicit user pronunciation choices. These become manual-override claims.
     #[serde(default)]
     pub pronunciation_overrides: Vec<PronunciationOverride>,
-}
-
-impl Default for PhonemicizeStyle {
-    fn default() -> Self {
-        Self {
-            careful_style: false,
-            emphasized_word_indices: Vec::new(),
-            citation_word_indices: Vec::new(),
-            pronunciation_overrides: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -583,6 +584,9 @@ pub struct LexicalPronunciationCandidates {
 pub struct PronunciationCandidateAlternative {
     pub id: String,
     pub phonemes: Vec<PhonemeId>,
+    /// Lexical stress carried by each phoneme candidate slot.
+    #[serde(default)]
+    pub lexical_stress: Vec<Option<crate::prosody::Stress>>,
     pub provenance: EvidenceProvenance,
     pub confidence: f32,
     pub constraints: PronunciationCandidateConstraints,
@@ -623,6 +627,7 @@ pub enum PronunciationWarningKind {
     MixedAlphaNumeric,
     AcronymExpanded,
     WeakFormApplied,
+    AlternativeLimitApplied,
     UnknownPronunciation,
 }
 
@@ -1467,22 +1472,34 @@ fn resolve_word_pronunciation(
         LinguisticTargetScope::Pronunciation {
             id: format!("word:{word_index}"),
         },
-        Some(crate::event::TextRange {
-            start: word.span.start_char,
-            end: word.span.end_char,
-        }),
+        Some(evidence_text_range(&word.span)?),
     );
-    let candidate_ids = pronunciation
+    let candidate_base_ids = pronunciation
         .candidates
         .iter()
         .map(|candidate| pronunciation_candidate_id(variety_id, word_index, candidate))
+        .collect::<Vec<_>>();
+    let candidate_ids = candidate_base_ids
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, base_id)| {
+            let duplicate_ordinal = candidate_base_ids[..candidate_index]
+                .iter()
+                .filter(|prior| *prior == base_id)
+                .count();
+            if duplicate_ordinal == 0 {
+                base_id.clone()
+            } else {
+                format!("{base_id}:duplicate-{duplicate_ordinal}")
+            }
+        })
         .collect::<Vec<_>>();
     let claim_ids = candidate_ids
         .iter()
         .map(|id| LinguisticClaimId(format!("claim:pronunciation:{id}")))
         .collect::<Vec<_>>();
-    let phrase_final = word_index + 1 == words.len()
-        || has_pause_boundary_after_word(boundaries, word_index);
+    let phrase_final =
+        word_index + 1 == words.len() || has_pause_boundary_after_word(boundaries, word_index);
     let token = syntax.tokens.get(word_index);
     let prosodically_prominent = token.is_some_and(|token| {
         matches!(
@@ -1492,9 +1509,7 @@ fn resolve_word_pronunciation(
             .syntactic_links
             .contains(&crate::syntax::SyntacticLinkKind::ContrastPair)
     });
-    let explicitly_strong = style
-        .emphasized_word_indices
-        .contains(&word_index)
+    let explicitly_strong = style.emphasized_word_indices.contains(&word_index)
         || style.citation_word_indices.contains(&word_index);
     let syntax_allows_reduction =
         syntax.permits_irreversible_prosody(crate::syntax::GrammarRankingPolicy::default());
@@ -1552,6 +1567,7 @@ fn resolve_word_pronunciation(
         alternatives.push(PronunciationCandidateAlternative {
             id: candidate_ids[candidate_index].clone(),
             phonemes,
+            lexical_stress: candidate.iter().map(planned_phoneme_stress).collect(),
             provenance: claim_context.provenance,
             confidence: confidence_for_status(pronunciation.status),
             constraints: claim_context.constraints,
@@ -1616,8 +1632,7 @@ fn pronunciation_candidate_claim_context(
         .iter()
         .map(|planned| planned.phoneme.clone())
         .collect::<Vec<_>>();
-    let is_manual = manual_override
-        .is_some_and(|manual| manual.phonemes == candidate_phonemes);
+    let is_manual = manual_override.is_some_and(|manual| manual.phonemes == candidate_phonemes);
     let matching_weak_rules = variety
         .weak_forms
         .iter()
@@ -1626,15 +1641,30 @@ fn pronunciation_candidate_claim_context(
                 && same_planned_candidate(candidate, &weak_form_candidate(rule, variety))
         })
         .collect::<Vec<_>>();
-    let is_reduction = !matching_weak_rules.is_empty();
-    let weak_rule_applies = matching_weak_rules.iter().any(|rule| {
+    let has_weak_form_alternative = variety
+        .weak_forms
+        .iter()
+        .any(|rule| rule.lexical_item == word.normalized);
+    let is_reduction = matching_weak_rules
+        .iter()
+        .any(|rule| weak_form_rule_applies(rule, &word.normalized, context));
+    let applicable_weak_rule = matching_weak_rules.iter().copied().find(|rule| {
         weak_form_rule_applies(rule, &word.normalized, context)
             && !phrase_final
             && !prosodically_prominent
             && !explicitly_strong
+            && !context.careful_style
             && !style_blocks_reduction(pronunciation, candidate, is_manual)
-            && syntax_allows_reduction
     });
+    let weak_rule_applies = applicable_weak_rule.is_some();
+    if weak_rule_applies {
+        supports.extend(grammar_support_claims(
+            artifact,
+            syntax,
+            word_index,
+            context.part_of_speech,
+        ));
+    }
     if is_reduction {
         constraints.reduction = Some(true);
         constraints.next_starts_with_vowelish = context.next_starts_with_vowelish;
@@ -1642,7 +1672,7 @@ fn pronunciation_candidate_claim_context(
             .iter()
             .any(|rule| rule.style == WeakFormStyleContext::CasualOnly)
             .then_some(false);
-    } else {
+    } else if has_weak_form_alternative {
         constraints.reduction = Some(false);
     }
 
@@ -1666,7 +1696,9 @@ fn pronunciation_candidate_claim_context(
             matching_selection_rules.push(rule);
         }
     }
-    constraints.parts_of_speech.sort_unstable_by_key(|pos| *pos as u8);
+    constraints
+        .parts_of_speech
+        .sort_unstable_by_key(|pos| *pos as u8);
     constraints.parts_of_speech.dedup();
     constraints
         .next_parts_of_speech
@@ -1682,14 +1714,10 @@ fn pronunciation_candidate_claim_context(
             word_index,
             context.part_of_speech,
         ));
-        for rule in matching_selection_rules {
+        for rule in &matching_selection_rules {
             if !rule.context_words.is_empty()
-                && let Some(context_claim) = insert_context_word_claim(
-                    artifact,
-                    words,
-                    word_index,
-                    &rule.context_words,
-                )?
+                && let Some(context_claim) =
+                    insert_context_word_claim(artifact, words, word_index, &rule.context_words)?
             {
                 supports.push(context_claim);
             }
@@ -1707,22 +1735,32 @@ fn pronunciation_candidate_claim_context(
             "pronunciation.manual_override",
             "explicit user pronunciation override",
         )
-    } else if explicitly_strong && !is_reduction {
+    } else if (explicitly_strong || context.careful_style) && !is_reduction {
         (
             EvidenceProvenance {
                 source: EvidenceSource::UserMarkup,
-                method: "emphasis or citation strong-form intent".into(),
+                method: if context.careful_style {
+                    "careful-style strong-form intent".into()
+                } else {
+                    "emphasis or citation strong-form intent".into()
+                },
                 version: Some("1".into()),
             },
             source_default_priority(&EvidenceSource::UserMarkup),
             "pronunciation.strong_form.user_intent",
-            "emphasis or citation requires a conservative strong form",
+            "careful style, emphasis, or citation requires a conservative strong form",
         )
     } else if weak_rule_applies {
         (
             EvidenceProvenance {
                 source: EvidenceSource::Rule,
-                method: "variety weak-form context".into(),
+                method: format!(
+                    "variety weak form: {}",
+                    applicable_weak_rule
+                        .expect("weak-rule applicability was checked")
+                        .id
+                        .replace('_', " ")
+                ),
                 version: Some("1".into()),
             },
             source_default_priority(&EvidenceSource::Lexicon) + 10,
@@ -1753,15 +1791,24 @@ fn pronunciation_candidate_claim_context(
             },
         )
     };
-    let rationale = ClaimRationale::new(code, summary)
+    let mut rationale = ClaimRationale::new(code, summary)
         .with_attribute("word_index", word_index.to_string())
         .with_attribute("token", word.normalized.clone())
         .with_attribute("candidate_index", candidate_index.to_string())
         .with_attribute("phrase_final", phrase_final.to_string())
+        .with_attribute("careful_style", context.careful_style.to_string())
+        .with_attribute("prosodically_prominent", prosodically_prominent.to_string())
+        .with_attribute("explicitly_strong", explicitly_strong.to_string())
         .with_attribute(
             "syntax_allows_irreversible_prosody",
             syntax_allows_reduction.to_string(),
         );
+    if let Some(part_of_speech) = context.part_of_speech {
+        rationale = rationale.with_attribute("part_of_speech", format!("{part_of_speech:?}"));
+    }
+    if let Some(vowelish) = context.next_starts_with_vowelish {
+        rationale = rationale.with_attribute("next_phonetic_onset_vowelish", vowelish.to_string());
+    }
     Ok(CandidateClaimContext {
         provenance,
         constraints,
@@ -1801,7 +1848,9 @@ fn pronunciation_selection_rule_applies(
     let pos_matches = rule
         .part_of_speech
         .map(canonical_pronunciation_pos)
-        .is_none_or(|expected| context.part_of_speech.map(canonical_pronunciation_pos) == Some(expected));
+        .is_none_or(|expected| {
+            context.part_of_speech.map(canonical_pronunciation_pos) == Some(expected)
+        });
     let next_pos_matches = rule
         .next_part_of_speech
         .is_none_or(|expected| context.next_part_of_speech == Some(expected));
@@ -1883,10 +1932,7 @@ fn insert_context_word_claim(
                 LinguisticTargetScope::Word {
                     id: format!("word:{context_index}"),
                 },
-                Some(crate::event::TextRange {
-                    start: context_word.span.start_char,
-                    end: context_word.span.end_char,
-                }),
+                Some(evidence_text_range(&context_word.span)?),
             ),
             LinguisticClaimValue::LexicalIdentity {
                 lexeme_id: context_word.normalized.clone(),
@@ -1901,6 +1947,17 @@ fn insert_context_word_claim(
     Ok(Some(id))
 }
 
+fn evidence_text_range(span: &TextSpan) -> Result<crate::event::TextRange, PhonemicizeError> {
+    Ok(crate::event::TextRange {
+        start: u32::try_from(span.start_char).map_err(|_| {
+            PhonemicizeError::Evidence("word start exceeds the evidence text-range limit".into())
+        })?,
+        end: u32::try_from(span.end_char).map_err(|_| {
+            PhonemicizeError::Evidence("word end exceeds the evidence text-range limit".into())
+        })?,
+    })
+}
+
 fn pronunciation_candidate_id(
     variety: &VarietyId,
     word_index: usize,
@@ -1911,6 +1968,10 @@ fn pronunciation_candidate_id(
     digest.update([0]);
     for phoneme in candidate {
         digest.update(phoneme.phoneme.0.as_bytes());
+        digest.update([0]);
+        if let Some(stress) = planned_phoneme_stress_label(phoneme) {
+            digest.update(stress.as_bytes());
+        }
         digest.update([0]);
     }
     let fingerprint = digest
@@ -1934,6 +1995,207 @@ fn phonemicize_utterance_id(variety: &VarietyId, normalized_text: &str) -> Utter
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     UtteranceId(format!("phonemicize:{fingerprint}"))
+}
+
+fn append_resolved_realization_claims(
+    artifact: &mut LinguisticEvidenceArtifact,
+    lexical_candidates: &[LexicalPronunciationCandidates],
+    phonemes: &[PhonemeToken],
+    boundaries: &[SpeechBoundaryToken],
+    word_ranges: &[crate::event::TextRange],
+) -> Result<(), PhonemicizeError> {
+    let mut phoneme_indices_by_word = vec![0usize; lexical_candidates.len()];
+    for phoneme in phonemes {
+        let Some(word_index) = phoneme_word_index(phoneme) else {
+            continue;
+        };
+        let Some(local_index) = phoneme_indices_by_word.get_mut(word_index) else {
+            continue;
+        };
+        let Some(selected_claim_id) =
+            selected_pronunciation_claim_id(lexical_candidates, word_index)
+        else {
+            continue;
+        };
+        let Spec::Known(phoneme_id) = &phoneme.phoneme else {
+            continue;
+        };
+        let phoneme_claim_id =
+            LinguisticClaimId(format!("claim:phoneme-plan:{word_index}:{}", *local_index));
+        let target = LinguisticTarget::new(
+            artifact.utterance_id.clone(),
+            LinguisticTargetScope::Phoneme {
+                id: format!("word:{word_index}:phoneme:{}", *local_index),
+            },
+            word_ranges.get(word_index).cloned(),
+        );
+        let claim = LinguisticClaim::new(
+            phoneme_claim_id.clone(),
+            target.clone(),
+            LinguisticClaimKind::PhonemeRealization,
+            LinguisticClaimValue::PhonemeRealization {
+                phoneme: phoneme_id.clone(),
+            },
+            EvidenceProvenance {
+                source: EvidenceSource::TtsPlan,
+                method: "phoneme plan projected from resolved pronunciation".into(),
+                version: Some("1".into()),
+            },
+            ClaimConfidence::new(
+                f64::from(phoneme.confidence),
+                Some("pronunciation-status-v1".into()),
+            )?,
+            ClaimRationale::new(
+                "pronunciation.resolved_phoneme_plan",
+                "selected pronunciation determines the planned phoneme",
+            )
+            .with_attribute("word_index", word_index.to_string())
+            .with_attribute("phoneme_index", local_index.to_string()),
+        )?
+        .with_support(selected_claim_id.clone());
+        artifact.insert_claim(claim)?;
+
+        if let Some(stress) = token_stress(phoneme) {
+            let stress_claim = LinguisticClaim::new(
+                LinguisticClaimId(format!(
+                    "claim:lexical-stress:{word_index}:{}",
+                    *local_index
+                )),
+                target.clone(),
+                LinguisticClaimKind::Stress,
+                LinguisticClaimValue::Stress(stress),
+                EvidenceProvenance {
+                    source: EvidenceSource::Prosody,
+                    method: "lexical stress projected from resolved pronunciation".into(),
+                    version: Some("1".into()),
+                },
+                ClaimConfidence::new(
+                    f64::from(phoneme.confidence),
+                    Some("pronunciation-status-v1".into()),
+                )?,
+                ClaimRationale::new(
+                    "pronunciation.resolved_lexical_stress",
+                    "selected pronunciation determines lexical stress",
+                ),
+            )?
+            .with_support(selected_claim_id);
+            artifact.insert_claim(stress_claim)?;
+        }
+
+        for (phone_index, phone) in phoneme.realized_as.iter().enumerate() {
+            let Spec::Known(phone_id) = &phone.phone else {
+                continue;
+            };
+            let claim = LinguisticClaim::new(
+                LinguisticClaimId(format!(
+                    "claim:phone-realization:{word_index}:{}:{phone_index}",
+                    *local_index
+                )),
+                LinguisticTarget::new(
+                    artifact.utterance_id.clone(),
+                    LinguisticTargetScope::Phone {
+                        id: format!(
+                            "word:{word_index}:phoneme:{}:phone:{phone_index}",
+                            *local_index
+                        ),
+                    },
+                    word_ranges.get(word_index).cloned(),
+                ),
+                LinguisticClaimKind::PhoneRealization,
+                LinguisticClaimValue::PhoneRealization {
+                    phone: phone_id.clone(),
+                },
+                phone.provenance.clone(),
+                ClaimConfidence::new(f64::from(phone.confidence), None)?,
+                ClaimRationale::new(
+                    "pronunciation.resolved_phone_realization",
+                    "phone realization derives from the resolved phoneme plan",
+                ),
+            )?
+            .with_support(phoneme_claim_id.clone());
+            artifact.insert_claim(claim)?;
+        }
+        *local_index += 1;
+    }
+
+    for (boundary_index, boundary) in boundaries.iter().enumerate() {
+        let mut claim = LinguisticClaim::new(
+            LinguisticClaimId(format!("claim:phrase-boundary:{boundary_index}")),
+            LinguisticTarget::new(
+                artifact.utterance_id.clone(),
+                LinguisticTargetScope::Boundary {
+                    id: format!("boundary:{boundary_index}"),
+                },
+                boundary
+                    .span
+                    .as_ref()
+                    .map(evidence_text_range)
+                    .transpose()?
+                    .or_else(|| word_ranges.get(boundary.after_grapheme_index).cloned()),
+            ),
+            LinguisticClaimKind::Boundary,
+            LinguisticClaimValue::Boundary(boundary.kind.clone()),
+            EvidenceProvenance {
+                source: if boundary.terminal.is_some() || boundary.pause.is_some() {
+                    EvidenceSource::Punctuation
+                } else {
+                    EvidenceSource::TtsPlan
+                },
+                method: "phrase boundary projected after pronunciation resolution".into(),
+                version: Some("1".into()),
+            },
+            ClaimConfidence::new(1.0, None)?,
+            ClaimRationale::new(
+                "pronunciation.resolved_phrase_boundary",
+                "phrase boundary retains support from adjacent resolved words",
+            )
+            .with_attribute(
+                "after_grapheme_index",
+                boundary.after_grapheme_index.to_string(),
+            ),
+        )?;
+        for word_index in [
+            Some(boundary.after_grapheme_index),
+            boundary.after_grapheme_index.checked_add(1),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(selected) = selected_pronunciation_claim_id(lexical_candidates, word_index)
+            {
+                claim = claim.with_support(selected);
+            }
+        }
+        artifact.insert_claim(claim)?;
+    }
+    Ok(())
+}
+
+fn selected_pronunciation_claim_id(
+    lexical_candidates: &[LexicalPronunciationCandidates],
+    word_index: usize,
+) -> Option<LinguisticClaimId> {
+    lexical_candidates
+        .get(word_index)?
+        .alternatives
+        .iter()
+        .find(|candidate| candidate.selected)
+        .map(|candidate| candidate.claim_id.clone())
+}
+
+fn phoneme_word_index(phoneme: &PhonemeToken) -> Option<usize> {
+    match phoneme
+        .features
+        .values
+        .get(&FeatureId("orthography.word_index".into()))
+    {
+        Some(Spec::Known(FeatureValue::Number(value)))
+            if value.is_finite() && *value >= 0.0 && value.fract() == 0.0 =>
+        {
+            usize::try_from(*value as u64).ok()
+        }
+        _ => None,
+    }
 }
 
 fn planned_candidate_from_phoneme_ids(
@@ -2192,9 +2454,7 @@ fn pronunciation_for_word(
     }
 
     let pipeline_weak = pipeline.weak_form_resolver(word, variety, context);
-    if let Some(mut pronunciation) =
-        pronunciation_from_declared_lexicons(word, variety, context)
-    {
+    if let Some(mut pronunciation) = pronunciation_from_declared_lexicons(word, variety, context) {
         append_weak_form_candidates(
             &mut pronunciation.candidates,
             word,
@@ -2204,12 +2464,7 @@ fn pronunciation_for_word(
         return pronunciation;
     }
     if let Some(mut pronunciation) = pipeline_weak {
-        append_weak_form_candidates(
-            &mut pronunciation.candidates,
-            word,
-            variety,
-            None,
-        );
+        append_weak_form_candidates(&mut pronunciation.candidates, word, variety, None);
         return pronunciation;
     }
 
@@ -2297,9 +2552,9 @@ fn hyphenated_pronunciation_from_parts(
         return None;
     }
 
-    let mut candidate = Vec::new();
-    let mut break_offsets = Vec::new();
+    let mut combinations = vec![(Vec::<PlannedPhoneme>::new(), Vec::<usize>::new())];
     let mut warnings = Vec::new();
+    let mut alternatives_truncated = false;
     for (index, part) in parts.iter().enumerate() {
         let normalized = normalize_surface_word(&part.text);
         if normalized.is_empty() {
@@ -2313,46 +2568,86 @@ fn hyphenated_pronunciation_from_parts(
         } else {
             None
         };
-        if let Some(planned) = prefix_phonemes {
-            candidate.extend(planned);
-            break_offsets.push(candidate.len());
-            continue;
-        }
-        let part_word = WordToken {
-            text: part.text.clone(),
-            normalized,
-            kind: (*part.kind).clone(),
-            span: word.span,
+        let options = if let Some(planned) = prefix_phonemes {
+            vec![planned]
+        } else {
+            let part_word = WordToken {
+                text: part.text.clone(),
+                normalized,
+                kind: (*part.kind).clone(),
+                span: word.span,
+            };
+            let mut part_context = context;
+            part_context.part_of_speech = None;
+            part_context.next_part_of_speech = None;
+            part_context.next_starts_with_vowelish = parts
+                .get(index + 1)
+                .and_then(|next| hyphenated_part_starts_with_vowelish(next, variety));
+            let part_pronunciation =
+                pronunciation_for_word(pipeline, &part_word, variety, part_context);
+            warnings.extend(part_pronunciation.warnings);
+            part_pronunciation.candidates
         };
-        let mut part_context = context;
-        part_context.part_of_speech = None;
-        part_context.next_part_of_speech = None;
-        part_context.next_starts_with_vowelish = parts
-            .get(index + 1)
-            .and_then(|next| hyphenated_part_starts_with_vowelish(next, variety));
-        let part_pronunciation =
-            pronunciation_for_word(pipeline, &part_word, variety, part_context);
-        let part_candidate = part_pronunciation.candidates.first()?;
-        if part_candidate.is_empty() {
+        if options.is_empty() || options.iter().any(Vec::is_empty) {
             return None;
         }
-        candidate.extend(part_candidate.clone());
-        warnings.extend(part_pronunciation.warnings);
-        if index + 1 < parts.len() {
-            break_offsets.push(candidate.len());
+
+        let mut expanded = Vec::new();
+        'combinations: for (candidate, offsets) in combinations {
+            for option in &options {
+                if expanded.len() == MAX_HYPHENATED_PRONUNCIATION_CANDIDATES {
+                    alternatives_truncated = true;
+                    break 'combinations;
+                }
+                let mut expanded_candidate = candidate.clone();
+                expanded_candidate.extend(option.clone());
+                let mut expanded_offsets = offsets.clone();
+                if index + 1 < parts.len() {
+                    expanded_offsets.push(expanded_candidate.len());
+                }
+                expanded.push((expanded_candidate, expanded_offsets));
+            }
         }
+        combinations = expanded;
+    }
+    if alternatives_truncated {
+        warnings.push(PronunciationWarning {
+            token: word.text.clone(),
+            kind: PronunciationWarningKind::AlternativeLimitApplied,
+            message: format!(
+                "hyphenated pronunciation alternatives were bounded at \
+                 {MAX_HYPHENATED_PRONUNCIATION_CANDIDATES} in provider-rank order"
+            ),
+        });
     }
 
+    let first_offsets = combinations.first()?.1.clone();
+    let common_break_offsets = if combinations
+        .iter()
+        .all(|(_, offsets)| offsets == &first_offsets)
+    {
+        first_offsets
+    } else {
+        Vec::new()
+    };
+    let candidates = combinations
+        .into_iter()
+        .map(|(candidate, _)| candidate)
+        .collect();
     Some(WordPronunciation {
-        candidates: vec![candidate],
+        candidates,
         status: PronunciationStatus::Guessed,
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
-            method: "hyphenated compound pronunciation from segment pronunciations".into(),
+            method: format!(
+                "hyphenated compound pronunciation from bounded segment alternatives \
+                 (limit {MAX_HYPHENATED_PRONUNCIATION_CANDIDATES}); provider-rank fallback is \
+                 resolved as an explicit claim"
+            ),
             version: Some("0.1".into()),
         },
         warnings,
-        letter_break_offsets: break_offsets,
+        letter_break_offsets: common_break_offsets,
         letter_indices: Vec::new(),
         part_of_speech: context.part_of_speech,
     })
@@ -2407,7 +2702,11 @@ fn hyphenated_part_starts_with_vowelish(
                 .map(|phoneme| planned_phoneme_is_vowel(variety, phoneme))
                 .collect::<std::collections::BTreeSet<_>>()
         })
-        .and_then(|starts| (starts.len() == 1).then(|| starts.iter().next().copied()).flatten())
+        .and_then(|starts| {
+            (starts.len() == 1)
+                .then(|| starts.iter().next().copied())
+                .flatten()
+        })
 }
 
 fn missing_pronunciation(
@@ -2526,9 +2825,7 @@ fn weak_form_rule_applies(
     }
     match rule.following {
         WeakFormFollowingContext::Any => true,
-        WeakFormFollowingContext::BeforeVowelish => {
-            context.next_starts_with_vowelish == Some(true)
-        }
+        WeakFormFollowingContext::BeforeVowelish => context.next_starts_with_vowelish == Some(true),
         WeakFormFollowingContext::BeforeConsonantish => {
             context.next_starts_with_vowelish == Some(false)
         }
@@ -2589,10 +2886,30 @@ fn append_weak_form_candidates(
 
 fn same_planned_candidate(left: &[PlannedPhoneme], right: &[PlannedPhoneme]) -> bool {
     left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| left.phoneme == right.phoneme)
+        && left.iter().zip(right).all(|(left, right)| {
+            left.phoneme == right.phoneme
+                && planned_phoneme_stress_label(left) == planned_phoneme_stress_label(right)
+        })
+}
+
+fn planned_phoneme_stress_label(phoneme: &PlannedPhoneme) -> Option<&str> {
+    match phoneme
+        .features
+        .values
+        .get(&FeatureId("phonology.stress".into()))
+    {
+        Some(Spec::Known(FeatureValue::Category(stress))) => Some(stress),
+        _ => None,
+    }
+}
+
+fn planned_phoneme_stress(phoneme: &PlannedPhoneme) -> Option<crate::prosody::Stress> {
+    match planned_phoneme_stress_label(phoneme)? {
+        "primary" | "1" => Some(crate::prosody::Stress::Primary),
+        "secondary" | "2" => Some(crate::prosody::Stress::Secondary),
+        "unstressed" | "0" => Some(crate::prosody::Stress::Unstressed),
+        _ => None,
+    }
 }
 
 fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> WordPronunciation {
@@ -2613,10 +2930,7 @@ fn weak_form_pronunciation(rule: &WeakFormRule, variety: &LinguisticVariety) -> 
     }
 }
 
-fn weak_form_candidate(
-    rule: &WeakFormRule,
-    variety: &LinguisticVariety,
-) -> Vec<PlannedPhoneme> {
+fn weak_form_candidate(rule: &WeakFormRule, variety: &LinguisticVariety) -> Vec<PlannedPhoneme> {
     if rule.source_pronunciation.is_empty() {
         rule.pronunciation
             .iter()
@@ -4990,6 +5304,26 @@ mod tests {
         }
     }
 
+    fn lexical_word<'a>(
+        output: &'a PhonemicizeOutput,
+        token: &str,
+    ) -> &'a LexicalPronunciationCandidates {
+        output
+            .lexical_candidates
+            .iter()
+            .find(|word| word.token == token)
+            .unwrap_or_else(|| panic!("missing lexical diagnostics for {token:?}"))
+    }
+
+    fn selected_alternative(
+        word: &LexicalPronunciationCandidates,
+    ) -> &PronunciationCandidateAlternative {
+        word.alternatives
+            .iter()
+            .find(|candidate| candidate.selected)
+            .expect("a pronunciation candidate should be selected")
+    }
+
     fn phoneme_symbols(output: &PhonemicizeOutput) -> Vec<String> {
         output
             .phonemes
@@ -5545,6 +5879,355 @@ mod tests {
             .phonemicize(&request("and then", "en-US"))
             .expect("and then");
         assert_eq!(&phone_symbols(&and_then)[..3], ["ə", "n", "d"]);
+    }
+
+    #[test]
+    fn pronunciation_claims_retain_and_serialize_selected_and_rejected_alternatives() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request("I record the record.", "en-US"))
+            .expect("ranked heteronyms");
+        let verb = &output.lexical_candidates[1];
+        let noun = &output.lexical_candidates[3];
+
+        for word in [verb, noun] {
+            assert!(word.alternatives.len() >= 2);
+            assert_eq!(
+                word.alternatives
+                    .iter()
+                    .filter(|candidate| candidate.selected)
+                    .count(),
+                1
+            );
+            assert!(word.alternatives.iter().any(|candidate| {
+                !candidate.selected && candidate.explanation.contains("selected")
+                    || candidate.explanation.contains("priority")
+                    || candidate.explanation.contains("tie")
+            }));
+            assert_eq!(
+                word.selected_candidate_id.as_deref(),
+                Some(selected_alternative(word).id.as_str())
+            );
+            assert!(word.resolution.is_some());
+            assert!(
+                word.alternatives
+                    .iter()
+                    .all(|candidate| !candidate.lexical_stress.is_empty())
+            );
+        }
+        assert_ne!(
+            selected_alternative(verb).lexical_stress,
+            selected_alternative(noun).lexical_stress
+        );
+        assert!(output.linguistic_evidence.claims.iter().any(|claim| {
+            claim.kind == LinguisticClaimKind::PhonemeRealization
+                && claim
+                    .supports
+                    .contains(&selected_alternative(verb).claim_id)
+        }));
+        assert!(output.linguistic_evidence.claims.iter().any(|claim| {
+            claim.kind == LinguisticClaimKind::Stress
+                && claim
+                    .supports
+                    .contains(&selected_alternative(noun).claim_id)
+        }));
+        assert!(output.linguistic_evidence.claims.iter().any(|claim| {
+            claim.kind == LinguisticClaimKind::Boundary && !claim.supports.is_empty()
+        }));
+
+        let json = serde_json::to_string(&output).expect("serialize phonemicization evidence");
+        let decoded: PhonemicizeOutput =
+            serde_json::from_str(&json).expect("deserialize phonemicization evidence");
+        assert_eq!(decoded.lexical_candidates, output.lexical_candidates);
+        assert_eq!(decoded.linguistic_evidence, output.linguistic_evidence);
+    }
+
+    #[test]
+    fn contextual_claims_resolve_the_required_english_heteronyms() {
+        let cases = [
+            ("The record played.", 1, &["R", "EH1", "K", "ER0", "D"][..]),
+            (
+                "We record the song.",
+                1,
+                &["R", "AH0", "K", "AO1", "R", "D"][..],
+            ),
+            ("The lead pipe broke.", 1, &["L", "EH1", "D"][..]),
+            ("They lead the team.", 1, &["L", "IY1", "D"][..]),
+            ("The wind blew.", 1, &["W", "IH1", "N", "D"][..]),
+            ("We wind the clock.", 1, &["W", "AY1", "N", "D"][..]),
+            (
+                "The object moved.",
+                1,
+                &["AA1", "B", "JH", "EH0", "K", "T"][..],
+            ),
+            (
+                "We object to the plan.",
+                1,
+                &["AH0", "B", "JH", "EH1", "K", "T"][..],
+            ),
+            (
+                "The present arrived.",
+                1,
+                &["P", "R", "EH1", "Z", "AH0", "N", "T"][..],
+            ),
+            (
+                "We present the case.",
+                1,
+                &["P", "R", "IY0", "Z", "EH1", "N", "T"][..],
+            ),
+            ("The bass guitar plays.", 1, &["B", "EY1", "S"][..]),
+            ("The bass fish swims.", 1, &["B", "AE1", "S"][..]),
+        ];
+
+        for (text, word_index, expected) in cases {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request(text, "en-US"))
+                .unwrap_or_else(|error| panic!("{text:?}: {error}"));
+            assert_eq!(
+                cmudict_symbols_for_word(&output, word_index),
+                expected,
+                "{text:?}"
+            );
+            let word = &output.lexical_candidates[word_index];
+            assert!(
+                word.alternatives.len() >= 2,
+                "{text:?} did not retain alternatives"
+            );
+            let selected = selected_alternative(word);
+            assert!(
+                selected.explanation.contains("context")
+                    || selected.explanation.contains("part of speech"),
+                "{text:?}: {}",
+                selected.explanation
+            );
+        }
+
+        let noun = VarietyDataPhonemicizer
+            .phonemicize(&request("The record played.", "en-US"))
+            .expect("noun record");
+        let verb = VarietyDataPhonemicizer
+            .phonemicize(&request("We record music.", "en-US"))
+            .expect("verb record");
+        let noun_word = lexical_word(&noun, "record");
+        let verb_word = lexical_word(&verb, "record");
+        assert_eq!(
+            noun_word
+                .alternatives
+                .iter()
+                .map(|candidate| &candidate.id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            verb_word
+                .alternatives
+                .iter()
+                .map(|candidate| &candidate.id)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_ne!(
+            noun_word.selected_candidate_id,
+            verb_word.selected_candidate_id
+        );
+    }
+
+    #[test]
+    fn weak_form_claims_use_phonetic_onset_and_honor_strong_form_intent() {
+        for (text, expected_vowelish, expected) in [
+            ("the hour", true, &["DH", "IY0"][..]),
+            ("the university", false, &["DH", "AH0"][..]),
+        ] {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request(text, "en-US"))
+                .unwrap_or_else(|error| panic!("{text:?}: {error}"));
+            assert_eq!(cmudict_symbols_for_word(&output, 0), expected);
+            let selected = selected_alternative(&output.lexical_candidates[0]);
+            assert_eq!(
+                selected.constraints.next_starts_with_vowelish,
+                Some(expected_vowelish)
+            );
+            let claim = output
+                .linguistic_evidence
+                .claim(&selected.claim_id)
+                .expect("selected pronunciation claim");
+            assert_eq!(
+                claim
+                    .rationale
+                    .attributes
+                    .get("next_phonetic_onset_vowelish")
+                    .map(String::as_str),
+                Some(if expected_vowelish { "true" } else { "false" })
+            );
+        }
+
+        for (text, word_index) in [
+            ("I want to go", 2),
+            ("I walked to school", 2),
+            ("a cat", 0),
+            ("an apple", 0),
+            ("we can go", 1),
+        ] {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request(text, "en-US"))
+                .unwrap_or_else(|error| panic!("{text:?}: {error}"));
+            assert_eq!(
+                selected_alternative(&output.lexical_candidates[word_index])
+                    .constraints
+                    .reduction,
+                Some(true),
+                "{text:?}"
+            );
+        }
+
+        let strong_cases = [
+            PhonemicizeRequest {
+                text: "Say the word to".into(),
+                variety: VarietyId("en-US".into()),
+                style: None,
+            },
+            PhonemicizeRequest {
+                text: "Say to now".into(),
+                variety: VarietyId("en-US".into()),
+                style: Some(PhonemicizeStyle {
+                    citation_word_indices: vec![1],
+                    ..PhonemicizeStyle::default()
+                }),
+            },
+            PhonemicizeRequest {
+                text: "the cat".into(),
+                variety: VarietyId("en-US".into()),
+                style: Some(PhonemicizeStyle {
+                    emphasized_word_indices: vec![0],
+                    ..PhonemicizeStyle::default()
+                }),
+            },
+            PhonemicizeRequest {
+                text: "the cat".into(),
+                variety: VarietyId("en-US".into()),
+                style: Some(PhonemicizeStyle {
+                    careful_style: true,
+                    ..PhonemicizeStyle::default()
+                }),
+            },
+        ];
+        for request in strong_cases {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request)
+                .unwrap_or_else(|error| panic!("{:?}: {error}", request.text));
+            let word_index = if request.text.starts_with("Say the word") {
+                3
+            } else if request.text.starts_with("Say") {
+                1
+            } else {
+                0
+            };
+            assert_eq!(
+                selected_alternative(&output.lexical_candidates[word_index])
+                    .constraints
+                    .reduction,
+                Some(false),
+                "{:?}",
+                request.text
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_islands_flow_into_shared_link_and_prosody_claims() {
+        let cases = [
+            (
+                "I want to see the movie",
+                SyntacticLinkKind::InfinitivalMarker,
+            ),
+            ("I walked to school", SyntacticLinkKind::Preposition),
+            ("we can go", SyntacticLinkKind::Auxiliary),
+            ("not tea but coffee", SyntacticLinkKind::ContrastPair),
+            ("Oh Joe listen", SyntacticLinkKind::Vocative),
+            ("This is my friend Bob", SyntacticLinkKind::Apposition),
+            (
+                "Many people particularly doctors believe",
+                SyntacticLinkKind::Parenthetical,
+            ),
+            ("I know that she left", SyntacticLinkKind::Complement),
+            ("we present the case", SyntacticLinkKind::Object),
+        ];
+
+        for (text, expected_link) in cases {
+            let output = VarietyDataPhonemicizer
+                .phonemicize(&request(text, "en-US"))
+                .unwrap_or_else(|error| panic!("{text:?}: {error}"));
+            assert!(
+                output.linguistic_evidence.claims.iter().any(|claim| {
+                    matches!(
+                        claim.value,
+                        LinguisticClaimValue::DependencyLink { kind, .. }
+                            if kind == expected_link
+                    )
+                }),
+                "{text:?} did not expose {expected_link:?}"
+            );
+            assert!(
+                output.linguistic_evidence.claims.iter().any(|claim| {
+                    matches!(
+                        claim.value,
+                        LinguisticClaimValue::ProsodicRole(crate::syntax::ProsodicRole::Focus)
+                    )
+                }) || expected_link != SyntacticLinkKind::Object,
+                "{text:?} did not expose object focus"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_override_is_a_winning_claim_without_erasing_automatic_candidates() {
+        let automatic = VarietyDataPhonemicizer
+            .phonemicize(&request("They lead the team.", "en-US"))
+            .expect("automatic lead");
+        let lead = lexical_word(&automatic, "lead");
+        let alternate = lead
+            .alternatives
+            .iter()
+            .find(|candidate| !candidate.selected)
+            .expect("retained lead alternative");
+
+        let overridden = VarietyDataPhonemicizer
+            .phonemicize(&PhonemicizeRequest {
+                text: "They lead the team.".into(),
+                variety: VarietyId("en-US".into()),
+                style: Some(PhonemicizeStyle {
+                    pronunciation_overrides: vec![PronunciationOverride {
+                        word_index: 1,
+                        phonemes: alternate.phonemes.clone(),
+                    }],
+                    ..PhonemicizeStyle::default()
+                }),
+            })
+            .expect("manual lead override");
+        let lead = lexical_word(&overridden, "lead");
+        let selected = selected_alternative(lead);
+
+        assert_eq!(selected.provenance.source, EvidenceSource::ManualOverride);
+        assert!(lead.alternatives.iter().any(|candidate| {
+            !candidate.selected && candidate.provenance.source != EvidenceSource::ManualOverride
+        }));
+    }
+
+    #[test]
+    fn multilingual_varieties_mark_english_weak_form_rules_not_applicable() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request("la casa", "es-ES"))
+            .expect("Spanish phonemicization");
+
+        assert!(
+            output
+                .lexical_candidates
+                .iter()
+                .flat_map(|word| &word.alternatives)
+                .all(|candidate| candidate.constraints.reduction.is_none())
+        );
+        assert!(
+            output
+                .linguistic_evidence
+                .claims
+                .iter()
+                .any(|claim| { matches!(claim.value, LinguisticClaimValue::ProsodicRole(_)) })
+        );
     }
 
     #[test]

@@ -338,7 +338,8 @@
           "required": "at all"
         },
         "lexical_candidates": {
-          "required": ["ət", "ɔl"]
+          "required": ["ət", "ɔl"],
+          "accepted_alternatives": [["æt", "ət", "ɔl"]]
         },
         "broad_phonemes": {
           "required": "ət ˈɔl"

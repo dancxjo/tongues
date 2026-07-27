@@ -129,7 +129,42 @@ be carried through the existing provider-neutral stream envelope as:
 
 CLI JSONL, server APIs, interpretation, and duplex may serialize or inspect the
 same shape. Grammar analyses already project every retained parse, dependency
-link, and POS assertion into this artifact through
+link, POS assertion, and prosodic-role assertion into this artifact through
 `GrammarAnalysis::to_linguistic_evidence`; parse candidates explicitly conflict
-and are supported by their component claims. Other producer integrations and
-the live duplex commit frontier remain layered on top of this shared contract.
+and are supported by their component claims.
+
+## Pronunciation resolution
+
+`PhonemicizeOutput` carries the same artifact in `linguistic_evidence`.
+Each `LexicalPronunciationCandidates` entry now records:
+
+- the selected stable candidate ID and the complete claim resolution;
+- every selected and rejected alternative, including phoneme IDs and lexical
+  stress;
+- provider provenance, confidence, variety/POS/context/style constraints, and
+  the resolver's explanation.
+
+Lexicon, morphology, G2P, rules, user markup, and manual overrides retain their
+own provenance. Grammar POS/link claims and nearby lexical-context claims are
+support edges where they contribute to a contextual choice. Weak-form
+rationales record phrase position, conservative POS, careful/emphasis/citation
+intent, and the known following phonetic onset. If the following candidates do
+not agree on a vowel/consonant onset, article selection remains conservative
+instead of using spelling or candidate zero.
+
+The resolved claim—not vector position—is passed into phoneme planning and
+phone realization. Where no contextual evidence separates candidates, the
+provider's deterministic ordering is retained as an explicit
+`pronunciation.provider_rank_fallback` claim. Hyphenated segment alternatives
+are combined and resolved through the same path, with a documented bound of 64
+combinations and an explicit warning if that bound is reached.
+
+`PhonemicizeStyle` adds optional emphasized/citation word indices and
+pronunciation overrides. These deserialize to empty lists, while the new output
+evidence fields have defaults, so existing request and stored-output JSON
+remain readable. Non-English varieties without the English weak-form rules
+serialize reduction applicability as unknown/not applicable rather than a
+false claim.
+
+Other producer integrations and the live duplex commit frontier remain layered
+on top of this shared contract.
