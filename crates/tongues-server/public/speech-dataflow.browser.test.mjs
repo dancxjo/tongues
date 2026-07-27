@@ -168,8 +168,10 @@ test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persi
   const jack=(nodeId,direction)=>page.locator(`[data-patch-jack][data-node-id="${nodeId}"][data-direction="${direction}"]`);
   const save=async()=>{
     savedGraph=null;
+    await page.locator("#status").evaluate(element=>{element.textContent="";});
     await page.getByRole("button",{name:"Save"}).click();
     await expect.poll(()=>savedGraph).not.toBeNull();
+    await expect(page.locator("#status")).toContainText("Saved Browser fixture");
   };
 
   await expect(jack("node:mic-1","output")).toBeVisible();
@@ -215,7 +217,8 @@ test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persi
 
   const audioConnection=page.locator(`.patch-connection-list button[data-edge-id="${audioEdge.id}"]`);
   await audioConnection.focus();
-  await audioConnection.press("Delete");
+  await expect(audioConnection).toBeFocused();
+  await page.keyboard.press("Delete");
   await expect(page.locator(".patch-cable")).toHaveCount(2);
   await save();
   expect(savedGraph.edges.some(edge=>edge.id===audioEdge.id)).toBe(false);
