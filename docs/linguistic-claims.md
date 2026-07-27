@@ -128,5 +128,8 @@ be carried through the existing provider-neutral stream envelope as:
 ```
 
 CLI JSONL, server APIs, interpretation, and duplex may serialize or inspect the
-same shape. Behavioral wiring into individual producers and the live duplex
-commit frontier is intentionally layered on top of this shared contract.
+same shape. Grammar analyses already project every retained parse, dependency
+link, and POS assertion into this artifact through
+`GrammarAnalysis::to_linguistic_evidence`; parse candidates explicitly conflict
+and are supported by their component claims. Other producer integrations and
+the live duplex commit frontier remain layered on top of this shared contract.

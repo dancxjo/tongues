@@ -269,8 +269,10 @@ pub trait PronunciationPipeline {
         let terminal = final_terminal(&boundaries);
         let syntax = self
             .syntax_analysis(&normalized_words, terminal, &variety)
-            .unwrap_or_else(|| GrammarAnalysis {
-                tokens: normalized_words
+            .unwrap_or_else(|| {
+                let mut analysis =
+                    GrammarAnalysis::failed(terminal, "phonemicization grammar was unavailable");
+                analysis.tokens = normalized_words
                     .iter()
                     .enumerate()
                     .map(|(word_index, word)| crate::syntax::SyntaxToken {
@@ -280,13 +282,23 @@ pub trait PronunciationPipeline {
                         prosodic_role: crate::syntax::ProsodicRole::Content,
                         syntactic_links: Vec::new(),
                     })
-                    .collect(),
-                ranked_parses: Vec::new(),
-                backend_parses: Vec::new(),
-                terminal,
+                    .collect();
+                analysis
             });
+        let conservative_syntax =
+            syntax.conservative_facts(crate::syntax::GrammarRankingPolicy::default());
         self.annotate_boundaries(&mut boundaries, &words, &syntax, &variety);
-        let prosody = prosody_from_boundaries(self, &boundaries, &words, &variety);
+        let mut prosody = prosody_from_boundaries(self, &boundaries, &words, &variety);
+        if !syntax.permits_irreversible_prosody(crate::syntax::GrammarRankingPolicy::default()) {
+            for label in &mut prosody.labels {
+                if label.kind == ProsodicLabelKind::AlternativeQuestionFall {
+                    label.kind = ProsodicLabelKind::QuestionRise;
+                }
+            }
+            prosody
+                .labels
+                .retain(|label| label.kind != ProsodicLabelKind::AlternativeQuestionRise);
+        }
         let mut graphemes = Vec::with_capacity(words.len());
         let mut phonemes = Vec::new();
         let mut phones = Vec::new();
@@ -311,8 +323,14 @@ pub trait PronunciationPipeline {
                     .get(word_index + 1)
                     .is_some_and(|next| self.next_word_starts_with_vowelish(next, &variety)),
                 careful_style,
-                part_of_speech: syntax.tokens.get(word_index).map(|token| token.pos),
-                next_part_of_speech: syntax.tokens.get(word_index + 1).map(|token| token.pos),
+                part_of_speech: conservative_syntax
+                    .tokens
+                    .get(word_index)
+                    .map(|token| token.pos),
+                next_part_of_speech: conservative_syntax
+                    .tokens
+                    .get(word_index + 1)
+                    .map(|token| token.pos),
             };
             let pronunciation = self.token_classifier(word, &variety, context);
             lexical_candidates.push(LexicalPronunciationCandidates {
@@ -905,6 +923,9 @@ fn annotate_alternative_question_boundaries(
     syntax: &GrammarAnalysis,
     variety: &LinguisticVariety,
 ) {
+    if !syntax.permits_irreversible_prosody(crate::syntax::GrammarRankingPolicy::default()) {
+        return;
+    }
     if final_terminal(boundaries) != Some(TerminalPunctuation::Question) {
         return;
     }
@@ -4657,6 +4678,37 @@ mod tests {
     }
 
     #[test]
+    fn low_margin_pos_ambiguity_does_not_force_grammar_specific_stress() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request("I saw her record.", "en-US"))
+            .expect("ambiguous heteronym should phonemicize");
+        let policy = crate::syntax::GrammarRankingPolicy::default();
+
+        assert_eq!(
+            output.syntax.interpretation_mode(policy),
+            crate::syntax::GrammarInterpretationMode::Conservative
+        );
+        assert_eq!(
+            output.syntax.conservative_facts(policy).tokens[3].pos,
+            PartOfSpeech::Unknown
+        );
+        assert!(
+            output.lexical_candidates[3].candidates.len() >= 2,
+            "the lexical stress alternatives should remain available"
+        );
+        assert!(
+            output
+                .phonemes
+                .iter()
+                .filter(|phoneme| {
+                    phoneme_usize_feature(phoneme, "orthography.word_index") == Some(3)
+                })
+                .all(|phoneme| !phoneme.provenance.method.contains("grammar POS")),
+            "a close grammar alternative must not force a POS-sensitive stress choice"
+        );
+    }
+
+    #[test]
     fn grammar_pos_can_select_noun_then_verb_for_same_spelling() {
         let output = VarietyDataPhonemicizer
             .phonemicize(&request("The object will object.", "en-US"))
@@ -6209,6 +6261,36 @@ mod tests {
                 .iter()
                 .any(|label| label.kind == ProsodicLabelKind::QuestionRise)
         );
+    }
+
+    #[test]
+    fn low_margin_attachment_ambiguity_suppresses_inserted_question_boundaries() {
+        let output = VarietyDataPhonemicizer
+            .phonemicize(&request(
+                "Would you rather marry or see the man with the telescope?",
+                "en-US",
+            ))
+            .expect("ambiguous alternative question should phonemicize");
+
+        assert_eq!(
+            output
+                .syntax
+                .interpretation_mode(crate::syntax::GrammarRankingPolicy::default()),
+            crate::syntax::GrammarInterpretationMode::Conservative
+        );
+        assert!(
+            !output
+                .boundaries
+                .iter()
+                .any(|boundary| { boundary.pause == Some(PauseKind::AlternativeQuestionRise) })
+        );
+        assert!(!output.prosody.labels.iter().any(|label| {
+            matches!(
+                label.kind,
+                ProsodicLabelKind::AlternativeQuestionRise
+                    | ProsodicLabelKind::AlternativeQuestionFall
+            )
+        }));
     }
 
     #[test]

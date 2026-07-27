@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -7,10 +7,16 @@ use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::data::variety_by_code;
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
+use crate::syntax_ambiguity::rank_and_expand_parses;
 
 pub type WordIndex = usize;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub const DEFAULT_CLOSE_PARSE_RANK_GAP: f32 = 0.08;
+pub const DEFAULT_PARSE_CONFIDENCE_FLOOR: f32 = 0.60;
+pub const DEFAULT_MAX_GRAMMAR_ALTERNATIVES: usize = 8;
+pub const DEFAULT_MAX_AMBIGUITY_TOKENS: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GrammarAnalysis {
     pub tokens: Vec<SyntaxToken>,
     #[serde(alias = "link_parses")]
@@ -20,6 +26,10 @@ pub struct GrammarAnalysis {
     #[serde(alias = "raw_link_grammar_parses")]
     pub backend_parses: Vec<BackendParse>,
     pub terminal: Option<TerminalPunctuation>,
+    #[serde(default = "complete_analysis_status")]
+    pub status: GrammarAnalysisStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,8 +43,164 @@ pub struct SyntaxToken {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankedGrammarParse {
+    #[serde(default)]
+    pub id: GrammarParseId,
     pub links: Vec<SyntacticLink>,
+    /// Backend-neutral score in [0, 1]. Higher is better.
     pub rank: f32,
+    /// Normalized confidence in [0, 1], separate from backend-native cost.
+    #[serde(default = "unit_confidence")]
+    pub confidence: f32,
+    #[serde(default)]
+    pub status: GrammarParseStatus,
+    #[serde(default)]
+    pub provenance: GrammarParseProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct GrammarParseId(pub String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GrammarParseStatus {
+    #[default]
+    Complete,
+    Partial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GrammarAnalysisStatus {
+    #[default]
+    Complete,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrammarParseProvenance {
+    pub backend: GrammarBackend,
+    pub backend_parse_index: usize,
+    pub variant: GrammarParseVariant,
+}
+
+impl Default for GrammarParseProvenance {
+    fn default() -> Self {
+        Self {
+            backend: GrammarBackend::TonguesRules,
+            backend_parse_index: 0,
+            variant: GrammarParseVariant::BackendPrimary,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum GrammarParseVariant {
+    #[default]
+    BackendPrimary,
+    PrepositionalAttachment {
+        preposition: WordIndex,
+        object: WordIndex,
+        head: WordIndex,
+    },
+    CoordinationScope {
+        conjunction: WordIndex,
+        left: WordIndex,
+        right: WordIndex,
+    },
+    PartOfSpeech {
+        word: WordIndex,
+        pos: PartOfSpeech,
+    },
+    ComplementAttachment {
+        marker: WordIndex,
+        head: WordIndex,
+    },
+    PhrasalParticle {
+        particle: WordIndex,
+        as_particle: bool,
+    },
+    RelativeClause {
+        marker: WordIndex,
+        head: WordIndex,
+    },
+    PunctuationIsland {
+        marker: WordIndex,
+        attach_left: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GrammarRankingPolicy {
+    pub close_rank_gap: f32,
+    pub confidence_floor: f32,
+    pub max_alternatives: usize,
+    pub max_tokens_for_alternatives: usize,
+}
+
+impl Default for GrammarRankingPolicy {
+    fn default() -> Self {
+        Self {
+            close_rank_gap: DEFAULT_CLOSE_PARSE_RANK_GAP,
+            confidence_floor: DEFAULT_PARSE_CONFIDENCE_FLOOR,
+            max_alternatives: DEFAULT_MAX_GRAMMAR_ALTERNATIVES,
+            max_tokens_for_alternatives: DEFAULT_MAX_AMBIGUITY_TOKENS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrammarInterpretationMode {
+    Decisive,
+    Conservative,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GrammarAmbiguityMargin {
+    pub best: GrammarParseId,
+    pub runner_up: GrammarParseId,
+    pub rank_gap: f32,
+    pub confidence_floor_met: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConservativeSyntaxFacts {
+    pub tokens: Vec<SyntaxToken>,
+    pub supporting_parses: Vec<GrammarParseId>,
+    pub mode: GrammarInterpretationMode,
+    pub suppress_irreversible_prosody: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrammarParseIdentityDelta {
+    pub retained: Vec<GrammarParseId>,
+    pub invalidated: Vec<GrammarParseId>,
+    pub introduced: Vec<GrammarParseId>,
+}
+
+const fn unit_confidence() -> f32 {
+    1.0
+}
+
+const fn complete_analysis_status() -> GrammarAnalysisStatus {
+    GrammarAnalysisStatus::Complete
+}
+
+impl Default for GrammarAnalysis {
+    fn default() -> Self {
+        Self {
+            tokens: Vec::new(),
+            ranked_parses: Vec::new(),
+            backend_parses: Vec::new(),
+            terminal: None,
+            status: GrammarAnalysisStatus::Failed,
+            diagnostic: Some("grammar analysis was not produced".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,10 +225,11 @@ pub struct BackendCost {
     pub length: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrammarBackend {
     #[serde(alias = "tongues_rule_grammar", alias = "tongues_link_grammar")]
+    #[default]
     TonguesRules,
     UdPipe,
 }
@@ -76,7 +243,7 @@ pub struct SyntacticLink {
     pub source: SyntacticLinkSource,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum SyntacticLinkKind {
     Subject,
@@ -213,10 +380,7 @@ impl GrammarParser for VarietyGrammarParser {
             }
             GrammarParserBackend::UdPipe => {
                 parse_udpipe_for_variety(&self.variety, words, terminal).unwrap_or_else(|| {
-                    GrammarAnalysis {
-                        terminal,
-                        ..Default::default()
-                    }
+                    GrammarAnalysis::failed(terminal, "configured UDPipe backend was unavailable")
                 })
             }
         }
@@ -229,10 +393,10 @@ fn parse_with_variety_rules(
     terminal: Option<TerminalPunctuation>,
 ) -> GrammarAnalysis {
     let Some(variety) = variety_by_code(&variety_id.0) else {
-        return GrammarAnalysis {
+        return GrammarAnalysis::failed(
             terminal,
-            ..Default::default()
-        };
+            format!("unknown linguistic variety {}", variety_id.0),
+        );
     };
     if let Some(analyzer) = variety.syntax_analyzer {
         return analyzer(words, terminal);
@@ -240,10 +404,10 @@ fn parse_with_variety_rules(
     if let Some(profile) = variety.syntax_rules {
         return parse_grammar_with_rules(words, terminal, profile);
     }
-    GrammarAnalysis {
+    GrammarAnalysis::failed(
         terminal,
-        ..Default::default()
-    }
+        format!("variety {} has no grammar rules", variety_id.0),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,10 +460,7 @@ impl UdPipeGrammarParser {
 impl GrammarParser for UdPipeGrammarParser {
     fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
         self.parse_with_status(words, terminal)
-            .unwrap_or_else(|| GrammarAnalysis {
-                terminal,
-                ..Default::default()
-            })
+            .unwrap_or_else(|| GrammarAnalysis::failed(terminal, "UDPipe parsing failed"))
     }
 }
 
@@ -410,7 +571,22 @@ fn analysis_from_udpipe_conllu(
     raw_links.dedup_by(|left, right| {
         left.left == right.left && left.right == right.right && left.label == right.label
     });
-    let parse = RankedGrammarParse { links, rank: 1.0 };
+    let parse_status = if projected_len == words.len() && (projected_len <= 1 || !links.is_empty())
+    {
+        GrammarParseStatus::Complete
+    } else {
+        GrammarParseStatus::Partial
+    };
+    let ranked_parses = rank_and_expand_parses(
+        &words[..projected_len],
+        links,
+        GrammarBackend::UdPipe,
+        0,
+        None,
+        parse_status,
+        GrammarRankingPolicy::default(),
+    );
+    let parse = ranked_parses.first()?;
     let tokens = udpipe_tokens
         .iter()
         .take(projected_len)
@@ -443,7 +619,7 @@ fn analysis_from_udpipe_conllu(
         .sum();
     Some(GrammarAnalysis {
         tokens,
-        ranked_parses: vec![parse],
+        ranked_parses,
         backend_parses: vec![BackendParse {
             links: raw_links,
             cost: Some(BackendCost {
@@ -451,10 +627,21 @@ fn analysis_from_udpipe_conllu(
                 disjunct: None,
                 length: Some(length),
             }),
-            accepted: true,
+            accepted: parse_status == GrammarParseStatus::Complete,
             backend: GrammarBackend::UdPipe,
         }],
         terminal,
+        status: if parse_status == GrammarParseStatus::Complete {
+            GrammarAnalysisStatus::Complete
+        } else {
+            GrammarAnalysisStatus::Partial
+        },
+        diagnostic: (parse_status == GrammarParseStatus::Partial).then(|| {
+            format!(
+                "UDPipe projected {projected_len} of {} tokens or returned no links",
+                words.len()
+            )
+        }),
     })
 }
 
@@ -818,9 +1005,27 @@ fn parse_rule_grammar(
         .iter()
         .map(|(_, normalized)| normalized.clone())
         .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return GrammarAnalysis::failed(terminal, "grammar input contained no lexical tokens");
+    }
     let (links, raw_links) = build_rule_links(&normalized, profile);
-    let rank = parse_rank(&links, normalized.len());
-    let parse = RankedGrammarParse { links, rank };
+    let parse_status = if links.is_empty() {
+        GrammarParseStatus::Partial
+    } else {
+        GrammarParseStatus::Complete
+    };
+    let ranked_parses = rank_and_expand_parses(
+        &normalized,
+        links,
+        GrammarBackend::TonguesRules,
+        0,
+        Some(profile),
+        parse_status,
+        GrammarRankingPolicy::default(),
+    );
+    let parse = ranked_parses
+        .first()
+        .expect("non-empty input always yields a primary ranked parse");
     let tokens = normalized
         .iter()
         .enumerate()
@@ -854,7 +1059,7 @@ fn parse_rule_grammar(
 
     GrammarAnalysis {
         tokens,
-        ranked_parses: vec![parse],
+        ranked_parses,
         backend_parses: vec![BackendParse {
             links: raw_links,
             cost: Some(BackendCost {
@@ -862,10 +1067,17 @@ fn parse_rule_grammar(
                 disjunct: Some(0.0),
                 length: Some(length),
             }),
-            accepted,
+            accepted: accepted && parse_status == GrammarParseStatus::Complete,
             backend: GrammarBackend::TonguesRules,
         }],
         terminal,
+        status: if parse_status == GrammarParseStatus::Complete {
+            GrammarAnalysisStatus::Complete
+        } else {
+            GrammarAnalysisStatus::Partial
+        },
+        diagnostic: (parse_status == GrammarParseStatus::Partial)
+            .then(|| "native grammar produced no typed links".into()),
     }
 }
 
@@ -1166,16 +1378,6 @@ fn grammar_link_label(kind: SyntacticLinkKind) -> &'static str {
         SyntacticLinkKind::Apposition => "APP",
         SyntacticLinkKind::Parenthetical => "PAR",
     }
-}
-
-fn parse_rank(links: &[SyntacticLink], word_count: usize) -> f32 {
-    if word_count == 0 {
-        return 1.0;
-    }
-    let average_confidence =
-        links.iter().map(|link| link.confidence).sum::<f32>() / links.len().max(1) as f32;
-    let coverage = 1.0 - (unlinked_word_count(word_count, links) as f32 / word_count as f32);
-    (average_confidence * 0.7 + coverage * 0.3).clamp(0.0, 1.0)
 }
 
 fn unlinked_word_count(word_count: usize, links: &[SyntacticLink]) -> usize {
@@ -1952,8 +2154,165 @@ fn multilingual_prosodic_role(pos: PartOfSpeech, links: &[SyntacticLinkKind]) ->
 }
 
 impl GrammarAnalysis {
-    pub fn primary_parse(&self) -> Option<&RankedGrammarParse> {
+    pub fn failed(terminal: Option<TerminalPunctuation>, diagnostic: impl Into<String>) -> Self {
+        Self {
+            terminal,
+            diagnostic: Some(diagnostic.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn best_parse(&self) -> Option<&RankedGrammarParse> {
         self.ranked_parses.first()
+    }
+
+    pub fn primary_parse(&self) -> Option<&RankedGrammarParse> {
+        self.best_parse()
+    }
+
+    pub fn alternatives(&self) -> &[RankedGrammarParse] {
+        self.ranked_parses.get(1..).unwrap_or_default()
+    }
+
+    pub fn ambiguity_margin(&self) -> Option<GrammarAmbiguityMargin> {
+        let best = self.ranked_parses.first()?;
+        let runner_up = self.ranked_parses.get(1)?;
+        Some(GrammarAmbiguityMargin {
+            best: best.id.clone(),
+            runner_up: runner_up.id.clone(),
+            rank_gap: (best.rank - runner_up.rank).max(0.0),
+            confidence_floor_met: best.confidence >= DEFAULT_PARSE_CONFIDENCE_FLOOR,
+        })
+    }
+
+    pub fn close_alternatives(&self, policy: GrammarRankingPolicy) -> Vec<&RankedGrammarParse> {
+        let Some(best) = self.best_parse() else {
+            return Vec::new();
+        };
+        self.ranked_parses
+            .iter()
+            .filter(|parse| {
+                (best.rank - parse.rank).max(0.0) <= policy.close_rank_gap
+                    || best.confidence < policy.confidence_floor
+            })
+            .collect()
+    }
+
+    pub fn interpretation_mode(&self, policy: GrammarRankingPolicy) -> GrammarInterpretationMode {
+        let Some(best) = self.best_parse() else {
+            return GrammarInterpretationMode::Unavailable;
+        };
+        if self.status != GrammarAnalysisStatus::Complete
+            || best.status != GrammarParseStatus::Complete
+            || best.confidence < policy.confidence_floor
+            || self
+                .ambiguity_margin()
+                .is_some_and(|margin| margin.rank_gap <= policy.close_rank_gap)
+        {
+            GrammarInterpretationMode::Conservative
+        } else {
+            GrammarInterpretationMode::Decisive
+        }
+    }
+
+    pub fn permits_irreversible_prosody(&self, policy: GrammarRankingPolicy) -> bool {
+        self.interpretation_mode(policy) == GrammarInterpretationMode::Decisive
+    }
+
+    pub fn token_facts_for_parse(&self, id: &GrammarParseId) -> Option<Vec<SyntaxToken>> {
+        let parse = self.ranked_parses.iter().find(|parse| &parse.id == id)?;
+        Some(
+            self.tokens
+                .iter()
+                .map(|token| token_for_parse(token, parse))
+                .collect(),
+        )
+    }
+
+    pub fn conservative_facts(&self, policy: GrammarRankingPolicy) -> ConservativeSyntaxFacts {
+        let mode = self.interpretation_mode(policy);
+        let close = self.close_alternatives(policy);
+        if close.is_empty() {
+            return ConservativeSyntaxFacts {
+                tokens: self.tokens.clone(),
+                supporting_parses: Vec::new(),
+                mode,
+                suppress_irreversible_prosody: true,
+            };
+        }
+        let per_parse = close
+            .iter()
+            .map(|parse| {
+                self.tokens
+                    .iter()
+                    .map(|token| token_for_parse(token, parse))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let tokens = self
+            .tokens
+            .iter()
+            .enumerate()
+            .map(|(index, base)| {
+                let facts = per_parse
+                    .iter()
+                    .filter_map(|tokens| tokens.get(index))
+                    .collect::<Vec<_>>();
+                let pos =
+                    unanimous(facts.iter().map(|token| token.pos)).unwrap_or(PartOfSpeech::Unknown);
+                let prosodic_role = unanimous(facts.iter().map(|token| token.prosodic_role))
+                    .unwrap_or(ProsodicRole::Content);
+                let mut syntactic_links = facts
+                    .first()
+                    .map(|token| {
+                        token
+                            .syntactic_links
+                            .iter()
+                            .copied()
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                for token in facts.iter().skip(1) {
+                    let current = token
+                        .syntactic_links
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>();
+                    syntactic_links.retain(|kind| current.contains(kind));
+                }
+                SyntaxToken {
+                    word_index: base.word_index,
+                    text: base.text.clone(),
+                    pos,
+                    prosodic_role,
+                    syntactic_links: syntactic_links.into_iter().collect(),
+                }
+            })
+            .collect();
+        ConservativeSyntaxFacts {
+            tokens,
+            supporting_parses: close.iter().map(|parse| parse.id.clone()).collect(),
+            mode,
+            suppress_irreversible_prosody: mode != GrammarInterpretationMode::Decisive,
+        }
+    }
+
+    pub fn identity_delta_from(&self, previous: &Self) -> GrammarParseIdentityDelta {
+        let previous_ids = previous
+            .ranked_parses
+            .iter()
+            .map(|parse| parse.id.clone())
+            .collect::<BTreeSet<_>>();
+        let current_ids = self
+            .ranked_parses
+            .iter()
+            .map(|parse| parse.id.clone())
+            .collect::<BTreeSet<_>>();
+        GrammarParseIdentityDelta {
+            retained: previous_ids.intersection(&current_ids).cloned().collect(),
+            invalidated: previous_ids.difference(&current_ids).cloned().collect(),
+            introduced: current_ids.difference(&previous_ids).cloned().collect(),
+        }
     }
 
     pub fn environment_patterns(&self) -> Vec<EnvironmentPattern> {
@@ -1964,12 +2323,14 @@ impl GrammarAnalysis {
     }
 
     pub fn rule_context(&self) -> SyntaxRuleContext {
+        let conservative = self.conservative_facts(GrammarRankingPolicy::default());
         SyntaxRuleContext {
             word_links: self
                 .tokens
                 .iter()
-                .map(|token| WordSyntacticLinks {
-                    word_index: token.word_index,
+                .zip(&conservative.tokens)
+                .map(|(original, token)| WordSyntacticLinks {
+                    word_index: original.word_index,
                     links: token.syntactic_links.clone(),
                 })
                 .collect(),
@@ -1981,15 +2342,44 @@ impl GrammarAnalysis {
     }
 
     pub fn matches_environment_pattern(&self, pattern: &EnvironmentPattern) -> bool {
-        let Some(primary) = self.primary_parse() else {
+        let close = self.close_alternatives(GrammarRankingPolicy::default());
+        if close.is_empty() {
             return false;
-        };
+        }
         pattern.predicates.iter().all(|predicate| match predicate {
-            ContextPredicate::SyntacticLink(kind) => {
-                primary.links.iter().any(|link| link.kind == *kind)
-            }
+            ContextPredicate::SyntacticLink(kind) => close
+                .iter()
+                .all(|parse| parse.links.iter().any(|link| link.kind == *kind)),
         })
     }
+}
+
+fn token_for_parse(token: &SyntaxToken, parse: &RankedGrammarParse) -> SyntaxToken {
+    let mut syntactic_links = parse
+        .links
+        .iter()
+        .filter_map(|link| {
+            (link.left == token.word_index || link.right == token.word_index).then_some(link.kind)
+        })
+        .collect::<Vec<_>>();
+    syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+    syntactic_links.dedup();
+    let pos = match parse.provenance.variant {
+        GrammarParseVariant::PartOfSpeech { word, pos } if word == token.word_index => pos,
+        _ => token.pos,
+    };
+    SyntaxToken {
+        word_index: token.word_index,
+        text: token.text.clone(),
+        pos,
+        prosodic_role: multilingual_prosodic_role(pos, &syntactic_links),
+        syntactic_links,
+    }
+}
+
+fn unanimous<T: Copy + Eq>(mut values: impl Iterator<Item = T>) -> Option<T> {
+    let first = values.next()?;
+    values.all(|value| value == first).then_some(first)
 }
 
 impl RankedGrammarParse {
@@ -2399,10 +2789,22 @@ mod tests {
                 .expect("fixture should project");
 
         assert_eq!(analysis.tokens[1].pos, PartOfSpeech::Verb);
+        assert_eq!(analysis.status, GrammarAnalysisStatus::Complete);
+        assert!(analysis.ranked_parses.len() >= 2);
+        assert!(
+            analysis
+                .ranked_parses
+                .iter()
+                .all(|parse| parse.provenance.backend == GrammarBackend::UdPipe)
+        );
+        assert!((0.0..=1.0).contains(&analysis.ranked_parses[0].rank));
+        assert!((0.0..=1.0).contains(&analysis.ranked_parses[0].confidence));
         assert_eq!(
             analysis.backend_parses.first().map(|parse| parse.backend),
             Some(GrammarBackend::UdPipe)
         );
+        assert!(analysis.backend_parses[0].cost.is_some());
+        assert!(analysis.backend_parses[0].accepted);
         assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&analysis, 2, 3, SyntacticLinkKind::Preposition);
     }

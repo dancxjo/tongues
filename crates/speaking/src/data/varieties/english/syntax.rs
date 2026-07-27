@@ -1,9 +1,10 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    BackendCost, BackendLink, BackendParse, GrammarAnalysis, GrammarBackend, GrammarRuleSet,
-    PartOfSpeech, ProsodicRole, RankedGrammarParse, SyntacticLink, SyntacticLinkKind, SyntaxToken,
-    link, normalize_syntax_word, push_link,
+    BackendCost, BackendLink, BackendParse, GrammarAnalysis, GrammarAnalysisStatus, GrammarBackend,
+    GrammarParseStatus, GrammarRankingPolicy, GrammarRuleSet, PartOfSpeech, ProsodicRole,
+    SyntacticLink, SyntacticLinkKind, SyntaxToken, link, normalize_syntax_word, push_link,
 };
+use crate::syntax_ambiguity::rank_and_expand_parses;
 
 pub fn syntax_profile() -> GrammarRuleSet {
     GrammarRuleSet {
@@ -61,6 +62,9 @@ pub fn parse_english_grammar(
         .iter()
         .map(|(_, normalized)| normalized.clone())
         .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return GrammarAnalysis::failed(terminal, "grammar input contained no lexical tokens");
+    }
     let links = build_links(&normalized);
     let unlinked = unlinked_word_count(normalized.len(), &links) as f32;
     let length = links
@@ -75,7 +79,23 @@ pub fn parse_english_grammar(
             label: link_label(link.kind).to_string(),
         })
         .collect::<Vec<_>>();
-    let parse = RankedGrammarParse { links, rank: 1.0 };
+    let parse_status = if links.is_empty() {
+        GrammarParseStatus::Partial
+    } else {
+        GrammarParseStatus::Complete
+    };
+    let ranked_parses = rank_and_expand_parses(
+        &normalized,
+        links,
+        GrammarBackend::TonguesRules,
+        0,
+        Some(syntax_profile()),
+        parse_status,
+        GrammarRankingPolicy::default(),
+    );
+    let parse = ranked_parses
+        .first()
+        .expect("non-empty input always yields a primary ranked parse");
     let tokens = normalized
         .iter()
         .enumerate()
@@ -101,7 +121,7 @@ pub fn parse_english_grammar(
 
     GrammarAnalysis {
         tokens,
-        ranked_parses: vec![parse],
+        ranked_parses,
         backend_parses: vec![BackendParse {
             links: raw_links,
             cost: Some(BackendCost {
@@ -109,10 +129,17 @@ pub fn parse_english_grammar(
                 disjunct: Some(0.0),
                 length: Some(length),
             }),
-            accepted: true,
+            accepted: parse_status == GrammarParseStatus::Complete,
             backend: GrammarBackend::TonguesRules,
         }],
         terminal,
+        status: if parse_status == GrammarParseStatus::Complete {
+            GrammarAnalysisStatus::Complete
+        } else {
+            GrammarAnalysisStatus::Partial
+        },
+        diagnostic: (parse_status == GrammarParseStatus::Partial)
+            .then(|| "native English grammar produced no typed links".into()),
     }
 }
 

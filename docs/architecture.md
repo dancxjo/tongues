@@ -203,6 +203,11 @@ server surfaces can exchange it without introducing reverse dependencies into
 `speaking`. See [Linguistic Claims and Conflict Resolution](linguistic-claims.md)
 for the schema, priority policy, and revision rules.
 
+Grammar analysis retains stable, ranked parse alternatives and projects each
+parse plus its supporting links and POS assertions into the claim contract.
+Close alternatives are preserved while downstream pronunciation and prosody
+consume only their conservative intersection.
+
 ### Deterministic duplex simulator
 
 `tongues-duplex` accepts a provider beam whose hypotheses carry normalized
@@ -328,7 +333,10 @@ The sentence-boundary family trains a cursor-time emit/continue/repair model.
 distance. The separate `grammar-parser` command emits `GrammarAnalysis`.
 UDPipe can provide parsed CoNLL-U when configured, while each variety owns a
 native fallback rule profile that emits the same typed links plus backend-native
-metadata. See the [terminology migration](terminology-migration.md).
+metadata. Both paths share normalized ranking, stable alternative identities,
+bounded ambiguity expansion, and explicit complete/partial/failed status. See
+the [grammar parser contract](grammar-parser.md) and
+[terminology migration](terminology-migration.md).
 
 ## Rule-Based Speech Helpers
 

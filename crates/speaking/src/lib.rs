@@ -35,6 +35,8 @@ pub mod spec;
 pub mod streaming;
 pub mod syllabify;
 pub mod syntax;
+mod syntax_ambiguity;
+mod syntax_claims;
 pub mod syntax_compatibility;
 pub mod text_stability;
 pub mod time;
