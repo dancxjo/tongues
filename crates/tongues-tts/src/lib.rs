@@ -70,6 +70,7 @@ pub mod freevc;
 pub mod freevc_config;
 pub mod glow_tts_config;
 pub mod languages;
+pub mod mbrola;
 pub mod mock_renderer;
 pub mod model_catalog;
 pub mod model_config;
@@ -227,6 +228,12 @@ pub use freevc::{
 pub use freevc_config::{FreeVcAudioConfig, FreeVcConfig, FreeVcNetworkConfig};
 pub use glow_tts_config::{GlowTtsEncoderConfig, GlowTtsInferenceConfig, GlowTtsNetworkConfig};
 pub use languages::LanguageCatalog;
+pub use mbrola::{
+    parse_pho, serialize_pho, MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone,
+    MbrolaLoweringError, MbrolaLoweringReport, MbrolaPhoError, MbrolaPhone, MbrolaPitchTarget,
+    MbrolaProjector, MbrolaSymbolMap, MbrolaTimingProfile, MbrolaVoiceMetadata,
+    NativeMbrolaRenderer, PhoneTimedPlan, MBROLA_SILENCE,
+};
 pub use mock_renderer::{MockTtsRenderer, MockTtsRendererConfig};
 pub use model_catalog::{
     default_model_cache, default_model_home, environment_offline,

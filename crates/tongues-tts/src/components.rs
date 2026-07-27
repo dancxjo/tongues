@@ -152,6 +152,14 @@ pub const NATIVE_SPEECH_COMPONENTS: &[NativeSpeechComponent] = &[
         explanation: "Causal append-only streaming renderer under evaluation for native integration; runtime registration is intentionally deferred until artifact pinning, parity, and ledger integration are complete.",
     },
     NativeSpeechComponent {
+        id: "mbrola-native-td-psola",
+        display_name: "Native MBROLA TD-PSOLA",
+        architecture: "mbrola",
+        kind: NativeSpeechComponentKind::EndToEnd,
+        readiness: NativeSpeechComponentReadiness::Runtime,
+        explanation: "Native Rust MBROLA voice-database reader and TD-PSOLA renderer for user-supplied or affirmatively licensed voice databases; never invokes the mbrola executable.",
+    },
+    NativeSpeechComponent {
         id: "speaker-encoder",
         display_name: "Coqui ResNet Speaker Encoder",
         architecture: "speaker-encoder",

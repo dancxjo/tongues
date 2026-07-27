@@ -45,9 +45,19 @@ pub struct SpeakCommand {
     pub backend: SpeakBackend,
     #[arg(
         long,
-        help = "Catalog model id/alias, or an imported package directory for --backend xtts"
+        help = "Catalog model id/alias, imported XTTS package, or MBROLA voice database path"
     )]
     pub model: Option<String>,
+    #[arg(
+        long,
+        help = "JSON source-to-voice phone map for --backend mbrola; defaults to inspected identity mapping"
+    )]
+    pub mbrola_symbol_map: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Write the lowered MBROLA phone/timing plan as a diagnostic .pho file"
+    )]
+    pub pho_output: Option<PathBuf>,
     #[arg(
         long,
         value_enum,
@@ -200,6 +210,8 @@ impl Default for SpeakCommand {
             variety: "en-US".into(),
             backend: SpeakBackend::Burn,
             model: None,
+            mbrola_symbol_map: None,
+            pho_output: None,
             vocoder: SpeakVocoder::Hifigan,
             output: None,
             sample_rate_hz: 24_000,
@@ -275,6 +287,7 @@ pub enum SpeakBackend {
     Mock,
     Styletts2,
     Onnx,
+    Mbrola,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum)]
@@ -549,6 +562,7 @@ enum BackendInstance {
     },
     #[cfg(not(feature = "onnx-tts"))]
     Onnx,
+    Mbrola(speech::NativeMbrolaRenderer),
 }
 
 struct BackendStartupProfile {
@@ -577,6 +591,7 @@ impl BackendInstance {
             Self::Mock(_) => "mock",
             Self::StyleTts2 { .. } => "styletts2",
             Self::Onnx { .. } => "onnx",
+            Self::Mbrola(_) => "mbrola-native-td-psola",
         }
     }
 
@@ -696,6 +711,34 @@ impl BackendInstance {
                 capabilities.varieties = speech::CapabilityValue::Any;
                 capabilities.speed = false;
                 capabilities.seed = false;
+                capabilities
+            }
+            Self::Mbrola(engine) => {
+                let mut capabilities = base(
+                    "mbrola",
+                    "mbrola-user-voice",
+                    speech::SpeechModelFamily::EndToEndSpeech,
+                    engine.sample_rate_hz(),
+                );
+                capabilities.varieties = speech::CapabilityValue::Any;
+                capabilities.pitch = speech::PitchCapabilities {
+                    scale: true,
+                    shift: true,
+                    explicit_values: true,
+                };
+                capabilities.durations = true;
+                capabilities.seed = false;
+                capabilities.devices = vec![speech::SpeechDeviceRequest::Cpu];
+                capabilities.provenance = vec![
+                    format!(
+                        "User-supplied MBROLA database {}",
+                        engine.database_path().display()
+                    ),
+                    format!("Symbol map {}", engine.projector().symbol_map.id),
+                    "UtterancePlan explicit prosody or documented fallback".into(),
+                    "Native Rust TD-PSOLA; no external executable".into(),
+                    "Mono finite f32 waveform/WAV".into(),
+                ];
                 capabilities
             }
             #[cfg(feature = "styletts2-onnx")]
@@ -850,6 +893,29 @@ impl BackendInstance {
                     sample_rate_hz: output.sample_rate_hz,
                     pcm: pcm_mono_f32,
                     timings: output.timings,
+                    profile: Vec::new(),
+                })
+            }
+            Self::Mbrola(engine) => {
+                let request = speech::SpeechSynthesisRequest {
+                    plan: plan.clone(),
+                    options: speech::SynthesisOptions {
+                        length_scale: Some((1.0 / options.speed) as f32),
+                        ..Default::default()
+                    },
+                };
+                let mut pcm = Vec::new();
+                engine.synthesize_plan_streaming(&request, &mut |chunk: speech::AudioChunk| {
+                    pcm.extend_from_slice(&chunk.pcm_mono_f32);
+                    if let Some(ref mut callback) = on_audio {
+                        callback(&chunk.pcm_mono_f32);
+                    }
+                    Ok(())
+                })?;
+                Ok(SpeechSynthesisArtifact {
+                    sample_rate_hz: engine.sample_rate_hz(),
+                    pcm,
+                    timings: Vec::new(),
                     profile: Vec::new(),
                 })
             }
@@ -1034,6 +1100,7 @@ impl BackendInstance {
             Self::XttsCpu(_)
             | Self::XttsCuda(_)
             | Self::Mock(_)
+            | Self::Mbrola(_)
             | Self::StyleTts2 { .. }
             | Self::Onnx { .. } => Ok(None),
         }
@@ -1668,6 +1735,55 @@ fn load_backend(
         SpeakBackend::Mock => {
             BackendInstance::Mock(MockStyleTts2Backend::new(command.sample_rate_hz))
         }
+        SpeakBackend::Mbrola => {
+            anyhow::ensure!(
+                matches!(device_arg, DeviceArg::Cpu),
+                "--backend mbrola currently supports --device cpu"
+            );
+            let voice_path = command
+                .model
+                .as_deref()
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("TONGUES_MBROLA_VOICE").map(PathBuf::from))
+                .context(
+                    "--backend mbrola requires --model /path/to/voice or TONGUES_MBROLA_VOICE",
+                )?;
+            anyhow::ensure!(
+                voice_path.is_file(),
+                "MBROLA voice database not found at {}",
+                voice_path.display()
+            );
+            let license = std::env::var("TONGUES_MBROLA_LICENSE").context(
+                "TONGUES_MBROLA_LICENSE must affirm the user-supplied voice database terms",
+            )?;
+            anyhow::ensure!(
+                !license.trim().is_empty(),
+                "TONGUES_MBROLA_LICENSE is empty"
+            );
+            let symbol_map = load_cli_mbrola_symbol_map(command, &voice_path)?;
+            let voice_id = voice_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("user-voice")
+                .to_string();
+            let projector = speech::MbrolaProjector {
+                voice: speech::MbrolaVoiceMetadata {
+                    id: voice_id,
+                    variety: command.variety.clone(),
+                    baseline_hz: None,
+                    pitch_range_hz: None,
+                },
+                symbol_map,
+                inventory: Default::default(),
+                timing: speech::MbrolaTimingProfile::default(),
+                control_baseline_hz: None,
+                control_pitch_range_hz: None,
+            };
+            BackendInstance::Mbrola(
+                speech::NativeMbrolaRenderer::load(voice_path, projector)
+                    .context("failed to load native MBROLA voice")?,
+            )
+        }
         SpeakBackend::Styletts2 => {
             #[cfg(feature = "styletts2-onnx")]
             {
@@ -1747,6 +1863,38 @@ fn default_fairseq_mms_model(variety: &str) -> &'static str {
     }
 }
 
+fn load_cli_mbrola_symbol_map(
+    command: &SpeakCommand,
+    voice_path: &Path,
+) -> Result<speech::MbrolaSymbolMap> {
+    let voice_id = voice_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("user-voice");
+    let path = command
+        .mbrola_symbol_map
+        .clone()
+        .or_else(|| std::env::var_os("TONGUES_MBROLA_SYMBOL_MAP").map(PathBuf::from));
+    let Some(path) = path else {
+        return Ok(speech::MbrolaSymbolMap::identity(format!(
+            "{voice_id}-identity"
+        )));
+    };
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read MBROLA symbol map {}", path.display()))?;
+    let mappings = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&source)
+        .with_context(|| {
+            format!(
+                "MBROLA symbol map {} must be a JSON object of source-to-voice symbols",
+                path.display()
+            )
+        })?;
+    Ok(speech::MbrolaSymbolMap {
+        id: path.display().to_string(),
+        mappings,
+    })
+}
+
 pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
     anyhow::ensure!(
         (1..=32).contains(&command.benchmark_runs),
@@ -1784,6 +1932,7 @@ fn run_speak_with_backend(
         SpeakBackend::Mock => command.sample_rate_hz,
         SpeakBackend::Styletts2 => command.sample_rate_hz,
         SpeakBackend::Onnx => backend.capabilities(startup.device).output.sample_rate_hz,
+        SpeakBackend::Mbrola => backend.capabilities(startup.device).output.sample_rate_hz,
     };
     let backend_label = backend.label();
     if command.timings {
@@ -2009,6 +2158,20 @@ fn run_speak_with_backend(
                 let sequence = speech::phoneme_sequence_from_plan(&plan)?;
                 sequence.symbols.join(" ")
             }
+            (_, SpeakBackend::Mbrola) => {
+                let BackendInstance::Mbrola(engine) = &*backend else {
+                    anyhow::bail!("MBROLA backend selection did not load an MBROLA renderer");
+                };
+                let (phone_plan, report) = engine.projector().project(&plan)?;
+                let pho = speech::serialize_pho(&phone_plan)?;
+                if let Some(path) = command.pho_output.as_ref() {
+                    std::fs::write(path, &pho).with_context(|| {
+                        format!("failed to write MBROLA .pho {}", path.display())
+                    })?;
+                }
+                println!("mbrola_lowering: {}", serde_json::to_string(&report)?);
+                pho.trim_end().replace('\n', " | ")
+            }
         };
 
         println!("Tongues speech synthesis plan");
@@ -2128,7 +2291,8 @@ fn run_speak_with_backend(
             | SpeakBackend::Vits
             | SpeakBackend::Fairseq
             | SpeakBackend::Yourtts
-            | SpeakBackend::Xtts => {
+            | SpeakBackend::Xtts
+            | SpeakBackend::Mbrola => {
                 println!("  1: {backend_symbols}");
             }
             SpeakBackend::Mock | SpeakBackend::Styletts2 => {
@@ -2394,6 +2558,7 @@ fn demo_backend_name(backend: SpeakBackend) -> &'static str {
         SpeakBackend::Onnx => "ONNX compatibility voice",
         SpeakBackend::Styletts2 => "StyleTTS2",
         SpeakBackend::Mock => "mock",
+        SpeakBackend::Mbrola => "Native MBROLA TD-PSOLA",
     }
 }
 

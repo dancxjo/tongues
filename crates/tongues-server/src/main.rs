@@ -3786,6 +3786,10 @@ const RESIDENT_BACKEND_PROVIDERS: &[ResidentBackendProvider] = &[
         load: load_styletts2_provider,
     },
     ResidentBackendProvider {
+        id: "mbrola",
+        load: load_mbrola_provider,
+    },
+    ResidentBackendProvider {
         id: "mock",
         load: load_mock_provider,
     },
@@ -4033,6 +4037,102 @@ fn load_mock_provider(
         capabilities,
         backend: styletts2::MockStyleTts2Backend::new(payload.sample_rate_hz.unwrap_or(24_000)),
     }))
+}
+
+fn load_mbrola_provider(
+    _home: &FsPath,
+    device: tongues_tts::ResolvedSpeechDevice,
+    payload: &SpeakRequest,
+    capabilities: tongues_tts::BackendCapabilities,
+) -> anyhow::Result<ResidentSpeechBackend> {
+    anyhow::ensure!(
+        matches!(device, tongues_tts::ResolvedSpeechDevice::Cpu),
+        "native MBROLA synthesis currently runs on CPU"
+    );
+    let voice_path = mbrola_voice_path()?;
+    let voice_id = voice_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("user-voice")
+        .to_string();
+    let symbol_map = mbrola_symbol_map(&voice_id)?;
+    let database = tongues_tts::MbrolaDatabase::load(&voice_path)?;
+    let projector = tongues_tts::MbrolaProjector {
+        voice: tongues_tts::MbrolaVoiceMetadata {
+            id: voice_id,
+            variety: payload.variety.clone().unwrap_or_else(|| "en-US".into()),
+            baseline_hz: mbrola_env_f32("TONGUES_MBROLA_BASELINE_HZ")?,
+            pitch_range_hz: mbrola_env_f32("TONGUES_MBROLA_PITCH_RANGE_HZ")?,
+        },
+        symbol_map,
+        inventory: database.phonemes().map(str::to_string).collect(),
+        timing: tongues_tts::MbrolaTimingProfile::default(),
+        control_baseline_hz: None,
+        control_pitch_range_hz: None,
+    };
+    let engine = tongues_tts::NativeMbrolaRenderer::load(voice_path, projector)?;
+    Ok(Box::new(tongues_tts::PlanEngineBackend::new(
+        capabilities,
+        device,
+        engine,
+    )))
+}
+
+fn mbrola_voice_path() -> anyhow::Result<PathBuf> {
+    let path = std::env::var_os("TONGUES_MBROLA_VOICE")
+        .map(PathBuf::from)
+        .context("TONGUES_MBROLA_VOICE must name a user-supplied MBROLA database")?;
+    anyhow::ensure!(
+        path.is_file(),
+        "TONGUES_MBROLA_VOICE does not name a file: {}",
+        path.display()
+    );
+    let license = std::env::var("TONGUES_MBROLA_LICENSE")
+        .context("TONGUES_MBROLA_LICENSE must affirm the user-supplied voice database terms")?;
+    anyhow::ensure!(
+        !license.trim().is_empty(),
+        "TONGUES_MBROLA_LICENSE must not be empty"
+    );
+    Ok(path)
+}
+
+fn mbrola_symbol_map(voice_id: &str) -> anyhow::Result<tongues_tts::MbrolaSymbolMap> {
+    let Some(path) = std::env::var_os("TONGUES_MBROLA_SYMBOL_MAP").map(PathBuf::from) else {
+        return Ok(tongues_tts::MbrolaSymbolMap::identity(format!(
+            "{voice_id}-identity"
+        )));
+    };
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read MBROLA symbol map {}", path.display()))?;
+    let mappings = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&source)
+        .with_context(|| {
+            format!(
+                "MBROLA symbol map {} must be a JSON object of source-to-voice symbols",
+                path.display()
+            )
+        })?;
+    Ok(tongues_tts::MbrolaSymbolMap {
+        id: path.display().to_string(),
+        mappings,
+    })
+}
+
+fn mbrola_env_f32(name: &'static str) -> anyhow::Result<Option<f32>> {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<f32>()
+                .with_context(|| format!("{name} must be a finite positive number"))
+                .and_then(|value| {
+                    anyhow::ensure!(
+                        value.is_finite() && value > 0.0,
+                        "{name} must be a finite positive number"
+                    );
+                    Ok(value)
+                })
+        })
+        .transpose()
 }
 
 fn selected_onnx_voice_model_at(home: &FsPath) -> anyhow::Result<String> {
@@ -4310,6 +4410,7 @@ fn speech_model_id(
         "vits" => Some("vits-vctk"),
         "yourtts" => Some("yourtts-multilingual"),
         "freevc" => Some("freevc24-vctk"),
+        "mbrola" => Some("mbrola-user-voice"),
         "mock" => Some("deterministic-mock"),
         "onnx" | "fairseq" | "styletts2" => None,
         _ => anyhow::bail!("unknown speech backend `{backend}`"),
@@ -4688,6 +4789,46 @@ fn speech_backend_capabilities(
             let model = speech_model_id(home, backend, model)?;
             let entry = styletts2_catalog_entry(&model)?;
             styletts2_backend_capabilities(&entry, device)
+        }
+        "mbrola" => {
+            let database = mbrola_voice_path()
+                .ok()
+                .and_then(|path| tongues_tts::MbrolaDatabase::load(path).ok());
+            tongues_tts::BackendCapabilities {
+                backend: "mbrola".into(),
+                model: "mbrola-user-voice".into(),
+                family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
+                varieties: tongues_tts::CapabilityValue::Any,
+                languages: tongues_tts::LanguageCapabilities::unsupported(),
+                speakers: unsupported_speakers(),
+                styles: unsupported_styles(),
+                reference_audio: Default::default(),
+                speed: true,
+                pitch: tongues_tts::PitchCapabilities {
+                    scale: true,
+                    shift: true,
+                    explicit_values: true,
+                },
+                energy: Default::default(),
+                durations: true,
+                seed: false,
+                devices: vec![tongues_tts::SpeechDeviceRequest::Cpu],
+                output: output(
+                    database
+                        .as_ref()
+                        .map(|database| database.sample_rate_hz)
+                        .unwrap_or(16_000),
+                ),
+                provenance: vec![
+                    "User-supplied MBROLA voice database".into(),
+                    "Explicit TONGUES_MBROLA_SYMBOL_MAP or inspected identity mapping".into(),
+                    "UtterancePlan spans/prosody or documented timing/F0 fallback".into(),
+                    "Native Rust TD-PSOLA renderer; no external executable".into(),
+                    "Mono finite f32 waveform/WAV".into(),
+                ],
+                capability_tier: tongues_tts::CapabilityTier::Unassigned,
+                revision_capable: false,
+            }
         }
         "mock" => tongues_tts::BackendCapabilities {
             backend: "mock".into(),
@@ -5881,7 +6022,7 @@ fn discover_speech_path(
         speech_backend_installation_error(home, backend, Some(model))
     };
     let installed = installation_error.is_none();
-    let verification_status = if backend == "mock" {
+    let verification_status = if matches!(backend, "mock" | "mbrola") && installed {
         tongues_tts::ModelVerificationStatus::Verified
     } else if catalog_entries.len() != catalog_ids.len() {
         tongues_tts::ModelVerificationStatus::Unavailable
@@ -5939,6 +6080,10 @@ fn discover_speech_path(
     }
     if backend == "mock" {
         statuses.push("Test backend".into());
+    }
+    if backend == "mbrola" && installed {
+        statuses.push("User-supplied voice".into());
+        statuses.push("License asserted".into());
     }
     let install_command = (!missing_catalog_ids.is_empty()).then(|| {
         missing_catalog_ids
@@ -6678,6 +6823,7 @@ fn speech_path_catalog_ids(
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
         "styletts2" => vec![speech_model_id(home, backend, model)?],
+        "mbrola" => Vec::new(),
         "onnx" => vec![
             model
                 .filter(|model| !model.trim().is_empty())
@@ -6717,6 +6863,12 @@ fn speech_path_components(
             ],
         ),
         "vits" => (None, None, Some("vits-vctk".into()), vec!["vits".into()]),
+        "mbrola" => (
+            None,
+            None,
+            Some("mbrola-native-td-psola".into()),
+            vec!["mbrola-native-td-psola".into()],
+        ),
         "fairseq" => (
             None,
             None,
@@ -7598,6 +7750,7 @@ fn speech_model_display_name<'a>(backend: &str, model: &'a str) -> &'a str {
         "freevc" => "FreeVC24 Voice Conversion",
         "styletts2" if model == "styletts2-en-us" => "StyleTTS2 en-US",
         "styletts2" => model,
+        "mbrola" => "Native MBROLA TD-PSOLA",
         "mock" => "Deterministic Mock",
         _ => model,
     }
@@ -7705,6 +7858,10 @@ fn speech_backend_installation_error(
             ]
         }
         "mock" => Vec::new(),
+        "mbrola" => match mbrola_voice_path() {
+            Ok(_) => Vec::new(),
+            Err(error) => return Some(error.to_string()),
+        },
         _ => return Some(format!("unknown speech backend `{backend}`")),
     };
     let missing = required
@@ -9143,6 +9300,49 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&mortar_home).expect("remove discovery home");
+    }
+
+    #[test]
+    fn speech_studio_exposes_native_mbrola_from_shared_registry() {
+        let mortar_home =
+            std::env::temp_dir().join(format!("tongues-mbrola-studio-{}", uuid::Uuid::new_v4()));
+        let discovery = speech_studio_discovery(
+            &mortar_home,
+            tongues_tts::ResolvedSpeechDevice::Cpu,
+            &[],
+        );
+        let path = discovery
+            .paths
+            .iter()
+            .find(|path| path.capabilities.backend == "mbrola")
+            .expect("Speech Studio MBROLA path");
+        assert_eq!(path.id, "mbrola-user-voice");
+        assert!(path
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("TONGUES_MBROLA_VOICE")));
+        let composition = discovery
+            .compositions
+            .iter()
+            .find(|composition| composition.backend == "mbrola")
+            .expect("Speech Studio MBROLA composition");
+        assert_eq!(
+            composition.pipeline.projector,
+            "projector/mbrola-phone-timing"
+        );
+        let projector = discovery
+            .components
+            .iter()
+            .find(|component| component.id == "projector/mbrola-phone-timing")
+            .expect("Speech Studio MBROLA projector stage");
+        assert!(projector
+            .produces
+            .iter()
+            .any(|contract| contract.summary.contains("`.pho`")));
+        assert!(discovery
+            .components
+            .iter()
+            .any(|component| component.id == "mbrola-native-td-psola"));
     }
 
     #[test]

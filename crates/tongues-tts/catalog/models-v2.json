@@ -3,6 +3,129 @@
   "id": "tongues-official",
   "entries": [
     {
+      "id": "mbrola-us1",
+      "display_name": "MBROLA US English Voice us1",
+      "aliases": ["us1", "mbrola-voice-us1"],
+      "architecture": "mbrola-diphone",
+      "component_id": "mbrola-native-td-psola",
+      "kind": "end_to_end_speech",
+      "backend": "mbrola",
+      "runtime_path": "models/speech/mbrola/us1/us1",
+      "compatible_with": ["mbrola-database-v2", "native-mbrola-td-psola-with-separate-permission"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": ["us1"], "names_file": null},
+      "sample_rate_hz": 16000,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "LicenseRef-MBROLA-Voice-Restricted",
+        "evidence": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us1/license.txt"
+      },
+      "provenance": {
+        "format": "mbrola-diphone-database",
+        "source": "https://github.com/numediart/MBROLA-voices/tree/master/data/us1"
+      },
+      "artifacts": [
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us1/us1",
+          "sha256": "9f1cd90de6334f43cb4f7348cacd0806fb414b0fbc762492bde7000b9e192a9a",
+          "size_bytes": 7238094,
+          "install_path": "models/speech/mbrola/us1/us1",
+          "members": []
+        },
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us1/license.txt",
+          "sha256": "f9f7a5205240dc9957ba8b336b253a1fccec8627e9d1153e295f8593944ecb7e",
+          "size_bytes": 1651,
+          "install_path": "models/speech/mbrola/us1/license.txt",
+          "members": []
+        }
+      ]
+    },
+    {
+      "id": "mbrola-us3",
+      "display_name": "MBROLA US English Voice us3",
+      "aliases": ["us3", "mbrola-voice-us3"],
+      "architecture": "mbrola-diphone",
+      "component_id": "mbrola-native-td-psola",
+      "kind": "end_to_end_speech",
+      "backend": "mbrola",
+      "runtime_path": "models/speech/mbrola/us3/us3",
+      "compatible_with": ["mbrola-database-v2", "native-mbrola-td-psola-with-separate-permission"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-US"],
+      "speakers": {"count": 1, "names": ["us3"], "names_file": null},
+      "sample_rate_hz": 16000,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "LicenseRef-MBROLA-Voice-Restricted",
+        "evidence": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us3/license.txt"
+      },
+      "provenance": {
+        "format": "mbrola-diphone-database",
+        "source": "https://github.com/numediart/MBROLA-voices/tree/master/data/us3"
+      },
+      "artifacts": [
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us3/us3",
+          "sha256": "7cc5c49e098f80091e34ed0bd50f0af3908ac2427fbbe7d2b16c57defb7611ec",
+          "size_bytes": 7410252,
+          "install_path": "models/speech/mbrola/us3/us3",
+          "members": []
+        },
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/us3/license.txt",
+          "sha256": "3cc9f62f529c0e4d2652674bb5924d19add30abb92728b08659e41cfdb9d89d1",
+          "size_bytes": 1768,
+          "install_path": "models/speech/mbrola/us3/license.txt",
+          "members": []
+        }
+      ]
+    },
+    {
+      "id": "mbrola-en1",
+      "display_name": "MBROLA British English Voice en1",
+      "aliases": ["en1", "mbrola-voice-en1"],
+      "architecture": "mbrola-diphone",
+      "component_id": "mbrola-native-td-psola",
+      "kind": "end_to_end_speech",
+      "backend": "mbrola",
+      "runtime_path": "models/speech/mbrola/en1/en1",
+      "compatible_with": ["mbrola-database-v2", "native-mbrola-td-psola-with-separate-permission"],
+      "package_version": 1,
+      "languages": ["en"],
+      "varieties": ["en-GB"],
+      "speakers": {"count": 1, "names": ["en1"], "names_file": null},
+      "sample_rate_hz": 16000,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "LicenseRef-MBROLA-Voice-Restricted",
+        "evidence": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/LICENSE.md"
+      },
+      "provenance": {
+        "format": "mbrola-diphone-database",
+        "source": "https://github.com/numediart/MBROLA-voices/tree/master/data/en1"
+      },
+      "artifacts": [
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/en1/en1",
+          "sha256": "edb8eaae6f0e38493d88ed627518632e6ff8a3843bcf08474a1a70aa786fd99f",
+          "size_bytes": 6716280,
+          "install_path": "models/speech/mbrola/en1/en1",
+          "members": []
+        },
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/LICENSE.md",
+          "sha256": "894056225f1bfb82cf85630ff6d0e2866f04671ca1d7576da254813ed866b81f",
+          "size_bytes": 1164,
+          "install_path": "models/speech/mbrola/en1/LICENSE.md",
+          "members": []
+        }
+      ]
+    },
+    {
       "id": "speedy-speech-ljspeech",
       "display_name": "SpeedySpeech LJSpeech",
       "aliases": ["speedy-speech", "speedyspeech", "coqui-speedy-speech", "coqui-speedy-speech-ljspeech"],

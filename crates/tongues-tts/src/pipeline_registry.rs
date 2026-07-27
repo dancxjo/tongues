@@ -322,6 +322,19 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
             ),
             false,
         ),
+        // User-supplied voice database. Runtime availability is resolved by the
+        // host from TONGUES_MBROLA_VOICE rather than a redistributed artifact.
+        RegisteredSpeechComposition::new(
+            "Native MBROLA TD-PSOLA",
+            "mbrola",
+            "mbrola-user-voice",
+            SpeechPipelineSelection::end_to_end(
+                "projector/mbrola-phone-timing",
+                "mbrola-native-td-psola",
+                Vec::new(),
+            ),
+            false,
+        ),
     ]
 }
 
@@ -596,6 +609,14 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
                     )],
                     produces: vec![waveform.clone()],
                     controls: match composition.backend.as_str() {
+                        "mbrola" => vec![
+                            "voice_database".into(),
+                            "symbol_map".into(),
+                            "speed".into(),
+                            "pitch".into(),
+                            "durations".into(),
+                            "pho".into(),
+                        ],
                         "vits" => vec!["speaker".into(), "speed".into(), "seed".into()],
                         "yourtts" => vec![
                             "speaker".into(),
@@ -614,9 +635,12 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
                         ],
                         _ => Vec::new(),
                     },
-                    explanation:
+                    explanation: if composition.backend == "mbrola" {
+                        "Native user-supplied MBROLA database rendering with typed phone timing, F0 targets, `.pho` inspection, and mono f32 waveform output.".into()
+                    } else {
                         "End-to-end model spanning acoustic generation and waveform decoding."
-                            .into(),
+                            .into()
+                    },
                 });
             }
         }
@@ -629,23 +653,42 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
         components.push(SpeechPipelineComponent {
             id: composition.pipeline.projector.clone(),
             display_name: format!("{projector_owner} projector"),
-            architecture: "checkpoint-projector".into(),
+            architecture: if composition.backend == "mbrola" {
+                "mbrola-phone-timing".into()
+            } else {
+                "checkpoint-projector".into()
+            },
             stage: SpeechPipelineStage::Projector,
             spans: Vec::new(),
             readiness: NativeSpeechComponentReadiness::Runtime,
             accepts: vec![plan.clone()],
-            produces: vec![port(
-                "model_tokens",
-                format!("tokens/{}", composition.model),
-                format!(
-                    "Checkpoint-local vocabulary and tokenization for {}.",
-                    composition.display_name
-                ),
-            )],
-            controls: Vec::new(),
-            explanation:
+            produces: vec![if composition.backend == "mbrola" {
+                port(
+                    "phone_timed_plan",
+                    "mbrola/phone-timed-plan-v1",
+                    "Voice-mapped phones with explicit millisecond durations and within-phone F0 targets; inspectable as `.pho`.",
+                )
+            } else {
+                port(
+                    "model_tokens",
+                    format!("tokens/{}", composition.model),
+                    format!(
+                        "Checkpoint-local vocabulary and tokenization for {}.",
+                        composition.display_name
+                    ),
+                )
+            }],
+            controls: if composition.backend == "mbrola" {
+                vec!["speed".into(), "pitch".into(), "durations".into(), "pho".into()]
+            } else {
+                Vec::new()
+            },
+            explanation: if composition.backend == "mbrola" {
+                "Deterministic UtterancePlan lowering using explicit voice symbol mapping, phone spans or documented timing defaults, breaks, and pitch source/fallback provenance.".into()
+            } else {
                 "Terminal projection into a checkpoint-private vocabulary; it cannot be substituted across models."
-                    .into(),
+                    .into()
+            },
         });
     }
     components.sort_by(|left, right| {
@@ -737,6 +780,35 @@ mod tests {
         let left = SpeechPipelineSelection::acoustic("projector/a", "a", "v1");
         let right = SpeechPipelineSelection::acoustic("projector/a", "a", "v2");
         assert_ne!(left.canonical_id().unwrap(), right.canonical_id().unwrap());
+    }
+
+    #[test]
+    fn mbrola_is_shared_discovery_with_pho_stage_contract() {
+        let composition = registered_speech_compositions()
+            .into_iter()
+            .find(|composition| composition.backend == "mbrola")
+            .expect("MBROLA composition");
+        assert_eq!(composition.model, "mbrola-user-voice");
+        assert_eq!(
+            composition.pipeline.projector,
+            "projector/mbrola-phone-timing"
+        );
+        assert_eq!(
+            composition.pipeline.end_to_end.as_deref(),
+            Some("mbrola-native-td-psola")
+        );
+        let components = registered_speech_pipeline_components();
+        let projector = components
+            .iter()
+            .find(|component| component.id == "projector/mbrola-phone-timing")
+            .expect("MBROLA projector");
+        assert_eq!(projector.produces[0].kind, "phone_timed_plan");
+        assert!(projector.produces[0].summary.contains("`.pho`"));
+        let renderer = components
+            .iter()
+            .find(|component| component.id == "mbrola-native-td-psola")
+            .expect("MBROLA renderer");
+        assert!(renderer.controls.iter().any(|control| control == "pho"));
     }
 
     #[test]
