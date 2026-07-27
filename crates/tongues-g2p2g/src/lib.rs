@@ -224,17 +224,21 @@ impl<B: Backend> Seq2SeqModel<B> {
         let memory = self.encoder.forward(encoder_input);
 
         // 2. Autoregressive loop
-        let decode_capacity = max_tgt_len.saturating_add(1);
+        let [position_capacity, _] = self.pos_embedding.weight.shape().dims();
+        let decode_capacity = max_tgt_len.min(position_capacity);
+        if decode_capacity == 0 {
+            return Vec::new();
+        }
         let all_tgt_positions =
             Tensor::arange(0..decode_capacity as i64, &device).unsqueeze_dim::<2>(0);
         let all_tgt_position_embeddings = self.pos_embedding.forward(all_tgt_positions);
         let position_width = all_tgt_position_embeddings.dims()[2];
         let all_tgt_attn_mask =
             burn::nn::attention::generate_autoregressive_mask(1, decode_capacity, &device);
-        let mut generated = Vec::with_capacity(decode_capacity);
+        let mut generated = Vec::with_capacity(decode_capacity.saturating_add(1));
         generated.push(BOS_ID as i32);
 
-        for _ in 0..max_tgt_len {
+        for _ in 0..decode_capacity {
             let tgt_len = generated.len();
             let tgt_in_ids = Tensor::<B, 2, Int>::from_data(
                 TensorData::new(generated.clone(), [1, tgt_len]),
@@ -1494,8 +1498,30 @@ pub fn load_model<B: Backend>(
 mod tests {
     use super::*;
     use burn::backend::ndarray::NdArray;
+    use burn::tensor::TensorData;
 
     type TestBackend = NdArray<f32>;
+
+    #[test]
+    fn generation_accepts_target_length_equal_to_position_capacity() {
+        let device = Default::default();
+        let config = ModelConfig::new(16)
+            .with_d_model(8)
+            .with_n_heads(2)
+            .with_n_layers(1)
+            .with_d_ff(16)
+            .with_dropout(0.0)
+            .with_max_seq_len(4);
+        let model = config.init::<TestBackend>(&device);
+        let src_ids = Tensor::<TestBackend, 2, Int>::from_data(
+            TensorData::new(vec![BOS_ID as i32, 7, EOS_ID as i32], [1, 3]),
+            &device,
+        );
+
+        let generated = model.generate(src_ids, config.max_seq_len);
+
+        assert!(generated.len() <= config.max_seq_len);
+    }
 
     #[test]
     fn default_training_tasks_alternate_within_batch() {
