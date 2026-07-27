@@ -39,6 +39,25 @@ Inspect a WAV with the same pipeline used by live input:
 tongues vad recording.wav
 ```
 
+Run that pipeline over the default host microphone captured through CPAL:
+
+```sh
+tongues vad --microphone
+```
+
+Select an exact CPAL device id (listed by
+`tongues common-phone listen-devices`) and inspect every 10 ms decision:
+
+```sh
+tongues vad --microphone \
+  --input-device "Scarlett 2i2 USB" \
+  --show-frames
+```
+
+CPAL capture is normalized to mono 16 kHz and uses the same WebRTC VAD and
+utterance segmentation defaults as browser microphone capture. Source queue
+overflow and timeline gaps remain explicit discontinuity events.
+
 Machine-readable lifecycle output and tuning are available directly:
 
 ```sh

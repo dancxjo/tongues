@@ -65,13 +65,26 @@ impl<S: AudioSource> NormalizedAudioSource<S> {
             )));
         }
         let source_frames = chunk.audio.frames() as u64;
-        let audio = chunk
+        let mut audio = chunk
             .audio
             .convert_channels(self.target_channels)?
             .resample_linear(self.target_rate_hz)?;
         let start_frame = chunk
             .start_frame
             .map(|frame| scale_frame(frame, self.source_rate_hz, self.target_rate_hz));
+        if let (Some(source_start_frame), Some(target_start_frame)) =
+            (chunk.start_frame, start_frame)
+        {
+            let target_end_frame = scale_frame(
+                source_start_frame.saturating_add(source_frames),
+                self.source_rate_hz,
+                self.target_rate_hz,
+            );
+            align_chunk_frames(
+                &mut audio,
+                target_end_frame.saturating_sub(target_start_frame),
+            );
+        }
         self.expected_source_frame = chunk
             .start_frame
             .map(|frame| frame.saturating_add(source_frames));
@@ -129,6 +142,32 @@ fn scale_frame(frame: u64, source_rate_hz: u32, target_rate_hz: u32) -> u64 {
     let scaled = u128::from(frame) * u128::from(target_rate_hz);
     let rounded = (scaled + u128::from(source_rate_hz) / 2) / u128::from(source_rate_hz);
     u64::try_from(rounded).unwrap_or(u64::MAX)
+}
+
+fn align_chunk_frames(audio: &mut crate::AudioBuffer, target_frames: u64) {
+    let channels = usize::from(audio.channels);
+    let target_samples = usize::try_from(target_frames)
+        .unwrap_or(usize::MAX / channels)
+        .saturating_mul(channels);
+    if audio.samples.len() > target_samples {
+        audio.samples.truncate(target_samples);
+        return;
+    }
+    if audio.samples.len() < target_samples {
+        let final_frame = audio
+            .samples
+            .get(audio.samples.len().saturating_sub(channels)..)
+            .unwrap_or(&[])
+            .to_vec();
+        if final_frame.is_empty() {
+            audio.samples.resize(target_samples, 0.0);
+        } else {
+            while audio.samples.len() < target_samples {
+                audio.samples.extend_from_slice(&final_frame);
+            }
+            audio.samples.truncate(target_samples);
+        }
+    }
 }
 
 fn channel_count(layout: &ChannelLayout) -> Result<u16> {
@@ -191,6 +230,18 @@ mod tests {
         }
     }
 
+    fn callback_chunk(sequence: u64, start_frame: u64, frames: usize) -> PushedAudioChunk {
+        PushedAudioChunk {
+            sequence,
+            start_frame: Some(start_frame),
+            audio: AudioBuffer {
+                samples: vec![0.25; frames * 2],
+                sample_rate_hz: 48_000,
+                channels: 2,
+            },
+        }
+    }
+
     #[test]
     fn format_conversion_is_deterministic_and_retains_source_metadata() {
         let (sender, source) = bounded_audio_input(descriptor(), 2).unwrap();
@@ -233,5 +284,25 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn adjacent_callback_chunks_keep_a_contiguous_normalized_timeline() {
+        let (sender, source) = bounded_audio_input(descriptor(), 3).unwrap();
+        sender.try_send(callback_chunk(0, 0, 512)).unwrap();
+        sender.try_send(callback_chunk(1, 512, 512)).unwrap();
+        sender.try_send(callback_chunk(2, 1024, 512)).unwrap();
+        let mut normalized = NormalizedAudioSource::new(source, 16_000, 1).unwrap();
+
+        let mut expected_start = 0;
+        for expected_frames in [171, 170, 171] {
+            let AudioSourceEvent::Audio(chunk) = normalized.next_event().unwrap() else {
+                panic!("expected normalized callback audio");
+            };
+            assert_eq!(chunk.start_frame, Some(expected_start));
+            assert_eq!(chunk.audio.frames(), expected_frames);
+            expected_start += expected_frames as u64;
+        }
+        assert_eq!(expected_start, 512);
     }
 }

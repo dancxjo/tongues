@@ -48,6 +48,12 @@ Exercise capture without loading a recognition model:
 just run common-phone listen --dry-run --debug-frames
 ```
 
+Exercise CPAL capture through the shared WebRTC VAD and utterance segmenter:
+
+```sh
+just run vad --microphone --show-frames
+```
+
 Start the local server:
 
 ```sh

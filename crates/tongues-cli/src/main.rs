@@ -154,7 +154,7 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Detect speech and segment utterances in a WAV file
+    /// Detect speech and segment utterances in a WAV file or CPAL microphone
     Vad(vad_cmd::VadCommand),
 
     /// Simulate deterministic duplex completion beams and commit frontiers

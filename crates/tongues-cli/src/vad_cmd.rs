@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
-use clap::{Args, ValueEnum};
+use anyhow::{bail, Result};
+use clap::{ArgGroup, Args, ValueEnum};
 use serde_json::{json, Value};
 use tongues_audio::{
-    EnergyVad, EnergyVadConfig, NormalizedAudioSource, SegmentationConfig, SegmentationEvent,
-    UtteranceSegmenter, VadBackendKind, VadPipelineEvent, VadSegmentationPipeline,
-    VoiceActivityDetector, WavAudioSource, WebRtcVad, WebRtcVadConfig,
+    AudioSource, CpalAudioSource, EnergyVad, EnergyVadConfig, NormalizedAudioSource,
+    SegmentationConfig, SegmentationEvent, UtteranceSegmenter, VadBackendKind, VadPipelineEvent,
+    VadSegmentationPipeline, VoiceActivityDetector, WavAudioSource, WebRtcVad, WebRtcVadConfig,
 };
+
+const CPAL_QUEUE_CAPACITY_CHUNKS: usize = 32;
+const VAD_SAMPLE_RATE_HZ: u32 = 16_000;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum VadBackendArg {
@@ -24,11 +27,24 @@ impl From<VadBackendArg> for VadBackendKind {
     }
 }
 
-/// Detect speech and segment utterances in a WAV file.
+/// Detect speech and segment utterances in a WAV file or live microphone.
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("source")
+        .required(true)
+        .args(["input", "microphone"])
+))]
 pub struct VadCommand {
     /// Input WAV file.
-    pub input: PathBuf,
+    pub input: Option<PathBuf>,
+
+    /// Capture live microphone audio through CPAL.
+    #[arg(long)]
+    pub microphone: bool,
+
+    /// Exact CPAL input device id from `common-phone listen-devices`.
+    #[arg(long, requires = "microphone")]
+    pub input_device: Option<String>,
 
     /// Voice activity detector implementation.
     #[arg(long, value_enum, default_value = "web-rtc")]
@@ -91,10 +107,32 @@ pub fn run(command: VadCommand) -> Result<()> {
     };
     config.validate()?;
 
-    // A whole-file chunk avoids introducing artificial boundaries while
-    // normalizing arbitrary WAV rates to WebRTC's canonical mono 16 kHz input.
-    let source = WavAudioSource::open(&command.input, usize::MAX)?;
-    let source = NormalizedAudioSource::new(source, 16_000, 1)?;
+    if let Some(input) = &command.input {
+        // A whole-file chunk avoids introducing artificial boundaries while
+        // normalizing arbitrary WAV rates to WebRTC's canonical mono input.
+        let source = WavAudioSource::open(input, usize::MAX)?;
+        return run_source(source, input.display().to_string(), &command, config);
+    }
+    if command.microphone {
+        let source =
+            CpalAudioSource::open(command.input_device.as_deref(), CPAL_QUEUE_CAPACITY_CHUNKS)?;
+        let source_id = source.descriptor().id.clone();
+        eprintln!(
+            "listening on {} with {:?} VAD (Ctrl-C to stop)",
+            source_id, command.backend
+        );
+        return run_source(source, source_id, &command, config);
+    }
+    bail!("either a WAV input or --microphone is required")
+}
+
+fn run_source<S: AudioSource>(
+    source: S,
+    source_id: String,
+    command: &VadCommand,
+    config: SegmentationConfig,
+) -> Result<()> {
+    let source = NormalizedAudioSource::new(source, VAD_SAMPLE_RATE_HZ, 1)?;
     let detector: Box<dyn VoiceActivityDetector> = match command.backend {
         VadBackendArg::Energy => Box::new(EnergyVad::new(EnergyVadConfig {
             threshold_rms: command.energy_threshold_rms,
@@ -106,7 +144,7 @@ pub fn run(command: VadCommand) -> Result<()> {
             Box::new(WebRtcVad::new(vad)?)
         }
     };
-    let segmenter = UtteranceSegmenter::new(command.input.display().to_string(), config)?;
+    let segmenter = UtteranceSegmenter::new(source_id, config)?;
     let mut pipeline = VadSegmentationPipeline::new(source, detector, segmenter)?;
 
     while let Some(event) = pipeline.next_event()? {
