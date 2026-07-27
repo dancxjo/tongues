@@ -405,7 +405,7 @@
                         <div id="speech-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
                         <div class="form-group">
                             <label for="text">Text to speak</label>
-                            <textarea id="text" required>Wow, the magic wand actually worked!</textarea>
+                            <textarea id="text" required>All human beings are born free and equal in dignity and rights. They are endowed with reason and conscience and should act towards one another in a spirit of brotherhood.</textarea>
                         </div>
                         <div class="speak-choice-grid">
                             <div class="form-group">
