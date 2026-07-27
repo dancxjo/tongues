@@ -230,7 +230,7 @@ impl MbrolaDatabase {
     }
 
     fn physical_frame_count(&self, diphone: &MbrolaDiphone) -> usize {
-        let mut total = 1;
+        let mut total = 1usize;
         let mut previous = VOICED;
         for logical_frame in 0..diphone.logical_frames {
             let mark = self.pitch_mark(diphone.pos_pitch_mark + logical_frame);

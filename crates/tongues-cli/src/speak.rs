@@ -708,6 +708,18 @@ impl BackendInstance {
                     speech::SpeechModelFamily::EndToEndSpeech,
                     24_000,
                 );
+                capabilities.varieties = speech::CapabilityValue::Any;
+                capabilities.speed = false;
+                capabilities.seed = false;
+                capabilities
+            }
+            Self::Mbrola(engine) => {
+                let mut capabilities = base(
+                    "mbrola",
+                    &engine.projector().voice.id,
+                    speech::SpeechModelFamily::EndToEndSpeech,
+                    engine.sample_rate_hz(),
+                );
                 let variety = engine.projector().voice.variety.as_str();
                 capabilities.varieties =
                     speech::CapabilityValue::Listed(vec![speech::NamedCapability::new(
@@ -721,18 +733,6 @@ impl BackendInstance {
                     required: false,
                     numeric_ids: false,
                 };
-                capabilities.speed = false;
-                capabilities.seed = false;
-                capabilities
-            }
-            Self::Mbrola(engine) => {
-                let mut capabilities = base(
-                    "mbrola",
-                    &engine.projector().voice.id,
-                    speech::SpeechModelFamily::EndToEndSpeech,
-                    engine.sample_rate_hz(),
-                );
-                capabilities.varieties = speech::CapabilityValue::Any;
                 capabilities.pitch = speech::PitchCapabilities {
                     scale: true,
                     shift: true,

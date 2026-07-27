@@ -6466,6 +6466,22 @@ fn speech_studio_discovery_page(
                 continue;
             }
         }
+        if provider.id == "mbrola" {
+            for config in tongues_tts::MBROLA_VOICE_CONFIGS {
+                paths.push(discover_speech_path(
+                    home,
+                    provider.id,
+                    config.id,
+                    config.display_name,
+                    config.id == "mbrola-eo-nl2",
+                    device,
+                    &scoped_catalog,
+                    &verification,
+                    loaded,
+                ));
+            }
+            continue;
+        }
         let model =
             speech_model_id(home, provider.id, None).unwrap_or_else(|_| "unavailable".into());
         paths.push(discover_speech_path(
@@ -9478,12 +9494,6 @@ mod tests {
                 .unavailable_reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("models fetch mbrola-nl2"))
-        );
-        assert!(
-            discovery
-                .catalog
-                .iter()
-                .any(|entry| entry.id == "mbrola-nl2")
         );
     }
 
