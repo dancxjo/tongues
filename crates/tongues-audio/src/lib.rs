@@ -16,6 +16,7 @@ use thiserror::Error;
 mod source;
 mod system_input;
 mod transform;
+mod vad;
 
 pub use source::{
     bounded_audio_input, AudioDiscontinuity, AudioSource, AudioSourceDescriptor, AudioSourceEvent,
@@ -27,6 +28,12 @@ pub use system_input::{
     InputDeviceInfo,
 };
 pub use transform::NormalizedAudioSource;
+pub use vad::{
+    create_vad_backend, EnergyVad, EnergyVadConfig, VadBackendKind, VadDecision,
+    VoiceActivityDetector,
+};
+#[cfg(feature = "vad-webrtc")]
+pub use vad::{WebRtcVad, WebRtcVadConfig};
 
 pub const DEFAULT_SPECTRAL_FLOOR: f32 = 1.0e-8;
 

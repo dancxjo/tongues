@@ -4,6 +4,10 @@ version = "0.1.0"
 license.workspace = true
 edition = "2021"
 
+[features]
+default = ["vad-webrtc"]
+vad-webrtc = ["dep:webrtc-vad"]
+
 [dependencies]
 cpal = { workspace = true }
 hound = { workspace = true }
@@ -12,3 +16,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 speaking = { path = "../speaking" }
 thiserror = { workspace = true }
+webrtc-vad = { version = "0.4", optional = true }
