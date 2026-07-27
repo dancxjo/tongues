@@ -113,6 +113,22 @@ Speech Studio exposes `mbrola-eo-nl2` as an Esperanto path while installation,
 verification, and license provenance continue to point to the single
 `mbrola-nl2` database artifact.
 
+Classical Latin and Sanskrit are exposed the same way:
+
+```sh
+cargo run --bin tongues -- models fetch mbrola-la1
+cargo run --bin tongues -- models fetch mbrola-in1
+cargo run --bin tongues -- models fetch mbrola-in2
+```
+
+`mbrola-la-la1` uses the purpose-built Classical Latin `la1` database.
+`mbrola-sa-in1` and `mbrola-sa-in2` use the Hindi databases, whose stop,
+retroflex, aspiration, vowel, and sibilant inventories cover Tongues' Sanskrit
+variety. The database has no syllabic-r unit, so Sanskrit `r̩` is explicitly
+projected to `r ii`; velar and palatal nasals use the database's dental nasal,
+and both Sanskrit postalveolar sibilants use `sh`. These are documented
+database limitations, not claims of exact phonetic identity.
+
 The library also exposes `parse_pho`, `serialize_pho`, and
 `NativeMbrolaRenderer::render_pho`, so parsed `.pho` and typed plans enter the
 same renderer.

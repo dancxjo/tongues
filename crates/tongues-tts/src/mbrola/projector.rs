@@ -85,6 +85,36 @@ pub const MBROLA_VOICE_CONFIGS: &[MbrolaVoiceConfig] = &[
         baseline_hz: None,
         pitch_range_hz: None,
     },
+    MbrolaVoiceConfig {
+        id: "mbrola-la-la1",
+        display_name: "Classical Latin via MBROLA la1",
+        database_id: "mbrola-la1",
+        database_voice_id: "la1",
+        variety: "la-Classical",
+        symbol_map_id: "la-la1",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-sa-in1",
+        display_name: "Sanskrit via MBROLA Hindi in1",
+        database_id: "mbrola-in1",
+        database_voice_id: "in1",
+        variety: "sa-Deva-Standard",
+        symbol_map_id: "sa-in1",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-sa-in2",
+        display_name: "Sanskrit via MBROLA Hindi in2",
+        database_id: "mbrola-in2",
+        database_voice_id: "in2",
+        variety: "sa-Deva-Standard",
+        symbol_map_id: "sa-in2",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
 ];
 
 impl MbrolaVoiceConfig {
@@ -456,6 +486,107 @@ impl MbrolaSymbolMap {
                         ("t͡ʃ", vec!["t", "S"]),
                         ("d͡ʒ", vec!["d", "Z"]),
                     ]),
+                );
+            }
+            "la-la1" | "mbrola-la-la1" => {
+                return Some(
+                    Self::new(
+                        "mbrola-la-la1-built-in",
+                        [
+                            ("_", "_"),
+                            ("a", "a"),
+                            ("e", "E"),
+                            ("i", "I"),
+                            ("o", "O"),
+                            ("u", "U"),
+                            ("y", "y"),
+                            ("ae̯", "aE"),
+                            ("au̯", "aU"),
+                            ("oe̯", "OE"),
+                            ("b", "b"),
+                            ("k", "k"),
+                            ("kʰ", "k_h"),
+                            ("d", "d"),
+                            ("f", "f"),
+                            ("ɡ", "g"),
+                            ("h", "h"),
+                            ("j", "j"),
+                            ("l", "l"),
+                            ("m", "m"),
+                            ("n", "n"),
+                            ("p", "p"),
+                            ("pʰ", "p_h"),
+                            ("r", "r"),
+                            ("s", "s"),
+                            ("t", "t"),
+                            ("tʰ", "t_h"),
+                            ("w", "w"),
+                            ("z", "z"),
+                        ],
+                    )
+                    .with_expansions([("ks", vec!["k", "s"])]),
+                );
+            }
+            "sa-in1" | "mbrola-sa-in1" | "sa-in2" | "mbrola-sa-in2" => {
+                let database = if voice_id.ends_with("in2") {
+                    "in2"
+                } else {
+                    "in1"
+                };
+                return Some(
+                    Self::new(
+                        format!("mbrola-sa-{database}-built-in"),
+                        [
+                            ("_", "_"),
+                            ("a", "a"),
+                            ("aː", "aa"),
+                            ("i", "ii"),
+                            ("iː", "ii"),
+                            ("u", "uu"),
+                            ("uː", "uu"),
+                            ("eː", "e"),
+                            ("ai̯", "ai"),
+                            ("oː", "o"),
+                            ("au̯", "au"),
+                            ("k", "k"),
+                            ("kʰ", "kh"),
+                            ("ɡ", "g"),
+                            ("ɡʱ", "gh"),
+                            ("ŋ", "n"),
+                            ("t͡ɕ", "c"),
+                            ("t͡ɕʰ", "ch"),
+                            ("d͡ʑ", "j"),
+                            ("d͡ʑʱ", "jh"),
+                            ("ɲ", "n"),
+                            ("ʈ", "T"),
+                            ("ʈʰ", "Th"),
+                            ("ɖ", "D"),
+                            ("ɖʱ", "Dh"),
+                            ("ɳ", "N"),
+                            ("t", "t"),
+                            ("tʰ", "th"),
+                            ("d", "d"),
+                            ("dʱ", "dh"),
+                            ("n", "n"),
+                            ("p", "p"),
+                            ("pʰ", "ph"),
+                            ("b", "b"),
+                            ("bʱ", "bh"),
+                            ("m", "m"),
+                            ("j", "y"),
+                            ("r", "r"),
+                            ("l", "l"),
+                            ("v", "v"),
+                            ("ɕ", "sh"),
+                            ("ʂ", "sh"),
+                            ("s", "s"),
+                            ("ɦ", "h"),
+                            ("h", "h"),
+                        ],
+                    )
+                    // Hindi MBROLA has no syllabic-r unit. Preserve the
+                    // rhotic onset and supply a short vocalic release.
+                    .with_expansions([("r̩", vec!["r", "ii"])]),
                 );
             }
             _ => return None,
@@ -1290,5 +1421,74 @@ mod tests {
             map.resolve("d͡ʒ", &voice, &inventory).unwrap(),
             vec!["d", "Z"]
         );
+    }
+
+    #[test]
+    fn latin_la1_configuration_covers_the_classical_inventory() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-la-la1").expect("Latin voice config");
+        assert_eq!(config.database_id, "mbrola-la1");
+        assert_eq!(config.variety, "la-Classical");
+        let map = config.symbol_map();
+        let inventory = [
+            "_", "E", "I", "O", "OE", "U", "a", "aE", "aU", "b", "d", "f", "g", "h", "j", "k",
+            "k_h", "l", "m", "n", "p", "p_h", "r", "s", "t", "t_h", "w", "y", "z",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let voice = MbrolaVoiceMetadata {
+            id: config.id.into(),
+            variety: config.variety.into(),
+            baseline_hz: None,
+            pitch_range_hz: None,
+        };
+        for phone in [
+            "a", "e", "i", "o", "u", "y", "ae̯", "au̯", "oe̯", "b", "k", "kʰ", "d", "f", "ɡ", "h",
+            "j", "l", "m", "n", "p", "pʰ", "r", "s", "t", "tʰ", "w", "ks", "z",
+        ] {
+            map.resolve(phone, &voice, &inventory)
+                .unwrap_or_else(|error| panic!("Latin phone {phone} is not covered: {error}"));
+        }
+        assert_eq!(
+            map.resolve("ks", &voice, &inventory).unwrap(),
+            vec!["k", "s"]
+        );
+    }
+
+    #[test]
+    fn sanskrit_hindi_configurations_cover_the_tongues_inventory() {
+        let inventory = [
+            "_", "D", "Dh", "N", "T", "Th", "a", "aa", "ai", "au", "b", "bh", "c", "ch", "d", "dh",
+            "e", "g", "gh", "h", "ii", "j", "jh", "k", "kh", "l", "m", "n", "o", "p", "ph", "r",
+            "s", "sh", "t", "th", "uu", "v", "y",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        for id in ["mbrola-sa-in1", "mbrola-sa-in2"] {
+            let config = MbrolaVoiceConfig::for_id(id).expect("Sanskrit voice config");
+            assert_eq!(config.variety, "sa-Deva-Standard");
+            let map = config.symbol_map();
+            let voice = MbrolaVoiceMetadata {
+                id: config.id.into(),
+                variety: config.variety.into(),
+                baseline_hz: None,
+                pitch_range_hz: None,
+            };
+            for phone in [
+                "a", "aː", "i", "iː", "u", "uː", "r̩", "eː", "ai̯", "oː", "au̯", "k", "kʰ", "ɡ", "ɡʱ",
+                "ŋ", "t͡ɕ", "t͡ɕʰ", "d͡ʑ", "d͡ʑʱ", "ɲ", "ʈ", "ʈʰ", "ɖ", "ɖʱ", "ɳ", "t", "tʰ", "d",
+                "dʱ", "n", "p", "pʰ", "b", "bʱ", "m", "j", "r", "l", "v", "ɕ", "ʂ", "s", "ɦ", "h",
+            ] {
+                map.resolve(phone, &voice, &inventory)
+                    .unwrap_or_else(|error| {
+                        panic!("Sanskrit phone {phone} is not covered by {id}: {error}")
+                    });
+            }
+            assert_eq!(
+                map.resolve("r̩", &voice, &inventory).unwrap(),
+                vec!["r", "ii"]
+            );
+        }
     }
 }

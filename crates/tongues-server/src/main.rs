@@ -9495,6 +9495,26 @@ mod tests {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("models fetch mbrola-nl2"))
         );
+        for (id, variety, database) in [
+            ("mbrola-la-la1", "la-Classical", "mbrola-la1"),
+            ("mbrola-sa-in1", "sa-Deva-Standard", "mbrola-in1"),
+            ("mbrola-sa-in2", "sa-Deva-Standard", "mbrola-in2"),
+        ] {
+            let path = discovery
+                .paths
+                .iter()
+                .find(|path| path.id == id)
+                .unwrap_or_else(|| panic!("Speech Studio should expose {id}"));
+            assert_eq!(
+                listed_capability_ids(&path.capabilities.varieties),
+                vec![variety]
+            );
+            assert!(
+                path.unavailable_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains(&format!("models fetch {database}")))
+            );
+        }
     }
 
     #[test]
