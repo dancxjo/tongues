@@ -87,6 +87,12 @@ jobs:
           node --test crates/tongues-server/public/wavedeck-model.test.mjs
           node --test crates/tongues-server/public/speech-dataflow-model.test.mjs
           node --test crates/tongues-server/public/live-conversation-model.test.mjs
+      - name: Install Graph Studio browser test
+        run: |
+          npm ci
+          npx playwright install --with-deps --only-shell chromium
+      - name: Test Graph Studio replacement workflow in Chromium
+        run: npm run test:graph-studio
 
   feature-powerset:
     name: Package feature powerset

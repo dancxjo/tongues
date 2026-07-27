@@ -1,0 +1,10 @@
+{
+  "name": "tongues-browser-tests",
+  "private": true,
+  "scripts": {
+    "test:graph-studio": "playwright test crates/tongues-server/public/speech-dataflow.browser.test.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

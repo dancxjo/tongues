@@ -350,9 +350,10 @@ function renderReplacementCandidates(){
   const filtered=filteredReplacementOptions(),visible=filtered.slice(0,replacementRenderLimit),fragment=document.createDocumentFragment();
   for(const option of visible){
     const button=document.createElement("button");button.type="button";button.className="replacement-candidate";button.setAttribute("role","option");
-    button.setAttribute("aria-selected",String(replacementSelected?.id===option.id));button.setAttribute("aria-disabled",String(!option.applyable));
+    button.setAttribute("aria-selected",String(replacementSelected?.id===option.id));button.dataset.applicable=String(option.applyable);
+    button.setAttribute("aria-description",option.applyable?option.reason:`Cannot apply: ${option.reason}`);
     button.dataset.compatible=String(option.compatibility!=="incompatible");
-    button.innerHTML=`<span><strong>${escapeHtml(option.label)}</strong><small>${escapeHtml(option.provider)} · ${escapeHtml(option.model)} · ${escapeHtml(option.component_id??option.kind)}</small><small>${escapeHtml(option.reason)}</small></span><span class="replacement-badge ${escapeHtml(option.readiness)}">${escapeHtml(replacementCompatibilityLabel(option))} · ${escapeHtml(option.readiness)}</span>`;
+    button.innerHTML=`<span><strong>${escapeHtml(option.label)}</strong><small>${escapeHtml(option.provider)} · ${escapeHtml(option.model)} · ${escapeHtml(option.component_id??option.kind)}</small>${option.detail?`<small>${escapeHtml(option.detail)}</small>`:""}<small>${escapeHtml(option.reason)}</small></span><span class="replacement-badge ${escapeHtml(option.readiness)}">${escapeHtml(replacementCompatibilityLabel(option))} · ${escapeHtml(option.readiness)}</span>`;
     button.onclick=()=>{replacementSelected=option;renderReplacementCandidates();byId("replacement-continue").disabled=!option.applyable;announce(`${option.label} selected. ${option.reason}`,!option.applyable);};
     button.onkeydown=event=>{
       if(!["ArrowDown","ArrowUp","Home","End"].includes(event.key))return;
