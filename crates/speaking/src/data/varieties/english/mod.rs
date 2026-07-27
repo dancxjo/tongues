@@ -363,6 +363,49 @@ fn english_number_names() -> crate::variety::NumberNameSet {
         value: 911,
         name: "nine one one".into(),
     }];
+    names.suffixed_number_names = [
+        (20, "twenties"),
+        (30, "thirties"),
+        (40, "forties"),
+        (50, "fifties"),
+        (60, "sixties"),
+        (70, "seventies"),
+        (80, "eighties"),
+        (90, "nineties"),
+    ]
+    .into_iter()
+    .map(|(value, name)| crate::variety::SuffixedNumberName {
+        value,
+        suffixes: vec!["s".into(), "’s".into(), "'s".into()],
+        name: name.into(),
+    })
+    .collect();
+    names.grouped_year_names = [(1000, 1999), (2010, 2099)]
+        .into_iter()
+        .map(|(first, last)| crate::variety::GroupedYearName {
+            first,
+            last,
+            divisor: 100,
+            exact_group_name: "hundred".into(),
+            leading_zero_name: "oh".into(),
+        })
+        .collect();
+    names.year_preceding_words = [
+        "after",
+        "around",
+        "before",
+        "circa",
+        "during",
+        "from",
+        "in",
+        "since",
+        "through",
+        "throughout",
+        "until",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
     names.ordinal_names = [
         (0, "zeroth"),
         (1, "first"),

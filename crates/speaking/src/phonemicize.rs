@@ -2993,21 +2993,118 @@ fn spell_dotted_number(
 }
 
 fn spell_year(year: u128, variety: &LinguisticVariety) -> String {
-    if (2000..=2009).contains(&year) {
+    let Some(rule) = variety
+        .number_names
+        .as_ref()
+        .and_then(|names| {
+            names
+                .grouped_year_names
+                .iter()
+                .find(|rule| u128::from(rule.first) <= year && year <= u128::from(rule.last))
+        })
+        .filter(|rule| rule.divisor > 1)
+    else {
+        return spell_out(year, variety);
+    };
+    let divisor = u128::from(rule.divisor);
+    let head = year / divisor;
+    let tail = year % divisor;
+    if tail == 0 {
+        format!("{} {}", spell_out(head, variety), rule.exact_group_name)
+    } else if tail < divisor / 10 {
         format!(
-            "{} {}",
-            spell_out(2000, variety),
-            spell_out(year - 2000, variety)
-        )
-    } else if (2010..=2099).contains(&year) {
-        format!(
-            "{} {}",
-            spell_out(20, variety),
-            spell_out(year - 2000, variety)
+            "{} {} {}",
+            spell_out(head, variety),
+            rule.leading_zero_name,
+            spell_out(tail, variety)
         )
     } else {
-        spell_out(year, variety)
+        format!("{} {}", spell_out(head, variety), spell_out(tail, variety))
     }
+}
+
+fn suffixed_number_name_at(
+    characters: &[char],
+    start: usize,
+    variety: &LinguisticVariety,
+) -> Option<(String, usize)> {
+    let mut index = start;
+    while index < characters.len() && characters[index].is_ascii_digit() {
+        index += 1;
+    }
+    let value = characters[start..index]
+        .iter()
+        .collect::<String>()
+        .parse::<u32>()
+        .ok()?;
+    let suffix_start = index;
+    while index < characters.len()
+        && (characters[index].is_alphabetic() || is_apostrophe(characters[index]))
+    {
+        index += 1;
+    }
+    if suffix_start == index || (index < characters.len() && characters[index].is_alphanumeric()) {
+        return None;
+    }
+    let suffix = characters[suffix_start..index]
+        .iter()
+        .collect::<String>()
+        .to_lowercase();
+    variety
+        .number_names
+        .as_ref()?
+        .suffixed_number_names
+        .iter()
+        .find(|name| {
+            name.value == value
+                && name
+                    .suffixes
+                    .iter()
+                    .any(|candidate| candidate.to_lowercase() == suffix)
+        })
+        .map(|name| (name.name.clone(), index))
+}
+
+fn preceding_word(characters: &[char], start: usize) -> Option<String> {
+    let mut end = start;
+    while end > 0 && !characters[end - 1].is_alphanumeric() {
+        end -= 1;
+    }
+    let mut begin = end;
+    while begin > 0 && characters[begin - 1].is_alphabetic() {
+        begin -= 1;
+    }
+    (begin < end).then(|| {
+        characters[begin..end]
+            .iter()
+            .collect::<String>()
+            .to_lowercase()
+    })
+}
+
+fn is_contextual_year(
+    characters: &[char],
+    start: usize,
+    digits: &str,
+    value: u128,
+    variety: &LinguisticVariety,
+) -> bool {
+    if digits.len() != 4 || digits.contains(',') {
+        return false;
+    }
+    let Some(names) = variety.number_names.as_ref() else {
+        return false;
+    };
+    names
+        .grouped_year_names
+        .iter()
+        .any(|rule| u128::from(rule.first) <= value && value <= u128::from(rule.last))
+        && preceding_word(characters, start).is_some_and(|word| {
+            names
+                .year_preceding_words
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&word))
+        })
 }
 
 fn spell_ordinal(value: u128, variety: &LinguisticVariety) -> String {
@@ -3616,6 +3713,12 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
                 idx = ordinal_end;
                 continue;
             }
+            if let Some((suffixed, suffixed_end)) = suffixed_number_name_at(&char_vec, idx, variety)
+            {
+                result.push_str(&suffixed);
+                idx = suffixed_end;
+                continue;
+            }
             if let Some((height, height_end)) = quoted_height_at(&char_vec, idx, variety) {
                 result.push_str(&height);
                 idx = height_end;
@@ -3796,6 +3899,11 @@ pub fn normalize_general_numbers(text: &str, variety: &LinguisticVariety) -> Str
                         idx = temp_idx;
                         continue;
                     } else {
+                        if is_contextual_year(&char_vec, idx, &int_part, val, variety) {
+                            result.push_str(&spell_year(val, variety));
+                            idx = temp_idx;
+                            continue;
+                        }
                         let mut decimal_temp = temp_idx;
                         if decimal_temp < char_vec.len() && char_vec[decimal_temp] == '.' {
                             let mut segments = Vec::new();
@@ -4033,6 +4141,44 @@ mod tests {
         assert_eq!(
             english_normalize_numbers("affects over 100,000 pending immigration cases"),
             "affects over one hundred thousand pending immigration cases"
+        );
+        assert_eq!(
+            english_normalize_numbers(
+                "Bob Dylan recorded it back in 1965; it became an icon of the 60s."
+            ),
+            "Bob Dylan recorded it back in nineteen sixty-five; it became an icon of the sixties."
+        );
+        assert_eq!(
+            english_normalize_numbers("A room held 1965 people and covered 1965 square feet."),
+            "A room held one thousand nine hundred sixty-five people and covered one thousand nine hundred sixty-five square feet."
+        );
+        assert_eq!(
+            english_normalize_numbers("The total was 1,965."),
+            "The total was one thousand nine hundred sixty-five."
+        );
+    }
+
+    #[test]
+    fn suffixed_numbers_and_grouped_years_are_variety_data_driven() {
+        let mut variety = variety_by_code("fr").expect("built-in French variety");
+        let names = variety.number_names.as_mut().expect("French number names");
+        names.suffixed_number_names = vec![crate::variety::SuffixedNumberName {
+            value: 60,
+            suffixes: vec!["a".into()],
+            name: "années-soixante".into(),
+        }];
+        names.grouped_year_names = vec![crate::variety::GroupedYearName {
+            first: 1900,
+            last: 1999,
+            divisor: 100,
+            exact_group_name: "cents".into(),
+            leading_zero_name: "zéro".into(),
+        }];
+        names.year_preceding_words = vec!["en".into()];
+
+        assert_eq!(
+            normalize_general_numbers("en 1965 et les 60a", &variety),
+            "en dix-neuf soixante-cinq et les années-soixante"
         );
     }
 

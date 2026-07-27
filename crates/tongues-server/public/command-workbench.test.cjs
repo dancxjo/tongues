@@ -76,3 +76,22 @@ test('route transitions announce identity and move focus without hijacking modif
     assert.match(tracks, /selection-heading.*focus/);
     assert.match(wavedeck, /page-title.*focus/);
 });
+
+test('the landing page names every v1 workflow and starts with the supported journey', () => {
+    for (const [title, path] of [
+        ['Speak', '/speech'],
+        ['Compose', '/speech/compose'],
+        ['Compare', '/speech/compare'],
+        ['Catalog', '/speech/catalog'],
+        ['Operate', '/speech/operate'],
+        ['Advanced / Commands', '/commands'],
+        ['Tracks / WaveDeck', '/runs'],
+        ['Live', '/speech/live'],
+    ]) {
+        assert.match(app, new RegExp(`title: '${title.replace('/', '\\/')}'[\\s\\S]{0,80}path: '${path.replace('/', '\\/')}'`));
+    }
+    assert.match(app, /Start with Speak/);
+    assert.match(app, /Compose or Compare → Operate → Tracks \/ WaveDeck/);
+    assert.match(app, /V1_WORKFLOWS\.map\(workflowLink\)/);
+    assert.match(app, /workflow\.clientRoute \? ` data-route/);
+});

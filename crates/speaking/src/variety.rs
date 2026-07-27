@@ -115,6 +115,12 @@ pub struct NumberNameSet {
     #[serde(default)]
     pub special_number_names: Vec<NumberName>,
     #[serde(default)]
+    pub suffixed_number_names: Vec<SuffixedNumberName>,
+    #[serde(default)]
+    pub grouped_year_names: Vec<GroupedYearName>,
+    #[serde(default)]
+    pub year_preceding_words: Vec<String>,
+    #[serde(default)]
     pub unit_names: Vec<UnitName>,
     #[serde(default)]
     pub ordinal_suffixes: Vec<OrdinalSuffixName>,
@@ -148,6 +154,28 @@ pub struct NumberNameSet {
 pub struct NumberName {
     pub value: u32,
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuffixedNumberName {
+    pub value: u32,
+    pub suffixes: Vec<String>,
+    pub name: String,
+}
+
+/// A language-declared convention for reading a year in two numeric groups.
+///
+/// For a divisor of 100, `1965` becomes the localized names for `19` and `65`.
+/// Exact groups and leading-zero tails use the supplied linking names, so the
+/// same normalizer can express conventions such as “nineteen hundred” and
+/// “nineteen oh five” without embedding those English words in its logic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupedYearName {
+    pub first: u32,
+    pub last: u32,
+    pub divisor: u32,
+    pub exact_group_name: String,
+    pub leading_zero_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use speaking::{
-    phone_display_symbol, phoneme_default_phone_display_symbol, realize_phoneme_at, token_stress,
-    variety_by_code, FeatureBundle, FeatureId, FeatureValue, PauseKind, PhoneDecompositionPolicy,
-    RealizationOptions, Spec, Stress, TerminalPunctuation, UtterancePlan,
+    FeatureBundle, FeatureId, FeatureValue, PauseKind, PhoneDecompositionPolicy,
+    RealizationOptions, Spec, Stress, TerminalPunctuation, UtterancePlan, phone_display_symbol,
+    phoneme_default_phone_display_symbol, realize_phoneme_at, token_stress, variety_by_code,
 };
 
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};
@@ -724,6 +724,34 @@ mod tests {
                 "{word} {variety}: {projected}"
             );
         }
+    }
+
+    #[test]
+    fn fastpitch_boundary_receives_year_and_decade_pronunciations() {
+        let plan = crate::utterance_plan_from_text(crate::SpeechRequest {
+            text: "Dylan recorded it back in 1965, an icon of the 60s.".into(),
+            variety: "en-US".into(),
+        })
+        .expect("number-normalized speech plan");
+        let projected = project_plan_symbols(
+            &plan,
+            |output, ipa| output.push_str(ipa),
+            "FastPitch regression",
+        )
+        .expect("FastPitch symbols");
+
+        assert!(
+            projected.contains("naɪntiːn sɪkstiːfaɪv"),
+            "year should be pronounced nineteen sixty-five: {projected}"
+        );
+        assert!(
+            projected.contains("sɪkstiːz"),
+            "decade should be pronounced sixties: {projected}"
+        );
+        assert!(
+            !projected.contains("sɪkszɪɹoʊɛs"),
+            "decade must not be spelled six-zero-es: {projected}"
+        );
     }
 
     #[test]

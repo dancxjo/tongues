@@ -11407,8 +11407,9 @@ mod tests {
         assert_eq!(first_page.page.returned, 32);
         assert_eq!(first_page.page.next_cursor, Some(32));
         assert!(
-            first_page.paths.len() < 50,
-            "the first response must not eagerly expand the entire catalog"
+            first_page.paths.len() < first_page.page.total,
+            "the first response must not eagerly expand all {} progressive catalog entries",
+            first_page.page.total
         );
         let second_page = speech_studio_discovery_page(
             &mortar_home,
@@ -11494,9 +11495,7 @@ mod tests {
             "hifigan",
             "melgan",
             "multiband-melgan",
-            "voice-ryan-medium",
-            "voice-amy-medium",
-            "voice-ljspeech-high",
+            "piper-onnx",
             "deterministic-mock",
         ] {
             assert!(

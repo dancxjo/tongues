@@ -28,6 +28,57 @@ const customPages = [
     },
 ];
 
+const V1_WORKFLOWS = [
+    {
+        title: 'Speak',
+        path: '/speech',
+        summary: 'Choose a ready recipe, enter text, generate speech, and inspect the resulting run.',
+        clientRoute: true,
+    },
+    {
+        title: 'Compose',
+        path: '/speech/compose',
+        summary: 'Inspect a typed recipe or continue into Graph Studio for safe graph editing.',
+        clientRoute: true,
+    },
+    {
+        title: 'Compare',
+        path: '/speech/compare',
+        summary: 'Run the same prompt through compatible recipes and compare their evidence.',
+        clientRoute: true,
+    },
+    {
+        title: 'Catalog',
+        path: '/speech/catalog',
+        summary: 'Find ready capabilities and recipes without loading the full component catalog.',
+        clientRoute: true,
+    },
+    {
+        title: 'Operate',
+        path: '/speech/operate',
+        summary: 'Follow readiness, verification, jobs, artifacts, failures, and runtime identity.',
+        clientRoute: true,
+    },
+    {
+        title: 'Advanced / Commands',
+        path: '/commands',
+        summary: 'Replay supported workflows through durable, schema-owned command pages.',
+        clientRoute: true,
+    },
+    {
+        title: 'Tracks / WaveDeck',
+        path: '/runs',
+        summary: 'Inspect immutable execution evidence, then open a provenance-preserving correction.',
+        clientRoute: false,
+    },
+    {
+        title: 'Live',
+        path: '/speech/live',
+        summary: 'Run an interruption-safe streamed conversation and retain its evidence.',
+        clientRoute: true,
+    },
+];
+
 let commandPages = [];
 let cliCommands = [];
 let activePage = null;
@@ -94,14 +145,16 @@ function titleCase(value) {
 
 function renderNavigation() {
     const nav = byId('primary-nav');
-    const primaryPages = commandPages.filter((page) => page.page !== 'command');
     nav.innerHTML = `
         <div class="nav-group">
-            <div class="nav-heading">Workspaces</div>
-            ${primaryPages.map(navLink).join('')}
+            <div class="nav-heading">V1 workflows</div>
+            ${V1_WORKFLOWS.map(workflowLink).join('')}
+        </div>
+        <div class="nav-group">
+            <div class="nav-heading">Specialized workspaces</div>
             <a href="/studio/graphs/new">Graph Studio</a>
-            <a href="/runs">Execution Tracks</a>
             <a href="/sessions/new/correct">WaveDeck</a>
+            <a href="/pronunciation-demo" data-route="/pronunciation-demo">Pronunciation Demo</a>
         </div>
         <div class="nav-group">
             <div class="nav-heading">Runtime</div>
@@ -110,8 +163,9 @@ function renderNavigation() {
     nav.addEventListener('click', activateRouteLink);
 }
 
-function navLink(page) {
-    return `<a href="${page.path}" data-route="${page.path}">${escapeHtml(page.title)}</a>`;
+function workflowLink(workflow) {
+    const route = workflow.clientRoute ? ` data-route="${workflow.path}"` : '';
+    return `<a href="${workflow.path}"${route}>${escapeHtml(workflow.title)}</a>`;
 }
 
 function activateRouteLink(event) {
@@ -232,14 +286,23 @@ function setHeader(kicker, title, summary, command) {
 }
 
 function renderDashboard() {
-    byId('dashboard-grid').innerHTML = commandPages.filter((page) => page.page !== 'command').map((page) => `
-        <a class="command-card" href="${page.path}" data-route="${page.path}">
-            <span>${escapeHtml(page.group)}</span>
-            <strong>${escapeHtml(page.title)}</strong>
-            <small>${escapeHtml(page.capabilityIds.join(', '))}</small>
-            <p>${escapeHtml(page.summary)}</p>
-        </a>
-    `).join('');
+    byId('dashboard-grid').innerHTML = `
+        <section class="command-card" aria-labelledby="first-run-heading">
+            <span>First run</span>
+            <strong id="first-run-heading">Start with Speak</strong>
+            <p>Choose a ready recipe, generate speech, then continue through Compose or Compare → Operate → Tracks / WaveDeck.</p>
+            <a href="/speech" data-route="/speech">Begin the supported starter journey</a>
+        </section>
+        ${V1_WORKFLOWS.map((workflow) => {
+        const route = workflow.clientRoute ? ` data-route="${workflow.path}"` : '';
+        return `
+            <a class="command-card" href="${workflow.path}"${route}>
+                <span>V1 workflow</span>
+                <strong>${escapeHtml(workflow.title)}</strong>
+                <small>${escapeHtml(workflow.path)}</small>
+                <p>${escapeHtml(workflow.summary)}</p>
+            </a>`;
+    }).join('')}`;
     byId('dashboard-grid').onclick = activateRouteLink;
 }
 
