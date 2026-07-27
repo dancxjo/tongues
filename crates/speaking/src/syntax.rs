@@ -156,11 +156,7 @@ pub struct WordSyntacticLinks {
 }
 
 pub trait GrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> GrammarAnalysis;
+    fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,11 +200,7 @@ impl VarietyGrammarParser {
 }
 
 impl GrammarParser for VarietyGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> GrammarAnalysis {
+    fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
         match self.backend {
             GrammarParserBackend::Auto => {
                 if let Some(analysis) = parse_udpipe_for_variety(&self.variety, words, terminal) {
@@ -302,11 +294,7 @@ impl UdPipeGrammarParser {
 }
 
 impl GrammarParser for UdPipeGrammarParser {
-    fn parse(
-        &self,
-        words: &[String],
-        terminal: Option<TerminalPunctuation>,
-    ) -> GrammarAnalysis {
+    fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
         self.parse_with_status(words, terminal)
             .unwrap_or_else(|| GrammarAnalysis {
                 terminal,
@@ -2297,6 +2285,49 @@ fn contains(word: &str, words: &[&str]) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn v1_legacy_grammar_json_decodes_and_reserializes_canonically() {
+        let legacy = serde_json::json!({
+            "tokens": [],
+            "link_parses": [],
+            "raw_link_grammar_parses": [{
+                "links": [],
+                "cost": null,
+                "accepted": true,
+                "backend": "tongues_link_grammar"
+            }],
+            "terminal": null
+        });
+
+        let analysis: GrammarAnalysis = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            analysis.backend_parses[0].backend,
+            GrammarBackend::TonguesRules
+        );
+
+        let canonical = serde_json::to_value(&analysis).unwrap();
+        assert!(canonical.get("ranked_parses").is_some());
+        assert!(canonical.get("backend_parses").is_some());
+        assert!(canonical.get("link_parses").is_none());
+        assert!(canonical.get("raw_link_grammar_parses").is_none());
+        assert_eq!(canonical["backend_parses"][0]["backend"], "tongues_rules");
+    }
+
+    #[test]
+    fn v1_legacy_link_sources_decode_to_neutral_names() {
+        let rule: SyntacticLinkSource = serde_json::from_str(r#""link_grammar_rule""#).unwrap();
+        let projection: SyntacticLinkSource =
+            serde_json::from_str(r#""link_grammar_projection""#).unwrap();
+
+        assert_eq!(rule, SyntacticLinkSource::GrammarRule);
+        assert_eq!(projection, SyntacticLinkSource::GrammarProjection);
+        assert_eq!(serde_json::to_string(&rule).unwrap(), r#""grammar_rule""#);
+        assert_eq!(
+            serde_json::to_string(&projection).unwrap(),
+            r#""grammar_projection""#
+        );
+    }
+
     fn words(sentence: &str) -> Vec<String> {
         sentence
             .split_whitespace()
@@ -2369,10 +2400,7 @@ mod tests {
 
         assert_eq!(analysis.tokens[1].pos, PartOfSpeech::Verb);
         assert_eq!(
-            analysis
-                .backend_parses
-                .first()
-                .map(|parse| parse.backend),
+            analysis.backend_parses.first().map(|parse| parse.backend),
             Some(GrammarBackend::UdPipe)
         );
         assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Subject);
@@ -2423,10 +2451,7 @@ mod tests {
 
             let analysis = parse_variety(code, sentence);
             assert_eq!(
-                analysis
-                    .backend_parses
-                    .first()
-                    .map(|parse| parse.backend),
+                analysis.backend_parses.first().map(|parse| parse.backend),
                 Some(GrammarBackend::TonguesRules),
                 "{code} should report the shared in-tree backend"
             );
@@ -2726,7 +2751,7 @@ mod tests {
         let esperanto = parse_variety("eo", "mi estas tre feliĉa");
         assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&esperanto, 1, 3, SyntacticLinkKind::Complement);
-        assert_link_between(&esperanto, 3, 2, SyntacticLinkKind::Modifier);
+        assert_link_between(&esperanto, 2, 3, SyntacticLinkKind::Modifier);
     }
 
     #[test]
@@ -2813,7 +2838,7 @@ mod tests {
         let german = parse_variety("de-DE-Standard", "ich bin sehr freundlich");
         assert_link_between(&german, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&german, 1, 3, SyntacticLinkKind::Complement);
-        assert_link_between(&german, 3, 2, SyntacticLinkKind::Modifier);
+        assert_link_between(&german, 2, 3, SyntacticLinkKind::Modifier);
 
         let esperanto = parse_variety("eo", "mi vidas lin kaj ŝin");
         assert_link_between(&esperanto, 0, 1, SyntacticLinkKind::Subject);

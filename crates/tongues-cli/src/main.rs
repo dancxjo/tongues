@@ -2056,7 +2056,9 @@ fn main() -> Result<()> {
         Commands::Vits { command } => vits_cmds::run(command, device_arg),
         Commands::Vocoder { command } => vocoder_cmds::run(command, device_arg),
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
-        Commands::SentenceBoundary { command } => run_sentence_boundary_command(command, device_arg),
+        Commands::SentenceBoundary { command } => {
+            run_sentence_boundary_command(command, device_arg)
+        }
         Commands::GrammarParser { command } => run_grammar_parser_command(command),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
         Commands::Styletts2 { command } => {
@@ -2853,12 +2855,13 @@ fn run_sentence_boundary_command(
                 "Preparing sentence-boundary dataset at {}",
                 out.display()
             ));
-            let report = tongues_sentence_boundary::prepare_dataset_with_progress(&out, &config, {
-                let pb = pb.clone();
-                move |progress| {
-                    pb.set_message(sentence_boundary_prepare_progress_message(progress));
-                }
-            })?;
+            let report =
+                tongues_sentence_boundary::prepare_dataset_with_progress(&out, &config, {
+                    let pb = pb.clone();
+                    move |progress| {
+                        pb.set_message(sentence_boundary_prepare_progress_message(progress));
+                    }
+                })?;
             finish_status(
                 pb,
                 format!(
@@ -2915,13 +2918,16 @@ fn run_sentence_boundary_command(
                     "Preparing sentence-boundary dataset at {}",
                     data.display()
                 ));
-                let report =
-                    tongues_sentence_boundary::prepare_dataset_with_progress(&data, &config_data, {
+                let report = tongues_sentence_boundary::prepare_dataset_with_progress(
+                    &data,
+                    &config_data,
+                    {
                         let pb = pb.clone();
                         move |progress| {
                             pb.set_message(sentence_boundary_prepare_progress_message(progress));
                         }
-                    })?;
+                    },
+                )?;
                 finish_status(
                     pb,
                     format!(
@@ -3038,8 +3044,7 @@ fn parse_grammar_text(
     let words = text
         .split_whitespace()
         .map(|word| {
-            let word =
-                word.trim_matches(|c: char| matches!(c, '.' | '?' | '!' | ',' | ';' | ':'));
+            let word = word.trim_matches(|c: char| matches!(c, '.' | '?' | '!' | ',' | ';' | ':'));
             if lowercase {
                 word.to_lowercase()
             } else {
@@ -3081,8 +3086,10 @@ fn cmd_sentence_boundary_train(
     let valid_rows: Vec<tongues_sentence_boundary::BoundaryTrainingExample> =
         read_jsonl_as(&data.join("valid.jsonl"))?;
     let source_filter = sentence_boundary_training_source_filter(training_set);
-    let train_rows = tongues_sentence_boundary::filter_examples_by_source(train_rows, source_filter);
-    let valid_rows = tongues_sentence_boundary::filter_examples_by_source(valid_rows, source_filter);
+    let train_rows =
+        tongues_sentence_boundary::filter_examples_by_source(train_rows, source_filter);
+    let valid_rows =
+        tongues_sentence_boundary::filter_examples_by_source(valid_rows, source_filter);
     anyhow::ensure!(
         !train_rows.is_empty(),
         "sentence-boundary train split is empty after applying training_set={}. Rebuild data with `sentence-boundary train --prepare --input <file-or-dir>` or set source_paths in the config",
@@ -3224,7 +3231,9 @@ fn sentence_boundary_training_source_filter(
     }
 }
 
-fn sentence_boundary_training_set_label(training_set: SentenceBoundaryTrainingSetArg) -> &'static str {
+fn sentence_boundary_training_set_label(
+    training_set: SentenceBoundaryTrainingSetArg,
+) -> &'static str {
     match training_set {
         SentenceBoundaryTrainingSetArg::All => "all",
         SentenceBoundaryTrainingSetArg::Seams => "seams",
@@ -5760,7 +5769,9 @@ fn run_sentence_boundary_stream_io(mut reader: impl Read, mut stdout: impl Write
     if !tail.is_empty() {
         writeln!(stdout, "{tail}").context("writing final sentence-boundary tail")?;
     }
-    stdout.flush().context("flushing sentence-boundary output")?;
+    stdout
+        .flush()
+        .context("flushing sentence-boundary output")?;
     Ok(())
 }
 
@@ -5823,7 +5834,9 @@ fn drain_completed_sentence_boundary_prefixes(
         }
     }
     if emitted > 0 {
-        stdout.flush().context("flushing sentence-boundary output")?;
+        stdout
+            .flush()
+            .context("flushing sentence-boundary output")?;
     }
     Ok(emitted)
 }
@@ -13668,30 +13681,47 @@ mod tests {
 
     #[test]
     fn cli_accepts_sentence_boundary_commands() {
-        let cli = Cli::try_parse_from([
-            "tongues",
-            "sentence-boundary",
-            "parse",
-            "--model",
-            "models/sentence-boundary/v0",
-            "The quick brown fox jumps.",
-        ])
-        .expect("sentence parser parse should parse");
-
-        assert!(matches!(
-            cli.command,
-            Some(Commands::SentenceBoundary {
-                command: SentenceBoundaryCommands::Parse { .. }
-            })
-        ));
-
         let cli = Cli::try_parse_from(["tongues", "sentence-boundary", "stream"])
-            .expect("sentence parser stream should parse");
+            .expect("sentence-boundary stream should parse");
 
         assert!(matches!(
             cli.command,
             Some(Commands::SentenceBoundary {
                 command: SentenceBoundaryCommands::Stream { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_separates_grammar_parsing_from_boundary_detection() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "grammar-parser",
+            "parse",
+            "--backend",
+            "tongues-rules",
+            "The quick brown fox jumps.",
+        ])
+        .expect("grammar-parser parse should parse");
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::GrammarParser {
+                command: GrammarParserCommands::Parse { .. }
+            })
+        ));
+
+        let legacy = Cli::try_parse_from([
+            "tongues",
+            "sentence-parser",
+            "parse",
+            "The quick brown fox jumps.",
+        ])
+        .expect("legacy compatibility command should parse");
+        assert!(matches!(
+            legacy.command,
+            Some(Commands::SentenceBoundary {
+                command: SentenceBoundaryCommands::Parse { .. }
             })
         ));
     }
@@ -13719,7 +13749,8 @@ mod tests {
         let mut output = Vec::new();
 
         let emitted =
-            emit_oversize_sentence_boundary_prefix(&mut cursor, &mut previous, &mut output).unwrap();
+            emit_oversize_sentence_boundary_prefix(&mut cursor, &mut previous, &mut output)
+                .unwrap();
 
         assert!(emitted);
         assert_eq!(previous, "Long sentence.");

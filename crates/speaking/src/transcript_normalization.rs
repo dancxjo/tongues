@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Confidence, EventRef, EventTimes, GrammarParser, LanguageHypothesis, Provenance, SegmentId,
-    GrammarAnalysis, StreamEvent, StreamEventEnvelope, TerminalPunctuation, TextRole,
+    Confidence, EventRef, EventTimes, GrammarAnalysis, GrammarParser, LanguageHypothesis,
+    Provenance, SegmentId, StreamEvent, StreamEventEnvelope, TerminalPunctuation, TextRole,
     TimedToken, VarietyGrammarParser, VarietyId,
 };
 

@@ -1,8 +1,8 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    GrammarRuleSet, PartOfSpeech, ProsodicRole, GrammarBackend, BackendCost,
-    BackendLink, BackendParse, GrammarAnalysis, SyntacticLink,
-    SyntacticLinkKind, RankedGrammarParse, SyntaxToken, link, normalize_syntax_word, push_link,
+    BackendCost, BackendLink, BackendParse, GrammarAnalysis, GrammarBackend, GrammarRuleSet,
+    PartOfSpeech, ProsodicRole, RankedGrammarParse, SyntacticLink, SyntacticLinkKind, SyntaxToken,
+    link, normalize_syntax_word, push_link,
 };
 
 pub fn syntax_profile() -> GrammarRuleSet {
@@ -42,10 +42,7 @@ pub fn syntax_profile() -> GrammarRuleSet {
     }
 }
 
-pub fn parse_grammar(
-    words: &[String],
-    terminal: Option<TerminalPunctuation>,
-) -> GrammarAnalysis {
+pub fn parse_grammar(words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
     parse_english_grammar(words, terminal)
 }
 

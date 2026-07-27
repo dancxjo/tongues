@@ -1619,6 +1619,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pre_versioned_v1_config_defaults_to_schema_one() {
+        let mut legacy = serde_json::to_value(SentenceBoundaryConfig::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("schema_version");
+        let config: SentenceBoundaryConfig = serde_json::from_value(legacy).unwrap();
+
+        assert_eq!(config.schema_version, CONFIG_SCHEMA_VERSION);
+        validate_config_schema(&config).unwrap();
+    }
+
+    #[test]
+    fn unsupported_config_schema_has_precise_migration_error() {
+        let config = SentenceBoundaryConfig {
+            schema_version: CONFIG_SCHEMA_VERSION + 1,
+            ..SentenceBoundaryConfig::default()
+        };
+
+        let error = validate_config_schema(&config).unwrap_err().to_string();
+        assert!(error.contains("unsupported sentence-boundary config schema_version=2"));
+        assert!(error.contains("expected 1"));
+    }
+
+    #[test]
+    fn legacy_v1_model_names_load_through_compatibility_boundary() {
+        assert!(supports_manifest_family(compatibility::LEGACY_FAMILY));
+
+        let dir = tempfile_path("sentence-boundary-legacy-config");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(compatibility::LEGACY_MODEL_CONFIG_FILE),
+            serde_json::to_string(&SentenceBoundaryConfig::default()).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_model_family_config(&dir).unwrap().unwrap();
+        assert_eq!(loaded.schema_version, CONFIG_SCHEMA_VERSION);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn repair_example_merges_bad_initial_cut() {
         let sentences = vec![
             ("Who shot John F.".to_string(), "fixture".to_string()),

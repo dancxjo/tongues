@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{GrammarParser, GrammarAnalysis, VarietyGrammarParser};
+use crate::syntax::{GrammarAnalysis, GrammarParser, VarietyGrammarParser};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StableTextChunk {

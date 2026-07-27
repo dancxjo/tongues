@@ -20,7 +20,7 @@ use crate::realize::{
 use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunctuation};
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
-use crate::syntax::{GrammarParser, PartOfSpeech, GrammarAnalysis, VarietyGrammarParser};
+use crate::syntax::{GrammarAnalysis, GrammarParser, PartOfSpeech, VarietyGrammarParser};
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
     ConnectedSpeechRule, LinguisticVariety, NumberNormalizationProfile, OrthographicUnitKind,

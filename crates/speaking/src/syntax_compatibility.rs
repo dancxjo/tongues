@@ -11,10 +11,7 @@ use crate::syntax::{
 
 #[deprecated(since = "0.1.0", note = "use GrammarAnalysis; removal 2027-07-27")]
 pub type SentenceSyntaxAnalysis = GrammarAnalysis;
-#[deprecated(
-    since = "0.1.0",
-    note = "use RankedGrammarParse; removal 2027-07-27"
-)]
+#[deprecated(since = "0.1.0", note = "use RankedGrammarParse; removal 2027-07-27")]
 pub type SyntacticLinkParse = RankedGrammarParse;
 #[deprecated(since = "0.1.0", note = "use BackendParse; removal 2027-07-27")]
 pub type RawLinkGrammarParse = BackendParse;
@@ -24,19 +21,13 @@ pub type RawLinkGrammarLink = BackendLink;
 pub type RawLinkGrammarCost = BackendCost;
 #[deprecated(since = "0.1.0", note = "use GrammarBackend; removal 2027-07-27")]
 pub type RawLinkGrammarBackend = GrammarBackend;
-#[deprecated(
-    since = "0.1.0",
-    note = "use VarietyGrammarParser; removal 2027-07-27"
-)]
+#[deprecated(since = "0.1.0", note = "use VarietyGrammarParser; removal 2027-07-27")]
 pub type VarietyLinkGrammarParser = VarietyGrammarParser;
 #[deprecated(since = "0.1.0", note = "use GrammarRuleSet; removal 2027-07-27")]
 pub type LinkGrammarRuleSet = GrammarRuleSet;
 #[deprecated(since = "0.1.0", note = "use GrammarRule; removal 2027-07-27")]
 pub type LinkGrammarRule = GrammarRule;
-#[deprecated(
-    since = "0.1.0",
-    note = "use GrammarConnector; removal 2027-07-27"
-)]
+#[deprecated(since = "0.1.0", note = "use GrammarConnector; removal 2027-07-27")]
 pub type LinkGrammarConnector = GrammarConnector;
 
 #[deprecated(since = "0.1.0", note = "use GrammarParser; removal 2027-07-27")]

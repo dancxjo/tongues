@@ -10,7 +10,7 @@ use crate::phonology::PhonemeInventory;
 use crate::prosody::ProsodyProfile;
 use crate::rules::{AllophoneRule, EpenthesisRule, Phonotactics};
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{GrammarRuleSet, PartOfSpeech, GrammarAnalysis};
+use crate::syntax::{GrammarAnalysis, GrammarRuleSet, PartOfSpeech};
 
 pub type SyntaxAnalyzer = fn(&[String], Option<TerminalPunctuation>) -> GrammarAnalysis;
 pub type OrthographyIpaSynthesizer =
