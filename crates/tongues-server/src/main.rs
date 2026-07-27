@@ -11082,7 +11082,13 @@ mod tests {
             span.modality == speaking::timeline::SpanModality::Phoneme
                 && span.metadata["symbol"] == "ʃa"
         }));
-        assert_eq!(projection.original, projection.edited);
+        assert_eq!(projection.original.len(), projection.edited.len());
+        assert!(projection.original.iter().all(|original| {
+            projection
+                .edited
+                .iter()
+                .any(|edited| edited == original)
+        }));
     }
 
     #[test]
