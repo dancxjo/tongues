@@ -163,3 +163,61 @@ test("dialog is keyboard-contained and becomes a full-width touch sheet on a nar
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("button",{name:"Replace"})).toBeFocused();
 });
+
+test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persist without implicit graph edits",async({page})=>{
+  const jack=(nodeId,direction)=>page.locator(`[data-patch-jack][data-node-id="${nodeId}"][data-direction="${direction}"]`);
+  const save=async()=>{
+    savedGraph=null;
+    await page.getByRole("button",{name:"Save"}).click();
+    await expect.poll(()=>savedGraph).not.toBeNull();
+  };
+
+  await expect(jack("node:mic-1","output")).toBeVisible();
+  await expect(jack("node:asr","input")).toBeVisible();
+  await jack("node:mic-1","output").dragTo(jack("node:asr","input"));
+  await expect(page.locator(".patch-cable")).toHaveCount(1);
+  await save();
+  expect(savedGraph.edges).toHaveLength(1);
+  const audioEdge=structuredClone(savedGraph.edges[0]);
+
+  await jack("node:mic-2","output").dragTo(jack("node:asr","input"));
+  await expect(page.locator(".patch-cable")).toHaveCount(1);
+  await expect(page.locator("#status")).toContainText("already occupied");
+  await page.keyboard.press("Escape");
+  await save();
+  expect(savedGraph.edges).toEqual([audioEdge]);
+
+  await jack("node:asr","output").focus();
+  await jack("node:asr","output").press("Enter");
+  await jack("node:sink-1","input").focus();
+  await jack("node:sink-1","input").press("Enter");
+  await expect(page.locator(".patch-cable")).toHaveCount(2);
+  await save();
+  await jack("node:asr","output").dragTo(jack("node:sink-2","input"));
+  await expect(page.locator(".patch-cable")).toHaveCount(3);
+  await expect(page.locator(".patch-connection-list").getByRole("button",{name:/connected to Transcript in/})).toHaveCount(2);
+
+  await save();
+  const beforeCancel=JSON.stringify(savedGraph);
+  await jack("node:asr","output").focus();
+  await jack("node:asr","output").press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".patch-cable-preview")).toHaveCount(0);
+  await save();
+  expect(JSON.stringify(savedGraph)).toBe(beforeCancel);
+
+  await page.locator(`.patch-cable-hit[data-edge-id="${audioEdge.id}"]`).dispatchEvent("pointerdown");
+  await jack("node:mic-1","output").dragTo(jack("node:mic-2","output"));
+  await save();
+  const reconnected=savedGraph.edges.find(edge=>edge.id===audioEdge.id);
+  expect(reconnected.capacity).toBe(audioEdge.capacity);
+  expect(reconnected.from).toEqual({node_id:"node:mic-2",port_id:"out"});
+
+  const audioConnection=page.locator(`.patch-connection-list button[data-edge-id="${audioEdge.id}"]`);
+  await audioConnection.focus();
+  await audioConnection.press("Delete");
+  await expect(page.locator(".patch-cable")).toHaveCount(2);
+  await save();
+  expect(savedGraph.edges.some(edge=>edge.id===audioEdge.id)).toBe(false);
+  expect(savedGraph.edges).toHaveLength(2);
+});

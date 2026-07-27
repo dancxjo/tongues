@@ -153,9 +153,10 @@ export function createPatchCanvas(options) {
       const source = pipeline().nodes.find(node => node.id === edge.from.node_id);
       const output = nodePorts(source, "output").find(port => port.id === edge.from.port_id);
       const path = cablePath(from, to);
-      const hit = svgElement(document, "path", {d: path, class: "patch-cable-hit"});
+      const hit = svgElement(document, "path", {d: path, class: "patch-cable-hit", "data-edge-id": edge.id});
       const visible = svgElement(document, "path", {
         d: path,
+        "data-edge-id": edge.id,
         class: `patch-cable signal-${signalFamily(output?.value_type)}${getSelectedEdgeId() === edge.id ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
       });
       hit.addEventListener("pointerdown", event => {
@@ -168,6 +169,7 @@ export function createPatchCanvas(options) {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.type = "button";
+      button.dataset.edgeId = edge.id;
       button.textContent = edgeDescription(edge);
       button.onclick = () => onSelectEdge(edge.id);
       button.onkeydown = event => {
