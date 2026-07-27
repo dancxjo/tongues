@@ -57,6 +57,31 @@ into WaveDeck. WaveDeck appends provenance-bearing operations and saves the
 result as an **editable projection**. Its graph/run return links come from the
 session record, not from referrer history.
 
+Execution tracks uses one reusable projector for durable sessions, graph runs,
+and incremental microphone/file events. It places input audio levels, VAD
+boundaries, anonymous diarization assignments, raw and normalized transcript,
+language, generated tokens, TTS/playback, pipeline lifecycle, latency, and
+errors on stable millisecond coordinates. Repeated speaker assignments remain
+visible as revisions, and spans from different anonymous speakers are marked
+when they overlap; neither state is presented as verified identity. An enrolled
+display name is used only when the source provenance explicitly includes
+identity consent.
+
+Zoom, pan, follow-live, track filters, speaker filters, and transcript
+projection controls are non-destructive. The renderer limits the number of DOM
+spans in a visible window, so a long session does not continuously append every
+historical event to the page. Selecting a span exposes its source event,
+provider/model, graph node, upstream sources, and downstream consumers. The
+WaveDeck handoff carries the same `span`, `start_ms`, and `end_ms`; WaveDeck
+restores the matching evidence interval without changing it.
+
+Microphone and file audio stays in browser memory for monitoring and permitted
+interval playback. Durable session writes remove raw audio payloads and
+speaker/voice embeddings while retaining non-biometric levels, timestamps,
+anonymous labels, transcript, and provenance. The tracks page always shows
+capture, raw-audio retention, and biometric retention state. Completion,
+cancellation, and failure are terminal, separately styled states.
+
 The live conversation page links to the backend `live_conversation` starter.
 After a completed turn, committed stream events are projected into a durable
 timeline session and the page exposes its WaveDeck route. Unstable hypotheses
