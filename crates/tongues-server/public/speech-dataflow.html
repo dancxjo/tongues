@@ -10,11 +10,11 @@ button:focus,select:focus,input:focus,.node:focus{outline:3px solid var(--accent
 @media(max-width:760px){.layout{grid-template-columns:1fr}}</style></head><body>
 <header><a href="/speech/compose">← Speech Studio</a> · <a id="open-timeline" href="/wavedeck.html">Open session Timeline</a>
 <h1>Bidirectional speech dataflow</h1><p>Configure execution here; inspect and correct evidence in WaveDeck.</p></header><main>
-<section class="panel"><div class="toolbar"><label>Starter <select id="template"><option value="transcription">Transcription</option><option value="multilingual_transcription">Multilingual transcription</option><option value="meeting_transcript">Meeting transcript</option><option value="spoken_interpretation">Spoken interpretation</option><option value="full_conversation">Full conversation</option></select></label>
+<section class="panel"><div class="toolbar"><label>Starter <select id="template"></select></label>
 <label>Name <input id="pipeline-name"></label><button id="save">Save</button><button id="restore">Restore</button><button id="share">Share JSON</button></div><p id="validation" role="status"></p></section>
 <div class="layout"><section class="panel" aria-labelledby="graph-heading"><h2 id="graph-heading">Pipeline graph</h2><ol id="nodes" class="nodes"></ol></section>
 <aside class="panel"><h2>Node library</h2><select id="catalog" aria-label="Backend node"></select><button id="add">Add after selected</button>
-<h3>Selected node</h3><div class="toolbar"><button id="up">Move up</button><button id="down">Move down</button><button id="duplicate">Duplicate</button><button id="bypass">Bypass</button><button id="remove">Remove</button></div>
+<h3>Selected node</h3><div class="toolbar"><button id="up">Move up</button><button id="down">Move down</button><button id="duplicate">Duplicate</button><button id="remove">Remove</button></div>
 <select id="replacement" aria-label="Replacement node"></select><button id="replace">Replace compatible</button>
 <label>Configuration JSON<textarea id="node-config" rows="5"></textarea></label><button id="configure">Apply configuration</button>
 <h3>Typed connection</h3><select id="connect-from" aria-label="Connection source"></select><select id="connect-to" aria-label="Connection target"></select><button id="connect">Connect</button></aside></div>

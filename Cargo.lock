@@ -7936,6 +7936,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tongues-pipeline"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "tongues-sentence-parser"
 version = "0.1.0"
 dependencies = [
@@ -7978,6 +7987,7 @@ dependencies = [
  "tongues-audio",
  "tongues-cli",
  "tongues-duplex",
+ "tongues-pipeline",
  "tongues-tts",
  "tower-http 0.7.0",
  "uuid",

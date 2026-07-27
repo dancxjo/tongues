@@ -13,6 +13,7 @@ members = [
     "crates/tongues-tts",
     "crates/tongues-head2phones",
     "crates/tongues-duplex",
+    "crates/tongues-pipeline",
     "crates/tongues-cli",
     "crates/speaking",
     "crates/styletts2",

@@ -55,6 +55,13 @@ impl AsrApiState {
             permits: Arc::new(Semaphore::new(SESSION_CAPACITY)),
         })
     }
+
+    pub(crate) fn provider_capabilities(&self) -> anyhow::Result<Vec<AsrProviderCapabilities>> {
+        self.runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("ASR runtime lock is poisoned"))
+            .map(|runtime| runtime.capabilities())
+    }
 }
 
 fn fixture_provider() -> anyhow::Result<FixtureAsrProvider> {

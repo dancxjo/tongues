@@ -23,6 +23,7 @@ speaking = { version = "0.1.0", path = "../speaking", features = ["asr-whisper"]
 styletts2 = { version = "0.1.0", path = "../styletts2" }
 tongues-audio = { version = "0.1.0", path = "../tongues-audio" }
 tongues-duplex = { version = "0.1.0", path = "../tongues-duplex" }
+tongues-pipeline = { version = "0.1.0", path = "../tongues-pipeline" }
 tongues-cli = { version = "0.1.0", path = "../tongues-cli" }
 tongues-tts = { version = "0.1.0", path = "../tongues-tts" }
 tokio = { version = "1.52.3", features = ["full"] }

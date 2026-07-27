@@ -318,6 +318,11 @@ fn build_app(state: AppState) -> Router {
         .route("/api/speech/runtime", get(get_speech_runtime))
         .route("/api/speech/runtime/reload", post(reload_speech_runtime))
         .route("/api/speech/runtime/unload", post(unload_speech_runtime))
+        .route("/api/pipeline/catalog", get(get_pipeline_catalog))
+        .route("/api/pipeline/starters", get(get_pipeline_starters))
+        .route("/api/pipeline/validate", post(validate_pipeline_graph))
+        .route("/api/pipeline/compile", post(compile_pipeline_graph))
+        .route("/api/pipeline/migrate", post(migrate_pipeline_graph))
         .route("/api/live/providers", get(get_live_providers))
         .route("/api/live/turn", post(start_live_turn))
         .route("/api/live/turn/{turn_id}/cancel", post(cancel_live_turn))
@@ -354,6 +359,272 @@ async fn get_live_providers() -> impl IntoResponse {
     Json(json!({
         "providers": live::provider_discovery().await,
     }))
+}
+
+async fn pipeline_graph_catalog(
+    state: &AppState,
+    requested_components: &[String],
+) -> tongues_pipeline::GraphCatalog {
+    use tongues_pipeline::{ComponentSpec, Readiness};
+
+    let mut catalog = tongues_pipeline::GraphCatalog::builtin();
+    if let Ok(providers) = state.asr.provider_capabilities() {
+        for provider in providers {
+            catalog.register_component(ComponentSpec {
+                id: format!("asr:{}", provider.provider_id),
+                node_kind: "asr".into(),
+                provider: provider.provider_id,
+                model: provider.model_id,
+                readiness: if provider.installed {
+                    Readiness::Ready
+                } else {
+                    Readiness::Unavailable
+                },
+                capabilities: std::collections::BTreeSet::from(["asr".into()]),
+                configuration_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "language": {"type": "string"},
+                        "timestamps": {"type": "boolean"}
+                    }
+                }),
+                default_config: json!({}),
+                detail: provider.model_license.map_or_else(
+                    || "ASR runtime registry".into(),
+                    |license| format!("ASR runtime registry; license {license}"),
+                ),
+            });
+        }
+    }
+    catalog.register_component(ComponentSpec {
+        id: "diarization:anonymous".into(),
+        node_kind: "diarization".into(),
+        provider: "speaking".into(),
+        model: "anonymous-speaker-clusterer-v1".into(),
+        readiness: Readiness::Ready,
+        capabilities: std::collections::BTreeSet::from(["diarization".into()]),
+        configuration_schema: json!({
+            "type": "object",
+            "properties": {
+                "assignment_threshold": {"type": "number"},
+                "merge_threshold": {"type": "number"}
+            }
+        }),
+        default_config: serde_json::to_value(speaking::AnonymousDiarizationConfig::default())
+            .unwrap_or_else(|_| json!({})),
+        detail: "Registered anonymous speaker clustering runtime".into(),
+    });
+    catalog.register_component(ComponentSpec {
+        id: "interpretation:native".into(),
+        node_kind: "interpretation".into(),
+        provider: "tongues-cli".into(),
+        model: "interpretation-runtime-v1".into(),
+        readiness: Readiness::Ready,
+        capabilities: std::collections::BTreeSet::from(["interpretation".into()]),
+        configuration_schema: json!({
+            "type": "object",
+            "properties": {
+                "target_language": {"type": "string"}
+            },
+            "required": ["target_language"]
+        }),
+        default_config: json!({"target_language": "en"}),
+        detail: "Shared Tongues interpretation library".into(),
+    });
+    for provider in live::provider_discovery().await {
+        for model in &provider.models {
+            catalog.register_component(ComponentSpec {
+                id: format!("response:{}:{model}", provider.id),
+                node_kind: "response".into(),
+                provider: provider.id.into(),
+                model: model.clone(),
+                readiness: if provider.available {
+                    Readiness::Ready
+                } else {
+                    Readiness::Unavailable
+                },
+                capabilities: std::collections::BTreeSet::from(["text_generation".into()]),
+                configuration_schema: json!({"type":"object"}),
+                default_config: json!({}),
+                detail: provider.detail.clone(),
+            });
+        }
+    }
+    let home = resolve_mortar_home();
+    let loaded = state
+        .speech
+        .lock()
+        .map(|speech| speech.engines.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut discoveries = vec![speech_studio_discovery_page(
+        &home,
+        state.speech_device,
+        &loaded,
+        0,
+        DEFAULT_SPEECH_DISCOVERY_PAGE_LIMIT,
+        &SpeechDiscoveryFilters::default(),
+    )];
+    let requested_models = tongues_tts::ModelCatalog::with_private_catalogs(
+        &tongues_tts::private_catalog_paths_from_environment(),
+    )
+    .map(|model_catalog| {
+        model_catalog
+            .entries
+            .iter()
+            .filter(|entry| {
+                requested_components
+                    .iter()
+                    .any(|component| component.contains(&entry.id))
+            })
+            .map(|entry| entry.id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    })
+    .unwrap_or_default();
+    if !requested_models.is_empty() {
+        let filters = SpeechDiscoveryFilters {
+            model_ids: requested_models.clone(),
+            ..SpeechDiscoveryFilters::default()
+        };
+        discoveries.push(speech_studio_discovery_page(
+            &home,
+            state.speech_device,
+            &loaded,
+            0,
+            requested_models.len(),
+            &filters,
+        ));
+    }
+    for composition in discoveries
+        .into_iter()
+        .flat_map(|discovery| discovery.compositions)
+    {
+        catalog.register_component(ComponentSpec {
+            id: format!("tts:{}", composition.id),
+            node_kind: "tts".into(),
+            provider: composition.backend,
+            model: composition.model,
+            readiness: if composition.runnable {
+                Readiness::Ready
+            } else {
+                Readiness::Unavailable
+            },
+            capabilities: std::collections::BTreeSet::from(["tts".into()]),
+            configuration_schema: speech_controls_schema(&composition.controls),
+            default_config: speech_controls_defaults(&composition.controls),
+            detail: composition
+                .unavailable_reason
+                .unwrap_or_else(|| composition.statuses.join("; ")),
+        });
+    }
+    catalog.revision = pipeline_catalog_revision(&catalog);
+    catalog
+}
+
+fn pipeline_catalog_revision(catalog: &tongues_pipeline::GraphCatalog) -> String {
+    // Stable FNV-1a over the execution-relevant registry projection. This is a
+    // revision identity, not a security checksum.
+    let mut hash = 0xcbf29ce484222325u64;
+    for component in catalog.components.values() {
+        for byte in format!(
+            "{}\0{}\0{}\0{:?}\0",
+            component.id, component.provider, component.model, component.readiness
+        )
+        .bytes()
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("tongues-pipeline-catalog-v1:{hash:016x}")
+}
+
+fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Value {
+    let properties = controls
+        .iter()
+        .map(|control| {
+            let kind = match control.kind {
+                "number" | "range" => "number",
+                "checkbox" | "boolean" => "boolean",
+                _ => "string",
+            };
+            (
+                control.field.to_string(),
+                json!({
+                    "type": kind,
+                    "minimum": control.min,
+                    "maximum": control.max,
+                    "description": control.help
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    json!({"type":"object","properties":properties})
+}
+
+fn speech_controls_defaults(controls: &[SpeechControlDiscovery]) -> serde_json::Value {
+    serde_json::Value::Object(
+        controls
+            .iter()
+            .filter_map(|control| {
+                control
+                    .default
+                    .clone()
+                    .map(|value| (control.field.to_string(), value))
+            })
+            .collect(),
+    )
+}
+
+async fn get_pipeline_catalog(State(state): State<AppState>) -> impl IntoResponse {
+    Json(pipeline_graph_catalog(&state, &[]).await)
+}
+
+async fn get_pipeline_starters(State(state): State<AppState>) -> impl IntoResponse {
+    let catalog = pipeline_graph_catalog(&state, &[]).await;
+    Json(json!({
+        "schema_version": tongues_pipeline::GRAPH_SCHEMA_VERSION,
+        "graphs": tongues_pipeline::available_starter_graphs(&catalog),
+    }))
+}
+
+async fn validate_pipeline_graph(
+    State(state): State<AppState>,
+    Json(graph): Json<tongues_pipeline::GraphDocument>,
+) -> impl IntoResponse {
+    let requested = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.component_id.clone())
+        .collect::<Vec<_>>();
+    let catalog = pipeline_graph_catalog(&state, &requested).await;
+    Json(tongues_pipeline::validate_graph(&graph, &catalog))
+}
+
+async fn compile_pipeline_graph(
+    State(state): State<AppState>,
+    Json(graph): Json<tongues_pipeline::GraphDocument>,
+) -> Response {
+    let requested = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.component_id.clone())
+        .collect::<Vec<_>>();
+    let catalog = pipeline_graph_catalog(&state, &requested).await;
+    match tongues_pipeline::compile_graph(&graph, &catalog) {
+        Ok(plan) => Json(plan).into_response(),
+        Err(failure) => (StatusCode::UNPROCESSABLE_ENTITY, Json(failure)).into_response(),
+    }
+}
+
+async fn migrate_pipeline_graph(Json(value): Json<serde_json::Value>) -> Response {
+    match tongues_pipeline::migrate_graph_json(value) {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_audio_input_capabilities() -> impl IntoResponse {
@@ -8987,6 +9258,21 @@ fn validate_emotion_vector(name: &str, vector: &[f32]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipeline_catalog_revision_is_compact_stable_and_execution_sensitive() {
+        let mut catalog = tongues_pipeline::fixture_catalog();
+        let first = pipeline_catalog_revision(&catalog);
+        assert_eq!(first, pipeline_catalog_revision(&catalog));
+        assert_eq!(first.len(), "tongues-pipeline-catalog-v1:".len() + 16);
+
+        catalog
+            .components
+            .get_mut("fixture-asr")
+            .expect("fixture ASR")
+            .model = "fixture-asr-v2".into();
+        assert_ne!(first, pipeline_catalog_revision(&catalog));
+    }
 
     #[test]
     fn every_server_exposure_resolves_to_one_current_clap_leaf() {

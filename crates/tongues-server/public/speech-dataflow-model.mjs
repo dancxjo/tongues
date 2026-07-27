@@ -1,141 +1,99 @@
-export const PIPELINE_SCHEMA_VERSION = 1;
-
-const PORTS = Object.freeze({
-  source:{in:null,out:"audio"}, cleanup:{in:"audio",out:"audio"}, vad:{in:"audio",out:"speech_audio"},
-  segmentation:{in:"speech_audio",out:"segments"}, language_id:{in:"segments",out:"routed_segments"},
-  diarization:{in:["segments","routed_segments"],out:"speaker_segments"},
-  asr:{in:["audio","speech_audio","segments","routed_segments","speaker_segments"],out:"recognition_events"},
-  normalization:{in:"recognition_events",out:"committed_text"}, parser:{in:"committed_text",out:"syntax"},
-  interpretation:{in:"syntax",out:"meaning"}, response:{in:["committed_text","meaning"],out:"generated_text"},
-  tts:{in:["generated_text","meaning"],out:"audio"}, output:{in:"audio",out:null},
-});
+export const PIPELINE_SCHEMA_VERSION = 2;
 
 export function buildCatalog(discovery) {
+  const kinds = discovery.node_kinds ?? {};
   const nodes = [];
-  const add = (kind, id, label, capability_id, config = {}) =>
-    nodes.push({kind,id:`${kind}:${id}`,label,capability_id,config,ports:PORTS[kind]});
-  for (const kind of discovery.audio?.source_kinds ?? []) add("source",kind,`${kind} audio`,`audio-input/source/${kind}`);
-  for (const stage of discovery.audio?.cleanup_stages ?? []) add("cleanup",stage.kind,stage.kind,`audio-cleanup/${stage.kind}`,stage);
-  add("vad","registered","Voice activity detection","audio-input/vad");
-  add("segmentation","registered","Utterance segmentation","audio-input/segmentation");
-  for (const detector of discovery.language?.detectors ?? []) add("language_id",detector.detector_id,detector.detector_id,detector.detector_id,detector);
-  add("diarization","anonymous","Anonymous diarization","diarization/anonymous");
-  for (const provider of discovery.asr?.providers ?? []) add("asr",provider.provider_id,provider.provider_id,provider.provider_id,provider);
-  const commands = flattenCommands(discovery.cli?.commands ?? []);
-  for (const [kind, fragment] of [["normalization","normalize"],["parser","sentence-parser"],["interpretation","interpret"]]) {
-    const command = commands.find(item => item.id?.includes(fragment));
-    add(kind,command?.id ?? kind,kind,command?.id ?? kind);
+  for (const kind of Object.values(kinds)) {
+    if (!kind.requires_component) {
+      nodes.push({
+        id:`kind:${kind.kind}`,kind:kind.kind,label:kind.label,component_id:null,
+        config:structuredClone(kind.default_config ?? {}),ports:kind.ports ?? [],
+      });
+    }
   }
-  for (const provider of discovery.live?.providers ?? []) add("response",provider.id,provider.label,provider.id,provider);
-  const speechItems = [
-    ...(discovery.speech?.compositions ?? []),
-    ...(discovery.speech?.paths ?? []),
-  ];
-  for (const model of speechItems) add("tts",model.id,model.display_name ?? model.id,model.id,model);
-  add("output","browser","Browser audio output","audio-output/browser");
-  return nodes;
-}
-
-function flattenCommands(commands) {
-  return commands.flatMap(command => [command,...flattenCommands(command.subcommands ?? [])]);
+  for (const component of Object.values(discovery.components ?? {})) {
+    const kind = kinds[component.node_kind];
+    if (!kind) continue;
+    nodes.push({
+      id:`component:${component.id}`,kind:component.node_kind,
+      label:`${kind.label} · ${component.provider} / ${component.model}`,
+      component_id:component.id,
+      config:structuredClone(component.default_config ?? kind.default_config ?? {}),
+      ports:kind.ports ?? [],readiness:component.readiness,detail:component.detail,
+    });
+  }
+  return nodes.sort((a,b)=>a.label.localeCompare(b.label));
 }
 
 export function createPipeline(name = "Untitled pipeline") {
-  return {schema_version:PIPELINE_SCHEMA_VERSION,id:`pipeline:${Date.now()}`,name,nodes:[],edges:[],revision:0};
+  return {
+    schema_version:PIPELINE_SCHEMA_VERSION,graph_id:`pipeline:${Date.now()}`,
+    revision:1,metadata:{name,description:"",allow_unsafe_execution:false,labels:{}},
+    nodes:[],edges:[],selected_sinks:[],
+  };
 }
 
 export function addNode(pipeline, catalogNode, afterId = null) {
   const node = {
-    instance_id:`node:${Date.now()}:${pipeline.nodes.length}`,catalog_id:catalogNode.id,
-    kind:catalogNode.kind,label:catalogNode.label,capability_id:catalogNode.capability_id,
-    config:structuredClone(catalogNode.config),bypassed:false,
+    id:`node:${Date.now()}:${pipeline.nodes.length}`,kind:catalogNode.kind,
+    component_id:catalogNode.component_id,config:structuredClone(catalogNode.config ?? {}),
   };
-  const index = afterId ? pipeline.nodes.findIndex(item => item.instance_id === afterId) + 1 : pipeline.nodes.length;
+  const index = afterId ? pipeline.nodes.findIndex(item => item.id === afterId) + 1 : pipeline.nodes.length;
   pipeline.nodes.splice(Math.max(0,index),0,node); pipeline.revision++; return node;
 }
 
 export function removeNode(pipeline, id) {
-  pipeline.nodes = pipeline.nodes.filter(node => node.instance_id !== id);
-  pipeline.edges = pipeline.edges.filter(edge => edge.from !== id && edge.to !== id); pipeline.revision++;
+  pipeline.nodes = pipeline.nodes.filter(node => node.id !== id);
+  pipeline.edges = pipeline.edges.filter(edge => edge.from.node_id !== id && edge.to.node_id !== id);
+  pipeline.selected_sinks = pipeline.selected_sinks.filter(sink => sink.node_id !== id);
+  pipeline.revision++;
 }
 
 export function duplicateNode(pipeline, id) {
-  const source = pipeline.nodes.find(node => node.instance_id === id);
+  const source = pipeline.nodes.find(node => node.id === id);
   if (!source) return null;
-  const copy = {...structuredClone(source),instance_id:`node:${Date.now()}:${pipeline.nodes.length}`,label:`${source.label} copy`};
+  const copy = {...structuredClone(source),id:`node:${Date.now()}:${pipeline.nodes.length}`};
   pipeline.nodes.splice(pipeline.nodes.indexOf(source)+1,0,copy); pipeline.revision++; return copy;
 }
 
 export function replaceNode(pipeline, id, catalogNode) {
-  const node = pipeline.nodes.find(item => item.instance_id === id);
-  if (!node || node.kind !== catalogNode.kind) throw new Error("Replacement must have the same typed stage kind.");
-  Object.assign(node,{catalog_id:catalogNode.id,label:catalogNode.label,capability_id:catalogNode.capability_id,config:structuredClone(catalogNode.config)});
+  const node = pipeline.nodes.find(item => item.id === id);
+  if (!node || node.kind !== catalogNode.kind) throw new Error("Replacement must have the same backend node kind.");
+  Object.assign(node,{component_id:catalogNode.component_id,config:structuredClone(catalogNode.config ?? {})});
   pipeline.revision++;
 }
 
 export function moveNode(pipeline, id, delta) {
-  const index = pipeline.nodes.findIndex(node => node.instance_id === id);
+  const index = pipeline.nodes.findIndex(node => node.id === id);
   const target = Math.max(0,Math.min(pipeline.nodes.length-1,index+delta));
   if (index < 0 || index === target) return;
   pipeline.nodes.splice(target,0,pipeline.nodes.splice(index,1)[0]); pipeline.revision++;
 }
 
-export function toggleBypass(pipeline, id) {
-  const node = pipeline.nodes.find(item => item.instance_id === id);
-  if (node) { node.bypassed = !node.bypassed; pipeline.revision++; }
+function kindFor(node, discovery) { return discovery.node_kinds?.[node?.kind]; }
+function compatiblePorts(source, target, discovery) {
+  const outputs=(kindFor(source,discovery)?.ports??[]).filter(port=>port.direction==="output");
+  const inputs=(kindFor(target,discovery)?.ports??[]).filter(port=>port.direction==="input");
+  return outputs.flatMap(output=>inputs.filter(input=>input.value_type===output.value_type).map(input=>({output,input})));
 }
 
-export function connect(pipeline, from, to) {
-  const result = connectionCompatibility(pipeline,from,to);
-  if (!result.valid) throw new Error(result.reason);
-  pipeline.edges = pipeline.edges.filter(edge => edge.to !== to);
-  pipeline.edges.push({from,to}); pipeline.revision++;
-}
-
-export function connectionCompatibility(pipeline, from, to) {
-  const source = pipeline.nodes.find(node => node.instance_id === from);
-  const target = pipeline.nodes.find(node => node.instance_id === to);
-  if (!source || !target) return {valid:false,reason:"Both connection endpoints must exist."};
-  if (source.bypassed || target.bypassed) return {valid:false,reason:"Bypassed stages cannot be connected."};
-  const output = PORTS[source.kind]?.out, input = PORTS[target.kind]?.in;
-  const valid = Array.isArray(input) ? input.includes(output) : input === output;
-  return valid ? {valid:true,reason:`${output} → ${Array.isArray(input)?input.join("|"):input}`}
-    : {valid:false,reason:`${source.label} emits ${output ?? "nothing"}; ${target.label} requires ${Array.isArray(input)?input.join(" or "):input ?? "no input"}.`};
-}
-
-export function validatePipeline(pipeline) {
-  if (pipeline.schema_version !== PIPELINE_SCHEMA_VERSION) return {valid:false,errors:[`Pipeline schema ${pipeline.schema_version} is unsupported; expected 1.`]};
-  const errors = [];
-  for (const edge of pipeline.edges) {
-    const result = connectionCompatibility(pipeline,edge.from,edge.to);
-    if (!result.valid) errors.push(result.reason);
+export function connect(pipeline, from, to, discovery) {
+  const source=pipeline.nodes.find(node=>node.id===from), target=pipeline.nodes.find(node=>node.id===to);
+  if (!source || !target) throw new Error("Both connection endpoints must exist.");
+  const pairs=compatiblePorts(source,target,discovery);
+  if (!pairs.length) {
+    const outputs=(kindFor(source,discovery)?.ports??[]).filter(port=>port.direction==="output").map(port=>port.value_type);
+    const inputs=(kindFor(target,discovery)?.ports??[]).filter(port=>port.direction==="input").map(port=>port.value_type);
+    throw new Error(`${source.kind} emits ${outputs.join(" or ")||"nothing"}; ${target.kind} requires ${inputs.join(" or ")||"no input"}.`);
   }
-  const active = pipeline.nodes.filter(node => !node.bypassed);
-  for (const [index,node] of active.entries()) {
-    const ports = PORTS[node.kind];
-    if (!ports) errors.push(`Unknown stage kind ${node.kind}.`);
-    if (ports?.in && !pipeline.edges.some(edge => edge.to === node.instance_id)) errors.push(`${node.label} has no input.`);
-    if (ports?.out && index < active.length-1 && !pipeline.edges.some(edge => edge.from === node.instance_id)) errors.push(`${node.label} has no output.`);
-  }
-  return {valid:errors.length===0,errors};
+  const {output,input}=pairs[0];
+  if (input.cardinality !== "many") pipeline.edges=pipeline.edges.filter(edge=>!(edge.to.node_id===to&&edge.to.port_id===input.id));
+  const id=`edge:${from}:${output.id}:${to}:${input.id}`;
+  pipeline.edges=pipeline.edges.filter(edge=>edge.id!==id);
+  pipeline.edges.push({id,from:{node_id:from,port_id:output.id},to:{node_id:to,port_id:input.id},capacity:16});
+  pipeline.revision++;
 }
 
-export function template(kind, catalog) {
-  const definitions = {
-    transcription:["source","vad","asr","normalization"],
-    multilingual_transcription:["source","vad","segmentation","language_id","asr","normalization"],
-    meeting_transcript:["source","vad","segmentation","diarization","asr","normalization"],
-    spoken_interpretation:["source","vad","asr","normalization","parser","interpretation","tts","output"],
-    full_conversation:["source","vad","asr","normalization","response","tts","output"],
-  };
-  const pipeline = createPipeline(kind.replaceAll("_"," "));
-  for (const stage of definitions[kind] ?? []) {
-    const candidates = catalog.filter(node => node.kind === stage);
-    const selected = candidates.find(node => node.config?.installed !== false && node.config?.available !== false) ?? candidates[0];
-    if (!selected) continue;
-    const previous = pipeline.nodes.at(-1);
-    const node = addNode(pipeline,selected);
-    if (previous && connectionCompatibility(pipeline,previous.instance_id,node.instance_id).valid) connect(pipeline,previous.instance_id,node.instance_id);
-  }
-  return pipeline;
+export function nodeLabel(node, catalog) {
+  return catalog.find(item=>item.kind===node.kind&&item.component_id===node.component_id)?.label ?? node.kind;
 }
