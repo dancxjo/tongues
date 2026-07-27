@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  adapterPaths,addNode,alignGraphSelection,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
-  catalogEntryForNode,connectionCompatibility,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
+  adapterPaths,addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,connectionIntentCandidates,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
+  catalogEntryForNode,connectionCompatibility,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
   pasteGraphSelection,planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,tidyGraphSelection,undoEdit,validateSchemaValue,
 } from "./speech-dataflow-model.mjs";
 
@@ -83,6 +83,52 @@ test("incompatible ports include an actionable adapter path",()=>{
   const sink=addNode(graph,catalog.find(node=>node.kind==="transcript_sink"));
   assert.throws(()=>connectPorts(graph,mic.id,"out",sink.id,"in",discovery),/audio_stream.*transcript_committed.*No registered adapter/);
   assert.deepEqual(adapterPaths("transcript_committed","text",discovery),[{kind:"to_text",label:"Transcript to text"}]);
+});
+
+test("quick-add candidates are discovery-derived and fail closed on ambiguous port choices",()=>{
+  const catalog=buildCatalog(discovery);
+  const consumers=connectionIntentCandidates(catalog,"from_output","transcript_committed");
+  assert.ok(consumers.some(option=>option.candidate.kind==="transcript_sink"&&option.compatible));
+  assert.ok(consumers.some(option=>option.candidate.kind==="to_text"&&option.compatible));
+  const ambiguous={...structuredClone(catalog.find(node=>node.kind==="transcript_sink")),id:"kind:ambiguous",
+    ports:[
+      {id:"first",direction:"input",value_type:"transcript_committed",cardinality:"one"},
+      {id:"second",direction:"input",value_type:"transcript_committed",cardinality:"one"},
+    ]};
+  const result=connectionIntentCandidates([ambiguous],"from_output","transcript_committed")[0];
+  assert.equal(result.compatible,false);assert.equal(result.ambiguous,true);assert.match(result.reason,/deliberate choice/);
+});
+
+test("inserting a module on a cable preserves upstream identity, capacity, and downstream signal path atomically",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const asr=addNode(graph,catalog.find(node=>node.kind==="asr"));
+  const sink=addNode(graph,catalog.find(node=>node.kind==="transcript_sink"));
+  const edge=connectPorts(graph,asr.id,"committed",sink.id,"in",discovery);edge.capacity=37;
+  const adapter=catalog.find(node=>node.kind==="to_text");
+  const textSink={...structuredClone(catalog.find(node=>node.kind==="transcript_sink")),id:"kind:text_sink",kind:"text_sink",
+    ports:[{id:"in",direction:"input",value_type:"text",cardinality:"one"}]};
+  discovery.node_kinds.text_sink={kind:"text_sink",ports:textSink.ports};
+  graph.nodes.find(node=>node.id===sink.id).kind="text_sink";
+  const before=JSON.stringify(graph),options=insertionCandidates(graph,edge.id,[adapter],discovery);
+  assert.equal(options[0].compatible,true);
+  const result=insertNodeOnEdge(graph,edge.id,adapter,options[0].mappings[0],discovery,{x:300,y:180});
+  assert.equal(result.upstream_edge.id,edge.id);assert.equal(result.upstream_edge.capacity,37);
+  assert.equal(result.downstream_edge.capacity,37);assert.equal(result.upstream_edge.to.node_id,result.node.id);
+  assert.equal(result.downstream_edge.from.node_id,result.node.id);assert.equal(result.downstream_edge.to.node_id,sink.id);
+  assert.notEqual(JSON.stringify(graph),before);
+  delete discovery.node_kinds.text_sink;
+});
+
+test("failed insert and occupied quick-add intent leave the serialized graph unchanged",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const first=addNode(graph,catalog.find(node=>node.kind==="microphone"));
+  const second=addNode(graph,catalog.find(node=>node.kind==="microphone"));
+  const asr=addNode(graph,catalog.find(node=>node.kind==="asr"));
+  const edge=connectPorts(graph,first.id,"out",asr.id,"audio",discovery),before=JSON.stringify(graph);
+  assert.throws(()=>insertNodeOnEdge(graph,edge.id,catalog.find(node=>node.kind==="text_source"),{input_port_id:"missing",output_port_id:"out"},discovery),/no unambiguous/);
+  assert.equal(JSON.stringify(graph),before);
+  assert.throws(()=>addNodeAtConnectionIntent(graph,catalog.find(node=>node.kind==="microphone"),{node_id:asr.id,port_id:"audio"},"to_input",discovery),/occupied.*merge/);
+  assert.equal(JSON.stringify(graph),before);assert.ok(second);
 });
 
 test("cable reconnection preserves identity and capacity atomically",()=>{

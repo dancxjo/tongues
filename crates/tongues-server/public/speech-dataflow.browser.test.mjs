@@ -33,6 +33,10 @@ const discovery={
     transcript_sink:{kind:"transcript_sink",label:"Transcript",requires_component:false,default_config:{},configuration_schema:{type:"object"},ports:[
       {id:"in",label:"transcript",direction:"input",value_type:"transcript_committed",cardinality:"one",streaming:true},
     ],replacement:replacement("transcript_sink")},
+    audio_passthrough:{kind:"audio_passthrough",label:"Audio pass-through",requires_component:false,default_config:{},configuration_schema:{type:"object"},ports:[
+      {id:"in",label:"audio in",direction:"input",value_type:"audio_stream",cardinality:"one",streaming:true},
+      {id:"out",label:"audio out",direction:"output",value_type:"audio_stream",cardinality:"many",streaming:true},
+    ],replacement:replacement("audio_passthrough")},
   },
   components,
 };
@@ -66,7 +70,7 @@ function cytoscapeStub(){
       };
     };
     return{
-      on:noop,off:noop,fit:noop,panBy:noop,extent:()=>({x1:0,y1:0,x2:840,y2:560}),
+      on:noop,off:noop,fit:noop,panBy:noop,pan:()=>({x:0,y:0}),zoom:()=>1,extent:()=>({x1:0,y1:0,x2:840,y2:560}),
       collection:items=>items,
       add:items=>items.forEach(item=>elements.set(item.data.id,item)),
       elements:()=>({remove:()=>elements.clear(),unselect:noop}),
@@ -296,4 +300,55 @@ test("multi-selection copy, paste, arrange, delete, undo, redo, and branch clear
   await save();expect(savedGraph.nodes).toHaveLength(7);expect(savedGraph.edges).toHaveLength(2);
   await page.getByRole("button",{name:"Undo"}).click();
   await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(3);
+});
+
+test("quick-add opens at intent, filters cable consumers, and inserts on a cable atomically",async({page})=>{
+  const jack=(nodeId,direction)=>page.locator(`[data-patch-jack][data-node-id="${nodeId}"][data-direction="${direction}"]`);
+  const save=async()=>{
+    savedGraph=null;
+    await page.locator("#status").evaluate(element=>{element.textContent="";});
+    await page.getByRole("button",{name:"Save"}).click();
+    await expect.poll(()=>savedGraph).not.toBeNull();
+    await expect(page.locator("#status")).toContainText("Saved Browser fixture");
+  };
+  const dialog=page.getByRole("dialog",{name:"Add module"});
+
+  await page.locator("#canvas").dispatchEvent("dblclick",{clientX:520,clientY:360});
+  await expect(dialog).toBeVisible();await expect(page.locator("#quick-add-search")).toBeFocused();
+  await page.locator("#quick-add-search").fill("Audio pass-through");
+  await page.getByRole("option",{name:/Audio pass-through/}).click();
+  await expect(dialog).toBeHidden();await save();expect(savedGraph.nodes).toHaveLength(6);
+  await page.getByRole("button",{name:"Undo"}).click();await save();expect(savedGraph.nodes).toHaveLength(5);
+
+  await jack("node:mic-1","output").dragTo(page.locator("#canvas"),{targetPosition:{x:360,y:430}});
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole("option",{name:/Audio pass-through/})).toBeVisible();
+  await page.locator("#quick-add-search").fill("Audio pass-through");
+  await page.getByRole("option",{name:/Audio pass-through/}).click();
+  await save();expect(savedGraph.nodes).toHaveLength(6);expect(savedGraph.edges).toHaveLength(1);
+  const originalEdge=structuredClone(savedGraph.edges[0]);
+
+  await page.locator(`.patch-cable-hit[data-edge-id="${originalEdge.id}"]`).dispatchEvent("pointerdown");
+  await page.keyboard.press("i");await expect(dialog).toBeVisible();
+  await page.locator("#quick-add-search").fill("Audio pass-through");
+  await page.getByRole("option",{name:/Audio pass-through/}).click();
+  await save();expect(savedGraph.nodes).toHaveLength(7);expect(savedGraph.edges).toHaveLength(2);
+  const upstream=savedGraph.edges.find(edge=>edge.id===originalEdge.id);
+  expect(upstream.capacity).toBe(originalEdge.capacity);expect(upstream.from).toEqual(originalEdge.from);
+  expect(upstream.to).not.toEqual(originalEdge.to);
+
+  await page.getByRole("button",{name:"Undo"}).click();await save();
+  expect(savedGraph.nodes).toHaveLength(6);expect(savedGraph.edges).toEqual([originalEdge]);
+  await page.getByRole("button",{name:"Redo"}).click();await save();
+  expect(savedGraph.nodes).toHaveLength(7);expect(savedGraph.edges).toHaveLength(2);
+
+  await page.locator("#palette-search").fill("Audio pass-through");
+  const paletteModule=page.locator(".palette-node").filter({hasText:"Audio pass-through"});
+  await paletteModule.dragTo(page.locator(`.patch-cable-hit[data-edge-id="${originalEdge.id}"]`));
+  await save();expect(savedGraph.nodes).toHaveLength(8);expect(savedGraph.edges).toHaveLength(3);
+  expect(savedGraph.edges.some(edge=>edge.id===originalEdge.id)).toBe(true);
+
+  await paletteModule.dragTo(jack("node:asr","input"));
+  await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(4);
+  expect(savedGraph.edges.some(edge=>edge.to.node_id==="node:asr"&&edge.to.port_id==="audio")).toBe(true);
 });

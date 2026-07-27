@@ -414,6 +414,79 @@ export function adapterPaths(fromType,toType,discovery) {
     .map(kind=>({kind:kind.kind,label:kind.label}));
 }
 
+export function connectionIntentCandidates(catalog,direction,valueType) {
+  const wanted=direction==="from_output"?"input":"output";
+  return catalog.map(candidate=>{
+    const ports=candidate.ports.filter(port=>port.direction===wanted&&port.value_type===valueType);
+    return{candidate,ports,compatible:ports.length===1,ambiguous:ports.length>1,
+      reason:ports.length===1?`${ports[0].label??ports[0].id} accepts ${valueType}.`
+        :ports.length>1?`${ports.length} ${valueType} ${wanted} ports require a deliberate choice.`
+        :`No ${wanted} port accepts ${valueType}.`};
+  }).filter(option=>option.ports.length>0);
+}
+
+export function insertionCandidates(pipeline,edgeId,catalog,discovery) {
+  const edge=pipeline.edges.find(item=>item.id===edgeId);
+  if(!edge)return[];
+  const source=pipeline.nodes.find(node=>node.id===edge.from.node_id),target=pipeline.nodes.find(node=>node.id===edge.to.node_id);
+  const output=portsFor(source,"output",discovery).find(port=>port.id===edge.from.port_id);
+  const input=portsFor(target,"input",discovery).find(port=>port.id===edge.to.port_id);
+  if(!output||!input)return[];
+  return catalog.map(candidate=>{
+    const inputs=candidate.ports.filter(port=>port.direction==="input"&&port.value_type===output.value_type);
+    const outputs=candidate.ports.filter(port=>port.direction==="output"&&port.value_type===input.value_type);
+    const mappings=inputs.flatMap(inPort=>outputs.map(outPort=>({input_port_id:inPort.id,output_port_id:outPort.id})));
+    const ready=(candidate.readiness??"ready")==="ready",compatible=mappings.length===1&&ready;
+    return{candidate,mappings,compatible,ambiguous:mappings.length>1,
+      reason:!ready?`Readiness is ${candidate.readiness}.`
+        :mappings.length===1?`${output.value_type} → ${candidate.label} → ${input.value_type} is explicit and unambiguous.`
+        :mappings.length>1?`${mappings.length} typed port mappings require a deliberate choice.`
+        :`This module cannot accept ${output.value_type} and produce ${input.value_type}.`};
+  }).filter(option=>option.mappings.length>0);
+}
+
+function nodeFromCatalog(catalogNode) {
+  return{
+    id:`node:${cryptoId()}`,kind:catalogNode.kind,component_id:catalogNode.component_id,
+    config:structuredClone(catalogNode.config??{}),disabled:false,bypassed:false,
+  };
+}
+
+export function insertNodeOnEdge(pipeline,edgeId,catalogNode,mapping,discovery,position=null) {
+  const edge=pipeline.edges.find(item=>item.id===edgeId);
+  if(!edge)throw new Error("The selected cable is no longer present.");
+  const option=insertionCandidates(pipeline,edgeId,[catalogNode],discovery)[0];
+  const chosen=option?.mappings.find(item=>item.input_port_id===mapping?.input_port_id&&item.output_port_id===mapping?.output_port_id);
+  if(!option?.compatible||!chosen)throw new Error(option?.reason??"The module has no unambiguous typed insertion path.");
+  const node=nodeFromCatalog(catalogNode),oldTarget=structuredClone(edge.to),capacity=edge.capacity;
+  pipeline.nodes.push(node);
+  edge.to={node_id:node.id,port_id:chosen.input_port_id};
+  const downstream={id:`edge:${cryptoId()}`,from:{node_id:node.id,port_id:chosen.output_port_id},to:oldTarget,capacity};
+  pipeline.edges.push(downstream);
+  if(position)setNodePosition(pipeline,node.id,position);
+  touch(pipeline);return{node,upstream_edge:edge,downstream_edge:downstream};
+}
+
+export function addNodeAtConnectionIntent(pipeline,catalogNode,anchor,direction,discovery,position=null) {
+  const anchorNode=pipeline.nodes.find(node=>node.id===anchor?.node_id);
+  const anchorDirection=direction==="from_output"?"output":"input";
+  const anchorPort=portsFor(anchorNode,anchorDirection,discovery).find(port=>port.id===anchor?.port_id);
+  if(!anchorNode||!anchorPort)throw new Error("The quick-add connection anchor is no longer present.");
+  const option=connectionIntentCandidates([catalogNode],direction,anchorPort.value_type)[0];
+  if(!option?.compatible)throw new Error(option?.reason??"The module has no unambiguous compatible port.");
+  if(direction==="to_input"){
+    const occupied=pipeline.edges.some(edge=>edge.to.node_id===anchor.node_id&&edge.to.port_id===anchor.port_id);
+    if(anchorPort.cardinality!=="many"&&occupied)throw new Error(`${anchorNode.kind}.${anchorPort.id} is occupied; add an explicit merge node.`);
+  }
+  const node=nodeFromCatalog(catalogNode),port=option.ports[0];
+  const from=direction==="from_output"?anchor:{node_id:node.id,port_id:port.id};
+  const to=direction==="from_output"?{node_id:node.id,port_id:port.id}:anchor;
+  pipeline.nodes.push(node);
+  const edge={id:`edge:${cryptoId()}`,from,to,capacity:16};pipeline.edges.push(edge);
+  if(position)setNodePosition(pipeline,node.id,position);
+  touch(pipeline);return{node,edge};
+}
+
 export function connectionCompatibility(pipeline,fromNode,fromPort,toNode,toPort,discovery,{ignoreEdgeId=null}={}) {
   const source=pipeline.nodes.find(node=>node.id===fromNode),target=pipeline.nodes.find(node=>node.id===toNode);
   const base={compatible:false,from:{node_id:fromNode,port_id:fromPort},to:{node_id:toNode,port_id:toPort},source,target,output:null,input:null};

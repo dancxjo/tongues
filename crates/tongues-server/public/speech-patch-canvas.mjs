@@ -50,7 +50,7 @@ function injectStyles(document) {
   style.textContent = `
     .patch-cables,.patch-jacks{position:absolute;inset:0;z-index:2;pointer-events:none}
     .patch-cables{width:100%;height:100%;overflow:visible}
-    .patch-cable{fill:none;stroke:#8da4ba;stroke-width:4;pointer-events:stroke;cursor:pointer}
+    .patch-cable{fill:none;stroke:#8da4ba;stroke-width:4;pointer-events:none}
     .patch-cable-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
     .patch-cable.signal-audio{stroke:#70d6a4;stroke-width:5}
     .patch-cable.signal-text{stroke:#dca3ff;stroke-dasharray:10 5}
@@ -96,6 +96,9 @@ export function createPatchCanvas(options) {
     onSelectNode,
     onSelectEdge,
     onGraphEdit,
+    onDropEmpty,
+    onDropCatalogOnEdge,
+    onDropCatalogOnJack,
     onAnnounce,
   } = options;
   const document = container.ownerDocument;
@@ -165,6 +168,11 @@ export function createPatchCanvas(options) {
         onSelectEdge(edge.id);
         render();
       });
+      hit.addEventListener("dragover",event=>{if(event.dataTransfer?.types.includes("application/x-tongues-catalog-id"))event.preventDefault();});
+      hit.addEventListener("drop",event=>{
+        const catalogId=event.dataTransfer?.getData("application/x-tongues-catalog-id");if(!catalogId)return;
+        event.preventDefault();onDropCatalogOnEdge?.({catalog_id:catalogId,edge_id:edge.id,clientX:event.clientX,clientY:event.clientY});
+      });
       svg.append(hit, visible);
 
       const item = document.createElement("li");
@@ -226,6 +234,12 @@ export function createPatchCanvas(options) {
           button.setAttribute("aria-label", jackDescription(node, port, connections));
           button.title = `${port.label ?? port.id} · ${readableType(port.value_type)}`;
           button.addEventListener("pointerdown", event => beginPointerGesture(event, node, port));
+          button.addEventListener("dragover",event=>{if(event.dataTransfer?.types.includes("application/x-tongues-catalog-id"))event.preventDefault();});
+          button.addEventListener("drop",event=>{
+            const catalogId=event.dataTransfer?.getData("application/x-tongues-catalog-id");if(!catalogId)return;
+            event.preventDefault();event.stopPropagation();
+            onDropCatalogOnJack?.({catalog_id:catalogId,node_id:node.id,port_id:port.id,direction,clientX:event.clientX,clientY:event.clientY});
+          });
           button.addEventListener("click", event => {
             if (event.detail !== 0) return;
             activateJack(node, port);
@@ -429,7 +443,19 @@ export function createPatchCanvas(options) {
   function pointerUp(event) {
     if (!gesture || event.pointerId !== pointerId) return;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("[data-patch-jack]");
-    if (!target) return cancel();
+    if (!target) {
+      const current=gesture,origin=current.origin;
+      if(!current.edge_id&&onDropEmpty){
+        gesture=null;previewPoint=null;pointerId=null;delete container.dataset.patching;render();
+        onDropEmpty({
+          kind:current.moving==="to"?"from_output":"to_input",anchor:structuredClone(current.fixed),
+          clientX:event.clientX,clientY:event.clientY,
+        });
+        onAnnounce(`Choose a compatible module for ${origin.node_id}.${origin.port_id}.`);
+        return;
+      }
+      return cancel();
+    }
     const node = pipeline().nodes.find(item => item.id === target.dataset.nodeId);
     const port = nodePorts(node, target.dataset.direction).find(item => item.id === target.dataset.portId);
     if (!node || !port || !commitTarget(node, port)) {

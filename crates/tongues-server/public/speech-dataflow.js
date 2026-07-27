@@ -1,6 +1,6 @@
 import {
-  addNode,alignGraphSelection,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
-  catalogEntryForNode,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,ensureLayout,insertSubgraph,moveGraphSelection,nodeLabel,nodePosition,
+  addNode,addNodeAtConnectionIntent,alignGraphSelection,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,connectPorts,connectionIntentCandidates,consumeNdjson,copyGraphSelection,createEditHistory,createPipeline,
+  catalogEntryForNode,deleteGraphSelection,diagnosticsByTarget,distributeGraphSelection,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,moveGraphSelection,nodeLabel,nodePosition,
   pasteGraphSelection,planNodeReplacement,portsFor,recordEdit,redoEdit,removeEdge,replacementCandidates,setNodePosition,tidyGraphSelection,touch,undoEdit,
 } from "./speech-dataflow-model.mjs";
 import {createPatchCanvas} from "./speech-patch-canvas.mjs";
@@ -12,6 +12,7 @@ let selectedNodes=new Set(),selectedEdges=new Set(),graphClipboard=null,pasteGen
 let validationGeneration=0,validationTimer=null,runController=null;
 let editHistory=createEditHistory(),replacementOptions=[],replacementSelected=null,replacementPlan=null;
 let replacementPreviewGeneration=0,replacementRenderLimit=100,replacementReturnFocus=null,replacementOverrides={};
+let quickAddContext=null,quickAddOptions=[],quickAddReturnFocus=null;
 
 const NODE_THEMES={
   "Sources":{accent:"#75bfff",surface:"#192f44"},
@@ -197,6 +198,13 @@ function initCanvas(){
     });
     scheduleValidation();renderOutline();
   });
+  byId("canvas").addEventListener("dblclick",event=>{
+    if(event.target.closest?.("[data-patch-jack]"))return;
+    openQuickAdd({kind:"empty",position:canvasPoint(event.clientX,event.clientY)});
+  });
+  byId("canvas").addEventListener("contextmenu",event=>{
+    event.preventDefault();openQuickAdd({kind:"empty",position:canvasPoint(event.clientX,event.clientY)});
+  });
 }
 
 function renderPalette(){
@@ -209,7 +217,9 @@ function renderPalette(){
     const list=document.createElement("div");list.className="palette-list";
     items.forEach(item=>{const button=document.createElement("button");button.className="palette-node";button.dataset.readiness=item.readiness;
       button.innerHTML=`${escapeHtml(item.label)}<small>${escapeHtml(item.kind)} · ${escapeHtml(item.readiness)}</small>`;
-      button.title=item.detail;button.onclick=()=>addCatalogNode(item);list.append(button);});
+      button.title=item.detail;button.draggable=true;
+      button.ondragstart=event=>event.dataTransfer.setData("application/x-tongues-catalog-id",item.id);
+      button.onclick=()=>addCatalogNode(item);list.append(button);});
     details.append(list);return details;
   }));
 }
@@ -228,6 +238,79 @@ function addCatalogNode(item){
   const center=cy.extent(),afterId=selectedNode;
   const node=performGraphEdit(`Add ${item.label}`,()=>addNode(pipeline,item,afterId,{x:(center.x1+center.x2)/2,y:(center.y1+center.y2)/2}),result=>replaceNodeSelection(result.id));
   renderGraph();selectNode(node.id);announce(`Added ${item.label}.`);
+}
+
+function canvasPoint(clientX,clientY){
+  const bounds=byId("canvas").getBoundingClientRect(),pan=cy.pan?.()??{x:0,y:0},zoom=cy.zoom?.()??1;
+  return{x:Math.round((clientX-bounds.left-pan.x)/zoom),y:Math.round((clientY-bounds.top-pan.y)/zoom)};
+}
+function canvasCenterPoint(){
+  const bounds=byId("canvas").getBoundingClientRect();
+  return canvasPoint(bounds.left+bounds.width/2,bounds.top+bounds.height/2);
+}
+function openQuickAdd(context){
+  quickAddContext=context;quickAddReturnFocus=document.activeElement;
+  if(context.kind==="insert_edge")quickAddOptions=insertionCandidates(pipeline,context.edge_id,catalog,discovery);
+  else if(["from_output","to_input"].includes(context.kind)){
+    const node=pipeline.nodes.find(item=>item.id===context.anchor.node_id);
+    const direction=context.kind==="from_output"?"output":"input";
+    const port=portsFor(node,direction,discovery).find(item=>item.id===context.anchor.port_id);
+    quickAddOptions=connectionIntentCandidates(catalog,context.kind,port?.value_type);
+  }else quickAddOptions=catalog.map(candidate=>({candidate,compatible:(candidate.readiness??"ready")==="ready",ambiguous:false,reason:candidate.detail||"Backend-discovered module."}));
+  const labels={
+    empty:"Add a backend-discovered module at this canvas position.",
+    from_output:"Choose a module with one compatible input; it will be added and connected atomically.",
+    to_input:"Choose a module with one compatible output; it will be added and connected atomically.",
+    insert_edge:"Choose an unambiguous typed processor to insert on the selected cable.",
+  };
+  byId("quick-add-context").textContent=labels[context.kind];byId("quick-add-search").value="";
+  renderQuickAdd();byId("quick-add-dialog").showModal();byId("quick-add-search").focus();
+}
+function renderQuickAdd(){
+  const query=byId("quick-add-search").value.trim().toLowerCase();
+  const options=quickAddOptions.filter(option=>`${option.candidate.label} ${option.candidate.provider} ${option.candidate.model} ${option.candidate.kind} ${option.reason}`.toLowerCase().includes(query));
+  byId("quick-add-results").replaceChildren(...options.slice(0,200).map(option=>{
+    const button=document.createElement("button");button.type="button";button.className="quick-add-option";button.setAttribute("role","option");
+    button.setAttribute("aria-disabled",String(!option.compatible));button.disabled=!option.compatible;
+    button.innerHTML=`<strong>${escapeHtml(option.candidate.label)}</strong><small>${escapeHtml(option.candidate.provider)} · ${escapeHtml(option.candidate.model)} · ${escapeHtml(option.reason)}</small>`;
+    button.onclick=()=>applyQuickAdd(option);return button;
+  }));
+  if(!options.length)byId("quick-add-results").innerHTML='<p class="muted">No backend-discovered modules match this typed intent.</p>';
+}
+function closeQuickAdd(message="Quick-add cancelled; the graph was not changed."){
+  if(byId("quick-add-dialog").open)byId("quick-add-dialog").close();
+  quickAddReturnFocus?.focus?.();quickAddContext=null;announce(message);
+}
+function applyQuickAdd(option){
+  try{
+    const context=quickAddContext;
+    const result=performGraphEdit(context.kind==="insert_edge"?"Insert module on cable":"Quick-add module",()=>{
+      if(context.kind==="insert_edge")return insertNodeOnEdge(pipeline,context.edge_id,option.candidate,option.mappings[0],discovery,context.position);
+      if(["from_output","to_input"].includes(context.kind))return addNodeAtConnectionIntent(pipeline,option.candidate,context.anchor,context.kind,discovery,context.position);
+      return{node:addNode(pipeline,option.candidate,null,context.position)};
+    },value=>replaceNodeSelection(value.node.id));
+    byId("quick-add-dialog").close();quickAddContext=null;renderGraph();scheduleValidation();selectNode(result.node.id);
+    announce(`${context.kind==="insert_edge"?"Inserted":"Added"} ${option.candidate.label} as one undoable edit.`);
+  }catch(error){announce(error.message,true);}
+}
+function dropCatalogOnEdge(intent){
+  const item=catalog.find(candidate=>candidate.id===intent.catalog_id);if(!item)return;
+  const option=insertionCandidates(pipeline,intent.edge_id,[item],discovery)[0];
+  if(!option?.compatible)return announce(option?.reason??"That module cannot be inserted on this cable.",true);
+  try{
+    const result=performGraphEdit("Insert module on cable",()=>insertNodeOnEdge(pipeline,intent.edge_id,item,option.mappings[0],discovery,canvasPoint(intent.clientX,intent.clientY)),value=>replaceNodeSelection(value.node.id));
+    renderGraph();scheduleValidation();selectNode(result.node.id);announce(`Inserted ${item.label} on the cable.`);
+  }catch(error){announce(error.message,true);}
+}
+function dropCatalogOnJack(intent){
+  const item=catalog.find(candidate=>candidate.id===intent.catalog_id);if(!item)return;
+  const kind=intent.direction==="output"?"from_output":"to_input",anchor={node_id:intent.node_id,port_id:intent.port_id};
+  const option=connectionIntentCandidates([item],kind,portsFor(pipeline.nodes.find(node=>node.id===intent.node_id),intent.direction,discovery).find(port=>port.id===intent.port_id)?.value_type)[0];
+  if(!option?.compatible)return announce(option?.reason??"That module has no unambiguous compatible port.",true);
+  try{
+    const result=performGraphEdit("Add module at jack",()=>addNodeAtConnectionIntent(pipeline,item,anchor,kind,discovery,canvasPoint(intent.clientX,intent.clientY)),value=>replaceNodeSelection(value.node.id));
+    renderGraph();scheduleValidation();selectNode(result.node.id);announce(`Added ${item.label} at the ${intent.direction} jack.`);
+  }catch(error){announce(error.message,true);}
 }
 
 function loadGraph(graph,{preserveHistory=false}={}){
@@ -255,6 +338,8 @@ function ensurePatchCanvas(){
     diagnosticsByEdge:()=>diagnosticsByTarget(validation).edges,
     onSelectNode:selectNode,onSelectEdge:selectEdge,
     onGraphEdit:recordCompletedGraphEdit,
+    onDropEmpty:intent=>openQuickAdd({...intent,position:canvasPoint(intent.clientX,intent.clientY)}),
+    onDropCatalogOnEdge:dropCatalogOnEdge,onDropCatalogOnJack:dropCatalogOnJack,
     onAnnounce:announce,
   });
 }
@@ -730,14 +815,20 @@ byId("replacement-lossy-ack").onchange=updateReplacementApply;
 byId("replacement-apply").onclick=applyReplacement;
 byId("replacement-dialog").addEventListener("cancel",event=>{event.preventDefault();closeReplacementPicker();});
 byId("replacement-dialog").addEventListener("click",event=>{if(event.target===byId("replacement-dialog"))closeReplacementPicker();});
+byId("quick-add-search").oninput=renderQuickAdd;byId("quick-add-cancel").onclick=()=>closeQuickAdd();
+byId("quick-add-dialog").addEventListener("cancel",event=>{event.preventDefault();closeQuickAdd();});
 document.onkeydown=event=>{
   if(event.key==="Escape"&&connecting){connecting=null;cy.nodes().removeClass("compatible");renderInspector();announce("Connection cancelled.");}
   const editable=["INPUT","TEXTAREA","SELECT"].includes(event.target?.tagName)||event.target?.isContentEditable;
   if(editable)return;
   if(["Delete","Backspace"].includes(event.key)){event.preventDefault();deleteSelectedObjects();return;}
+  if(!event.ctrlKey&&!event.metaKey&&event.key.toLowerCase()==="i"&&selectedEdge){
+    event.preventDefault();openQuickAdd({kind:"insert_edge",edge_id:selectedEdge,position:canvasCenterPoint()});return;
+  }
   if(!(event.ctrlKey||event.metaKey))return;
   const key=event.key.toLowerCase();
-  if(key==="z"){event.preventDefault();event.shiftKey?redoGraphEdit():undoGraphEdit();}
+  if(event.code==="Space"){event.preventDefault();openQuickAdd({kind:"empty",position:canvasCenterPoint()});}
+  else if(key==="z"){event.preventDefault();event.shiftKey?redoGraphEdit():undoGraphEdit();}
   else if(key==="y"){event.preventDefault();redoGraphEdit();}
   else if(key==="c"){event.preventDefault();copySelectedObjects();}
   else if(key==="x"){event.preventDefault();cutSelectedObjects();}

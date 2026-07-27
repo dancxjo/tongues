@@ -6,12 +6,12 @@
   <title>Speech Studio Patch Canvas · Tongues</title>
   <style>
     :root{color-scheme:dark;--bg:#0c1118;--panel:#161f2b;--panel2:#202c3b;--line:#40536a;--ink:#edf5ff;--muted:#a6b7ca;--accent:#76e2ce;--warn:#ffc86b;--bad:#ff8c91;--source:#72b7ff;--audio:#70d6a4;--text:#dca3ff;--control:#ffca70}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}button,input,select,textarea{font:inherit}
+    *{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}button,input,select,textarea{font:inherit}
     button,input,select,textarea{color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.5rem}
     button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{cursor:not-allowed;opacity:.5}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
     a{color:var(--accent)}header{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid var(--line)}header h1{font-size:1.2rem;margin:0}header p{margin:0;color:var(--muted)}
     .toolbar{display:flex;align-items:end;gap:.5rem;flex-wrap:wrap;padding:.65rem 1rem;border-bottom:1px solid var(--line)}label{display:grid;gap:.2rem;color:var(--muted);font-size:.85rem}.grow{flex:1;min-width:14rem}
-    .workspace{display:grid;grid-template-columns:17rem minmax(26rem,1fr) 20rem;flex:1;min-height:540px}.sidebar{overflow:auto;background:var(--panel);padding:.8rem;border-right:1px solid var(--line)}.sidebar.right{border-right:0;border-left:1px solid var(--line)}
+    .workspace{display:grid;grid-template-columns:17rem minmax(26rem,1fr) 20rem;flex:1;min-height:0}.sidebar{overflow:auto;background:var(--panel);padding:.8rem;border-right:1px solid var(--line)}.sidebar.right{border-right:0;border-left:1px solid var(--line)}
     h2{font-size:1rem;margin:.25rem 0 .65rem}h3{font-size:.9rem;margin:1rem 0 .4rem}.palette-search{width:100%}.palette-group{margin:.8rem 0}.palette-group summary{color:var(--muted);cursor:pointer}.palette-list{display:grid;gap:.35rem;margin-top:.4rem}
     .palette-node{text-align:left}.palette-node small{display:block;color:var(--muted)}.palette-node[data-readiness=unavailable]{border-color:var(--bad)}
     .canvas-wrap{position:relative;min-width:0}.canvas-help{position:absolute;z-index:3;left:.9rem;top:.75rem;margin:0;padding:.38rem .7rem;background:#0a1119e8;border:1px solid #33465b;border-radius:999px;color:#b8c8d9;box-shadow:0 5px 18px #0005;pointer-events:none}
@@ -32,6 +32,7 @@
     .replacement-badge{align-self:start;border:1px solid var(--line);border-radius:999px;padding:.15rem .45rem;font-size:.78rem;white-space:nowrap}.replacement-badge.ready{color:var(--accent)}.replacement-badge.unavailable{color:var(--bad)}
     .replacement-actions{display:flex;justify-content:flex-end;gap:.5rem;padding:.8rem 1.2rem;border-top:1px solid var(--line)}.replacement-review{overflow:auto;padding:.5rem 1.2rem 1rem}.impact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}.impact-card{border:1px solid var(--line);border-radius:.55rem;padding:.65rem}.impact-card h3{margin:0 0 .35rem}.impact-card ul{margin:.25rem 0;padding-left:1.2rem}
     #replacement-error{border-left:3px solid var(--bad);padding:.5rem;background:#3b2027}.replacement-config{display:grid;gap:.45rem}.replacement-config input,.replacement-config select,.replacement-config textarea{width:100%}
+    #quick-add-dialog{max-width:46rem;height:min(42rem,calc(100vh - 2rem));padding:0;overflow:hidden}.quick-add-shell{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100%}.quick-add-heading{padding:1rem 1.2rem .35rem}.quick-add-heading h2{margin:0}.quick-add-heading p{margin:.25rem 0;color:var(--muted)}#quick-add-search{margin:.6rem 1.2rem;width:calc(100% - 2.4rem)}#quick-add-results{overflow:auto;display:grid;align-content:start;gap:.4rem;padding:.25rem 1.2rem 1rem}.quick-add-option{text-align:left}.quick-add-option small{display:block;color:var(--muted)}
     @media(max-width:900px){.workspace{grid-template-columns:14rem 1fr}.sidebar.right{position:fixed;z-index:5;right:0;top:0;bottom:0;width:min(22rem,90vw);transform:translateX(100%);transition:.2s}.sidebar.right.open{transform:none}.mobile-inspector{display:inline-block!important}}
     @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}#replacement-dialog{inset:0;width:100%;height:100%;max-height:none;border-radius:0}.replacement-filters{grid-template-columns:1fr}.impact-grid{grid-template-columns:1fr}}
   </style>
@@ -96,6 +97,14 @@
   <p id="status" class="sr-only" role="status" aria-live="polite"></p>
   <dialog id="open-dialog"><form method="dialog"><h2>Open a saved graph</h2><div id="saved-graphs" class="stack"></div><div class="row"><button value="cancel">Cancel</button></div></form></dialog>
   <dialog id="share-dialog"><form method="dialog"><h2>Share graph</h2><p>Copy this backend URL or the versioned graph JSON.</p><input id="share-url" readonly><textarea id="share-json" rows="12" readonly></textarea><div class="row"><button type="button" id="copy-share">Copy URL</button><button value="close">Close</button></div></form></dialog>
+  <dialog id="quick-add-dialog" aria-labelledby="quick-add-title" aria-describedby="quick-add-context">
+    <div class="quick-add-shell">
+      <header class="quick-add-heading"><div><h2 id="quick-add-title">Add module</h2><p id="quick-add-context"></p></div></header>
+      <input id="quick-add-search" type="search" autocomplete="off" placeholder="Search backend-discovered modules" aria-label="Search quick-add modules">
+      <div id="quick-add-results" role="listbox" aria-label="Compatible modules"></div>
+      <div class="replacement-actions"><button type="button" id="quick-add-cancel">Cancel</button></div>
+    </div>
+  </dialog>
   <dialog id="replacement-dialog" aria-labelledby="replacement-title" aria-describedby="replacement-context">
     <div class="replacement-shell">
       <header class="replacement-heading">
