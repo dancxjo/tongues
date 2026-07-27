@@ -4,13 +4,14 @@
 //! Installers verify pinned artifacts before making them visible, record every
 //! installed file, and can validate the same files while fully offline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
@@ -25,6 +26,13 @@ pub const MODEL_RUNTIME_COMPATIBILITY_VERSION: u32 = 1;
 pub const EMBEDDED_MODEL_CATALOG: &str = include_str!("../catalog/models-v2.json");
 pub const EMBEDDED_FAIRSEQ_MODEL_CATALOG: &str =
     include_str!("../catalog/fairseq-mms-models-v2.json");
+
+// Parsing and merging the MMS inventory used to happen on every discovery
+// request. The merge alone is large enough to stall the speech studio for
+// tens of seconds, even though this compile-time catalog cannot change while
+// the process is running. Cache the validated source and hand callers an
+// independent clone so existing mutation-oriented APIs remain safe.
+static EMBEDDED_CATALOG: OnceLock<Result<ModelCatalog, String>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalog {
@@ -249,9 +257,20 @@ pub struct ModelStore {
 
 impl ModelCatalog {
     pub fn embedded() -> Result<Self> {
-        let mut catalog = Self::from_json(EMBEDDED_MODEL_CATALOG)?;
-        catalog.merge(Self::from_json(EMBEDDED_FAIRSEQ_MODEL_CATALOG)?)?;
-        Ok(catalog)
+        match EMBEDDED_CATALOG.get_or_init(|| {
+            let mut catalog =
+                Self::from_json(EMBEDDED_MODEL_CATALOG).map_err(|error| format!("{error:#}"))?;
+            catalog
+                .merge(
+                    Self::from_json(EMBEDDED_FAIRSEQ_MODEL_CATALOG)
+                        .map_err(|error| format!("{error:#}"))?,
+                )
+                .map_err(|error| format!("{error:#}"))?;
+            Ok(catalog)
+        }) {
+            Ok(catalog) => Ok(catalog.clone()),
+            Err(error) => anyhow::bail!("{error}"),
+        }
     }
 
     pub fn from_json(source: &str) -> Result<Self> {
@@ -273,7 +292,6 @@ impl ModelCatalog {
         for path in paths {
             catalog.merge(Self::from_file(path)?)?;
         }
-        catalog.validate()?;
         Ok(catalog)
     }
 
@@ -319,11 +337,14 @@ impl ModelCatalog {
             other.schema_version,
             self.schema_version
         );
+        let mut ids = self
+            .entries
+            .iter()
+            .map(|entry| normalize_id(&entry.id))
+            .collect::<BTreeSet<_>>();
         for entry in other.entries {
             ensure!(
-                self.entries
-                    .iter()
-                    .all(|existing| normalize_id(&existing.id) != normalize_id(&entry.id)),
+                ids.insert(normalize_id(&entry.id)),
                 "private catalog attempts to replace existing model `{}`",
                 entry.id
             );
@@ -1724,6 +1745,17 @@ mod tests {
             assert!(catalog.find(id).is_some(), "missing {id}");
         }
         assert_eq!(catalog.find("vits-vctk").unwrap().speakers.count, 109);
+    }
+
+    #[test]
+    fn embedded_catalog_cache_returns_independent_catalogs() {
+        let mut first = ModelCatalog::embedded().expect("first embedded catalog");
+        let expected_entries = first.entries.len();
+        first.entries.clear();
+
+        let second = ModelCatalog::embedded().expect("cached embedded catalog");
+        assert_eq!(second.entries.len(), expected_entries);
+        assert!(second.find("styletts2-en-us").is_some());
     }
 
     #[test]
