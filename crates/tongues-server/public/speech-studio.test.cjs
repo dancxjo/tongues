@@ -713,6 +713,13 @@ test('operate keeps targeted verification, jobs, cancellation, and duplex eviden
     );
 });
 
+test('operate streams job updates without replacing expanded cards', () => {
+    assert.match(studioSource, /new browser\.EventSource\(/);
+    assert.match(studioSource, /\/api\/jobs\/\$\{encodeURIComponent\(job\.id\)\}\/events/);
+    assert.match(studioSource, /existing\.get\(job\.id\) \|\| operateJobCard\(job\)/);
+    assert.doesNotMatch(studioSource, /state\.jobsTimer/);
+});
+
 test('workflow controls are labeled, responsive, theme-aware, and reduced-motion safe', () => {
     for (const label of [
         'Text to speak',

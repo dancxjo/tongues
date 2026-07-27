@@ -28,7 +28,7 @@
         comparePreferred: '',
         userRecipes: [],
         selectedStage: 'generator',
-        jobsTimer: null,
+        jobStreams: new Map(),
         liveProviders: [],
         liveMessages: [],
         liveTurn: null,
@@ -55,6 +55,7 @@
     };
     const VERIFICATION_CONCURRENCY = 1;
     const DEFAULT_COMPARISON_CONCURRENCY = 2;
+    const JOB_OUTPUT_LIMIT = 1_000;
     const USER_RECIPES_KEY = 'tongues.speech.user-recipes.v1';
     const WORKFLOWS = {
         speak: {
@@ -822,10 +823,7 @@
         const workflow = WORKFLOWS[workflowForPath(pathname)] ? workflowForPath(pathname) : 'speak';
         state.workflow = workflow;
         if (typeof document === 'undefined') return workflow;
-        if (workflow !== 'operate' && state.jobsTimer != null) {
-            window.clearTimeout(state.jobsTimer);
-            state.jobsTimer = null;
-        }
+        if (workflow !== 'operate') stopOperateJobStreams();
         document.querySelectorAll('[data-workflow]').forEach((section) => {
             section.classList.toggle('hidden', section.dataset.workflow !== workflow);
         });
@@ -3441,20 +3439,77 @@
         return command.join(' ') || job.label || 'Tongues job';
     }
 
+    function renderOperateJobOutput(card) {
+        const raw = card.querySelector('.advanced-section');
+        if (!raw?.dataset.loaded) return;
+        raw.querySelector('pre').textContent = (card.jobOutput || [])
+            .map((line) => `[${line.stream}] ${line.line}`).join('\n') || 'No log output.';
+    }
+
+    async function loadOperateJobDetail(card, { force = false } = {}) {
+        const raw = card.querySelector('.advanced-section');
+        if (!raw || raw.dataset.loading || (raw.dataset.loaded && !force)) return;
+        raw.dataset.loading = 'true';
+        try {
+            const response = await fetch(`/api/jobs/${encodeURIComponent(card.dataset.jobId)}`);
+            if (!response.ok) {
+                raw.querySelector('pre').textContent = await response.text();
+                return;
+            }
+            const detail = await response.json();
+            card.jobOutput = detail.output || [];
+            raw.dataset.loaded = 'true';
+            renderOperateJobOutput(card);
+            const artifacts = raw.querySelector('.job-artifacts');
+            artifacts.replaceChildren(...(detail.artifacts || []).map((artifact) => {
+                const item = document.createElement(artifact.download_url ? 'a' : 'span');
+                item.textContent = artifact.label || artifact.path;
+                if (artifact.download_url) item.href = artifact.download_url;
+                return item;
+            }));
+        } finally {
+            delete raw.dataset.loading;
+        }
+    }
+
+    function updateOperateJobCard(card, update) {
+        const job = { ...(card.job || {}), ...update };
+        if (update.progress) job.progress = update.progress;
+        card.job = job;
+        card.querySelector('[data-job-label]').textContent = humanJobLabel(job);
+        card.querySelector('[data-job-phase]').textContent = job.progress?.phase || job.status;
+        const badge = card.querySelector('.runtime-badge');
+        badge.dataset.state = job.status;
+        badge.textContent = job.status;
+        const progress = card.querySelector('[data-job-progress]');
+        progress.textContent = job.progress?.total
+            ? `${job.progress.current || 0} / ${job.progress.total}`
+            : job.progress?.phase || job.status;
+        const percent = job.progress?.total
+            ? Math.min(100, Math.round((job.progress.current || 0) / job.progress.total * 100))
+            : (job.status === 'running' ? 35 : 100);
+        card.querySelector('.progress-bar').style.width = `${percent}%`;
+        const cancel = card.querySelector('[data-cancel-job]');
+        if (job.status !== 'running') cancel?.remove();
+    }
+
     function operateJobCard(job) {
         const details = document.createElement('details');
         details.className = 'operate-job';
+        details.dataset.jobId = job.id;
+        details.job = job;
+        details.jobOutput = [];
         const summary = document.createElement('summary');
         summary.innerHTML = `
-            <span><strong>${escapeHtml(humanJobLabel(job))}</strong>
-            <small>${escapeHtml(job.progress?.phase || job.status)}</small></span>
+            <span><strong data-job-label>${escapeHtml(humanJobLabel(job))}</strong>
+            <small data-job-phase>${escapeHtml(job.progress?.phase || job.status)}</small></span>
             <span class="runtime-badge" data-state="${escapeAttribute(job.status)}">${escapeHtml(job.status)}</span>
         `;
         const body = document.createElement('div');
         body.className = 'operate-job-detail';
         body.innerHTML = `
             <div class="progress-shell"><div class="progress-bar"></div></div>
-            <p>${escapeHtml(job.progress?.total
+            <p data-job-progress>${escapeHtml(job.progress?.total
                 ? `${job.progress.current || 0} / ${job.progress.total}`
                 : job.progress?.phase || job.status)}</p>
             ${job.status === 'running'
@@ -3467,41 +3522,80 @@
                 <div class="job-artifacts"></div>
             </details>
         `;
-        const percent = job.progress?.total
-            ? Math.min(100, Math.round((job.progress.current || 0) / job.progress.total * 100))
-            : (job.status === 'running' ? 35 : 100);
-        body.querySelector('.progress-bar').style.width = `${percent}%`;
         body.querySelector('[data-cancel-job]')?.addEventListener('click', async (event) => {
             event.currentTarget.disabled = true;
             const response = await fetch(
                 `/api/jobs/${encodeURIComponent(event.currentTarget.dataset.cancelJob)}/cancel`,
                 { method: 'POST' },
             );
-            if (!response.ok) byId('operate-jobs').textContent = await response.text();
-            await refreshOperateJobs();
+            if (!response.ok) {
+                event.currentTarget.disabled = false;
+                body.querySelector('[data-job-progress]').textContent = await response.text();
+            } else {
+                body.querySelector('[data-job-progress]').textContent = 'Cancel requested';
+            }
         });
         const raw = body.querySelector('.advanced-section');
         raw.addEventListener('toggle', async () => {
-            if (!raw.open || raw.dataset.loaded) return;
-            raw.dataset.loaded = 'true';
-            const response = await fetch(`/api/jobs/${encodeURIComponent(job.id)}`);
-            if (!response.ok) {
-                raw.querySelector('pre').textContent = await response.text();
-                return;
+            if (raw.open) {
+                await loadOperateJobDetail(details);
             }
-            const detail = await response.json();
-            raw.querySelector('pre').textContent = (detail.output || [])
-                .map((line) => `[${line.stream}] ${line.line}`).join('\n') || 'No log output.';
-            const artifacts = raw.querySelector('.job-artifacts');
-            artifacts.replaceChildren(...(detail.artifacts || []).map((artifact) => {
-                const item = document.createElement(artifact.download_url ? 'a' : 'span');
-                item.textContent = artifact.label || artifact.path;
-                if (artifact.download_url) item.href = artifact.download_url;
-                return item;
-            }));
         });
         details.append(summary, body);
+        updateOperateJobCard(details, job);
         return details;
+    }
+
+    function closeOperateJobStream(jobId) {
+        state.jobStreams.get(jobId)?.close();
+        state.jobStreams.delete(jobId);
+    }
+
+    function stopOperateJobStreams() {
+        for (const stream of state.jobStreams.values()) stream.close();
+        state.jobStreams.clear();
+    }
+
+    function streamOperateJob(job) {
+        if (
+            state.workflow !== 'operate'
+            || job.status !== 'running'
+            || state.jobStreams.has(job.id)
+            || !browser?.EventSource
+        ) return;
+        const stream = new browser.EventSource(
+            `/api/jobs/${encodeURIComponent(job.id)}/events`,
+        );
+        state.jobStreams.set(job.id, stream);
+        stream.addEventListener('message', (event) => {
+            let message;
+            try {
+                message = JSON.parse(event.data);
+            } catch (_) {
+                return;
+            }
+            const card = [...byId('operate-jobs')?.querySelectorAll('[data-job-id]') || []]
+                .find((candidate) => candidate.dataset.jobId === job.id);
+            if (!card) return;
+            if (message.type === 'snapshot') {
+                card.jobOutput = message.output || [];
+                updateOperateJobCard(card, message.summary);
+                renderOperateJobOutput(card);
+                if (message.summary.status !== 'running') closeOperateJobStream(job.id);
+            } else if (message.type === 'output') {
+                card.jobOutput.push(message);
+                if (card.jobOutput.length > JOB_OUTPUT_LIMIT) card.jobOutput.shift();
+                renderOperateJobOutput(card);
+            } else if (message.type === 'progress') {
+                updateOperateJobCard(card, { progress: message.progress });
+            } else if (message.type === 'status') {
+                updateOperateJobCard(card, message.summary);
+                closeOperateJobStream(job.id);
+                if (card.querySelector('.advanced-section')?.open) {
+                    loadOperateJobDetail(card, { force: true }).catch(() => {});
+                }
+            }
+        });
     }
 
     async function refreshOperateJobs() {
@@ -3510,18 +3604,27 @@
         if (!response.ok) throw new Error(await response.text());
         const jobs = await response.json();
         const target = byId('operate-jobs');
-        target.replaceChildren(...jobs.map(operateJobCard));
+        const existing = new Map(
+            [...target.querySelectorAll('[data-job-id]')]
+                .map((card) => [card.dataset.jobId, card]),
+        );
+        const cards = jobs.map((job) => {
+            const card = existing.get(job.id) || operateJobCard(job);
+            updateOperateJobCard(card, job);
+            streamOperateJob(job);
+            return card;
+        });
+        for (const jobId of state.jobStreams.keys()) {
+            if (!jobs.some((job) => job.id === jobId && job.status === 'running')) {
+                closeOperateJobStream(jobId);
+            }
+        }
+        target.replaceChildren(...cards);
         if (!jobs.length) {
             const empty = document.createElement('p');
             empty.className = 'catalog-empty';
             empty.textContent = 'No background activity yet.';
             target.appendChild(empty);
-        }
-        if (state.jobsTimer != null) window.clearTimeout(state.jobsTimer);
-        if (state.workflow === 'operate' && jobs.some((job) => job.status === 'running')) {
-            state.jobsTimer = window.setTimeout(() => {
-                refreshOperateJobs().catch(() => {});
-            }, 1500);
         }
     }
 

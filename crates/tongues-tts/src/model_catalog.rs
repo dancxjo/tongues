@@ -48,6 +48,7 @@ pub struct ModelCatalogEntry {
     pub component_id: Option<String>,
     /// User-facing/runtime classification projected by CLI and server
     /// consumers instead of repeated in their own registries.
+    #[serde(default)]
     pub kind: CatalogModelKind,
     /// Runtime provider that can load this artifact. `None` keeps an entry
     /// visible and installable without claiming that it can run.
@@ -55,6 +56,7 @@ pub struct ModelCatalogEntry {
     pub backend: Option<String>,
     /// Canonical installed file used to open the model. This may identify an
     /// extracted archive member.
+    #[serde(default)]
     pub runtime_path: String,
     /// External checkpoint, configuration, or runtime contracts accepted by
     /// this entry. Values are searchable compatibility labels, not Tongues
@@ -91,6 +93,12 @@ pub enum CatalogModelKind {
     VoiceConversion,
     StyleTts2,
     VoiceModel,
+}
+
+impl Default for CatalogModelKind {
+    fn default() -> Self {
+        Self::EndToEndSpeech
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -762,7 +770,7 @@ impl ModelStore {
                     format!("invalid installed model record {}", record_path.display())
                 })?;
             ensure!(
-                record.entry == *entry,
+                installed_record_matches_entry(&record, entry)?,
                 "installed model record does not match catalog entry {} v{}",
                 entry.id,
                 entry.package_version
@@ -907,8 +915,7 @@ impl ModelStore {
             if let Ok(record) =
                 serde_json::from_slice::<InstalledModelRecord>(&fs::read(&record_path)?)
             {
-                if record.schema_version == INSTALLED_MODEL_SCHEMA_VERSION && record.entry == *entry
-                {
+                if installed_record_matches_entry(&record, entry).unwrap_or(false) {
                     return record
                         .files
                         .iter()
@@ -1635,6 +1642,29 @@ fn catalog_entry_fingerprint(entry: &ModelCatalogEntry) -> Result<String> {
         .collect())
 }
 
+fn installed_record_matches_entry(
+    record: &InstalledModelRecord,
+    entry: &ModelCatalogEntry,
+) -> Result<bool> {
+    if record.schema_version != INSTALLED_MODEL_SCHEMA_VERSION
+        || record.entry.id != entry.id
+        || record.entry.package_version != entry.package_version
+    {
+        return Ok(false);
+    }
+
+    // Schema-v1 installation records embedded the complete catalog entry.
+    // Catalog schema v2 added runtime-only metadata to that entry without
+    // changing the pinned artifacts. Older records therefore deserialize with
+    // an empty runtime path and should remain usable when their artifact
+    // fingerprints still match the current authoritative catalog.
+    if record.entry.runtime_path.is_empty() {
+        return Ok(catalog_entry_fingerprint(&record.entry)? == catalog_entry_fingerprint(entry)?);
+    }
+
+    Ok(record.entry == *entry)
+}
+
 fn modified_unix_nanos(metadata: &fs::Metadata) -> Option<u64> {
     let nanos = metadata
         .modified()
@@ -1806,8 +1836,29 @@ mod tests {
             store.verification_state(&entry).status,
             ModelVerificationStatus::PendingVerification
         );
+        store
+            .write_record(&store.build_record(&entry, None).unwrap())
+            .unwrap();
         store.verify(&entry).expect("valid offline artifact");
+        let installed_record_path = store.record_path(&entry.id, entry.package_version);
+        let mut legacy_record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&installed_record_path).unwrap()).unwrap();
+        let legacy_entry = legacy_record["entry"].as_object_mut().unwrap();
+        legacy_entry.remove("component_id");
+        legacy_entry.remove("kind");
+        legacy_entry.remove("backend");
+        legacy_entry.remove("runtime_path");
+        write_json_atomic(&installed_record_path, &legacy_record).unwrap();
+
         let restarted = ModelStore::new(&root, &cache).with_offline(true);
+        assert_eq!(
+            restarted.installed_records().unwrap().len(),
+            1,
+            "catalog-v1 installation records should remain readable"
+        );
+        restarted
+            .verify(&entry)
+            .expect("catalog-v1 installation record should verify against unchanged artifacts");
         assert_eq!(
             restarted.verification_state(&entry).status,
             ModelVerificationStatus::Verified,
