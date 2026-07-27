@@ -555,10 +555,36 @@ export function planNodeReplacement(pipeline,nodeId,candidate,catalog,{useDefaul
   };
 }
 
-export function attachReplacementValidation(plan,report) {
+function diagnosticFingerprint(diagnostic){
+  const target=diagnostic?.target??{};
+  return JSON.stringify([
+    diagnostic?.code??"",diagnostic?.severity??"",diagnostic?.message??"",
+    target.node_id??null,target.port_id??null,target.edge_id??null,target.subpatch_id??null,
+  ]);
+}
+
+export function attachReplacementValidation(plan,report,baseline=null) {
   const next=structuredClone(plan);next.validation=structuredClone(report);
-  if(!report?.valid)next.blocking.push({code:"replacement.validation_failed",message:report?.diagnostics?.[0]?.message??"The replacement preview is not valid."});
-  next.applyable=next.classification.applyable&&next.blocking.length===0&&Boolean(report?.valid);
+  const baselineDiagnostics=new Map();
+  for(const diagnostic of baseline?.diagnostics??[]){
+    const fingerprint=diagnosticFingerprint(diagnostic);
+    baselineDiagnostics.set(fingerprint,(baselineDiagnostics.get(fingerprint)??0)+1);
+  }
+  const introduced=[];
+  for(const diagnostic of report?.diagnostics??[]){
+    const fingerprint=diagnosticFingerprint(diagnostic),remaining=baselineDiagnostics.get(fingerprint)??0;
+    if(remaining)baselineDiagnostics.set(fingerprint,remaining-1);
+    else introduced.push(diagnostic);
+  }
+  next.introduced_diagnostics=structuredClone(introduced);
+  const introducedErrors=introduced.filter(diagnostic=>(diagnostic?.severity??"error")==="error");
+  if(!report||introducedErrors.length){
+    next.blocking.push({
+      code:"replacement.validation_failed",
+      message:introducedErrors[0]?.message??"The replacement preview could not be validated.",
+    });
+  }
+  next.applyable=next.classification.applyable&&next.blocking.length===0&&Boolean(report);
   return next;
 }
 

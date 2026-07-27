@@ -5,7 +5,8 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 
 const publicRoot=path.dirname(fileURLToPath(import.meta.url));
-let server,baseUrl,savedGraph;
+let server,baseUrl,savedGraph,runSequence=0,holdRuns=false,meterStorm=false;
+const activeRuns=new Map();
 test.use({hasTouch:true});
 
 const replacement=family=>({
@@ -21,6 +22,7 @@ const components=Object.fromEntries([
   ["base",{id:"base",node_kind:"asr",provider:"Fixture",model:"Base",readiness:"ready",capabilities:["asr"],configuration_schema:schema,default_config:{language:"en",timestamps:true},detail:"Installed base model",replacement:replacement("asr")}],
   ["alternate",{id:"alternate",node_kind:"asr",provider:"Alternate Labs",model:"Ready Model",readiness:"ready",capabilities:["asr"],configuration_schema:schema,default_config:{language:"fr",timestamps:false},detail:"Installed alternate model",replacement:replacement("asr")}],
   ["unavailable",{id:"unavailable",node_kind:"asr",provider:"Alternate Labs",model:"Missing Model",readiness:"unavailable",capabilities:["asr"],configuration_schema:schema,default_config:{language:"en"},detail:"Model files are absent",replacement:replacement("asr")}],
+  ["tts-base",{id:"tts-base",node_kind:"tts",provider:"Fixture",model:"Voice",readiness:"ready",capabilities:["tts"],configuration_schema:{type:"object",properties:{voice:{type:"string",enum:["alto","tenor"],"x-ui-widget":"menu"}},required:["voice"]},default_config:{voice:"alto"},detail:"Installed fixture voice",replacement:replacement("tts")}],
   ...Array.from({length:1200},(_,index)=>[`bulk-${index}`,{id:`bulk-${index}`,node_kind:"asr",provider:`Provider ${index%12}`,model:`Catalog Model ${index}`,readiness:"ready",capabilities:["asr"],configuration_schema:schema,default_config:{language:"en"},detail:`Synthetic discovery fixture ${index}`,replacement:replacement("asr")}]),
 ]);
 const discovery={
@@ -37,6 +39,20 @@ const discovery={
       {id:"in",label:"audio in",direction:"input",value_type:"audio_stream",cardinality:"one",streaming:true},
       {id:"out",label:"audio out",direction:"output",value_type:"audio_stream",cardinality:"many",streaming:true},
     ],replacement:replacement("audio_passthrough")},
+    text_source:{kind:"text_source",label:"Text source",requires_component:false,default_config:{text:"Hello from Graph Studio"},configuration_schema:{type:"object",properties:{text:{type:"string","x-ui-widget":"short_text"}},required:["text"]},ports:[
+      {id:"out",label:"text",direction:"output",value_type:"text",cardinality:"many",streaming:true},
+    ],replacement:replacement("text_source")},
+    tts:{kind:"tts",label:"TTS",requires_component:true,required_capabilities:["tts"],configuration_schema:{type:"object",properties:{voice:{type:"string",enum:["alto","tenor"],"x-ui-widget":"menu"}},required:["voice"]},default_config:{voice:"alto"},ports:[
+      {id:"text",label:"text",direction:"input",value_type:"text",cardinality:"one",streaming:true},
+      {id:"audio",label:"audio",direction:"output",value_type:"audio_stream",cardinality:"many",streaming:true},
+    ],replacement:replacement("tts")},
+    audio_output:{kind:"audio_output",label:"Audio output",requires_component:false,default_config:{},configuration_schema:{type:"object"},ports:[
+      {id:"in",label:"audio",direction:"input",value_type:"audio_stream",cardinality:"one",streaming:true},
+    ],replacement:replacement("audio_output")},
+    transcript_merge:{kind:"transcript_merge",label:"Transcript merge",requires_component:false,merge:{strategy:"source_order"},default_config:{},configuration_schema:{type:"object"},ports:[
+      {id:"in",label:"transcripts",direction:"input",value_type:"transcript_committed",cardinality:"many",streaming:true},
+      {id:"out",label:"merged transcript",direction:"output",value_type:"transcript_committed",cardinality:"many",streaming:true},
+    ],replacement:replacement("transcript_merge")},
   },
   components,
 };
@@ -61,6 +77,46 @@ const graph={
   ],
   edges:[],selected_sinks:[{node_id:"node:asr",port_id:"committed"}],
 };
+
+function readRequestJson(request){
+  return new Promise((resolve,reject)=>{
+    let body="";
+    request.setEncoding("utf8");
+    request.on("data",chunk=>body+=chunk);
+    request.on("end",()=>{try{resolve(body?JSON.parse(body):{});}catch(error){reject(error);}});
+    request.on("error",reject);
+  });
+}
+
+function writeRunEvent(response,event){
+  response.write(`${JSON.stringify(event)}\n`);
+}
+
+function finishRun(runId,status,kind,detail){
+  const run=activeRuns.get(runId);
+  if(!run||run.closed)return;
+  run.status=status;
+  run.closed=true;
+  run.timers.forEach(clearTimeout);
+  writeRunEvent(run.response,{run_id:runId,status,node_id:run.nodeId,kind,elapsed_ms:25,detail});
+  run.response.end();
+}
+
+function largeGraph(nodeCount=180){
+  const document=structuredClone(graph);
+  document.graph_id="pipeline:large-fixture";
+  document.revision=11;
+  document.metadata.name="Large interaction fixture";
+  document.nodes=Array.from({length:nodeCount},(_,index)=>({
+    id:`node:large-${index}`,kind:index%2?"transcript_sink":"microphone",component_id:null,config:{},disabled:false,bypassed:false,
+  }));
+  document.edges=[];
+  document.selected_sinks=[];
+  document.metadata.labels["studio.layout.v1"]=JSON.stringify(Object.fromEntries(document.nodes.map((node,index)=>[
+    node.id,{x:120+(index%18)*240,y:120+Math.floor(index/18)*180},
+  ])));
+  return document;
+}
 
 function cytoscapeStub(){
   const noop=()=>{};
@@ -87,9 +143,64 @@ function cytoscapeStub(){
   };
 }
 
+async function addFromPalette(page,text,{keyboard=false}={}){
+  const previousCount=await page.locator(".patch-node-card").count();
+  const item=page.locator(".palette-node").filter({hasText:text}).first();
+  if(keyboard){await item.focus();await item.press("Enter");}
+  else await item.click();
+  await expect(page.locator(".patch-node-card")).toHaveCount(previousCount+1);
+  const card=page.locator(".patch-node-card").last();
+  await expect(card).toBeVisible();
+  return card.getAttribute("data-node-id");
+}
+
+const jack=(page,nodeId,direction)=>page.locator(`[data-patch-jack][data-node-id="${nodeId}"][data-direction="${direction}"]`);
+
+async function persistGraph(page){
+  savedGraph=null;
+  await page.getByRole("button",{name:"Save"}).click();
+  await expect.poll(()=>savedGraph).not.toBeNull();
+  return structuredClone(savedGraph);
+}
+
 test.beforeAll(async()=>{
-  server=http.createServer((request,response)=>{
+  server=http.createServer(async(request,response)=>{
     const pathname=new URL(request.url,"http://fixture").pathname;
+    if(request.method==="POST"&&pathname==="/api/pipeline/run"){
+      const document=await readRequestJson(request);
+      const runId=`fixture-run-${++runSequence}`;
+      const nodeId=document.nodes[0]?.id??"graph";
+      response.writeHead(200,{"Content-Type":"application/x-ndjson","Cache-Control":"no-store"});
+      const run={response,status:"running",nodeId,timers:[],closed:false};
+      activeRuns.set(runId,run);
+      writeRunEvent(response,{run_id:runId,status:"running",node_id:nodeId,kind:"started",elapsed_ms:0});
+      if(holdRuns)return;
+      const outputCount=meterStorm?600:Math.max(1,document.nodes.length);
+      for(let index=0;index<outputCount;index++){
+        const delay=meterStorm?10:35+index*8;
+        run.timers.push(setTimeout(()=>writeRunEvent(response,{
+          run_id:runId,status:"running",node_id:document.nodes[index%Math.max(1,document.nodes.length)]?.id??nodeId,
+          kind:"output",elapsed_ms:index+1,output:{port_id:index%2?"committed":"out",value:index%2?`phrase ${index}`:[0.82]},
+        }),delay));
+      }
+      run.timers.push(setTimeout(()=>finishRun(runId,"completed","completed"),meterStorm?45:70+outputCount*8));
+      return;
+    }
+    const command=pathname.match(/^\/api\/pipeline\/runs\/([^/]+)\/(stop|panic)$/);
+    if(request.method==="POST"&&command){
+      const runId=decodeURIComponent(command[1]),action=command[2];
+      response.writeHead(200,{"Content-Type":"application/json"});
+      response.end(JSON.stringify({run_id:runId,status:"stopping",action}));
+      finishRun(runId,"cancelled","cancelled",action==="panic"?"Panic requested by operator.":"Stop requested by operator.");
+      return;
+    }
+    const runLookup=pathname.match(/^\/api\/pipeline\/runs\/([^/]+)$/);
+    if(request.method==="GET"&&runLookup){
+      const runId=decodeURIComponent(runLookup[1]),run=activeRuns.get(runId);
+      response.writeHead(run?200:404,{"Content-Type":"application/json"});
+      response.end(JSON.stringify(run?{run_id:runId,status:run.status,started_at_ms:Date.now()-25}:{error:"run not found"}));
+      return;
+    }
     const relative=pathname==="/"?"speech-dataflow.html":pathname.replace(/^\/+/,"");
     const target=path.resolve(publicRoot,relative);
     if(!target.startsWith(`${publicRoot}${path.sep}`)||!fs.existsSync(target)){response.writeHead(404);response.end("not found");return;}
@@ -103,10 +214,13 @@ test.afterAll(async()=>new Promise(resolve=>server.close(resolve)));
 
 test.beforeEach(async({page})=>{
   savedGraph=null;
+  holdRuns=false;
+  meterStorm=false;
   await page.addInitScript(stub=>{globalThis.cytoscape=eval(`(${stub})`)();},cytoscapeStub.toString());
   await page.route("https://cdn.jsdelivr.net/**",route=>route.abort());
   await page.route("**/api/pipeline/**",async route=>{
     const request=route.request(),url=new URL(request.url()),pathname=url.pathname;
+    if(pathname==="/api/pipeline/run"||pathname.startsWith("/api/pipeline/runs/"))return route.continue();
     if(pathname==="/api/pipeline/catalog")return route.fulfill({json:discovery});
     if(pathname==="/api/pipeline/starters")return route.fulfill({json:{graphs:[graph]}});
     if(pathname==="/api/pipeline/validate")return route.fulfill({json:{valid:true,diagnostics:[]}});
@@ -415,4 +529,181 @@ test("quick-add opens at intent, filters cable consumers, and inserts on a cable
   });
   await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(4);
   expect(savedGraph.edges.some(edge=>edge.to.node_id==="node:asr"&&edge.to.port_id==="audio")).toBe(true);
+});
+
+test("complete ASR and TTS patches can be built, run, and persisted with pointer and keyboard paths",async({page})=>{
+  await page.getByRole("button",{name:"New"}).click();
+  await expect(page.locator(".patch-node-card")).toHaveCount(0);
+  const microphone=await addFromPalette(page,"Microphone");
+  const recognizer=await addFromPalette(page,"Base");
+  const transcript=await addFromPalette(page,"transcript_sink");
+  for(let index=0;index<8;index++)await page.locator("#graph-outline button").nth(0).press("ArrowLeft");
+  for(let index=0;index<8;index++)await page.locator("#graph-outline button").nth(2).press("ArrowRight");
+  await jack(page,microphone,"output").dragTo(jack(page,recognizer,"input"));
+  await jack(page,recognizer,"output").dragTo(jack(page,transcript,"input"));
+  await page.getByRole("button",{name:"Run"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Completed");
+  await expect(page.locator("#run-events")).toContainText("output");
+  let stored=await persistGraph(page);
+  expect(stored.nodes.map(node=>node.kind)).toEqual(["microphone","asr","transcript_sink"]);
+  expect(stored.edges).toHaveLength(2);
+
+  await page.getByRole("button",{name:"New"}).focus();
+  await page.getByRole("button",{name:"New"}).press("Enter");
+  await expect(page.locator(".patch-node-card")).toHaveCount(0);
+  const source=await addFromPalette(page,"Text source",{keyboard:true});
+  const synthesizer=await addFromPalette(page,"Voice",{keyboard:true});
+  const speaker=await addFromPalette(page,"Audio output",{keyboard:true});
+  await jack(page,source,"output").focus();await jack(page,source,"output").press("Enter");
+  await jack(page,synthesizer,"input").focus();await jack(page,synthesizer,"input").press("Enter");
+  await jack(page,synthesizer,"output").focus();await jack(page,synthesizer,"output").press("Enter");
+  await jack(page,speaker,"input").focus();await jack(page,speaker,"input").press("Enter");
+
+  const voice=page.locator(`[data-node-card="${synthesizer}"] select[data-config-field="voice"]`);
+  await voice.focus();await voice.selectOption("tenor");
+  await expect(voice).toHaveValue("tenor");
+  await page.getByRole("button",{name:"Undo"}).click();
+  await expect(page.locator(`[data-node-card="${synthesizer}"] select[data-config-field="voice"]`)).toHaveValue("alto");
+  await page.getByRole("button",{name:"Redo"}).click();
+  await expect(page.locator(`[data-node-card="${synthesizer}"] select[data-config-field="voice"]`)).toHaveValue("tenor");
+
+  await page.getByRole("button",{name:"Run"}).focus();
+  await page.getByRole("button",{name:"Run"}).press("Enter");
+  await expect(page.locator("#run-state")).toHaveText("Completed");
+  stored=await persistGraph(page);
+  expect(stored.nodes.map(node=>node.kind)).toEqual(["text_source","tts","audio_output"]);
+  expect(stored.nodes.find(node=>node.id===synthesizer).config.voice).toBe("tenor");
+  expect(stored.edges).toHaveLength(2);
+});
+
+test("transport locks staged structural edits and Stop or Panic end activity with named failure state",async({page})=>{
+  holdRuns=true;
+  await jack(page,"node:mic-1","output").dragTo(jack(page,"node:asr","input"));
+  await page.locator("#pipeline-name").fill("Held transport");
+  const initialCards=await page.locator(".patch-node-card").count();
+
+  await page.getByRole("button",{name:"Run"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Running");
+  await expect(page.getByRole("button",{name:"Stop"})).toBeEnabled();
+  await page.locator(".palette-node").filter({hasText:"Audio pass-through"}).first().click();
+  await expect(page.locator("#status")).toContainText("Stop transport before editing");
+  await expect(page.locator(".patch-node-card")).toHaveCount(initialCards);
+  await jack(page,"node:mic-2","output").dragTo(jack(page,"node:asr","input"));
+  await expect(page.locator("#status")).toContainText("Stop transport before patching");
+
+  await page.getByRole("button",{name:"Stop"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Cancelled");
+  await expect(page.getByRole("button",{name:"Run"})).toBeEnabled();
+
+  await page.getByRole("button",{name:"Run"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Running");
+  await page.getByRole("button",{name:"Panic"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Cancelled");
+  const connection=page.locator(".patch-connection-list").getByRole("button");
+  await expect(connection).toContainText("connection state failed");
+  await expect(connection).toContainText("Panic requested by operator");
+  await expect(page.locator(".patch-cable")).toHaveClass(/edge-state-failed/);
+  expect(await page.locator(".patch-cable").evaluate(element=>getComputedStyle(element).strokeDasharray)).not.toBe("none");
+});
+
+test("presentation edits and semantic wiring survive save, share, new, and reopen",async({page})=>{
+  await jack(page,"node:mic-1","output").dragTo(jack(page,"node:asr","input"));
+  await page.locator(".patch-cable-hit").dispatchEvent("pointerdown");
+  await page.getByRole("button",{name:"Add reroute at canvas center"}).click();
+  await page.getByRole("button",{name:"Note"}).click();
+  await page.locator("#organization-text").fill("Operator note");
+  await page.locator("#organization-apply").click();
+  await page.locator("#cable-opacity").fill("0.6");
+  await page.locator("#cable-opacity").dispatchEvent("change");
+
+  await page.getByRole("button",{name:"Share"}).click();
+  const share=page.getByRole("dialog",{name:"Share graph"});
+  await expect(share).toBeVisible();
+  const shared=JSON.parse(await page.locator("#share-json").inputValue());
+  expect(shared.edges).toHaveLength(1);
+  expect(shared.presentation.notes[0].text).toBe("Operator note");
+  expect(shared.presentation.cables[shared.edges[0].id].reroute_points).toHaveLength(1);
+  expect(shared.presentation.global_cable_opacity).toBe(0.6);
+  await expect(page.locator("#share-url")).toHaveValue(/\/studio\/graphs\/pipeline%3A/);
+  await share.getByRole("button",{name:"Close"}).click();
+
+  await page.getByRole("button",{name:"New"}).click();
+  await expect(page.locator(".patch-cable")).toHaveCount(0);
+  await page.getByRole("button",{name:"Open"}).click();
+  await page.locator("#saved-graphs button").click();
+  await expect(page.locator(".patch-cable")).toHaveCount(1);
+  await expect(page.locator(".patch-note")).toHaveText("Operator note");
+  const reopened=await persistGraph(page);
+  expect(reopened.edges).toEqual(shared.edges);
+  expect(reopened.presentation).toEqual(shared.presentation);
+});
+
+test("accessible names, documented shortcuts, non-color cues, and touch targets match the implementation",async({page})=>{
+  await page.setViewportSize({width:390,height:720});
+  await jack(page,"node:mic-1","output").dragTo(jack(page,"node:asr","input"));
+  const sourceJack=jack(page,"node:mic-1","output");
+  const targetJack=jack(page,"node:asr","input");
+  for(const target of [sourceJack,targetJack]){
+    const box=await target.boundingBox();
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  await expect(sourceJack).toHaveAttribute("aria-label",/Microphone.*output audio.*audio stream.*connection.*Base.*connection state ready/i);
+  await expect(page.locator(".patch-connection-list").getByRole("button")).toContainText(/audio stream.*connected to.*connection state ready/i);
+
+  const shortcutContract={
+    undo:"Control+Z Meta+Z",
+    redo:"Control+Shift+Z Meta+Shift+Z Control+Y",
+    "copy-selection":"Control+C Meta+C",
+    "cut-selection":"Control+X Meta+X",
+    "paste-selection":"Control+V Meta+V",
+    "duplicate-selection":"Control+D Meta+D",
+    "delete-selection":"Delete Backspace",
+  };
+  for(const [id,value] of Object.entries(shortcutContract))await expect(page.locator(`#${id}`)).toHaveAttribute("aria-keyshortcuts",value);
+  const help=fs.readFileSync(path.resolve(publicRoot,"../../../docs/speech-dataflow.md"),"utf8");
+  for(const phrase of ["Control+Space","Control+C","Control+X","Control+V","Control+D","Control+Shift+Z","Control+Y","Delete or Backspace","press I","Run, Stop, or Panic"]){
+    expect(help).toContain(phrase);
+  }
+  expect(help).toContain("44-pixel cable-jack targets");
+  expect(help).toContain("distinct line patterns as well as colors");
+});
+
+test("large graphs meet generous interaction budgets and streamed activity stays bounded",async({page})=>{
+  test.setTimeout(60_000);
+  savedGraph=largeGraph(180);
+  const loadStarted=Date.now();
+  await page.getByRole("button",{name:"Open"}).click();
+  await page.locator("#saved-graphs button").click();
+  await expect(page.locator(".patch-node-card")).toHaveCount(180,{timeout:5_000});
+  expect(Date.now()-loadStarted).toBeLessThan(5_000);
+
+  const selectionStarted=Date.now();
+  await page.locator("#graph-outline button").nth(90).dispatchEvent("click");
+  await expect(page.locator("#graph-outline button").nth(90)).toHaveAttribute("aria-pressed","true");
+  expect(Date.now()-selectionStarted).toBeLessThan(750);
+  const searchStarted=Date.now();
+  await page.locator("#canvas").dispatchEvent("dblclick",{clientX:300,clientY:300});
+  await page.locator("#quick-add-search").fill("Audio pass-through");
+  await expect(page.getByRole("option",{name:/Audio pass-through/})).toBeVisible();
+  expect(Date.now()-searchStarted).toBeLessThan(1_000);
+  await page.locator("#quick-add-cancel").click();
+  await expect(page.locator("#quick-add-dialog")).toBeHidden();
+
+  await page.getByRole("button",{name:"New"}).click();
+  await expect(page.locator(".patch-node-card")).toHaveCount(0);
+  await addFromPalette(page,"Microphone");
+  meterStorm=true;
+  await page.locator("#pipeline-name").fill("Meter storm");
+  await page.evaluate(()=>{
+    globalThis.__cardMutations=0;
+    new MutationObserver(records=>globalThis.__cardMutations+=records.length)
+      .observe(document.querySelector(".patch-node-cards"),{childList:true});
+  });
+  await page.getByRole("button",{name:"Run"}).click();
+  await expect(page.locator("#run-state")).toHaveText("Completed");
+  expect(await page.locator("#run-events li").count()).toBeLessThanOrEqual(200);
+  await expect(page.locator("#run-events li").last()).toContainText("completed");
+  expect(await page.evaluate(()=>globalThis.__cardMutations)).toBeLessThan(20);
+  await expect(page.locator(".patch-node-card")).toHaveCount(1);
 });

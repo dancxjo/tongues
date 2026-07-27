@@ -421,6 +421,22 @@ test("declared cross-kind plans name port/config remaps and reject stale or fail
   assert.deepEqual(applied.selected_sinks,[{node_id:asr.id,port_id:"text"}]);
 });
 
+test("replacement validation permits existing draft diagnostics but blocks diagnostics introduced by the preview",()=>{
+  const{catalog,graph,asr}=replacementGraph(),candidate=catalog.find(item=>item.id==="component:fixture-alt");
+  const planned=planNodeReplacement(graph,asr.id,candidate,catalog,{catalogRevision:"fixture-revision"});
+  const existing={code:"port.required_input_missing",severity:"error",message:"ASR input is not connected.",target:{node_id:asr.id,port_id:"audio"}};
+  const baseline={valid:false,diagnostics:[existing]};
+  const unchanged=attachReplacementValidation(planned,{valid:false,diagnostics:[existing]},baseline);
+  assert.equal(unchanged.applyable,true);
+  assert.deepEqual(unchanged.introduced_diagnostics,[]);
+
+  const introduced={code:"component.unavailable",severity:"error",message:"Replacement component is unavailable.",target:{node_id:asr.id}};
+  const rejected=attachReplacementValidation(planned,{valid:false,diagnostics:[existing,introduced]},baseline);
+  assert.equal(rejected.applyable,false);
+  assert.deepEqual(rejected.introduced_diagnostics,[introduced]);
+  assert.match(rejected.blocking.at(-1).message,/unavailable/);
+});
+
 test("general edit history restores graph, selection, focus, and only clears the invalid redo branch",()=>{
   const catalog=buildCatalog(discovery),graph=createPipeline(),history=createEditHistory();
   const before=structuredClone(graph),mic=addNode(graph,catalog.find(node=>node.kind==="microphone"));

@@ -38,7 +38,7 @@ use std::sync::{
     atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, Semaphore};
+use tokio::sync::{Semaphore, broadcast};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tongues_duplex::{
     DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
@@ -121,7 +121,8 @@ enum PipelineRunCommand {
     Panic,
 }
 
-const PIPELINE_RUN_ACTIVE_STATUSES: &[&str] = &["preparing", "loading", "running", "stopping", "monitoring"];
+const PIPELINE_RUN_ACTIVE_STATUSES: &[&str] =
+    &["preparing", "loading", "running", "stopping", "monitoring"];
 
 #[derive(Clone)]
 struct SpeechAdmission {
@@ -353,7 +354,10 @@ fn build_app(state: AppState) -> Router {
         .route("/api/pipeline/runs", get(list_pipeline_runs))
         .route("/api/pipeline/runs/{run_id}", get(get_pipeline_run))
         .route("/api/pipeline/runs/{run_id}/stop", post(stop_pipeline_run))
-        .route("/api/pipeline/runs/{run_id}/panic", post(panic_pipeline_run))
+        .route(
+            "/api/pipeline/runs/{run_id}/panic",
+            post(panic_pipeline_run),
+        )
         .route(
             "/api/timeline/sessions/{session_id}",
             get(get_timeline_session).put(save_timeline_session),
@@ -412,6 +416,30 @@ async fn pipeline_graph_catalog(
     use tongues_pipeline::{ComponentSpec, Readiness};
 
     let mut catalog = tongues_pipeline::GraphCatalog::builtin();
+    if let Some(output) = catalog.node_kinds.get_mut("audio_output") {
+        let (devices, discovery_error) = match tongues_audio::output_device_inventory() {
+            Ok(devices) => (devices, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        let mut values = vec![json!("default")];
+        let mut labels = vec![json!("System default")];
+        for device in devices {
+            values.push(json!(device.id));
+            labels.push(json!(if device.is_default {
+                format!("{} (default)", device.display_name)
+            } else {
+                device.display_name
+            }));
+        }
+        output.configuration_schema["properties"]["system_device_id"]["enum"] =
+            serde_json::Value::Array(values);
+        output.configuration_schema["properties"]["system_device_id"]["x-enum-labels"] =
+            serde_json::Value::Array(labels);
+        if let Some(error) = discovery_error {
+            output.configuration_schema["properties"]["system_device_id"]["x-device-discovery-error"] =
+                json!(error);
+        }
+    }
     if let Ok(providers) = state.asr.provider_capabilities() {
         for provider in providers {
             catalog.register_component(ComponentSpec {
@@ -598,9 +626,18 @@ fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Va
                 _ => "string",
             };
             let mut spec = serde_json::Map::new();
-            spec.insert("title".to_string(), serde_json::Value::String(control.label.to_string()));
-            spec.insert("type".to_string(), serde_json::Value::String(kind.to_string()));
-            spec.insert("description".to_string(), serde_json::Value::String(control.help.to_string()));
+            spec.insert(
+                "title".to_string(),
+                serde_json::Value::String(control.label.to_string()),
+            );
+            spec.insert(
+                "type".to_string(),
+                serde_json::Value::String(kind.to_string()),
+            );
+            spec.insert(
+                "description".to_string(),
+                serde_json::Value::String(control.help.to_string()),
+            );
             let ui_hint = match control.kind {
                 "checkbox" | "boolean" => "toggle",
                 "select" => "menu",
@@ -609,8 +646,14 @@ fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Va
                 "number_array" | "positive_integer_array" => "short_text",
                 _ => "short_text",
             };
-            spec.insert("x-ui-widget".to_string(), serde_json::Value::String(ui_hint.to_string()));
-            spec.insert("x-ui-priority".to_string(), serde_json::Value::Number(serde_json::Number::from(0)));
+            spec.insert(
+                "x-ui-widget".to_string(),
+                serde_json::Value::String(ui_hint.to_string()),
+            );
+            spec.insert(
+                "x-ui-priority".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(0)),
+            );
             if !control.group.is_empty() {
                 spec.insert(
                     "x-ui-group".to_string(),
@@ -624,7 +667,10 @@ fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Va
                 spec.insert("maximum".to_string(), serde_json::Value::from(value));
             }
             if let Some(value) = control.unit {
-                spec.insert("x-ui-unit".to_string(), serde_json::Value::String(value.to_string()));
+                spec.insert(
+                    "x-ui-unit".to_string(),
+                    serde_json::Value::String(value.to_string()),
+                );
             }
             if !control.options.is_empty() {
                 spec.insert(
@@ -906,10 +952,7 @@ async fn cleanup_active_pipeline_run(
     if active.as_deref() == Some(run_id) {
         active.take();
     }
-    pipeline_run_controls
-        .lock()
-        .await
-        .remove(run_id);
+    pipeline_run_controls.lock().await.remove(run_id);
 }
 
 fn pipeline_run_status_message(command: PipelineRunCommand) -> &'static str {
@@ -952,7 +995,7 @@ async fn control_pipeline_run(
             StatusCode::CONFLICT,
             Json(json!({"error": "execution run is not currently active"})),
         )
-        .into_response();
+            .into_response();
     }
 
     let sender = {
@@ -982,28 +1025,12 @@ async fn control_pipeline_run(
     (StatusCode::ACCEPTED, Json(message)).into_response()
 }
 
-async fn stop_pipeline_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Response {
-    control_pipeline_run(
-        State(state),
-        Path(run_id),
-        PipelineRunCommand::Stop,
-    )
-    .await
+async fn stop_pipeline_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
+    control_pipeline_run(State(state), Path(run_id), PipelineRunCommand::Stop).await
 }
 
-async fn panic_pipeline_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Response {
-    control_pipeline_run(
-        State(state),
-        Path(run_id),
-        PipelineRunCommand::Panic,
-    )
-    .await
+async fn panic_pipeline_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
+    control_pipeline_run(State(state), Path(run_id), PipelineRunCommand::Panic).await
 }
 
 #[derive(Debug, Serialize)]
@@ -1192,7 +1219,8 @@ async fn run_pipeline_graph(
                 );
                 let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, stop).await;
                 mark_pipeline_run_status(&run_path, &mut run, "cancelled");
-                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id)
+                    .await;
                 return;
             }
             if *command_receiver.borrow() == PipelineRunCommand::Panic {
@@ -1208,19 +1236,22 @@ async fn run_pipeline_graph(
                 );
                 let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
                 mark_pipeline_run_status(&run_path, &mut run, "failed");
-                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id)
+                    .await;
                 return;
             }
 
             mark_pipeline_run_status(&run_path, &mut run, "loading");
-            let started_event =
-                pipeline_run_event(&run_id, &plan, step, "started", started, None, None, "loading");
+            let started_event = pipeline_run_event(
+                &run_id, &plan, step, "started", started, None, None, "loading",
+            );
             if emit_pipeline_run_event(&sender, &run_path, &mut run, started_event)
                 .await
                 .is_err()
             {
                 mark_pipeline_run_cancelled(&run_path, &mut run);
-                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id)
+                    .await;
                 return;
             }
             mark_pipeline_run_status(&run_path, &mut run, "running");
@@ -1240,7 +1271,12 @@ async fn run_pipeline_graph(
                     );
                     let _ = emit_pipeline_run_event(&sender, &run_path, &mut run, failed).await;
                     mark_pipeline_run_status(&run_path, &mut run, "failed");
-                    cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                    cleanup_active_pipeline_run(
+                        active_pipeline_run,
+                        pipeline_run_controls,
+                        &run_id,
+                    )
+                    .await;
                     return;
                 }
             };
@@ -1363,26 +1399,48 @@ async fn run_pipeline_graph(
                     "deterministic contract output from {}",
                     step.component_id.as_deref().unwrap_or(&step.node_kind)
                 );
-                let event =
-                    pipeline_run_event(&run_id, &plan, step, "output", started, None, Some(detail), "running");
+                let event = pipeline_run_event(
+                    &run_id,
+                    &plan,
+                    step,
+                    "output",
+                    started,
+                    None,
+                    Some(detail),
+                    "running",
+                );
                 if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
                     .await
                     .is_err()
                 {
                     mark_pipeline_run_cancelled(&run_path, &mut run);
-                    cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                    cleanup_active_pipeline_run(
+                        active_pipeline_run,
+                        pipeline_run_controls,
+                        &run_id,
+                    )
+                    .await;
                     return;
                 }
             }
 
-            let completed =
-                pipeline_run_event(&run_id, &plan, step, "completed", started, None, None, "running");
+            let completed = pipeline_run_event(
+                &run_id,
+                &plan,
+                step,
+                "completed",
+                started,
+                None,
+                None,
+                "running",
+            );
             if emit_pipeline_run_event(&sender, &run_path, &mut run, completed)
                 .await
                 .is_err()
             {
                 mark_pipeline_run_cancelled(&run_path, &mut run);
-                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id)
+                    .await;
                 return;
             }
         }
@@ -1787,7 +1845,10 @@ impl LiveConversationSnapshot {
                     "pending" | "streaming" | "completed" | "stopped" | "failed"
                 )
             {
-                return Err(format!("live conversation message `{}` is invalid", message.id));
+                return Err(format!(
+                    "live conversation message `{}` is invalid",
+                    message.id
+                ));
             }
         }
         Ok(())

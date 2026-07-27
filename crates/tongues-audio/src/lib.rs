@@ -18,6 +18,7 @@ mod segmentation;
 mod source;
 mod speech_pipeline;
 mod system_input;
+mod system_output;
 mod transform;
 mod vad;
 
@@ -39,6 +40,9 @@ pub use speech_pipeline::{VadPipelineEvent, VadSegmentationPipeline};
 pub use system_input::{
     input_capabilities, input_device_inventory, AudioInputCapabilities, CpalAudioSource,
     InputDeviceInfo,
+};
+pub use system_output::{
+    output_device_inventory, write_wav_output, CpalAudioSink, OutputDeviceInfo,
 };
 pub use transform::NormalizedAudioSource;
 pub use vad::{

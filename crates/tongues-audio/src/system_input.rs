@@ -1,17 +1,17 @@
 //! Host audio-device discovery and bounded CPAL capture.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use speaking::{AudioEncoding, AudioFormat, ChannelLayout, StreamSource};
 
 use crate::{
-    AudioBuffer, AudioSource, AudioSourceDescriptor, AudioSourceEvent, AudioSourceKind,
-    BoundedAudioInput, BoundedAudioInputSender, PushedAudioChunk, Result, bounded_audio_input,
-    invalid,
+    bounded_audio_input, invalid, AudioBuffer, AudioSource, AudioSourceDescriptor,
+    AudioSourceEvent, AudioSourceKind, BoundedAudioInput, BoundedAudioInputSender,
+    PushedAudioChunk, Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -445,16 +445,67 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
             ],
             "tts",
         ),
-        node(
-            "audio_output",
-            "Audio output",
-            vec![
-                port("in", Input, AudioStream, One, false),
-                port("played", Output, Artifact, Many, false),
-                port("cancel", Input, Cancellation, Optional, false),
-                port("error", Output, Error, Many, false),
-            ],
-        ),
+        {
+            let mut output = node(
+                "audio_output",
+                "Audio output",
+                vec![
+                    port("in", Input, AudioStream, One, false),
+                    port("played", Output, Artifact, Many, false),
+                    port("cancel", Input, Cancellation, Optional, false),
+                    port("error", Output, Error, Many, false),
+                ],
+            );
+            output.configuration_schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "title": "Destination",
+                        "description": "Browser playback is performed by the connected client; system playback is performed by the server host; WAV writes a workspace artifact.",
+                        "enum": ["browser", "system", "wav"],
+                        "x-enum-labels": ["This browser", "Server audio device (CPAL)", "WAV file"],
+                        "x-ui-priority": 0
+                    },
+                    "browser_device_id": {
+                        "type": "string",
+                        "title": "Browser playback device",
+                        "description": "Browser-provided output device key. Availability and permission are checked when the graph runs.",
+                        "default": "default",
+                        "x-ui-source": "browser_audio_outputs",
+                        "x-ui-visible-when": {"target": "browser"},
+                        "x-ui-priority": 10
+                    },
+                    "system_device_id": {
+                        "type": "string",
+                        "title": "Server playback device",
+                        "description": "Opaque CPAL output-device key advertised by the server.",
+                        "default": "default",
+                        "enum": ["default"],
+                        "x-enum-labels": ["System default"],
+                        "x-ui-visible-when": {"target": "system"},
+                        "x-ui-priority": 10
+                    },
+                    "wav_path": {
+                        "type": "string",
+                        "title": "WAV output path",
+                        "description": "Workspace-relative WAV artifact path.",
+                        "format": "path",
+                        "default": "data/speech-output.wav",
+                        "x-ui-visible-when": {"target": "wav"},
+                        "x-ui-priority": 10
+                    }
+                },
+                "required": ["target"]
+            });
+            output.default_config = serde_json::json!({
+                "target": "browser",
+                "browser_device_id": "default",
+                "system_device_id": "default",
+                "wav_path": "data/speech-output.wav"
+            });
+            output
+        },
         node(
             "transcript_sink",
             "Transcript output",

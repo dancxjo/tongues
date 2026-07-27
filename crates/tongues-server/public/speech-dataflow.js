@@ -15,6 +15,7 @@ let selectedNode=null,selectedEdge=null,connecting=null,validation={valid:false,
 let selectedNodes=new Set(),selectedEdges=new Set(),graphClipboard=null,pasteGeneration=0,snapToGrid=false;
 let validationGeneration=0,validationTimer=null;
 const PIPELINE_RUN_ACTIVE_STATUSES=new Set(["preparing","loading","running","stopping","monitoring"]);
+const RUN_EVENT_LIMIT=200;
 const PIPELINE_RUN_STATUS_LABELS={
   idle:"Idle",
   preparing:"Preparing",
@@ -31,6 +32,7 @@ let runStatusTimer=null;
 let runTransportRefreshInFlight=false;
 let nodeRuntimeState={};
 let edgeRuntimeState={};
+let runtimeRenderRequested=false;
 let editHistory=createEditHistory(),replacementOptions=[],replacementSelected=null,replacementPlan=null;
 let replacementPreviewGeneration=0,replacementRenderLimit=100,replacementReturnFocus=null,replacementOverrides={};
 let quickAddContext=null,quickAddOptions=[],quickAddReturnFocus=null;
@@ -513,6 +515,7 @@ function renderTemplates(){
 function addCatalogNode(item){
   const center=cy.extent(),afterId=selectedNode;
   const node=performGraphEdit(`Add ${item.label}`,()=>addNode(pipeline,item,afterId,{x:(center.x1+center.x2)/2,y:(center.y1+center.y2)/2}),result=>replaceNodeSelection(result.id));
+  if(!node)return;
   renderGraph();selectNode(node.id);announce(`Added ${item.label}.`);
 }
 
@@ -1077,6 +1080,13 @@ function updateRuntimeStateFromEvent(event) {
   }
   updateNodeRuntimeState(event);
   updateEdgeRuntimeState(event);
+  if(!runtimeRenderRequested){
+    runtimeRenderRequested=true;
+    requestAnimationFrame(()=>{
+      runtimeRenderRequested=false;
+      patchCanvas?.render();
+    });
+  }
 }
 
 async function runGraph() {
@@ -1170,6 +1180,7 @@ function renderRunEvent(event){
   const output=event.output?` · ${event.output.port_id}=${JSON.stringify(event.output.value)}`:"";
   item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${output}${event.detail?` · ${event.detail}`:""}`;
   byId("run-events").append(item);
+  while(byId("run-events").children.length>RUN_EVENT_LIMIT)byId("run-events").firstElementChild.remove();
   item.scrollIntoView({block:"nearest"});
   if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}
 }

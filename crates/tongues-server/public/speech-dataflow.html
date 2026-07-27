@@ -109,7 +109,7 @@
   </main>
   <p id="status" class="sr-only" role="status" aria-live="polite"></p>
   <dialog id="open-dialog"><form method="dialog"><h2>Open a saved graph</h2><div id="saved-graphs" class="stack"></div><div class="row"><button value="cancel">Cancel</button></div></form></dialog>
-  <dialog id="share-dialog"><form method="dialog"><h2>Share graph</h2><p>Copy this backend URL or the versioned graph JSON.</p><input id="share-url" readonly><textarea id="share-json" rows="12" readonly></textarea><div class="row"><button type="button" id="copy-share">Copy URL</button><button value="close">Close</button></div></form></dialog>
+  <dialog id="share-dialog" aria-labelledby="share-dialog-title"><form method="dialog"><h2 id="share-dialog-title">Share graph</h2><p>Copy this backend URL or the versioned graph JSON.</p><input id="share-url" readonly><textarea id="share-json" rows="12" readonly></textarea><div class="row"><button type="button" id="copy-share">Copy URL</button><button value="close">Close</button></div></form></dialog>
   <dialog id="quick-add-dialog" aria-labelledby="quick-add-title" aria-describedby="quick-add-context">
     <div class="quick-add-shell">
       <header class="quick-add-heading"><div><h2 id="quick-add-title">Add module</h2><p id="quick-add-context"></p></div></header>

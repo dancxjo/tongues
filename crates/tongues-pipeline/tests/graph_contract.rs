@@ -184,6 +184,48 @@ fn component_configuration_schema_is_validated() {
 }
 
 #[test]
+fn audio_output_declares_explicit_browser_system_and_wav_destinations() {
+    let catalog = fixture_catalog();
+    let output = catalog.node_kinds.get("audio_output").unwrap();
+    assert_eq!(
+        output.configuration_schema["properties"]["target"]["enum"],
+        json!(["browser", "system", "wav"])
+    );
+    assert_eq!(output.default_config["target"], "browser");
+    assert_eq!(output.default_config["browser_device_id"], "default");
+    assert_eq!(output.default_config["system_device_id"], "default");
+    assert_eq!(output.default_config["wav_path"], "data/speech-output.wav");
+}
+
+#[test]
+fn audio_output_rejects_unknown_targets_and_escaping_wav_paths() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    let output = graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == "audio_output")
+        .unwrap();
+    output.config.insert("target".into(), json!("telepathy"));
+    output
+        .config
+        .insert("wav_path".into(), json!("../outside.wav"));
+    let report = validate_graph(&graph, &catalog);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "config.value_not_available")
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "config.path_outside_workspace")
+    );
+}
+
+#[test]
 fn meeting_graph_fans_out_and_has_explicit_join_semantics() {
     let catalog = fixture_catalog();
     let graph = starter_graph(StarterGraph::MeetingTranscription, &catalog).unwrap();

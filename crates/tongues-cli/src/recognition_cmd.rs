@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 use speaking::{
-    AsrDecodingControl, AsrProviderCapabilities, AsrResourceLimits, AsrRuntime, AsrSessionConfig,
-    AsrStreamingCapability, CommittedTranscriptPipeline, FixtureAsrProvider, FixtureAsrStep,
-    FriendlySpeechVerb, LanguageId, RuleBasedTranscriptNormalizer, StreamEvent,
-    StructuralTranscriptInterpreter, TranscriptSourceMetadata, WhisperAsrProvider,
-    committed_transcript, recognition_workflow,
+    committed_transcript, recognition_workflow, AsrDecodingControl, AsrProviderCapabilities,
+    AsrResourceLimits, AsrRuntime, AsrSessionConfig, AsrStreamingCapability,
+    CommittedTranscriptPipeline, FixtureAsrProvider, FixtureAsrStep, FriendlySpeechVerb,
+    LanguageId, RuleBasedTranscriptNormalizer, StreamEvent, StructuralTranscriptInterpreter,
+    TranscriptSourceMetadata, WhisperAsrProvider,
 };
 use tongues_audio::{
     AudioSource, AudioSourceDescriptor, AudioSourceEvent, CpalAudioSource, NormalizedAudioSource,

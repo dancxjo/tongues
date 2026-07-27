@@ -1982,7 +1982,12 @@ fn main() -> Result<()> {
 
     match command {
         Commands::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "tongues", &mut std::io::stdout());
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "tongues",
+                &mut std::io::stdout(),
+            );
             Ok(())
         }
         Commands::Listen(command) => {
@@ -8275,11 +8280,7 @@ struct CommonPhoneListenOptions {
 fn cmd_common_phone_listen_devices() -> Result<()> {
     println!("Audio input devices:");
     for device in tongues_audio::input_device_inventory()? {
-        let marker = if device.is_default {
-            " (default)"
-        } else {
-            ""
-        };
+        let marker = if device.is_default { " (default)" } else { "" };
         println!("  {}{marker}", device.id);
     }
     Ok(())
@@ -8310,10 +8311,7 @@ fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
     };
     frame_config.sample_rate_hz = options.sample_rate;
 
-    let mut source = tongues_audio::CpalAudioSource::open(
-        options.input_device.as_deref(),
-        32,
-    )?;
+    let mut source = tongues_audio::CpalAudioSource::open(options.input_device.as_deref(), 32)?;
     let native_sample_rate = source.descriptor().decoded_format.sample_rate_hz;
     let device_name = match &source.descriptor().source {
         speaking::StreamSource::Live {

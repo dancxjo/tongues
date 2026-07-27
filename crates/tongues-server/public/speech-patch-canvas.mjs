@@ -89,8 +89,9 @@ function injectStyles(document) {
     .patch-cable.signal-control{stroke:#ffca70;stroke-dasharray:3 5}
     .patch-cable.signal-error{stroke:#ff8c91;stroke-dasharray:2 4}
     .patch-cable.signal-artifact{stroke:#72b7ff;stroke-dasharray:14 4 3 4}
-    .patch-cable.edge-state-active{filter:drop-shadow(0 0 7px #76e2ce);stroke-width:5}
-    .patch-cable.edge-state-failed{stroke:#ff8c91;opacity:.88}
+    .patch-cable.edge-state-loading{stroke-dasharray:6 6}
+    .patch-cable.edge-state-active{filter:drop-shadow(0 0 7px #76e2ce);stroke-width:5;stroke-dasharray:12 3}
+    .patch-cable.edge-state-failed{stroke:#ff8c91;opacity:.88;stroke-dasharray:2 4}
     .patch-cable.edge-state-ready{opacity:1}
     .patch-cable.signal-data{stroke:#a6b7ca}
     .patch-cable.selected{stroke:#f7fffd;stroke-width:7;filter:drop-shadow(0 0 5px #76e2ce)}
@@ -141,6 +142,7 @@ function injectStyles(document) {
     .patch-jack.signal-artifact{border-color:#72b7ff}.patch-jack.compatible{outline:4px solid #76e2ce;outline-offset:3px}
     .patch-jack.incompatible{opacity:.48}.patch-jack.drag-origin{outline:4px solid #f7fffd;outline-offset:3px}
     .patch-jack:focus-visible{outline:4px solid #76e2ce;outline-offset:3px;opacity:1}
+    @media (pointer:coarse),(max-width:620px){.patch-jack{width:2.75rem;height:2.75rem;min-width:2.75rem}.patch-jack-label{font-size:.75rem}}
     .patch-connection-list{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
     #canvas[data-patching=true]{box-shadow:inset 0 0 0 3px #76e2ce}
   `;
@@ -567,7 +569,11 @@ export function createPatchCanvas(options) {
   function edgeDescription(edge) {
     const source = pipeline().nodes.find(node => node.id === edge.from.node_id);
     const output = nodePorts(source, "output").find(port => port.id === edge.from.port_id);
-    return `${label(edge.from.node_id)} ${output?.label ?? edge.from.port_id}, ${readableType(output?.value_type)}, connected to ${label(edge.to.node_id)} ${edge.to.port_id}`;
+    const runtime = edgeRuntime(edge.id);
+    const diagnostics = options.diagnosticsByEdge?.()?.[edge.id] ?? [];
+    const state = runtime?.status ?? (diagnostics.length ? "invalid" : "ready");
+    const reason = runtime?.detail ?? diagnostics.map(item => item.message).filter(Boolean).join(". ");
+    return `${label(edge.from.node_id)} ${output?.label ?? edge.from.port_id}, ${readableType(output?.value_type)}, connected to ${label(edge.to.node_id)} ${edge.to.port_id}, connection state ${state}${reason ? `, ${reason}` : ""}`;
   }
 
   function renderConnections() {

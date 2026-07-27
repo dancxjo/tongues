@@ -75,6 +75,39 @@ by runtime events rather than pretending that live input is saved config.
 The friendly CLI and browser are expected to call this library-owned contract;
 neither surface should reproduce routing rules.
 
+## Graph Studio gestures and shortcuts
+
+The same edits are available from visible controls for pointer and touch users
+and from the keyboard graph outline for keyboard and assistive-technology
+users. On macOS, use Command where the table says Control.
+
+| Action | Pointer or touch | Keyboard |
+| --- | --- | --- |
+| Add a module | Select it in the node palette, or double-click/right-click empty canvas for quick-add | Focus a palette item and press Enter, or press Control+Space for quick-add |
+| Connect jacks | Drag an output jack to a compatible input jack | Focus the first jack and press Enter, then focus the compatible jack and press Enter |
+| Cancel patching | Release away from a target or use the Cancel control | Escape |
+| Reconnect a cable end | Select the cable, then drag either connected plug | Select the cable, activate its connected jack, then activate a replacement jack |
+| Insert on a cable | Drop a compatible palette module on the cable | Select the cable, press I, choose a compatible module, and press Enter |
+| Select more objects | Shift-, Control-, or Command-select; marquee selection is also supported | Shift-, Control-, or Command-activate items in the graph outline; Control+A selects all |
+| Move selected modules | Drag a selected module; use Snap for grid movement | Arrow keys in the graph outline |
+| Copy, cut, paste, duplicate | Toolbar controls | Control+C, Control+X, Control+V, Control+D |
+| Delete | Delete selection control | Delete or Backspace |
+| Undo and redo | Undo and Redo controls | Control+Z; Control+Shift+Z or Control+Y |
+| Align, distribute, tidy, frame, note, or subpatch | Named toolbar controls | Tab to the named toolbar control and press Enter |
+| Run, stop, or panic | Named transport controls | Tab to Run, Stop, or Panic and press Enter |
+
+Touch layouts use 44-pixel cable-jack targets. Cable signal families have
+distinct line patterns as well as colors. Node faceplates and the accessible
+connection outline name runtime state and failure reasons, so activity,
+selection, incompatibility, and failure are not conveyed by color or animation
+alone.
+
+The browser conformance fixture uses deliberately generous CI budgets: a
+180-node graph must render within 5 seconds, keyboard selection within 750 ms,
+and compatibility-filtered quick-add search within 1 second. Streamed run
+history is capped at 200 visible events, and faceplate/cable refreshes are
+coalesced so a burst cannot create one DOM rebuild per event.
+
 ## Schema 3 document
 
 A graph records `graph_id`, monotonically increasing `revision`, metadata,

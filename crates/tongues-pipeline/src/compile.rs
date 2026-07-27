@@ -826,6 +826,24 @@ fn validate_config(
             ));
             continue;
         }
+        if let Some(allowed) = field_schema
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            && !allowed.contains(value)
+        {
+            diagnostics.push(error(
+                graph,
+                "config.value_not_available",
+                format!(
+                    "Node `{}` configuration field `{field}` selects a value that is not available in the current backend catalog.",
+                    node.id
+                ),
+                Some(&node.id),
+                None,
+                None,
+            ));
+            continue;
+        }
         if let (Some(text), Some(min_length)) = (
             value.as_str(),
             field_schema
@@ -840,6 +858,28 @@ fn validate_config(
                     "Node `{}` configuration field `{field}` must contain at least {min_length} character{}.",
                     node.id,
                     if min_length == 1 { "" } else { "s" }
+                ),
+                Some(&node.id),
+                None,
+                None,
+            ));
+        }
+        if field_schema
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            == Some("path")
+            && let Some(path) = value.as_str()
+            && (std::path::Path::new(path).is_absolute()
+                || std::path::Path::new(path)
+                    .components()
+                    .any(|component| component == std::path::Component::ParentDir))
+        {
+            diagnostics.push(error(
+                graph,
+                "config.path_outside_workspace",
+                format!(
+                    "Node `{}` configuration field `{field}` must be a workspace-relative path without parent traversal.",
+                    node.id
                 ),
                 Some(&node.id),
                 None,
