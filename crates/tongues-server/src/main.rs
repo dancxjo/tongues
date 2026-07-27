@@ -420,6 +420,7 @@ async fn pipeline_graph_catalog(
                     || "ASR runtime registry".into(),
                     |license| format!("ASR runtime registry; license {license}"),
                 ),
+                replacement: tongues_pipeline::ReplacementSpec::for_node_kind("asr"),
             });
         }
     }
@@ -440,6 +441,7 @@ async fn pipeline_graph_catalog(
         default_config: serde_json::to_value(speaking::AnonymousDiarizationConfig::default())
             .unwrap_or_else(|_| json!({})),
         detail: "Registered anonymous speaker clustering runtime".into(),
+        replacement: tongues_pipeline::ReplacementSpec::for_node_kind("diarization"),
     });
     catalog.register_component(ComponentSpec {
         id: "interpretation:native".into(),
@@ -457,6 +459,7 @@ async fn pipeline_graph_catalog(
         }),
         default_config: json!({"target_language": "en"}),
         detail: "Shared Tongues interpretation library".into(),
+        replacement: tongues_pipeline::ReplacementSpec::for_node_kind("interpretation"),
     });
     for provider in live::provider_discovery().await {
         for model in &provider.models {
@@ -474,6 +477,7 @@ async fn pipeline_graph_catalog(
                 configuration_schema: json!({"type":"object"}),
                 default_config: json!({}),
                 detail: provider.detail.clone(),
+                replacement: tongues_pipeline::ReplacementSpec::for_node_kind("response"),
             });
         }
     }
@@ -541,6 +545,7 @@ async fn pipeline_graph_catalog(
             detail: composition
                 .unavailable_reason
                 .unwrap_or_else(|| composition.statuses.join("; ")),
+            replacement: tongues_pipeline::ReplacementSpec::for_node_kind("tts"),
         });
     }
     catalog.revision = pipeline_catalog_revision(&catalog);
@@ -558,17 +563,12 @@ fn pipeline_catalog_revision(catalog: &tongues_pipeline::GraphCatalog) -> String
         }
     }
     for component in catalog.components.values() {
-        for byte in format!(
-            "{}\0{}\0{}\0{:?}\0",
-            component.id, component.provider, component.model, component.readiness
-        )
-        .bytes()
-        {
+        for byte in serde_json::to_vec(component).unwrap_or_default() {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
     }
-    format!("tongues-pipeline-catalog-v2:{hash:016x}")
+    format!("tongues-pipeline-catalog-v3:{hash:016x}")
 }
 
 fn speech_controls_schema(controls: &[SpeechControlDiscovery]) -> serde_json::Value {
@@ -10236,7 +10236,7 @@ mod tests {
         let mut catalog = tongues_pipeline::fixture_catalog();
         let first = pipeline_catalog_revision(&catalog);
         assert_eq!(first, pipeline_catalog_revision(&catalog));
-        assert_eq!(first.len(), "tongues-pipeline-catalog-v2:".len() + 16);
+        assert_eq!(first.len(), "tongues-pipeline-catalog-v3:".len() + 16);
 
         catalog
             .node_kinds

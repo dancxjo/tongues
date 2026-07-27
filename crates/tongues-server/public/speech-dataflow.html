@@ -24,8 +24,16 @@
     .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
     #validation{margin:0;padding:.35rem 1rem;border-bottom:1px solid var(--line)}#validation[data-state=valid]{color:var(--accent)}#validation[data-state=invalid]{color:var(--warn)}
     dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:.7rem;max-width:42rem;width:calc(100% - 2rem)}dialog::backdrop{background:#0009}dialog textarea{width:100%}
+    #replacement-dialog{max-width:68rem;height:min(48rem,calc(100vh - 2rem));padding:0;overflow:hidden}
+    .replacement-shell{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100%}.replacement-heading{padding:1rem 1.2rem .25rem}.replacement-heading h2{margin:0}.replacement-heading p{margin:.25rem 0;color:var(--muted)}
+    .replacement-filters{display:grid;grid-template-columns:minmax(14rem,1fr) 12rem 12rem;gap:.6rem;padding:.75rem 1.2rem}.replacement-results{margin:0;padding:0 1.2rem .5rem;color:var(--muted)}
+    .replacement-list{overflow:auto;display:grid;align-content:start;gap:.45rem;padding:.25rem 1.2rem 1rem}.replacement-candidate{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.75rem;text-align:left;padding:.7rem .8rem}
+    .replacement-candidate strong,.replacement-candidate small{display:block}.replacement-candidate small{color:var(--muted);margin-top:.15rem}.replacement-candidate[aria-selected=true]{border-color:var(--accent);box-shadow:0 0 0 2px #76e2ce44}.replacement-candidate[data-compatible=false]{border-color:#6d4b52}
+    .replacement-badge{align-self:start;border:1px solid var(--line);border-radius:999px;padding:.15rem .45rem;font-size:.78rem;white-space:nowrap}.replacement-badge.ready{color:var(--accent)}.replacement-badge.unavailable{color:var(--bad)}
+    .replacement-actions{display:flex;justify-content:flex-end;gap:.5rem;padding:.8rem 1.2rem;border-top:1px solid var(--line)}.replacement-review{overflow:auto;padding:.5rem 1.2rem 1rem}.impact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}.impact-card{border:1px solid var(--line);border-radius:.55rem;padding:.65rem}.impact-card h3{margin:0 0 .35rem}.impact-card ul{margin:.25rem 0;padding-left:1.2rem}
+    #replacement-error{border-left:3px solid var(--bad);padding:.5rem;background:#3b2027}.replacement-config{display:grid;gap:.45rem}.replacement-config input,.replacement-config select,.replacement-config textarea{width:100%}
     @media(max-width:900px){.workspace{grid-template-columns:14rem 1fr}.sidebar.right{position:fixed;z-index:5;right:0;top:0;bottom:0;width:min(22rem,90vw);transform:translateX(100%);transition:.2s}.sidebar.right.open{transform:none}.mobile-inspector{display:inline-block!important}}
-    @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}.workspace{height:calc(100vh - 190px)}}
+    @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}.workspace{height:calc(100vh - 190px)}#replacement-dialog{inset:0;width:100%;height:100%;max-height:none;border-radius:0}.replacement-filters{grid-template-columns:1fr}.impact-grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -41,6 +49,7 @@
     <label>Starter <select id="template"></select></label>
     <label class="grow">Graph name <input id="pipeline-name"></label>
     <button id="new">New</button><button id="save">Save</button><button id="open">Open</button><button id="duplicate-graph">Duplicate</button><button id="share">Share</button>
+    <button id="undo" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button><button id="redo" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
     <button id="fit">Fit</button><button id="run">Run</button><button id="cancel" disabled>Cancel</button>
     <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
   </div>
@@ -61,7 +70,7 @@
       <h2 id="canvas-heading" class="sr-only">Pipeline canvas</h2>
       <p class="canvas-help">Drag to move · wheel/pinch to zoom · Space+drag to pan · Tab for keyboard outline</p>
       <div id="canvas" tabindex="0" role="application" aria-describedby="canvas-instructions"></div>
-      <p id="canvas-instructions" class="sr-only">Use Tab to reach graph nodes in the outline. Enter selects a node. Arrow keys move it. Delete removes it. Use the inspector to connect typed ports.</p>
+      <p id="canvas-instructions" class="sr-only">Use Tab to reach graph nodes, visible input and output jacks, and the connection outline. Activate a jack, then activate a compatible jack to connect. Select a cable before activating one of its plugs to reconnect that endpoint. Escape cancels a cable gesture and Delete removes a selected cable.</p>
       <ol id="graph-outline" class="sr-only" aria-label="Keyboard graph outline"></ol>
     </section>
     <aside class="sidebar right" id="inspector-panel" aria-labelledby="inspector-heading">
@@ -84,6 +93,41 @@
   <p id="status" class="sr-only" role="status" aria-live="polite"></p>
   <dialog id="open-dialog"><form method="dialog"><h2>Open a saved graph</h2><div id="saved-graphs" class="stack"></div><div class="row"><button value="cancel">Cancel</button></div></form></dialog>
   <dialog id="share-dialog"><form method="dialog"><h2>Share graph</h2><p>Copy this backend URL or the versioned graph JSON.</p><input id="share-url" readonly><textarea id="share-json" rows="12" readonly></textarea><div class="row"><button type="button" id="copy-share">Copy URL</button><button value="close">Close</button></div></form></dialog>
+  <dialog id="replacement-dialog" aria-labelledby="replacement-title" aria-describedby="replacement-context">
+    <div class="replacement-shell">
+      <header class="replacement-heading">
+        <div><h2 id="replacement-title">Replace node</h2><p id="replacement-context"></p></div>
+      </header>
+      <div id="replacement-picker-controls">
+        <div class="replacement-filters">
+          <label>Search candidates<input id="replacement-search" type="search" autocomplete="off" placeholder="Label, provider, model, component, or detail"></label>
+          <label>Provider<select id="replacement-provider"><option value="">All providers</option></select></label>
+          <label>Readiness<select id="replacement-readiness"><option value="">All readiness states</option></select></label>
+        </div>
+        <p id="replacement-results" class="replacement-results" role="status" aria-live="polite"></p>
+      </div>
+      <div id="replacement-list" class="replacement-list" role="listbox" aria-label="Backend-discovered replacement candidates"></div>
+      <section id="replacement-review" class="replacement-review" hidden aria-labelledby="replacement-review-title">
+        <h2 id="replacement-review-title" tabindex="-1">Review replacement impact</h2>
+        <p id="replacement-review-summary"></p>
+        <div class="impact-grid">
+          <section class="impact-card"><h3>Connections and sinks</h3><ul id="replacement-wiring-impact"></ul></section>
+          <section class="impact-card"><h3>Configuration</h3><ul id="replacement-config-impact"></ul></section>
+        </div>
+        <label><input id="replacement-use-defaults" type="checkbox"> Use replacement defaults instead of preserving compatible settings</label>
+        <div id="replacement-required-config" class="replacement-config section"></div>
+        <label id="replacement-lossy-row" hidden><input id="replacement-lossy-ack" type="checkbox"> I understand the named settings or connections will be removed or reset.</label>
+        <div id="replacement-diagnostics" class="section"></div>
+        <p id="replacement-error" role="alert" hidden></p>
+      </section>
+      <div class="replacement-actions">
+        <button type="button" id="replacement-back" hidden>Back to candidates</button>
+        <button type="button" id="replacement-cancel">Cancel</button>
+        <button type="button" id="replacement-continue" disabled>Review replacement</button>
+        <button type="button" id="replacement-apply" hidden disabled>Apply replacement</button>
+      </div>
+    </div>
+  </dialog>
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.1/dist/cytoscape.min.js" crossorigin="anonymous"></script>
   <script type="module" src="/speech-dataflow.js"></script>
 </body>

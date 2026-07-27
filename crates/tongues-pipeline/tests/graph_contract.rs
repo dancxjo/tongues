@@ -2,6 +2,39 @@ use serde_json::json;
 use tongues_pipeline::*;
 
 #[test]
+fn catalog_exposes_backend_owned_replacement_identity_and_mapping_contracts() {
+    let mut catalog = fixture_catalog();
+    assert_eq!(catalog.schema_version, 2);
+    for kind in catalog.node_kinds.values() {
+        assert_eq!(kind.replacement.family, kind.kind);
+        assert!(!kind.replacement.configuration_schema_id.is_empty());
+        assert!(kind.replacement.configuration_schema_version > 0);
+    }
+    let component = catalog.components.get_mut("fixture-asr").unwrap();
+    component
+        .replacement
+        .port_aliases
+        .insert("audio".into(), "samples".into());
+    component
+        .replacement
+        .configuration_aliases
+        .insert("language".into(), "locale".into());
+    let serialized = serde_json::to_value(&catalog).unwrap();
+    assert_eq!(
+        serialized["components"]["fixture-asr"]["replacement"]["family"],
+        "asr"
+    );
+    assert_eq!(
+        serialized["components"]["fixture-asr"]["replacement"]["port_aliases"]["audio"],
+        "samples"
+    );
+    assert_eq!(
+        serialized["components"]["fixture-asr"]["replacement"]["configuration_aliases"]["language"],
+        "locale"
+    );
+}
+
+#[test]
 fn starter_graphs_validate_and_compile_deterministically() {
     let catalog = fixture_catalog();
     for starter in StarterGraph::ALL {

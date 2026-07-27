@@ -74,6 +74,8 @@ pub struct NodeKindSpec {
     pub adapter: Option<AdapterSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<MergeSpec>,
+    #[serde(default)]
+    pub replacement: ReplacementSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +98,41 @@ pub enum Readiness {
     Unverified,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplacementSpec {
+    /// Backend-owned semantic role. Equal port shapes alone are never enough
+    /// to make two nodes replacement candidates.
+    #[serde(default)]
+    pub family: String,
+    /// Stable identity for the configuration contract, independent of labels.
+    #[serde(default)]
+    pub configuration_schema_id: String,
+    #[serde(default)]
+    pub configuration_schema_version: u32,
+    /// Explicit source-port to destination-port mappings for declared
+    /// cross-kind replacements.
+    #[serde(default)]
+    pub port_aliases: BTreeMap<String, String>,
+    /// Explicit source-field to destination-field configuration mappings.
+    #[serde(default)]
+    pub configuration_aliases: BTreeMap<String, String>,
+    /// Source ports whose connections may be deliberately removed by a lossy
+    /// plan. Missing ports otherwise fail closed.
+    #[serde(default)]
+    pub disconnect_ports: BTreeSet<String>,
+}
+
+impl ReplacementSpec {
+    pub fn for_node_kind(kind: &str) -> Self {
+        Self {
+            family: kind.into(),
+            configuration_schema_id: format!("tongues.pipeline.{kind}.config"),
+            configuration_schema_version: 1,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComponentSpec {
     pub id: String,
@@ -111,6 +148,8 @@ pub struct ComponentSpec {
     pub default_config: Value,
     #[serde(default)]
     pub detail: String,
+    #[serde(default)]
+    pub replacement: ReplacementSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,8 +164,8 @@ pub struct GraphCatalog {
 impl GraphCatalog {
     pub fn builtin() -> Self {
         let mut catalog = Self {
-            schema_version: 1,
-            revision: "tongues-pipeline-catalog-v2".into(),
+            schema_version: 2,
+            revision: "tongues-pipeline-catalog-v3".into(),
             node_kinds: BTreeMap::new(),
             components: BTreeMap::new(),
         };
@@ -196,6 +235,7 @@ fn node(kind: &str, label: &str, ports: Vec<PortSpec>) -> NodeKindSpec {
         permits_cycle: false,
         adapter: None,
         merge: None,
+        replacement: ReplacementSpec::for_node_kind(kind),
     }
 }
 

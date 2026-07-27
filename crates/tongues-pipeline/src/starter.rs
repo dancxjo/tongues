@@ -260,6 +260,7 @@ pub fn fixture_catalog() -> GraphCatalog {
             configuration_schema: serde_json::json!({"type":"object"}),
             default_config: serde_json::json!({}),
             detail: "deterministic contract fixture".into(),
+            replacement: crate::ReplacementSpec::for_node_kind(kind),
         });
     }
     catalog

@@ -21,16 +21,23 @@ export function catalogEntryForNode(node,catalog) {
 }
 
 function catalogEntry(kind, component=null) {
+  const replacement=component?.replacement?.family?component.replacement:kind.replacement;
   return {
     id:component?`component:${component.id}`:`kind:${kind.kind}`,
     kind:kind.kind,
     label:component?`${kind.label} · ${component.provider} / ${component.model}`:kind.label,
     component_id:component?.id??null,
+    provider:component?.provider??"Tongues",
+    model:component?.model??kind.kind,
     config:structuredClone(component?.default_config??kind.default_config??{}),
     schema:structuredClone(component?.configuration_schema??kind.configuration_schema??{}),
     ports:structuredClone(kind.ports??[]),
     readiness:component?.readiness??"ready",
     detail:component?.detail??"",
+    capabilities:[...(component?.capabilities??kind.required_capabilities??[])],
+    required_capabilities:[...(kind.required_capabilities??[])],
+    replacement:structuredClone(replacement??{}),
+    support:structuredClone(component?.support??{}),
     adapter:kind.adapter??null,
     merge:kind.merge??null,
     group:capabilityGroup(kind),
@@ -102,11 +109,252 @@ export function applyNodeConfig(pipeline,id,values) {
   touch(pipeline);return node;
 }
 
-export function replaceNode(pipeline,id,catalogNode) {
-  const node=pipeline.nodes.find(item=>item.id===id);
-  if(!node||node.kind!==catalogNode?.kind)throw new Error("Replacement must have the same backend node kind.");
-  Object.assign(node,{component_id:catalogNode.component_id,config:structuredClone(catalogNode.config??{})});
-  touch(pipeline);
+function canonical(value) {
+  if(Array.isArray(value))return value.map(canonical);
+  if(value&&typeof value==="object")return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));
+  return value;
+}
+
+function sameValue(left,right){return JSON.stringify(canonical(left))===JSON.stringify(canonical(right));}
+function pipelineFingerprint(pipeline){return JSON.stringify(pipeline);}
+function replacementMetadata(entry){return entry?.replacement??{};}
+function portKey(port){return `${port.direction}:${port.id}:${port.value_type}:${port.cardinality}:${Boolean(port.streaming)}`;}
+function exactPortContract(left,right){
+  return left.length===right.length&&left.map(portKey).sort().join("|")===right.map(portKey).sort().join("|");
+}
+function destinationPort(sourcePort,candidate){
+  const aliases=replacementMetadata(candidate).port_aliases??{};
+  const id=aliases[sourcePort.id]??sourcePort.id;
+  return candidate.ports.find(port=>port.id===id&&port.direction===sourcePort.direction);
+}
+function connectedPortIds(pipeline,nodeId){
+  const ids=new Set();
+  pipeline.edges.forEach(edge=>{
+    if(edge.from.node_id===nodeId)ids.add(edge.from.port_id);
+    if(edge.to.node_id===nodeId)ids.add(edge.to.port_id);
+  });
+  pipeline.selected_sinks.filter(sink=>sink.node_id===nodeId).forEach(sink=>ids.add(sink.port_id));
+  return ids;
+}
+
+export function validateSchemaValue(value,schema,path="$") {
+  const errors=[];
+  if(schema==null||typeof schema!=="object")return errors;
+  if(schema.const!==undefined&&!sameValue(value,schema.const))errors.push(`${path} must equal the declared constant.`);
+  if(Array.isArray(schema.enum)&&!schema.enum.some(item=>sameValue(item,value)))errors.push(`${path} is not an allowed value.`);
+  const types=Array.isArray(schema.type)?schema.type:[schema.type].filter(Boolean);
+  const matches=type=>{
+    if(type==="null")return value===null;
+    if(type==="object")return value!==null&&!Array.isArray(value)&&typeof value==="object";
+    if(type==="array")return Array.isArray(value);
+    if(type==="integer")return Number.isInteger(value);
+    if(type==="number")return typeof value==="number"&&Number.isFinite(value);
+    return typeof value===type;
+  };
+  if(types.length&&!types.some(matches)){errors.push(`${path} must be ${types.join(" or ")}.`);return errors;}
+  if(typeof value==="number"){
+    if(schema.minimum!=null&&value<schema.minimum)errors.push(`${path} must be at least ${schema.minimum}.`);
+    if(schema.maximum!=null&&value>schema.maximum)errors.push(`${path} must be at most ${schema.maximum}.`);
+    if(schema.exclusiveMinimum!=null&&value<=schema.exclusiveMinimum)errors.push(`${path} must be greater than ${schema.exclusiveMinimum}.`);
+    if(schema.exclusiveMaximum!=null&&value>=schema.exclusiveMaximum)errors.push(`${path} must be less than ${schema.exclusiveMaximum}.`);
+  }
+  if(typeof value==="string"){
+    if(schema.minLength!=null&&value.length<schema.minLength)errors.push(`${path} is too short.`);
+    if(schema.maxLength!=null&&value.length>schema.maxLength)errors.push(`${path} is too long.`);
+    if(schema.pattern)try{if(!new RegExp(schema.pattern).test(value))errors.push(`${path} does not match the required pattern.`);}catch{}
+  }
+  if(Array.isArray(value)){
+    if(schema.minItems!=null&&value.length<schema.minItems)errors.push(`${path} needs at least ${schema.minItems} items.`);
+    if(schema.maxItems!=null&&value.length>schema.maxItems)errors.push(`${path} allows at most ${schema.maxItems} items.`);
+    value.forEach((item,index)=>errors.push(...validateSchemaValue(item,schema.items??{},`${path}[${index}]`)));
+  }
+  if(value!==null&&!Array.isArray(value)&&typeof value==="object"){
+    for(const required of schema.required??[])if(value[required]===undefined)errors.push(`${path}.${required} is required.`);
+    for(const [name,item] of Object.entries(value)){
+      const property=schema.properties?.[name];
+      if(property)errors.push(...validateSchemaValue(item,property,`${path}.${name}`));
+      else if(schema.additionalProperties===false)errors.push(`${path}.${name} is not allowed.`);
+      else if(schema.additionalProperties&&typeof schema.additionalProperties==="object")errors.push(...validateSchemaValue(item,schema.additionalProperties,`${path}.${name}`));
+    }
+  }
+  return errors;
+}
+
+export function migrateReplacementConfig(currentConfig,currentEntry,candidate,{useDefaults=false,overrides={}}={}) {
+  const source=currentConfig??{},sourceSchema=currentEntry?.schema??{},targetSchema=candidate?.schema??{};
+  const targetProperties=targetSchema.properties??{},sourceProperties=sourceSchema.properties??{};
+  const required=new Set(targetSchema.required??[]),defaults=candidate?.config??{};
+  const aliases=replacementMetadata(candidate).configuration_aliases??{};
+  const targetToSource=new Map(Object.entries(aliases).map(([from,to])=>[to,from]));
+  const sameSchema=replacementMetadata(currentEntry).configuration_schema_id
+    &&replacementMetadata(currentEntry).configuration_schema_id===replacementMetadata(candidate).configuration_schema_id
+    &&replacementMetadata(currentEntry).configuration_schema_version===replacementMetadata(candidate).configuration_schema_version;
+  const config={},changes=[],used=new Set(),blocking=[];
+  for(const [targetName,targetSpec] of Object.entries(targetProperties)){
+    const mappedSource=targetToSource.get(targetName),sourceName=mappedSource??targetName;
+    const sourceSpec=sourceProperties[sourceName],hasSource=Object.prototype.hasOwnProperty.call(source,sourceName);
+    const explicitMap=Boolean(mappedSource),equivalent=explicitMap||sameSchema||sameValue(sourceSpec,targetSpec);
+    let value,state,reason;
+    if(Object.prototype.hasOwnProperty.call(overrides,targetName)){
+      value=structuredClone(overrides[targetName]);state="provided";reason="Entered for the replacement.";
+    }else if(!useDefaults&&hasSource&&equivalent&&!validateSchemaValue(source[sourceName],targetSpec).length){
+      value=structuredClone(source[sourceName]);state=explicitMap?"mapped":"preserved";
+      reason=explicitMap?`Mapped from ${sourceName} by backend metadata.`:"Compatible value preserved.";
+      used.add(sourceName);
+    }else if(Object.prototype.hasOwnProperty.call(defaults,targetName)){
+      value=structuredClone(defaults[targetName]);state="defaulted";reason=useDefaults?"Replacement defaults requested.":"Existing value is absent, incompatible, or invalid.";
+    }else if(required.has(targetName)){
+      state="requires_input";reason="Required by the replacement and no valid default is available.";
+      blocking.push({field:targetName,code:"config.required_input",message:reason});
+    }else continue;
+    if(state!=="requires_input"){
+      const errors=validateSchemaValue(value,targetSpec);
+      if(errors.length){state="invalid";reason=errors.join(" ");blocking.push({field:targetName,code:"config.invalid",message:reason});}
+      else config[targetName]=value;
+    }
+    changes.push({field:targetName,source_field:sourceName,state,before:source[sourceName],after:value,reason});
+  }
+  for(const [name,value] of Object.entries(source))if(!used.has(name)&&!changes.some(change=>change.source_field===name&&["preserved","mapped"].includes(change.state))){
+    changes.push({field:name,source_field:name,state:"removed",before:value,reason:"The replacement schema does not accept this field."});
+  }
+  const wholeErrors=validateSchemaValue(config,targetSchema);
+  for(const message of wholeErrors)if(!blocking.some(item=>item.message===message))blocking.push({field:null,code:"config.invalid",message});
+  return{config,changes,blocking};
+}
+
+export function classifyReplacement(pipeline,nodeId,currentEntry,candidate) {
+  const node=pipeline.nodes.find(item=>item.id===nodeId),currentMeta=replacementMetadata(currentEntry),candidateMeta=replacementMetadata(candidate);
+  const base={candidate,compatibility:"incompatible",code:"replacement.incompatible",reason:"This candidate cannot replace the selected node.",applyable:false,port_changes:[]};
+  if(!node||!currentEntry)return{...base,code:"replacement.source_missing",reason:"The selected node or its discovery metadata is no longer available."};
+  if(!currentMeta.family||!candidateMeta.family||!currentMeta.configuration_schema_id||!candidateMeta.configuration_schema_id){
+    return{...base,code:"replacement.metadata_missing",reason:"Backend replacement family or schema identity is missing; replacement fails closed."};
+  }
+  if(currentMeta.family!==candidateMeta.family)return{...base,code:"replacement.family_mismatch",reason:`Backend families differ (${currentMeta.family} vs ${candidateMeta.family}).`};
+  const required=new Set(candidate.required_capabilities??[]),capabilities=new Set(candidate.capabilities??[]);
+  const missing=[...required].filter(value=>!capabilities.has(value));
+  if(missing.length)return{...base,code:"replacement.capability_missing",reason:`Candidate is missing required capability: ${missing.join(", ")}.`};
+  const connected=connectedPortIds(pipeline,nodeId),disconnect=new Set(candidateMeta.disconnect_ports??[]);
+  const portChanges=[],blocking=[];
+  for(const sourcePort of currentEntry.ports){
+    const target=destinationPort(sourcePort,candidate);
+    if(target&&target.value_type===sourcePort.value_type){
+      if(target.id!==sourcePort.id)portChanges.push({from:sourcePort.id,to:target.id,state:"remapped"});
+      continue;
+    }
+    if(connected.has(sourcePort.id)&&!disconnect.has(sourcePort.id))blocking.push(sourcePort.id);
+    portChanges.push({from:sourcePort.id,to:null,state:disconnect.has(sourcePort.id)?"disconnect":"missing"});
+  }
+  if(blocking.length)return{...base,code:"replacement.connected_port_missing",reason:`Connected port${blocking.length===1?"":"s"} ${blocking.join(", ")} have no backend-declared mapping.`,port_changes:portChanges};
+  const exact=node.kind===candidate.kind&&exactPortContract(currentEntry.ports,candidate.ports);
+  const compatibility=exact?"exact_drop_in":"migration";
+  const readiness=candidate.readiness??"unknown";
+  const ready=readiness==="ready";
+  const reason=exact
+    ?(ready?"Same backend family and exact port contract; connections can be preserved.":`Exact port contract, but readiness is ${readiness}.`)
+    :(ready?"Backend-declared family match with an explicit port impact plan.":`Structurally replaceable, but readiness is ${readiness}.`);
+  return{candidate,compatibility,code:ready?`replacement.${compatibility}`:"replacement.not_ready",reason,applyable:ready,port_changes:portChanges};
+}
+
+export function replacementCandidates(pipeline,nodeId,catalog) {
+  const node=pipeline.nodes.find(item=>item.id===nodeId),currentEntry=catalogEntryForNode(node,catalog);
+  if(!node||!currentEntry)return[];
+  const currentFamily=replacementMetadata(currentEntry).family;
+  return catalog.filter(candidate=>candidate.id!==currentEntry.id
+    &&(candidate.kind===node.kind||(currentFamily&&replacementMetadata(candidate).family===currentFamily))).map(candidate=>{
+    const result=classifyReplacement(pipeline,nodeId,currentEntry,candidate);
+    const migration=migrateReplacementConfig(node.config,currentEntry,candidate);
+    const preserved=migration.changes.filter(change=>["preserved","mapped"].includes(change.state)).length;
+    return{...candidate,...result,config_preview:migration,preserved_config_count:preserved};
+  }).sort((left,right)=>{
+    const rank={exact_drop_in:0,migration:1,incompatible:2};
+    return rank[left.compatibility]-rank[right.compatibility]
+      ||Number(right.readiness==="ready")-Number(left.readiness==="ready")
+      ||right.preserved_config_count-left.preserved_config_count
+      ||left.label.localeCompare(right.label)
+      ||left.id.localeCompare(right.id);
+  });
+}
+
+export function planNodeReplacement(pipeline,nodeId,candidate,catalog,{useDefaults=false,overrides={},catalogRevision=null}={}) {
+  const node=pipeline.nodes.find(item=>item.id===nodeId),currentEntry=catalogEntryForNode(node,catalog);
+  const classification=classifyReplacement(pipeline,nodeId,currentEntry,candidate);
+  const beforeFingerprint=pipelineFingerprint(pipeline),preview=structuredClone(pipeline);
+  const config=migrateReplacementConfig(node?.config,currentEntry,candidate,{useDefaults,overrides});
+  const edgeChanges=[],sinkChanges=[],blocking=[...config.blocking];
+  if(classification.compatibility==="incompatible")blocking.push({code:classification.code,message:classification.reason});
+  const aliases=replacementMetadata(candidate).port_aliases??{},disconnect=new Set(replacementMetadata(candidate).disconnect_ports??[]);
+  const edges=[];
+  for(const edge of preview.edges){
+    let drop=false,next=structuredClone(edge);
+    for(const endpointName of ["from","to"]){
+      const endpoint=next[endpointName];if(endpoint.node_id!==nodeId)continue;
+      const targetId=aliases[endpoint.port_id]??endpoint.port_id;
+      const targetPort=candidate.ports.find(port=>port.id===targetId&&port.direction===(endpointName==="from"?"output":"input"));
+      if(targetPort){
+        const state=targetId===endpoint.port_id?"preserved":"remapped";
+        edgeChanges.push({edge_id:edge.id,endpoint:endpointName,from:edge[endpointName].port_id,to:targetId,state});
+        endpoint.port_id=targetId;
+      }else if(disconnect.has(endpoint.port_id)){drop=true;edgeChanges.push({edge_id:edge.id,endpoint:endpointName,from:endpoint.port_id,to:null,state:"disconnected"});}
+      else blocking.push({code:"replacement.edge_unmapped",edge_id:edge.id,message:`Edge ${edge.id} uses unmapped port ${endpoint.port_id}.`});
+    }
+    if(!drop)edges.push(next);
+  }
+  preview.edges=edges;
+  preview.selected_sinks=preview.selected_sinks.flatMap(sink=>{
+    if(sink.node_id!==nodeId)return[sink];
+    const targetId=aliases[sink.port_id]??sink.port_id;
+    if(candidate.ports.some(port=>port.id===targetId&&port.direction==="output")){
+      sinkChanges.push({from:sink.port_id,to:targetId,state:targetId===sink.port_id?"preserved":"remapped"});
+      return[{...sink,port_id:targetId}];
+    }
+    if(disconnect.has(sink.port_id)){sinkChanges.push({from:sink.port_id,to:null,state:"disconnected"});return[];}
+    blocking.push({code:"replacement.sink_unmapped",message:`Selected sink ${sink.port_id} has no mapping.`});return[sink];
+  });
+  const previewNode=preview.nodes.find(item=>item.id===nodeId);
+  if(previewNode)Object.assign(previewNode,{kind:candidate?.kind,component_id:candidate?.component_id,config:structuredClone(config.config)});
+  preview.revision=Math.max(1,Number(pipeline.revision)||1)+1;
+  const lossy=edgeChanges.some(change=>change.state==="disconnected")||sinkChanges.some(change=>change.state==="disconnected")
+    ||config.changes.some(change=>["defaulted","removed","invalid","requires_input"].includes(change.state));
+  return{
+    schema_version:1,node_id:nodeId,candidate_id:candidate?.id,current_component_id:node?.component_id??null,
+    candidate_component_id:candidate?.component_id??null,graph_revision:pipeline.revision,
+    graph_fingerprint:beforeFingerprint,catalog_revision:catalogRevision,
+    classification,config_changes:config.changes,edge_changes:edgeChanges,sink_changes:sinkChanges,
+    lossless:!lossy,lossy,blocking,preview_graph:preview,validation:null,applyable:false,
+  };
+}
+
+export function attachReplacementValidation(plan,report) {
+  const next=structuredClone(plan);next.validation=structuredClone(report);
+  if(!report?.valid)next.blocking.push({code:"replacement.validation_failed",message:report?.diagnostics?.[0]?.message??"The replacement preview is not valid."});
+  next.applyable=next.classification.applyable&&next.blocking.length===0&&Boolean(report?.valid);
+  return next;
+}
+
+export function applyReplacementPlan(pipeline,plan,catalogRevision) {
+  if(!plan?.applyable)throw new Error("The displayed replacement plan is not applyable.");
+  if(pipeline.revision!==plan.graph_revision||pipelineFingerprint(pipeline)!==plan.graph_fingerprint)throw new Error("The graph changed after this replacement preview. Review it again.");
+  if((catalogRevision??null)!==(plan.catalog_revision??null))throw new Error("Backend discovery changed after this replacement preview. Review it again.");
+  const node=pipeline.nodes.find(item=>item.id===plan.node_id);
+  if(!node||(node.component_id??null)!==plan.current_component_id)throw new Error("The selected node changed after this replacement preview.");
+  return structuredClone(plan.preview_graph);
+}
+
+export function createEditHistory(){return{undo:[],redo:[]};}
+export function clearRedo(history){history.redo.length=0;}
+export function commitReplacement(pipeline,plan,catalogRevision,history,selection) {
+  const next=applyReplacementPlan(pipeline,plan,catalogRevision);
+  history.undo.push({before:structuredClone(pipeline),after:structuredClone(next),selection_before:selection,selection_after:plan.node_id});
+  history.redo.length=0;
+  return next;
+}
+export function undoEdit(history){
+  const entry=history.undo.pop();if(!entry)return null;history.redo.push(entry);
+  return{pipeline:structuredClone(entry.before),selection:entry.selection_before};
+}
+export function redoEdit(history){
+  const entry=history.redo.pop();if(!entry)return null;history.undo.push(entry);
+  return{pipeline:structuredClone(entry.after),selection:entry.selection_after};
 }
 
 export function insertSubgraph(pipeline,template,origin={x:80,y:80}) {
@@ -133,8 +381,9 @@ export function compatibleTargets(pipeline,fromNodeId,fromPortId,discovery) {
   const output=portsFor(source,"output",discovery).find(port=>port.id===fromPortId);
   if(!output)return[];
   return pipeline.nodes.flatMap(node=>portsFor(node,"input",discovery)
-    .filter(port=>port.value_type===output.value_type)
-    .map(port=>({node_id:node.id,port_id:port.id,value_type:port.value_type})));
+    .map(port=>connectionCompatibility(pipeline,fromNodeId,fromPortId,node.id,port.id,discovery))
+    .filter(result=>result.compatible)
+    .map(result=>({node_id:result.to.node_id,port_id:result.to.port_id,value_type:result.input.value_type})));
 }
 
 export function adapterPaths(fromType,toType,discovery) {
@@ -143,22 +392,56 @@ export function adapterPaths(fromType,toType,discovery) {
     .map(kind=>({kind:kind.kind,label:kind.label}));
 }
 
-export function connectPorts(pipeline,fromNode,fromPort,toNode,toPort,discovery) {
+export function connectionCompatibility(pipeline,fromNode,fromPort,toNode,toPort,discovery,{ignoreEdgeId=null}={}) {
   const source=pipeline.nodes.find(node=>node.id===fromNode),target=pipeline.nodes.find(node=>node.id===toNode);
-  if(!source||!target)throw new Error("Both connection endpoints must exist.");
+  const base={compatible:false,from:{node_id:fromNode,port_id:fromPort},to:{node_id:toNode,port_id:toPort},source,target,output:null,input:null};
+  if(!source||!target)return{...base,code:"connection.endpoint_missing",reason:"Both connection endpoints must exist."};
   const output=portsFor(source,"output",discovery).find(port=>port.id===fromPort);
   const input=portsFor(target,"input",discovery).find(port=>port.id===toPort);
-  if(!output||!input)throw new Error("Choose an output port and an input port.");
+  const detail={...base,output,input};
+  if(!output||!input)return{...detail,code:"connection.direction",reason:"Choose an output port and an input port."};
   if(output.value_type!==input.value_type){
     const adapters=adapterPaths(output.value_type,input.value_type,discovery);
     const route=adapters.length?` Add ${adapters.map(item=>item.label).join(" or ")} between them.`:" No registered adapter path is available.";
-    throw new Error(`${source.kind}.${output.id} emits ${output.value_type}; ${target.kind}.${input.id} requires ${input.value_type}.${route}`);
+    return{...detail,code:adapters.length?"connection.adapter_available":"connection.type_mismatch",adapters,
+      reason:`${source.kind}.${output.id} emits ${output.value_type}; ${target.kind}.${input.id} requires ${input.value_type}.${route}`};
   }
-  if(input.cardinality!=="many")pipeline.edges=pipeline.edges.filter(edge=>!(edge.to.node_id===toNode&&edge.to.port_id===toPort));
-  const duplicate=pipeline.edges.some(edge=>edge.from.node_id===fromNode&&edge.from.port_id===fromPort&&edge.to.node_id===toNode&&edge.to.port_id===toPort);
-  if(duplicate)return;
-  pipeline.edges.push({id:`edge:${cryptoId()}`,from:{node_id:fromNode,port_id:fromPort},to:{node_id:toNode,port_id:toPort},capacity:16});
+  const otherEdges=pipeline.edges.filter(edge=>edge.id!==ignoreEdgeId);
+  const duplicate=otherEdges.find(edge=>edge.from.node_id===fromNode&&edge.from.port_id===fromPort&&edge.to.node_id===toNode&&edge.to.port_id===toPort);
+  if(duplicate)return{...detail,code:"connection.duplicate",reason:"That typed connection already exists.",duplicate_edge_id:duplicate.id};
+  const occupied=otherEdges.find(edge=>edge.to.node_id===toNode&&edge.to.port_id===toPort);
+  if(input.cardinality!=="many"&&occupied){
+    return{...detail,code:"connection.input_occupied",occupied_edge_id:occupied.id,
+      reason:`${target.kind}.${input.id} accepts one connection and is already occupied. Insert an explicit merge node or reconnect the existing cable.`};
+  }
+  return{...detail,compatible:true,code:"connection.compatible",reason:`${output.value_type} output is compatible with ${input.value_type} input.`};
+}
+
+export function connectPorts(pipeline,fromNode,fromPort,toNode,toPort,discovery) {
+  const compatibility=connectionCompatibility(pipeline,fromNode,fromPort,toNode,toPort,discovery);
+  if(!compatibility.compatible){
+    if(compatibility.code==="connection.duplicate")return pipeline.edges.find(edge=>edge.id===compatibility.duplicate_edge_id);
+    throw new Error(compatibility.reason);
+  }
+  const edge={id:`edge:${cryptoId()}`,from:{node_id:fromNode,port_id:fromPort},to:{node_id:toNode,port_id:toPort},capacity:16};
+  pipeline.edges.push(edge);
   touch(pipeline);
+  return edge;
+}
+
+export function reconnectEdge(pipeline,edgeId,endpoint,nodeId,portId,discovery) {
+  const edge=pipeline.edges.find(item=>item.id===edgeId);
+  if(!edge)throw new Error("The selected connection is no longer present.");
+  if(!["from","to"].includes(endpoint))throw new Error("Choose which cable plug to reconnect.");
+  const from=endpoint==="from"?{node_id:nodeId,port_id:portId}:edge.from;
+  const to=endpoint==="to"?{node_id:nodeId,port_id:portId}:edge.to;
+  const compatibility=connectionCompatibility(
+    pipeline,from.node_id,from.port_id,to.node_id,to.port_id,discovery,{ignoreEdgeId:edgeId},
+  );
+  if(!compatibility.compatible)throw new Error(compatibility.reason);
+  edge[endpoint]={node_id:nodeId,port_id:portId};
+  touch(pipeline);
+  return edge;
 }
 
 export function connect(pipeline,from,to,discovery) {
