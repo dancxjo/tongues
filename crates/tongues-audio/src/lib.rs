@@ -13,6 +13,7 @@ use rustfft::FftPlanner;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod cleanup;
 mod segmentation;
 mod source;
 mod speech_pipeline;
@@ -20,6 +21,10 @@ mod system_input;
 mod transform;
 mod vad;
 
+pub use cleanup::{
+    CleanupAudioSource, CleanupCapability, CleanupPipeline, CleanupStage, CleanupStageConfig,
+    CleanupStageTrace, ProcessedAudio,
+};
 pub use segmentation::{
     AudioSegment, AuthoritativeBoundary, BoundaryEvidenceKind, SegmentCloseReason,
     SegmentationConfig, SegmentationEvent, SegmentationFrame, SegmentationMetrics,
