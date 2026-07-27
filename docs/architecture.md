@@ -188,6 +188,21 @@ speaking (contracts only)
 TTS, playback, and orchestration crates emit or consume typed events but do not
 introduce reverse dependencies into `speaking`.
 
+## Linguistic Claim Contract
+
+Competing grammar, lexical, acoustic, morphological, prosodic, and user
+evidence uses the lifecycle-aware `speaking::LinguisticEvidenceArtifact`.
+Claims retain stable IDs, typed targets and values, provenance, support or
+conflict edges, revision history, and deterministic resolution explanations.
+Revised or invalidated claims remain inspectable but cannot win, while
+committed claims are locked against later analysis.
+
+The contract is carried through the existing `StreamEvent::DerivedArtifact`
+envelope with stage `linguistic_claims`, so interpretation, duplex, CLI, and
+server surfaces can exchange it without introducing reverse dependencies into
+`speaking`. See [Linguistic Claims and Conflict Resolution](linguistic-claims.md)
+for the schema, priority policy, and revision rules.
+
 ### Deterministic duplex simulator
 
 `tongues-duplex` accepts a provider beam whose hypotheses carry normalized

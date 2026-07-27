@@ -117,6 +117,7 @@ For detailed training, data preparation, and model-family documentation, see:
 - [Sentence boundary](docs/sentence-boundary.md)
 - [Grammar parser](docs/grammar-parser.md)
 - [Boundary and grammar terminology migration](docs/terminology-migration.md)
+- [Linguistic claims and conflict resolution](docs/linguistic-claims.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Head2Phones v0 model card](docs/models/head2phones-v0.md)
 - [Interpretation](docs/interpretation.md)

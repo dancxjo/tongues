@@ -158,7 +158,7 @@ pub enum StreamSource {
     Replay { source_stream_id: StreamId },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TextRange {
     /// Start in Unicode scalar values, inclusive.
     pub start: u32,

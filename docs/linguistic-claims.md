@@ -1,0 +1,132 @@
+# Linguistic Claims and Conflict Resolution
+
+Tongues represents competing linguistic interpretations as durable claims
+rather than overwriting one analysis with another. The shared contract lives in
+`speaking::evidence`, below every producer and consumer:
+
+```text
+grammar / lexicon / acoustics / morphology / user markup
+                         |
+                         v
+             LinguisticEvidenceArtifact
+                         |
+                         v
+interpretation / duplex policy / server and CLI inspection
+```
+
+`speaking` owns the serializable data model and deterministic resolver. It does
+not depend on interpretation, duplex, or server crates, so those crates can use
+the same artifact without a dependency cycle.
+
+## Claim shape
+
+Every `LinguisticClaim` has:
+
+- a durable string `LinguisticClaimId`;
+- an utterance-scoped `LinguisticTarget`;
+- a typed `LinguisticClaimKind` and matching `LinguisticClaimValue`;
+- `EvidenceProvenance`, normalized confidence, and a machine/human rationale;
+- explicit `supports` and `conflicts_with` claim-ID edges;
+- a lifecycle state and source priority.
+
+Targets cover an utterance, text range, token, word, morpheme, phoneme, phone,
+boundary, syntax link, pronunciation, or parse. A target may carry a
+`TextRange`; those ranges preserve claim identity for an unchanged transcript
+prefix and identify only the claims affected by a later repair. Range offsets
+count Unicode scalar values.
+
+Claim values cover part of speech, dependency links, lexical identity,
+pronunciation, morphology, phoneme and phone realization, reduction, prosodic
+role, stress, boundaries, and parses. Constructors for grammar, lexicon,
+acoustic, morphology, user-markup, and manual-override producers assign
+standard provenance and default priority.
+
+## Lifecycle and revisions
+
+The lifecycle is append-only:
+
+```text
+hypothesis -> stable -> committed
+     |          |
+     +----------+-> revised
+     +----------+-> invalidated
+```
+
+Each transition records its sequence, reason, and optional replacement claim.
+Revised and invalidated claims stay in the artifact for diagnostics but are
+never eligible to win. Committed claims are locked: a later revision or
+invalidation fails before mutation. A repair beginning at text offset `n`
+invalidates eligible, uncommitted claims whose ranges extend beyond `n`, while
+claims wholly inside the stable prefix retain their IDs and state.
+
+## Resolution policy
+
+Resolution is deterministic and inspectable. If a committed candidate exists,
+it stays selected. Otherwise candidates are ordered by:
+
+1. source priority;
+2. normalized confidence;
+3. count of active supporting claims;
+4. lifecycle stability;
+5. lexicographic claim ID.
+
+The default source order is:
+
+```text
+manual override
+  > manual evidence
+  > user markup
+  > committed acoustics
+  > acoustic model / forced alignment / ASR
+  > lexicon
+  > grammar
+  > morphology
+  > prosody
+  > punctuation
+  > rule
+  > imported data
+  > G2P
+  > learned prediction / inference
+  > memory
+  > TTS plan
+  > unknown
+```
+
+Confidence is compared only after source priority. Scores must be finite and in
+the inclusive range `[0, 1]`; producers should name a calibration policy when
+one exists. Every resolution preserves all candidates and records a
+machine-readable reason, a human-readable explanation, and whether the
+candidate conflicts with the winner. A manual override therefore wins without
+erasing the automatic claim it replaced.
+
+## Artifact and event schema
+
+`LinguisticEvidenceArtifact` uses `schema_version = 1`. JSON readers require
+the field and reject unsupported versions with the found and expected values.
+There is no pre-v1 durable claim artifact to migrate. Future schema changes
+must add an explicit decoder/migration before incrementing
+`LINGUISTIC_EVIDENCE_SCHEMA_V1`.
+
+The artifact contains claims, lifecycle history, and saved resolutions. It can
+be carried through the existing provider-neutral stream envelope as:
+
+```json
+{
+  "type": "derived_artifact",
+  "data": {
+    "stage": "linguistic_claims",
+    "artifact_id": "claims:utterance-42",
+    "value": {
+      "schema_version": 1,
+      "utterance_id": "utterance-42",
+      "claims": [],
+      "lifecycle": [],
+      "resolutions": []
+    }
+  }
+}
+```
+
+CLI JSONL, server APIs, interpretation, and duplex may serialize or inspect the
+same shape. Behavioral wiring into individual producers and the live duplex
+commit frontier is intentionally layered on top of this shared contract.
