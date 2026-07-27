@@ -1,6 +1,6 @@
 use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message, WebSocket};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use tongues_audio::{
@@ -54,9 +54,13 @@ enum ProbeEvent {
 
 pub(crate) async fn browser_audio_upgrade(
     headers: HeaderMap,
+    uri: Uri,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if let Err(error) = super::validate_same_origin(&headers) {
+    if let Err(error) = super::validate_same_origin(
+        &headers,
+        uri.authority().map(|authority| authority.as_str()),
+    ) {
         return (StatusCode::FORBIDDEN, error).into_response();
     }
     upgrade.on_upgrade(browser_audio_session)

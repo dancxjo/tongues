@@ -43,8 +43,8 @@ use tongues_duplex::{
 };
 use tower_http::services::ServeDir;
 
-mod live;
 mod audio_input_ws;
+mod live;
 
 const STYLE_VECTOR_DIMS: usize = 256;
 const DEFAULT_DUPLEX_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
@@ -875,26 +875,38 @@ async fn enforce_request_policy(request: Request, next: Next) -> Response {
         && request.method() != Method::HEAD
         && request.method() != Method::OPTIONS
     {
-        if let Err(error) = validate_same_origin(request.headers()) {
+        if let Err(error) = validate_same_origin(
+            request.headers(),
+            request
+                .uri()
+                .authority()
+                .map(|authority| authority.as_str()),
+        ) {
             return (StatusCode::FORBIDDEN, error).into_response();
         }
     }
     next.run(request).await
 }
 
-fn validate_same_origin(headers: &axum::http::HeaderMap) -> Result<(), String> {
+fn validate_same_origin(
+    headers: &axum::http::HeaderMap,
+    request_authority: Option<&str>,
+) -> Result<(), String> {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return Ok(());
     };
     let origin = origin
         .to_str()
         .map_err(|_| "invalid Origin header".to_string())?;
-    let host = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| "missing Host header on mutating request".to_string())?;
-    let allowed_http = format!("http://{host}");
-    let allowed_https = format!("https://{host}");
+    let authority = match headers.get(header::HOST) {
+        Some(host) => host
+            .to_str()
+            .map_err(|_| "invalid Host header".to_string())?,
+        None => request_authority
+            .ok_or_else(|| "missing request authority on mutating request".to_string())?,
+    };
+    let allowed_http = format!("http://{authority}");
+    let allowed_https = format!("https://{authority}");
     if origin.eq_ignore_ascii_case(&allowed_http) || origin.eq_ignore_ascii_case(&allowed_https) {
         return Ok(());
     }
@@ -9806,12 +9818,24 @@ mod tests {
             header::ORIGIN,
             "http://localhost:3000".parse().expect("origin header"),
         );
-        assert!(validate_same_origin(&headers).is_ok());
+        assert!(validate_same_origin(&headers, None).is_ok());
         headers.insert(
             header::ORIGIN,
             "https://evil.example".parse().expect("evil origin"),
         );
-        assert!(validate_same_origin(&headers).is_err());
+        assert!(validate_same_origin(&headers, None).is_err());
+    }
+
+    #[test]
+    fn same_origin_policy_accepts_http2_request_authority_without_host_header() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            "https://localhost:3443".parse().expect("origin header"),
+        );
+
+        assert!(validate_same_origin(&headers, Some("localhost:3443")).is_ok());
+        assert!(validate_same_origin(&headers, Some("evil.example")).is_err());
     }
 
     #[test]
