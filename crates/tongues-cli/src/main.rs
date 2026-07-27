@@ -11,6 +11,7 @@ mod duplex_cmd;
 mod fetch_corpora;
 pub mod language_routing_cmd;
 pub mod models;
+mod recognition_cmd;
 mod speak;
 mod speech_corpus;
 mod styletts2_cmds;
@@ -155,6 +156,27 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Generate shell completion from the real Clap command tree
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
+    /// Capture audio and report source events
+    Listen(recognition_cmd::FriendlyRecognitionCommand),
+
+    /// Recognize committed text from audio
+    Transcribe(recognition_cmd::FriendlyRecognitionCommand),
+
+    /// Produce normalized transcript and sentence structure
+    Recognize(recognition_cmd::FriendlyRecognitionCommand),
+
+    /// Add semantic interpretation to committed recognition
+    Interpret(recognition_cmd::FriendlyRecognitionCommand),
+
+    /// Run recognition, deterministic response generation, and TTS
+    Converse(recognition_cmd::FriendlyRecognitionCommand),
+
     /// Show shared language detection and ASR routing capabilities
     #[command(name = "language-routing")]
     LanguageRouting(language_routing_cmd::LanguageRoutingCommand),
@@ -1957,6 +1979,25 @@ fn main() -> Result<()> {
     }
 
     match command {
+        Commands::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "tongues", &mut std::io::stdout());
+            Ok(())
+        }
+        Commands::Listen(command) => {
+            recognition_cmd::run(speaking::FriendlySpeechVerb::Listen, command)
+        }
+        Commands::Transcribe(command) => {
+            recognition_cmd::run(speaking::FriendlySpeechVerb::Transcribe, command)
+        }
+        Commands::Recognize(command) => {
+            recognition_cmd::run(speaking::FriendlySpeechVerb::Recognize, command)
+        }
+        Commands::Interpret(command) => {
+            recognition_cmd::run(speaking::FriendlySpeechVerb::Interpret, command)
+        }
+        Commands::Converse(command) => {
+            recognition_cmd::run(speaking::FriendlySpeechVerb::Converse, command)
+        }
         Commands::LanguageRouting(command) => language_routing_cmd::run(command),
         Commands::Vad(command) => vad_cmd::run(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
@@ -13245,6 +13286,37 @@ mod tests {
         assert!(matches!(
             speaking.command,
             Some(Commands::Speaking { json: true, .. })
+        ));
+    }
+
+    #[test]
+    fn friendly_recognition_verbs_share_source_and_output_arguments() {
+        for verb in ["listen", "transcribe", "recognize", "interpret", "converse"] {
+            let cli = Cli::try_parse_from([
+                "tongues",
+                verb,
+                "--stdin",
+                "--pcm-encoding",
+                "f32le",
+                "--sample-rate",
+                "16000",
+                "--channels",
+                "1",
+                "--provider",
+                "fixture",
+                "--output",
+                "jsonl",
+            ])
+            .unwrap_or_else(|error| panic!("{verb} should parse: {error}"));
+            assert!(cli.command.is_some());
+        }
+        let description = Cli::try_parse_from(["tongues", "transcribe", "--describe"])
+            .expect("workflow description needs no source");
+        assert!(matches!(
+            description.command,
+            Some(Commands::Transcribe(
+                recognition_cmd::FriendlyRecognitionCommand { describe: true, .. }
+            ))
         ));
     }
 
