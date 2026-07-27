@@ -74,6 +74,8 @@ pub struct NodeKindSpec {
     pub adapter: Option<AdapterSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<MergeSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splitter: Option<SplitterSpec>,
     #[serde(default)]
     pub replacement: ReplacementSpec,
 }
@@ -88,6 +90,11 @@ pub struct AdapterSpec {
 pub struct MergeSpec {
     pub strategy: String,
     pub deterministic_order: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitterSpec {
+    pub strategy: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,6 +242,7 @@ fn node(kind: &str, label: &str, ports: Vec<PortSpec>) -> NodeKindSpec {
         permits_cycle: false,
         adapter: None,
         merge: None,
+        splitter: None,
         replacement: ReplacementSpec::for_node_kind(kind),
     }
 }
@@ -497,5 +505,17 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
         deterministic_order: "event time, source edge ID, source sequence".into(),
     });
     kinds.push(transcript_merge);
+    let mut transcript_splitter = node(
+        "transcript_splitter",
+        "Transcript splitter",
+        vec![
+            port("in", Input, TranscriptCommitted, One, false),
+            port("out", Output, TranscriptCommitted, Many, true),
+        ],
+    );
+    transcript_splitter.splitter = Some(SplitterSpec {
+        strategy: "copy_each_value_to_every_outgoing_edge".into(),
+    });
+    kinds.push(transcript_splitter);
     kinds
 }

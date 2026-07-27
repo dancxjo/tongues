@@ -6,6 +6,7 @@ import {
   catalogEntryForNode,connectionCompatibility,deleteGraphSelection,deleteNodeFaceplateGeometry,diagnosticsByTarget,distributeGraphSelection,duplicateNode,ensureLayout,insertNodeOnEdge,insertionCandidates,insertSubgraph,migrateReplacementConfig,moveGraphSelection,nodeLabel,
   pasteGraphSelection,planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,tidyGraphSelection,undoEdit,validateSchemaValue,
   readNodeFaceplateGeometry,setNodeFaceplateGeometry,NODE_FACEPLATE_GEOMETRY_DEFAULT,
+  addNote,createEmbeddedSubpatch,createFrame,migratePipelineOrganization,setCablePresentation,subpatchBoundaryPorts,subpatchUrl,
 } from "./speech-dataflow-model.mjs";
 
 const replacement=(family,extra={})=>({family,configuration_schema_id:`fixture.${family}.config`,configuration_schema_version:1,port_aliases:{},configuration_aliases:{},disconnect_ports:[],...extra});
@@ -224,20 +225,20 @@ test("node faceplate geometry is clamped and follows duplicate/copy/paste graph 
   const pasted=pasteGraphSelection(graph,copied,{x:22,y:11});
   assert.equal(pasted.length,1);
   assert.deepEqual(readNodeFaceplateGeometry(graph,pasted[0]),clamped);
-  assert.equal(Object.keys(JSON.parse(graph.metadata.labels["studio.node-faceplate-geometry.v1"])).length,3);
+  assert.equal(Object.keys(graph.presentation.node_faceplates).length,3);
 });
 
 test("faceplate geometry metadata is removed when geometry and nodes are deleted",()=>{
   const graph=createPipeline(),catalog=buildCatalog(discovery),first=addNode(graph,catalog.find(node=>node.kind==="microphone")),second=addNode(graph,catalog.find(node=>node.kind==="asr"));
   setNodeFaceplateGeometry(graph,first.id,NODE_FACEPLATE_GEOMETRY_DEFAULT);
   setNodeFaceplateGeometry(graph,second.id,{width:333,height:222,collapsed_height:77});
-  assert.ok(graph.metadata.labels["studio.node-faceplate-geometry.v1"]);
+  assert.ok(graph.presentation.node_faceplates[second.id]);
   deleteNodeFaceplateGeometry(graph,first.id);
-  const metadata=JSON.parse(graph.metadata.labels["studio.node-faceplate-geometry.v1"]);
+  const metadata=graph.presentation.node_faceplates;
   assert.equal(metadata[first.id],undefined);
   assert.ok(metadata[second.id]);
   deleteGraphSelection(graph,[second.id]);
-  assert.equal(graph.metadata.labels["studio.node-faceplate-geometry.v1"],undefined);
+  assert.equal(graph.presentation.node_faceplates[second.id],undefined);
 });
 
 test("multi-object delete and presentation arrangement are atomic and semantics-safe",()=>{
@@ -260,6 +261,47 @@ test("multi-object delete and presentation arrangement are atomic and semantics-
   assert.equal(deleteGraphSelection(graph,[nodes[1].id],[edgeId]),true);
   assert.deepEqual(graph.nodes.map(node=>node.id),[nodes[0].id,nodes[2].id]);
   assert.equal(graph.edges.length,0);
+});
+
+test("typed presentation organization persists without changing runtime topology",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const mic=addNode(graph,catalog.find(node=>node.kind==="microphone"),null,{x:100,y:120});
+  const asr=addNode(graph,catalog.find(node=>node.kind==="asr"),null,{x:420,y:120});
+  const edge=connectPorts(graph,mic.id,"out",asr.id,"audio",discovery);
+  const topology=JSON.stringify({nodes:graph.nodes,edges:graph.edges,selected_sinks:graph.selected_sinks});
+  const frame=createFrame(graph,[mic.id,asr.id],{title:"Capture",color:"#123456"});
+  const note=addNote(graph,{text:"Operator note",position:{x:240,y:40}});
+  setCablePresentation(graph,edge.id,{routing:"orthogonal",reroute_points:[{x:260,y:180}],emphasized:true});
+  assert.equal(frame.node_ids.length,2);assert.equal(note.text,"Operator note");
+  assert.equal(graph.presentation.cables[edge.id].routing,"orthogonal");
+  assert.equal(JSON.stringify({nodes:graph.nodes,edges:graph.edges,selected_sinks:graph.selected_sinks}),topology);
+  assert.deepEqual(JSON.parse(JSON.stringify(graph)).presentation,graph.presentation);
+});
+
+test("subpatch creation requires reviewed external ports and embedded copies become independent definitions",()=>{
+  const graph=createPipeline(),catalog=buildCatalog(discovery);
+  const mic=addNode(graph,catalog.find(node=>node.kind==="microphone"),null,{x:100,y:100});
+  const asr=addNode(graph,catalog.find(node=>node.kind==="asr"),null,{x:400,y:100});
+  const sink=addNode(graph,catalog.find(node=>node.kind==="transcript_sink"),null,{x:700,y:100});
+  connectPorts(graph,mic.id,"out",asr.id,"audio",discovery);connectPorts(graph,asr.id,"committed",sink.id,"in",discovery);
+  const boundary=subpatchBoundaryPorts(graph,[asr.id],discovery);
+  assert.deepEqual(boundary.map(port=>port.direction).sort(),["input","output"]);
+  assert.throws(()=>createEmbeddedSubpatch(graph,[asr.id],{title:"Recognizer"},discovery),/Review and provide/);
+  const original=createEmbeddedSubpatch(graph,[asr.id],{title:"Recognizer",exposed_ports:boundary},discovery);
+  const copied=copyGraphSelection(graph,[asr.id]),pasted=pasteGraphSelection(graph,copied);
+  const duplicate=graph.subpatches.find(subpatch=>subpatch.id!==original.id);
+  assert.equal(pasted.length,1);assert.ok(duplicate);
+  assert.notEqual(duplicate.definition_id,original.definition_id);
+  assert.equal(duplicate.definition_version,original.definition_version);
+  assert.match(subpatchUrl(graph.graph_id,original.id,asr.id),/subpatch=.*&node=/);
+});
+
+test("schema two browser graphs migrate label organization into schema three",()=>{
+  const graph={schema_version:2,metadata:{labels:{"studio.layout.v1":"{\"node:a\":{\"x\":5,\"y\":9}}"}},nodes:[],edges:[],selected_sinks:[]};
+  migratePipelineOrganization(graph);
+  assert.equal(graph.schema_version,3);
+  assert.deepEqual(graph.presentation.node_positions["node:a"],{x:5,y:9});
+  assert.deepEqual(graph.subpatches,[]);
 });
 
 test("bypass is explicit structural rewiring and preserves compatible fan-out",()=>{
@@ -431,8 +473,8 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
   assert.match(browserHtml,/id="graph-outline".*aria-label="Keyboard graph outline"/);
   assert.match(browserSource,/\/api\/pipeline\/graphs\/\$\{encodeURIComponent/);
   assert.match(browserSource,/fetch\("\/api\/pipeline\/run"/);
-  assert.match(browserSource,/id="run-state"/);
-  assert.match(browserSource,/id="run-id"/);
+  assert.match(browserHtml,/id="run-state"/);
+  assert.match(browserHtml,/id="run-id"/);
   assert.match(browserSource,/request\(`\/api\/pipeline\/runs\/\$\{encodeURIComponent\(runState\.runId\)\}\/stop`/);
   assert.match(browserSource,/\/api\/pipeline\/runs\/\$\{encodeURIComponent\(runState\.runId\)\}\/panic/);
   assert.match(browserSource,/byId\("stop"\)\.disabled/);
@@ -453,7 +495,7 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
 });
 
 test("canvas nodes use readable cards and humanized port types",()=>{
-  assert.match(browserSource,/"width":"data\\(width\\)","height":"data\\(height\\)"/);
+  assert.match(browserSource,/"width":"data\(width\)","height":"data\(height\)"/);
   assert.match(browserSource,/"font-size":14/);
   assert.match(browserSource,/"text-justification":"left"/);
   assert.match(browserSource,/transcript_committed:"committed transcript"/);

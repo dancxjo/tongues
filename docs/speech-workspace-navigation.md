@@ -13,7 +13,7 @@ history is useful navigation, but it is never treated as evidence storage.
 | `/speech`, `/speech/compose`, `/speech/compare`, `/speech/catalog`, `/speech/operate` | Speech Studio | speech configuration, comparison, discovery, or runtime operation |
 | `/speech/live` | Live conversation | an execution in progress; committed turns become session evidence |
 | `/studio/graphs/new?starter={starter-id}` | Graph Studio | an unsaved configuration draft seeded by a backend starter |
-| `/studio/graphs/{graph-id}` | Graph Studio | a saved graph revision; `?node={node-id}` selects provenance |
+| `/studio/graphs/{graph-id}` | Graph Studio | a saved graph revision; `?subpatch={subpatch-id}&node={node-id}` drills into an embedded subpatch and selects provenance |
 | `/runs` | Execution tracks | an index of durable execution records |
 | `/runs/{run-id}/tracks` | Execution tracks | observed lifecycle evidence for one execution run |
 | `/sessions/new/correct` | WaveDeck | an empty correction workspace awaiting observed evidence |

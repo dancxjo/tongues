@@ -1,4 +1,5 @@
-export const PIPELINE_SCHEMA_VERSION = 2;
+export const PIPELINE_SCHEMA_VERSION = 3;
+export const PRESENTATION_SCHEMA_VERSION = 1;
 const LAYOUT_LABEL = "studio.layout.v1";
 const NODE_FACEPLATE_LABEL = "studio.node-faceplate.v1";
 const NODE_FACEPLATE_GEOMETRY_LABEL = "studio.node-faceplate-geometry.v1";
@@ -145,13 +146,52 @@ export function createPipeline(name="Untitled pipeline") {
     schema_version:PIPELINE_SCHEMA_VERSION,graph_id:`pipeline:${cryptoId()}`,
     revision:1,metadata:{name,description:"",allow_unsafe_execution:false,labels:{}},
     nodes:[],edges:[],selected_sinks:[],
+    presentation:createPresentation(),subpatches:[],
   };
 }
 
+function createPresentation(){
+  return{schema_version:PRESENTATION_SCHEMA_VERSION,node_positions:{},node_faceplates:{},frames:[],notes:[],cables:{},collapsed_subpatches:[],global_cable_opacity:1,selected_path_focus:false};
+}
+
+export function migratePipelineOrganization(pipeline){
+  pipeline.presentation??=createPresentation();
+  pipeline.presentation.schema_version??=PRESENTATION_SCHEMA_VERSION;
+  pipeline.presentation.node_positions??={};
+  pipeline.presentation.node_faceplates??={};
+  pipeline.presentation.frames??=[];
+  pipeline.presentation.notes??=[];
+  pipeline.presentation.cables??={};
+  pipeline.presentation.collapsed_subpatches??=[];
+  pipeline.presentation.global_cable_opacity??=1;
+  pipeline.presentation.selected_path_focus??=false;
+  pipeline.subpatches??=[];
+  if(pipeline.schema_version===2){
+    try{Object.assign(pipeline.presentation.node_positions,JSON.parse(pipeline.metadata?.labels?.[LAYOUT_LABEL]??"{}"));}catch{}
+    let collapsed={};try{collapsed=JSON.parse(pipeline.metadata?.labels?.[NODE_FACEPLATE_LABEL]??"{}")?.collapsed??{};}catch{}
+    let geometry={};try{geometry=JSON.parse(pipeline.metadata?.labels?.[NODE_FACEPLATE_GEOMETRY_LABEL]??"{}");}catch{}
+    for(const nodeId of new Set([...Object.keys(collapsed),...Object.keys(geometry)])){
+      pipeline.presentation.node_faceplates[nodeId]={...(geometry[nodeId]??{}),collapsed:Boolean(collapsed[nodeId])};
+    }
+    pipeline.schema_version=PIPELINE_SCHEMA_VERSION;
+  }
+  return pipeline;
+}
+
 function readNodeFaceplateMetadata(pipeline) {
+  if(pipeline?.presentation?.node_faceplates)return{collapsed:Object.fromEntries(Object.entries(pipeline.presentation.node_faceplates).filter(([,value])=>value?.collapsed).map(([id])=>[id,true]))};
   try{return JSON.parse(pipeline?.metadata?.labels?.[NODE_FACEPLATE_LABEL]??"{}");}catch{return{};}
 }
 function writeNodeFaceplateMetadata(pipeline,metadata) {
+  if(pipeline?.presentation){
+    pipeline.presentation.node_faceplates??={};
+    const collapsed=metadata?.collapsed??{};
+    for(const [id,value] of Object.entries(pipeline.presentation.node_faceplates))value.collapsed=Boolean(collapsed[id]);
+    for(const id of Object.keys(collapsed))pipeline.presentation.node_faceplates[id]??={collapsed:true};
+    pipeline.metadata.labels??={};
+    pipeline.metadata.labels[NODE_FACEPLATE_LABEL]=JSON.stringify(metadata);
+    return;
+  }
   pipeline.metadata.labels??={};
   if(!metadata||Object.keys(metadata).length===0) {
     delete pipeline.metadata.labels[NODE_FACEPLATE_LABEL];
@@ -160,9 +200,25 @@ function writeNodeFaceplateMetadata(pipeline,metadata) {
   pipeline.metadata.labels[NODE_FACEPLATE_LABEL]=JSON.stringify(metadata);
 }
 function readNodeFaceplateGeometryMetadata(pipeline) {
+  if(pipeline?.presentation?.node_faceplates)return Object.fromEntries(Object.entries(pipeline.presentation.node_faceplates).map(([id,value])=>[id,{width:value.width,height:value.height,collapsed_height:value.collapsed_height}]));
   try{return JSON.parse(pipeline?.metadata?.labels?.[NODE_FACEPLATE_GEOMETRY_LABEL]??"{}");}catch{return{};}
 }
 function writeNodeFaceplateGeometryMetadata(pipeline,metadata) {
+  if(pipeline?.presentation){
+    pipeline.presentation.node_faceplates??={};
+    for(const [id,value] of Object.entries(metadata??{})){
+      pipeline.presentation.node_faceplates[id]={...(pipeline.presentation.node_faceplates[id]??{}),...value};
+    }
+    for(const id of Object.keys(pipeline.presentation.node_faceplates))if(!metadata?.[id]){
+      const collapsed=Boolean(pipeline.presentation.node_faceplates[id].collapsed);
+      pipeline.presentation.node_faceplates[id]=collapsed?{collapsed:true}:undefined;
+      if(!collapsed)delete pipeline.presentation.node_faceplates[id];
+    }
+    pipeline.metadata.labels??={};
+    const legacy=Object.fromEntries(Object.entries(pipeline.presentation.node_faceplates).flatMap(([id,value])=>value.width==null&&value.height==null&&value.collapsed_height==null?[]:[[id,{width:value.width,height:value.height,collapsed_height:value.collapsed_height}]]));
+    if(Object.keys(legacy).length)pipeline.metadata.labels[NODE_FACEPLATE_GEOMETRY_LABEL]=JSON.stringify(legacy);else delete pipeline.metadata.labels[NODE_FACEPLATE_GEOMETRY_LABEL];
+    return;
+  }
   pipeline.metadata.labels??={};
   if(!metadata||Object.keys(metadata).length===0) {
     delete pipeline.metadata.labels[NODE_FACEPLATE_GEOMETRY_LABEL];
@@ -254,9 +310,13 @@ export function addNode(pipeline,catalogNode,afterId=null,position=null) {
 }
 
 export function removeNode(pipeline,id) {
+  const removedEdges=pipeline.edges.filter(edge=>edge.from.node_id===id||edge.to.node_id===id).map(edge=>edge.id);
   pipeline.nodes=pipeline.nodes.filter(node=>node.id!==id);
   pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==id&&edge.to.node_id!==id);
   pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==id);
+  removedEdges.forEach(edgeId=>{if(pipeline.presentation?.cables)delete pipeline.presentation.cables[edgeId];});
+  pipeline.subpatches=(pipeline.subpatches??[]).map(subpatch=>({...subpatch,node_ids:subpatch.node_ids.filter(nodeId=>nodeId!==id),exposed_ports:subpatch.exposed_ports.filter(port=>port.internal.node_id!==id)})).filter(subpatch=>subpatch.node_ids.length);
+  pipeline.presentation.frames=(pipeline.presentation?.frames??[]).map(frame=>({...frame,node_ids:frame.node_ids.filter(nodeId=>nodeId!==id)}));
   deleteNodeFaceplateState(pipeline,id);
   const layout=readLayout(pipeline);delete layout[id];writeLayout(pipeline,layout);touch(pipeline);
 }
@@ -723,7 +783,7 @@ export function connect(pipeline,from,to,discovery) {
   connectPorts(pipeline,from,pairs[0].output.id,to,pairs[0].input.id,discovery);
 }
 
-export function removeEdge(pipeline,id){pipeline.edges=pipeline.edges.filter(edge=>edge.id!==id);touch(pipeline);}
+export function removeEdge(pipeline,id){pipeline.edges=pipeline.edges.filter(edge=>edge.id!==id);if(pipeline.presentation?.cables)delete pipeline.presentation.cables[id];touch(pipeline);}
 
 export function bypassNode(pipeline,id,discovery) {
   const incoming=pipeline.edges.filter(edge=>edge.to.node_id===id);
@@ -748,13 +808,87 @@ export function nodeLabel(node,catalog) {
 }
 
 export function readLayout(pipeline) {
+  if(pipeline?.presentation?.node_positions)return pipeline.presentation.node_positions;
   try{return JSON.parse(pipeline.metadata?.labels?.[LAYOUT_LABEL]??"{}");}catch{return{};}
 }
 function writeLayout(pipeline,layout) {
+  if(pipeline?.presentation){pipeline.presentation.node_positions=layout;pipeline.metadata.labels??={};pipeline.metadata.labels[LAYOUT_LABEL]=JSON.stringify(layout);return;}
   pipeline.metadata.labels??={};pipeline.metadata.labels[LAYOUT_LABEL]=JSON.stringify(layout);
 }
 export function nodePosition(pipeline,id){return readLayout(pipeline)[id]??null;}
 export function setNodePosition(pipeline,id,position){const layout=readLayout(pipeline);layout[id]={x:Math.round(position.x),y:Math.round(position.y)};writeLayout(pipeline,layout);}
+
+export function createFrame(pipeline,nodeIds,{title="Section",color="#31536b",padding=72}={}){
+  const selected=[...new Set(nodeIds)].filter(id=>pipeline.nodes.some(node=>node.id===id));
+  if(!selected.length)throw new Error("Select at least one runtime node to frame.");
+  const layout=readLayout(pipeline),points=selected.map(id=>layout[id]).filter(Boolean);
+  if(!points.length)throw new Error("The selected nodes need canvas positions before framing.");
+  const minX=Math.min(...points.map(point=>point.x))-padding,minY=Math.min(...points.map(point=>point.y))-padding;
+  const maxX=Math.max(...points.map(point=>point.x))+padding,maxY=Math.max(...points.map(point=>point.y))+padding;
+  const frame={id:`frame:${cryptoId()}`,title,color,origin:{x:minX,y:minY},size:{x:Math.max(180,maxX-minX),y:Math.max(120,maxY-minY)},node_ids:selected};
+  pipeline.presentation.frames.push(frame);touch(pipeline);return frame;
+}
+
+export function moveFrame(pipeline,frameId,delta,{moveContents=true}={}){
+  const frame=pipeline.presentation?.frames?.find(item=>item.id===frameId);
+  if(!frame)return false;
+  frame.origin={x:Math.round(frame.origin.x+delta.x),y:Math.round(frame.origin.y+delta.y)};
+  if(moveContents)moveGraphSelection(pipeline,frame.node_ids,delta);
+  else touch(pipeline);
+  return true;
+}
+
+export function addNote(pipeline,{text="Note",position={x:100,y:100},color="#594c2c"}={}){
+  const note={id:`note:${cryptoId()}`,text,position:{x:Math.round(position.x),y:Math.round(position.y)},color};
+  pipeline.presentation.notes.push(note);touch(pipeline);return note;
+}
+
+export function setCablePresentation(pipeline,edgeId,{routing="curved",reroute_points=[],emphasized=false}={}){
+  if(!pipeline.edges.some(edge=>edge.id===edgeId))throw new Error("The selected cable is no longer present.");
+  if(!["straight","curved","orthogonal"].includes(routing))throw new Error("Choose straight, curved, or orthogonal cable routing.");
+  pipeline.presentation.cables[edgeId]={routing,reroute_points:reroute_points.map(point=>({x:Math.round(point.x),y:Math.round(point.y)})),emphasized:Boolean(emphasized)};
+  touch(pipeline);return pipeline.presentation.cables[edgeId];
+}
+
+export function subpatchBoundaryPorts(pipeline,nodeIds,discovery){
+  const members=new Set(nodeIds),boundaries=new Map();
+  const add=(endpoint,direction)=>{
+    const key=`${direction}:${endpoint.node_id}:${endpoint.port_id}`;
+    if(boundaries.has(key))return;
+    const node=pipeline.nodes.find(item=>item.id===endpoint.node_id);
+    const port=portsFor(node,direction,discovery).find(item=>item.id===endpoint.port_id);
+    if(port)boundaries.set(key,{id:`${direction==="input"?"in":"out"}-${boundaries.size+1}`,label:port.label??port.id,direction,value_type:port.value_type,internal:structuredClone(endpoint)});
+  };
+  for(const edge of pipeline.edges){
+    const fromInside=members.has(edge.from.node_id),toInside=members.has(edge.to.node_id);
+    if(fromInside&&!toInside)add(edge.from,"output");
+    else if(!fromInside&&toInside)add(edge.to,"input");
+  }
+  for(const sink of pipeline.selected_sinks)if(members.has(sink.node_id))add(sink,"output");
+  return[...boundaries.values()];
+}
+
+export function createEmbeddedSubpatch(pipeline,nodeIds,{title="Subpatch",exposed_ports=null,parent_subpatch_id=null}={},discovery){
+  const members=[...new Set(nodeIds)].filter(id=>pipeline.nodes.some(node=>node.id===id));
+  if(!members.length)throw new Error("Select at least one runtime node for a subpatch.");
+  const boundary=subpatchBoundaryPorts(pipeline,members,discovery);
+  if(exposed_ports==null)throw new Error("Review and provide every external subpatch port before creating the boundary.");
+  const key=port=>`${port.direction}:${port.internal.node_id}:${port.internal.port_id}:${port.value_type}`;
+  if(boundary.map(key).sort().join("|")!==exposed_ports.map(key).sort().join("|"))throw new Error("The reviewed exposed ports no longer match the graph boundary.");
+  const subpatch={id:`subpatch:${cryptoId()}`,title,definition_id:`definition:${cryptoId()}`,definition_version:1,parent_subpatch_id,node_ids:members,exposed_ports:structuredClone(exposed_ports)};
+  pipeline.subpatches.push(subpatch);touch(pipeline);return subpatch;
+}
+
+export function setSubpatchCollapsed(pipeline,subpatchId,collapsed){
+  const ids=new Set(pipeline.presentation.collapsed_subpatches??[]);
+  if(collapsed)ids.add(subpatchId);else ids.delete(subpatchId);
+  pipeline.presentation.collapsed_subpatches=[...ids];touch(pipeline);
+}
+
+export function subpatchUrl(graphId,subpatchId,nodeId=null){
+  const url=`/studio/graphs/${encodeURIComponent(graphId)}?subpatch=${encodeURIComponent(subpatchId)}`;
+  return nodeId?`${url}&node=${encodeURIComponent(nodeId)}`:url;
+}
 
 export function copyGraphSelection(pipeline,nodeIds) {
   const selected=new Set(nodeIds),layout=readLayout(pipeline);
@@ -765,6 +899,7 @@ export function copyGraphSelection(pipeline,nodeIds) {
     edges:pipeline.edges.filter(edge=>selected.has(edge.from.node_id)&&selected.has(edge.to.node_id)).map(edge=>structuredClone(edge)),
     positions:Object.fromEntries([...selected].filter(id=>layout[id]).map(id=>[id,structuredClone(layout[id])])),
     faceplate_geometry:Object.fromEntries([...selected].filter(id=>geometry[id]).map(id=>[id,structuredClone(geometry[id])])),
+    subpatches:(pipeline.subpatches??[]).filter(subpatch=>subpatch.node_ids.every(id=>selected.has(id))).map(subpatch=>structuredClone(subpatch)),
   };
 }
 
@@ -782,6 +917,11 @@ export function pasteGraphSelection(pipeline,selection,offset={x:36,y:36}) {
     if(!from||!to)continue;
     pipeline.edges.push({...structuredClone(source),id:`edge:${cryptoId()}`,from:{...source.from,node_id:from},to:{...source.to,node_id:to}});
   }
+  for(const source of selection?.subpatches??[]){
+    const nodeIds=source.node_ids.map(id=>idMap.get(id)).filter(Boolean);
+    if(nodeIds.length!==source.node_ids.length)continue;
+    pipeline.subpatches.push({...structuredClone(source),id:`subpatch:${cryptoId()}`,definition_id:`definition:${cryptoId()}`,node_ids:nodeIds,parent_subpatch_id:null,exposed_ports:source.exposed_ports.map(port=>({...structuredClone(port),internal:{...port.internal,node_id:idMap.get(port.internal.node_id)}}))});
+  }
   if(!pasted.length)return[];
   writeLayout(pipeline,layout);touch(pipeline);return pasted;
 }
@@ -792,6 +932,9 @@ export function deleteGraphSelection(pipeline,nodeIds,edgeIds=[]) {
   pipeline.nodes=pipeline.nodes.filter(node=>!nodes.has(node.id));
   pipeline.edges=pipeline.edges.filter(edge=>!edges.has(edge.id)&&!nodes.has(edge.from.node_id)&&!nodes.has(edge.to.node_id));
   pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>!nodes.has(sink.node_id));
+  if(pipeline.presentation?.cables)for(const id of edges)delete pipeline.presentation.cables[id];
+  pipeline.subpatches=(pipeline.subpatches??[]).map(subpatch=>({...subpatch,node_ids:subpatch.node_ids.filter(id=>!nodes.has(id)),exposed_ports:subpatch.exposed_ports.filter(port=>!nodes.has(port.internal.node_id))})).filter(subpatch=>subpatch.node_ids.length);
+  pipeline.presentation.frames=(pipeline.presentation?.frames??[]).map(frame=>({...frame,node_ids:frame.node_ids.filter(id=>!nodes.has(id))}));
   const layout=readLayout(pipeline),geometry=readNodeFaceplateGeometryMetadata(pipeline),collapsed=readNodeFaceplateMetadata(pipeline);
   nodes.forEach(id=>{
     delete layout[id];

@@ -39,6 +39,9 @@
     .quick-add-title{display:flex;align-items:center;gap:.42rem}
     .quick-add-option{display:grid;gap:.1rem}
     .quick-add-option strong{font-size:.88rem}
+    .breadcrumbs{display:flex;align-items:center;gap:.35rem;padding:.35rem 1rem;border-bottom:1px solid var(--line);min-height:2.4rem}.breadcrumbs button{padding:.25rem .45rem}
+    .organization-list{display:grid;gap:.4rem}.organization-item{border:1px solid var(--line);border-radius:.45rem;padding:.45rem}.organization-item p{margin:.2rem 0;color:var(--muted)}
+    .port-review{display:grid;gap:.35rem;max-height:18rem;overflow:auto}.port-review label{display:flex;align-items:center;gap:.45rem;padding:.4rem;border:1px solid var(--line);border-radius:.4rem}.port-review input{width:auto}
     @media(max-width:900px){.workspace{grid-template-columns:14rem 1fr}.sidebar.right{position:fixed;z-index:5;right:0;top:0;bottom:0;width:min(22rem,90vw);transform:translateX(100%);transition:.2s}.sidebar.right.open{transform:none}.mobile-inspector{display:inline-block!important}}
     @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}#replacement-dialog{inset:0;width:100%;height:100%;max-height:none;border-radius:0}.replacement-filters{grid-template-columns:1fr}.impact-grid{grid-template-columns:1fr}}
   </style>
@@ -60,10 +63,13 @@
     <button id="copy-selection" aria-keyshortcuts="Control+C Meta+C">Copy</button><button id="cut-selection" aria-keyshortcuts="Control+X Meta+X">Cut</button><button id="paste-selection" aria-keyshortcuts="Control+V Meta+V">Paste</button><button id="duplicate-selection" aria-keyshortcuts="Control+D Meta+D">Duplicate</button>
     <button id="delete-selection" aria-keyshortcuts="Delete Backspace">Delete selection</button>
     <button id="align-horizontal" title="Align selected modules along their top edge">Align top</button><button id="distribute-horizontal" title="Distribute selected modules from left to right">Distribute</button><button id="tidy-selection">Tidy</button>
+    <button id="frame-selection">Frame</button><button id="note">Note</button><button id="create-subpatch">Subpatch</button>
+    <label>Cable opacity<input id="cable-opacity" type="range" min="0.1" max="1" step="0.1" value="1"></label><button id="focus-path" aria-pressed="false">Focus selected path</button>
     <button id="snap-grid" aria-pressed="false">Snap off</button><button id="fit-selection">Fit selection</button><button id="fit">Fit graph</button><button id="run">Run</button><button id="stop" disabled>Stop</button><button id="panic" disabled>Panic</button>
     <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
   </div>
   <p id="validation" role="status">Loading backend discovery…</p>
+  <nav id="subpatch-breadcrumbs" class="breadcrumbs" aria-label="Subpatch breadcrumb"></nav>
   <aside id="route-recovery" class="section" role="alert" hidden></aside>
   <aside id="run-context" class="section" hidden>
     <p><strong id="run-state">Idle</strong><span id="run-id">no run yet</span><span id="run-elapsed"></span></p>
@@ -96,7 +102,8 @@
         <div class="section"><h3>Configuration</h3><div id="config-fields" class="stack"></div><button id="apply-config">Apply configuration</button></div>
         <div id="node-diagnostics" class="section"></div>
       </div>
-      <div id="edge-inspector" hidden><strong id="edge-title"></strong><p id="edge-type"></p><label>Buffer capacity<input id="edge-capacity" type="number" min="1"></label><button id="apply-edge">Apply</button> <button id="delete-edge">Delete edge</button><div id="edge-diagnostics"></div></div>
+      <div id="edge-inspector" hidden><strong id="edge-title"></strong><p id="edge-type"></p><label>Buffer capacity<input id="edge-capacity" type="number" min="1"></label><label>Presentation route<select id="cable-routing"><option value="curved">Curved</option><option value="straight">Straight</option><option value="orthogonal">Orthogonal</option></select></label><label><input id="cable-emphasized" type="checkbox"> Emphasize this path</label><button id="add-reroute">Add reroute at canvas center</button><button id="apply-edge">Apply</button> <button id="delete-edge">Delete edge</button><div id="edge-diagnostics"></div></div>
+      <div class="section"><h2>Organization</h2><div id="organization-list" class="organization-list"></div></div>
       <div class="section"><h2>Run events</h2><ol id="run-events" class="events" aria-live="polite"></ol></div>
     </aside>
   </main>
@@ -110,6 +117,17 @@
       <div id="quick-add-results" role="listbox" aria-label="Compatible modules"></div>
       <div class="replacement-actions"><button type="button" id="quick-add-cancel">Cancel</button></div>
     </div>
+  </dialog>
+  <dialog id="organization-dialog" aria-labelledby="organization-title">
+    <form method="dialog">
+      <h2 id="organization-title">Organize selection</h2>
+      <p id="organization-context" class="muted"></p>
+      <label>Title or note text<input id="organization-text" autocomplete="off"></label>
+      <label id="organization-color-row">Color<input id="organization-color" type="color" value="#31536b"></label>
+      <div id="organization-port-review" class="port-review"></div>
+      <p id="organization-error" class="error" role="alert" hidden></p>
+      <div class="row"><button value="cancel">Cancel</button><button type="button" id="organization-apply">Apply</button></div>
+    </form>
   </dialog>
   <dialog id="replacement-dialog" aria-labelledby="replacement-title" aria-describedby="replacement-context">
     <div class="replacement-shell">

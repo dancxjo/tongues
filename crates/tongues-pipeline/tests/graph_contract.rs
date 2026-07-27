@@ -352,7 +352,115 @@ fn v1_saved_graph_migrates_with_precise_steps() {
         report.document.selected_sinks,
         vec![Endpoint::new("output", "out")]
     );
-    assert_eq!(report.steps.len(), 3);
+    assert_eq!(report.steps.len(), 4);
+    assert_eq!(report.document.presentation.schema_version, 1);
+    assert!(report.document.subpatches.is_empty());
+}
+
+#[test]
+fn v2_presentation_labels_migrate_into_typed_metadata() {
+    let report = migrate_graph_json(json!({
+        "schema_version": 2,
+        "graph_id": "legacy-layout",
+        "revision": 2,
+        "metadata": {"name":"Layout","labels":{
+            "studio.layout.v1":"{\"source\":{\"x\":12,\"y\":34}}",
+            "studio.node-faceplate.v1":"{\"collapsed\":{\"source\":true}}",
+            "studio.node-faceplate-geometry.v1":"{\"source\":{\"width\":300,\"height\":180,\"collapsed_height\":60}}"
+        }},
+        "nodes": [], "edges": [], "selected_sinks": []
+    })).unwrap();
+    assert_eq!(report.to_version, GRAPH_SCHEMA_VERSION);
+    assert_eq!(
+        report.document.presentation.node_positions["source"].x,
+        12.0
+    );
+    assert!(report.document.presentation.node_faceplates["source"].collapsed);
+    assert_eq!(
+        report.document.presentation.node_faceplates["source"].width,
+        Some(300.0)
+    );
+}
+
+#[test]
+fn subpatch_boundaries_are_reviewed_without_changing_the_execution_plan() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    let baseline = compile_graph(&graph, &catalog).unwrap();
+    graph.subpatches.push(Subpatch {
+        id: "voice".into(),
+        title: "Voice".into(),
+        definition_id: "definition:voice".into(),
+        definition_version: 1,
+        parent_subpatch_id: None,
+        node_ids: vec!["text".into(), "tts".into()],
+        exposed_ports: vec![SubpatchPort {
+            id: "audio".into(),
+            label: "Audio".into(),
+            direction: PortDirection::Output,
+            value_type: ValueType::AudioStream,
+            internal: Endpoint::new("tts", "out"),
+        }],
+    });
+    let organized = compile_graph(&graph, &catalog).unwrap();
+    assert_eq!(organized.steps, baseline.steps);
+    assert_eq!(organized.channels, baseline.channels);
+    graph.subpatches[0].exposed_ports.clear();
+    let report = validate_graph(&graph, &catalog);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "subpatch.boundary_unreviewed")
+    );
+}
+
+#[test]
+fn explicit_splitter_merge_adapter_and_direct_fanout_remain_distinct() {
+    let catalog = fixture_catalog();
+    assert!(catalog.node_kinds["transcript_splitter"].splitter.is_some());
+    assert!(catalog.node_kinds["transcript_splitter"].merge.is_none());
+    assert!(catalog.node_kinds["transcript_merge"].merge.is_some());
+    assert!(
+        catalog.node_kinds["committed_transcript_to_text"]
+            .adapter
+            .is_some()
+    );
+    let graph = starter_graph(StarterGraph::MeetingTranscription, &catalog).unwrap();
+    let plan = compile_graph(&graph, &catalog).unwrap();
+    let direct = plan
+        .channels
+        .iter()
+        .filter(|channel| channel.from == Endpoint::new("vad", "out"))
+        .count();
+    assert_eq!(
+        direct, 2,
+        "legal direct fan-out stays represented as two edges"
+    );
+}
+
+#[test]
+fn recursive_or_excessively_nested_subpatches_fail_gracefully() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    for index in 0..9 {
+        graph.subpatches.push(Subpatch {
+            id: format!("nested-{index}"),
+            title: format!("Nested {index}"),
+            definition_id: format!("definition:{index}"),
+            definition_version: 1,
+            parent_subpatch_id: (index > 0).then(|| format!("nested-{}", index - 1)),
+            node_ids: vec!["text".into()],
+            exposed_ports: vec![],
+        });
+    }
+    let report = validate_graph(&graph, &catalog);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "subpatch.depth_limit")
+    );
 }
 
 struct CancellingRunner {

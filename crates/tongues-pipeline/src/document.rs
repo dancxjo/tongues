@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-pub const GRAPH_SCHEMA_VERSION: u32 = 2;
+pub const GRAPH_SCHEMA_VERSION: u32 = 3;
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraphDocument {
@@ -17,6 +18,15 @@ pub struct GraphDocument {
     pub edges: Vec<GraphEdge>,
     #[serde(default)]
     pub selected_sinks: Vec<Endpoint>,
+    /// Editor organization that never changes execution semantics.
+    #[serde(default)]
+    pub presentation: GraphPresentation,
+    /// Explicit semantic boundaries over ordinary runtime nodes and edges.
+    ///
+    /// Subpatches are embedded snapshots in schema 3. Their member nodes remain
+    /// in `nodes`, so compilation never depends on invisible frontend routing.
+    #[serde(default)]
+    pub subpatches: Vec<Subpatch>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -75,6 +85,139 @@ pub struct GraphEdge {
     pub capacity: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphPresentation {
+    #[serde(default = "default_presentation_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub node_positions: BTreeMap<String, CanvasPoint>,
+    #[serde(default)]
+    pub node_faceplates: BTreeMap<String, NodeFaceplatePresentation>,
+    #[serde(default)]
+    pub frames: Vec<PresentationFrame>,
+    #[serde(default)]
+    pub notes: Vec<PresentationNote>,
+    #[serde(default)]
+    pub cables: BTreeMap<String, CablePresentation>,
+    #[serde(default)]
+    pub collapsed_subpatches: Vec<String>,
+    #[serde(default = "default_cable_opacity")]
+    pub global_cable_opacity: f32,
+    #[serde(default)]
+    pub selected_path_focus: bool,
+}
+
+impl Default for GraphPresentation {
+    fn default() -> Self {
+        Self {
+            schema_version: PRESENTATION_SCHEMA_VERSION,
+            node_positions: BTreeMap::new(),
+            node_faceplates: BTreeMap::new(),
+            frames: Vec::new(),
+            notes: Vec::new(),
+            cables: BTreeMap::new(),
+            collapsed_subpatches: Vec::new(),
+            global_cable_opacity: default_cable_opacity(),
+            selected_path_focus: false,
+        }
+    }
+}
+
+const fn default_presentation_schema_version() -> u32 {
+    PRESENTATION_SCHEMA_VERSION
+}
+
+const fn default_cable_opacity() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct CanvasPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeFaceplatePresentation {
+    #[serde(default)]
+    pub collapsed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collapsed_height: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresentationFrame {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub color: String,
+    pub origin: CanvasPoint,
+    pub size: CanvasPoint,
+    #[serde(default)]
+    pub node_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PresentationNote {
+    pub id: String,
+    pub text: String,
+    pub position: CanvasPoint,
+    #[serde(default)]
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CableRouting {
+    Straight,
+    #[default]
+    Curved,
+    Orthogonal,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CablePresentation {
+    #[serde(default)]
+    pub routing: CableRouting,
+    #[serde(default)]
+    pub reroute_points: Vec<CanvasPoint>,
+    #[serde(default)]
+    pub emphasized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subpatch {
+    pub id: String,
+    pub title: String,
+    /// Stable embedded-definition identity retained by duplicates.
+    pub definition_id: String,
+    #[serde(default = "default_definition_version")]
+    pub definition_version: u64,
+    #[serde(default)]
+    pub parent_subpatch_id: Option<String>,
+    #[serde(default)]
+    pub node_ids: Vec<String>,
+    #[serde(default)]
+    pub exposed_ports: Vec<SubpatchPort>,
+}
+
+const fn default_definition_version() -> u64 {
+    1
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubpatchPort {
+    pub id: String,
+    pub label: String,
+    pub direction: crate::PortDirection,
+    pub value_type: crate::ValueType,
+    pub internal: Endpoint,
+}
+
 pub const fn default_edge_capacity() -> usize {
     16
 }
@@ -92,6 +235,8 @@ impl GraphDocument {
             nodes: Vec::new(),
             edges: Vec::new(),
             selected_sinks: Vec::new(),
+            presentation: GraphPresentation::default(),
+            subpatches: Vec::new(),
         }
     }
 }
@@ -119,9 +264,9 @@ pub enum MigrationError {
 
 /// Migrates serialized saved graphs before resolving runtime components.
 ///
-/// Schema 1 used `id`, `name`, and string sink node IDs. Schema 2 makes graph
-/// identity and sink ports explicit. Runtime/model references remain stable IDs
-/// and are deliberately resolved later by validation/compilation.
+/// Schema 1 used `id`, `name`, and string sink node IDs. Schema 2 made graph
+/// identity and sink ports explicit. Schema 3 promotes presentation organization
+/// into a typed contract and adds explicit embedded subpatch boundaries.
 pub fn migrate_graph_json(value: Value) -> Result<MigrationReport, MigrationError> {
     let from_version = value
         .get("schema_version")
@@ -144,6 +289,7 @@ pub fn migrate_graph_json(value: Value) -> Result<MigrationReport, MigrationErro
                 document,
             })
         }
+        2 => migrate_v2(value),
         1 => migrate_v1(value),
         other => Err(MigrationError::NoMigration(other)),
     }
@@ -192,6 +338,67 @@ fn migrate_v1(mut value: Value) -> Result<MigrationReport, MigrationError> {
             "rename `id` to `graph_id`".into(),
             "move `name` into `metadata.name`".into(),
             "replace selected output node IDs with explicit sink endpoints".into(),
+            "add versioned presentation metadata and embedded subpatch boundaries".into(),
+        ],
+        document,
+    })
+}
+
+fn migrate_v2(mut value: Value) -> Result<MigrationReport, MigrationError> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| MigrationError::InvalidJson("graph must be an object".into()))?;
+    object.insert("schema_version".into(), Value::from(GRAPH_SCHEMA_VERSION));
+    let mut presentation = serde_json::to_value(GraphPresentation::default())
+        .expect("presentation defaults serialize");
+    if let Some(labels) = object
+        .get("metadata")
+        .and_then(|value| value.get("labels"))
+        .and_then(Value::as_object)
+    {
+        let parsed = |key: &str| {
+            labels
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+        };
+        if let Some(layout) = parsed("studio.layout.v1") {
+            presentation["node_positions"] = layout;
+        }
+        let collapsed = parsed("studio.node-faceplate.v1")
+            .and_then(|value| value.get("collapsed").cloned())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let geometry = parsed("studio.node-faceplate-geometry.v1")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut faceplates = Map::new();
+        for node_id in collapsed.keys().chain(geometry.keys()) {
+            let mut faceplate = geometry
+                .get(node_id)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            faceplate.insert(
+                "collapsed".into(),
+                Value::Bool(collapsed.contains_key(node_id)),
+            );
+            faceplates.insert(node_id.clone(), Value::Object(faceplate));
+        }
+        presentation["node_faceplates"] = Value::Object(faceplates);
+    }
+    object.insert("presentation".into(), presentation);
+    object
+        .entry("subpatches")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let document = serde_json::from_value(value)
+        .map_err(|error| MigrationError::InvalidJson(error.to_string()))?;
+    Ok(MigrationReport {
+        from_version: 2,
+        to_version: GRAPH_SCHEMA_VERSION,
+        steps: vec![
+            "promote layout and faceplate labels into `presentation`".into(),
+            "add explicit embedded subpatch boundaries".into(),
         ],
         document,
     })

@@ -22,6 +22,8 @@ pub struct DiagnosticTarget {
     pub port_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpatch_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +56,7 @@ fn target(
         node_id: node.map(str::to_owned),
         port_id: port.map(str::to_owned),
         edge_id: edge.map(str::to_owned),
+        subpatch_id: None,
     }
 }
 
@@ -312,17 +315,20 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
     }
     validate_cycles(graph, catalog, &nodes, &mut diagnostics);
     validate_sinks(graph, catalog, &nodes, &incoming, &mut diagnostics);
+    validate_organization(graph, catalog, &nodes, &mut diagnostics);
     diagnostics.sort_by(|a, b| {
         (
             &a.target.node_id,
             &a.target.port_id,
             &a.target.edge_id,
+            &a.target.subpatch_id,
             &a.code,
         )
             .cmp(&(
                 &b.target.node_id,
                 &b.target.port_id,
                 &b.target.edge_id,
+                &b.target.subpatch_id,
                 &b.code,
             ))
     });
@@ -333,6 +339,297 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
         graph_id: graph.graph_id.clone(),
         graph_revision: graph.revision,
         diagnostics,
+    }
+}
+
+const MAX_SUBPATCH_DEPTH: usize = 8;
+const MAX_REROUTE_POINTS: usize = 256;
+
+fn validate_organization(
+    graph: &GraphDocument,
+    catalog: &GraphCatalog,
+    nodes: &BTreeMap<&str, &GraphNode>,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    fn push(
+        graph: &GraphDocument,
+        diagnostics: &mut Vec<GraphDiagnostic>,
+        code: &str,
+        message: String,
+        subpatch_id: Option<&str>,
+    ) {
+        let mut diagnostic = error(graph, code, message, None, None, None);
+        diagnostic.target.subpatch_id = subpatch_id.map(str::to_owned);
+        diagnostics.push(diagnostic);
+    }
+
+    if graph.presentation.schema_version != crate::PRESENTATION_SCHEMA_VERSION {
+        push(
+            graph,
+            diagnostics,
+            "presentation.schema_unsupported",
+            format!(
+                "Presentation schema {} is unsupported; migrate it to {}.",
+                graph.presentation.schema_version,
+                crate::PRESENTATION_SCHEMA_VERSION
+            ),
+            None,
+        );
+    }
+    if !(0.1..=1.0).contains(&graph.presentation.global_cable_opacity) {
+        push(
+            graph,
+            diagnostics,
+            "presentation.opacity_invalid",
+            "Global cable opacity must stay between 0.1 and 1 so connections remain discoverable."
+                .into(),
+            None,
+        );
+    }
+    let edge_ids = graph
+        .edges
+        .iter()
+        .map(|edge| edge.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for (edge_id, cable) in &graph.presentation.cables {
+        if !edge_ids.contains(edge_id.as_str()) {
+            push(
+                graph,
+                diagnostics,
+                "presentation.cable_missing",
+                format!("Cable presentation references missing edge `{edge_id}`."),
+                None,
+            );
+        }
+        if cable.reroute_points.len() > MAX_REROUTE_POINTS {
+            push(
+                graph,
+                diagnostics,
+                "presentation.reroute_limit",
+                format!(
+                    "Cable `{edge_id}` has {} reroute points; the limit is {MAX_REROUTE_POINTS}.",
+                    cable.reroute_points.len()
+                ),
+                None,
+            );
+        }
+    }
+    for frame in &graph.presentation.frames {
+        for node_id in &frame.node_ids {
+            if !nodes.contains_key(node_id.as_str()) {
+                push(
+                    graph,
+                    diagnostics,
+                    "presentation.frame_node_missing",
+                    format!("Frame `{}` references missing node `{node_id}`.", frame.id),
+                    None,
+                );
+            }
+        }
+    }
+
+    let subpatch_by_id = graph
+        .subpatches
+        .iter()
+        .map(|subpatch| (subpatch.id.as_str(), subpatch))
+        .collect::<BTreeMap<_, _>>();
+    if subpatch_by_id.len() != graph.subpatches.len() {
+        push(
+            graph,
+            diagnostics,
+            "subpatch.duplicate_id",
+            "Subpatch IDs must be unique.".into(),
+            None,
+        );
+    }
+    for subpatch in &graph.subpatches {
+        let subpatch_id = Some(subpatch.id.as_str());
+        let members = subpatch
+            .node_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if members.is_empty() {
+            push(
+                graph,
+                diagnostics,
+                "subpatch.empty",
+                format!(
+                    "Subpatch `{}` must contain at least one runtime node.",
+                    subpatch.id
+                ),
+                subpatch_id,
+            );
+        }
+        if members.len() != subpatch.node_ids.len() {
+            push(
+                graph,
+                diagnostics,
+                "subpatch.duplicate_member",
+                format!(
+                    "Subpatch `{}` lists a runtime node more than once.",
+                    subpatch.id
+                ),
+                subpatch_id,
+            );
+        }
+        for node_id in &subpatch.node_ids {
+            if !nodes.contains_key(node_id.as_str()) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.node_missing",
+                    format!(
+                        "Subpatch `{}` references missing node `{node_id}`.",
+                        subpatch.id
+                    ),
+                    subpatch_id,
+                );
+            }
+        }
+
+        let mut depth = 1;
+        let mut parent = subpatch.parent_subpatch_id.as_deref();
+        let mut ancestors = BTreeSet::from([subpatch.id.as_str()]);
+        while let Some(parent_id) = parent {
+            if !ancestors.insert(parent_id) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.recursive",
+                    format!("Subpatch `{}` has a recursive parent chain.", subpatch.id),
+                    subpatch_id,
+                );
+                break;
+            }
+            let Some(parent_subpatch) = subpatch_by_id.get(parent_id) else {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.parent_missing",
+                    format!(
+                        "Subpatch `{}` references missing parent `{parent_id}`.",
+                        subpatch.id
+                    ),
+                    subpatch_id,
+                );
+                break;
+            };
+            depth += 1;
+            if depth > MAX_SUBPATCH_DEPTH {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.depth_limit",
+                    format!(
+                        "Subpatch `{}` exceeds the maximum nesting depth of {MAX_SUBPATCH_DEPTH}.",
+                        subpatch.id
+                    ),
+                    subpatch_id,
+                );
+                break;
+            }
+            parent = parent_subpatch.parent_subpatch_id.as_deref();
+        }
+
+        let mut boundary = BTreeMap::<Endpoint, PortDirection>::new();
+        for edge in &graph.edges {
+            let from_inside = members.contains(edge.from.node_id.as_str());
+            let to_inside = members.contains(edge.to.node_id.as_str());
+            if from_inside && !to_inside {
+                boundary.insert(edge.from.clone(), PortDirection::Output);
+            } else if !from_inside && to_inside {
+                boundary.insert(edge.to.clone(), PortDirection::Input);
+            }
+        }
+        for sink in &graph.selected_sinks {
+            if members.contains(sink.node_id.as_str()) {
+                boundary.insert(sink.clone(), PortDirection::Output);
+            }
+        }
+        let mut exposed_ids = BTreeSet::new();
+        let mut reviewed = BTreeMap::new();
+        for port in &subpatch.exposed_ports {
+            if !exposed_ids.insert(port.id.as_str()) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.port_duplicate",
+                    format!(
+                        "Subpatch `{}` exposes port ID `{}` more than once.",
+                        subpatch.id, port.id
+                    ),
+                    subpatch_id,
+                );
+            }
+            if !members.contains(port.internal.node_id.as_str()) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.port_outside",
+                    format!(
+                        "Exposed port `{}` must map to a node inside subpatch `{}`.",
+                        port.id, subpatch.id
+                    ),
+                    subpatch_id,
+                );
+                continue;
+            }
+            let Some(node) = nodes.get(port.internal.node_id.as_str()) else {
+                continue;
+            };
+            let actual = catalog.node_kinds.get(&node.kind).and_then(|kind| {
+                kind.ports
+                    .iter()
+                    .find(|candidate| candidate.id == port.internal.port_id)
+            });
+            match actual {
+                Some(actual)
+                    if actual.direction == port.direction
+                        && actual.value_type == port.value_type =>
+                {
+                    reviewed.insert(port.internal.clone(), port.direction);
+                }
+                _ => push(
+                    graph,
+                    diagnostics,
+                    "subpatch.port_contract_invalid",
+                    format!(
+                        "Exposed port `{}` does not match the backend port contract for `{}.{}`.",
+                        port.id, port.internal.node_id, port.internal.port_id
+                    ),
+                    subpatch_id,
+                ),
+            }
+        }
+        for (endpoint, direction) in &boundary {
+            if reviewed.get(endpoint) != Some(direction) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.boundary_unreviewed",
+                    format!(
+                        "Subpatch `{}` boundary `{}.{}` must be exposed through an explicitly reviewed {:?} port.",
+                        subpatch.id, endpoint.node_id, endpoint.port_id, direction
+                    ),
+                    subpatch_id,
+                );
+            }
+        }
+        for endpoint in reviewed.keys() {
+            if !boundary.contains_key(endpoint) {
+                push(
+                    graph,
+                    diagnostics,
+                    "subpatch.port_not_boundary",
+                    format!(
+                        "Exposed port `{}.{}` is not currently an external subpatch boundary.",
+                        endpoint.node_id, endpoint.port_id
+                    ),
+                    subpatch_id,
+                );
+            }
+        }
     }
 }
 
@@ -698,6 +995,8 @@ pub struct PlanStep {
     pub lifecycle: Vec<LifecycleEventKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge: Option<crate::MergeSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splitter: Option<crate::SplitterSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -795,6 +1094,7 @@ pub fn compile_graph(
                     LifecycleEventKind::Failed,
                 ],
                 merge: kind.merge.clone(),
+                splitter: kind.splitter.clone(),
             }
         })
         .collect::<Vec<_>>();

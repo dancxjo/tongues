@@ -32,6 +32,13 @@ test("cable geometry bends out of output and into input", () => {
   assert.match(cablePath({x: 210, y: 20}, {x: 10, y: 90}), /^M 210 20 C 300 20, -80 90, 10 90$/);
 });
 
+test("straight and orthogonal cable presentation routes through non-semantic anchors",()=>{
+  const points=[{x:80,y:40},{x:140,y:90}];
+  assert.equal(cablePath({x:10,y:20},{x:210,y:90},points,"straight"),"M 10 20 L 80 40 L 140 90 L 210 90");
+  assert.match(cablePath({x:10,y:20},{x:210,y:90},points,"orthogonal"),/^M 10 20 L 45 20 L 45 40/);
+  assert.match(cablePath({x:10,y:20},{x:210,y:90},points,"curved"),/C .* 80 40 C .* 140 90/);
+});
+
 test("patch controller exposes pointer, touch, keyboard, focus, and direct cable operations", () => {
   const source = fs.readFileSync(new URL("./speech-patch-canvas.mjs", import.meta.url), "utf8");
   assert.match(source, /addEventListener\("pointerdown"/);

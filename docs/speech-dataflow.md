@@ -48,8 +48,10 @@ The DOM graph outline provides keyboard selection, movement, and deletion
 alongside the pointer/touch canvas. Port buttons, live diagnostics, validation,
 and streamed execution changes use status/live regions for screen readers.
 Starter graphs can replace the document or be inserted as reusable subgraphs.
-Node layout is saved in the graph metadata label `studio.layout.v1`; it does
-not change runtime routing. Disabled nodes and structurally bypassed nodes
+Schema 3 stores layout, faceplates, titled/colorable frames, freeform notes,
+cable routes/reroute points, emphasis, opacity, and collapsed-subpatch state
+in versioned `presentation` metadata. None changes runtime routing. Disabled
+nodes and structurally bypassed nodes
 remain visible in the saved document but do not enter the execution plan;
 their old edges are removed explicitly rather than silently rerouted.
 
@@ -73,7 +75,7 @@ by runtime events rather than pretending that live input is saved config.
 The friendly CLI and browser are expected to call this library-owned contract;
 neither surface should reproduce routing rules.
 
-## Schema 2 document
+## Schema 3 document
 
 A graph records `graph_id`, monotonically increasing `revision`, metadata,
 stable node and edge IDs, explicit port endpoints, positive bounded edge
@@ -91,8 +93,33 @@ cardinality. The catalog currently exposes explicit buffered-audio-to-stream
 and committed-transcript-to-text adapters.
 
 Ordinary inputs accept one edge and fan-in inputs exist only on explicit merge
-nodes. Outputs may fan out over one bounded channel per edge. The transcript
-merge orders equal-time values by source edge ID and source sequence.
+nodes. Outputs may fan out directly over one bounded channel per edge. The
+explicit transcript splitter is a real pass-through node for cases where a
+named branch improves readability; it remains distinct from direct fan-out,
+the transcript merge, and type adapters. The transcript merge orders
+equal-time values by source edge ID and source sequence.
+
+## Frames, notes, cables, and subpatches
+
+Frames and notes are presentation-only. Moving a frame can deliberately move
+its listed nodes, but framing never creates an execution boundary. Cable
+reroute points are coordinates on an existing edge, never runtime nodes.
+Straight, curved, and orthogonal routes preserve the same endpoints and
+capacity. Global opacity is bounded at 0.1 so connections remain discoverable.
+
+A subpatch is created only from an explicit selection after reviewing every
+edge and selected sink that crosses its boundary. Exposed ports map to real
+backend-typed internal endpoints. Runtime nodes and edges remain top-level, so
+collapsing, drilling, or reopening cannot change the compiled plan. Breadcrumb
+links use `?subpatch={id}&node={id}` and work with pointer, keyboard, browser
+history, and direct URLs.
+
+Schema 3 uses **embedded copies**, not live linked definitions. Copying or
+duplicating a complete subpatch mints fresh runtime IDs, a fresh subpatch ID,
+and a fresh `definition_id`; it retains `definition_version` as provenance.
+The copies update independently. Linked definitions require a future schema
+with an explicit update policy. Parent chains are validated, recursion fails
+closed, and nesting is capped at eight levels.
 
 ## Validation and planning
 
@@ -126,14 +153,16 @@ documented in [speech-workspace-navigation.md](speech-workspace-navigation.md).
 
 ## Migration
 
-Schema 1 graphs migrate to schema 2 by renaming `id` to `graph_id`, moving
+Schema 1 graphs migrate to schema 3 by renaming `id` to `graph_id`, moving
 `name` under `metadata.name`, and replacing selected output node IDs with
-explicit sink endpoints. Future schemas fail with an instruction to upgrade
-Tongues. Unknown older schemas fail with a precise missing-migration error.
+explicit sink endpoints. Schema 2 graphs promote legacy layout and faceplate
+label JSON into typed presentation metadata and begin with no subpatches.
+Future schemas fail with an instruction to upgrade Tongues. Unknown older schemas fail with a precise missing-migration error.
 After structural migration, normal validation reports any component or port
 that the current registry can no longer resolve.
 
-The browser stores schema-2 JSON locally and sends old saved JSON through the
-backend migration endpoint before use. WaveDeck remains the sibling evidence
+The browser stores schema-3 JSON, upgrades schema-2 drafts before editing, and
+sends old saved JSON through the backend migration endpoint before use.
+WaveDeck remains the sibling evidence
 editor; graph configuration and human correction do not become one mutable
 authority.

@@ -5,6 +5,7 @@ import {
   connectionIntentCandidates,tidyGraphSelection,touch,undoEdit,validateSchemaValue,consumeNdjson,
   setNodeFaceplateCollapsed,
   catalogItemIcon,nodeLabelWithIcon,
+  addNote,createEmbeddedSubpatch,createFrame,migratePipelineOrganization,moveFrame,setCablePresentation,setSubpatchCollapsed,subpatchBoundaryPorts,subpatchUrl,
 } from "./speech-dataflow-model.mjs";
 import {createPatchCanvas} from "./speech-patch-canvas.mjs";
 
@@ -33,6 +34,7 @@ let edgeRuntimeState={};
 let editHistory=createEditHistory(),replacementOptions=[],replacementSelected=null,replacementPlan=null;
 let replacementPreviewGeneration=0,replacementRenderLimit=100,replacementReturnFocus=null,replacementOverrides={};
 let quickAddContext=null,quickAddOptions=[],quickAddReturnFocus=null;
+let activeSubpatchId=null,organizationMode=null,organizationBoundary=[];
 
 const NODE_THEMES={
   "Sources":{accent:"#75bfff",surface:"#192f44"},
@@ -597,7 +599,9 @@ function dropCatalogOnJack(intent){
 
 function loadGraph(graph,{preserveHistory=false}={}){
   const previousSelection=selectionState();
-  pipeline=structuredClone(graph);pipeline.metadata.labels??={};ensureLayout(pipeline);
+  pipeline=migratePipelineOrganization(structuredClone(graph));pipeline.metadata.labels??={};ensureLayout(pipeline);
+  const requestedSubpatch=new URLSearchParams(location.search).get("subpatch");
+  activeSubpatchId=pipeline.subpatches.some(item=>item.id===requestedSubpatch)?requestedSubpatch:null;
   nodeRuntimeState={};
   edgeRuntimeState={};
   if(!preserveHistory)editHistory=createEditHistory();
@@ -605,11 +609,12 @@ function loadGraph(graph,{preserveHistory=false}={}){
   else replaceNodeSelection(pipeline.nodes[0]?.id??null);
   connecting=null;
   byId("pipeline-name").value=pipeline.metadata.name;
+  byId("cable-opacity").value=String(pipeline.presentation.global_cable_opacity);byId("focus-path").setAttribute("aria-pressed",String(pipeline.presentation.selected_path_focus));
   byId("graph-identity").textContent=pipeline.graph_id.startsWith("starter:")
     ?"Editing a configuration draft seeded from a backend template"
     :`Editing saved graph ${pipeline.graph_id}, revision ${pipeline.revision}`;
   document.title=`${pipeline.metadata.name} · Graph Studio · Tongues`;
-  renderGraph();ensurePatchCanvas();patchCanvas.render();updateEditControls();scheduleValidation(0);
+  renderGraph();ensurePatchCanvas();patchCanvas.render();updateEditControls();renderOrganization();scheduleValidation(0);
 }
 
 function ensurePatchCanvas(){
@@ -637,13 +642,15 @@ function ensurePatchCanvas(){
     onBypassNode:toggleNodeBypass,
     onDisableNode:updateNodeDisabledState,
     isRunLocked,
+    getVisibleNodeIds:()=>activeSubpatchId?new Set(pipeline.subpatches.find(item=>item.id===activeSubpatchId)?.node_ids??[]):null,
     onAnnounce:announce,
   });
 }
 
 function graphElements(){
   const grouped=diagnosticsByTarget(validation);
-  const nodes=pipeline.nodes.map(node=>{
+  const visibleIds=activeSubpatchId?new Set(pipeline.subpatches.find(item=>item.id===activeSubpatchId)?.node_ids??[]):null;
+  const nodes=pipeline.nodes.filter(node=>!visibleIds||visibleIds.has(node.id)).map(node=>{
     const item=catalogEntryForNode(node,catalog);
     const ports=discovery.node_kinds?.[node.kind]?.ports??[];
     const kind=discovery.node_kinds?.[node.kind],theme=NODE_THEMES[item?.group]??FALLBACK_NODE_THEME;
@@ -655,7 +662,7 @@ function graphElements(){
     const classes=[item?.readiness&&item.readiness!=="ready"?"unavailable":"",grouped.nodes[node.id]?.length?"invalid":"",node.disabled||node.bypassed?"inactive":""].filter(Boolean).join(" ");
     return{group:"nodes",data:{id:node.id,label,accent:theme.accent,surface:theme.surface,width,height},position:nodePosition(pipeline,node.id),classes};
   });
-  const edges=pipeline.edges.map(edge=>{
+  const edges=pipeline.edges.filter(edge=>!visibleIds||(visibleIds.has(edge.from.node_id)&&visibleIds.has(edge.to.node_id))).map(edge=>{
     const source=pipeline.nodes.find(node=>node.id===edge.from.node_id);
     const port=portsFor(source,"output",discovery).find(item=>item.id===edge.from.port_id);
     return{group:"edges",data:{id:edge.id,source:edge.from.node_id,target:edge.to.node_id,type:readableType(port?.value_type)},classes:grouped.edges[edge.id]?.length?"invalid":""};
@@ -666,11 +673,61 @@ function graphElements(){
 function renderGraph(){
   cy.elements().remove();cy.add(graphElements());
   [...selectedNodes,...selectedEdges].forEach(id=>cy.getElementById(id).select());
-  renderOutline();renderInspector();patchCanvas?.render();byId("pipeline-name").value=pipeline.metadata.name;
+  renderOutline();renderInspector();renderOrganization();patchCanvas?.render();byId("pipeline-name").value=pipeline.metadata.name;
+}
+
+function renderOrganization(){
+  if(!pipeline)return;
+  const crumbs=[{id:null,title:pipeline.metadata.name},...subpatchAncestors(activeSubpatchId)];
+  byId("subpatch-breadcrumbs").replaceChildren(...crumbs.flatMap((crumb,index)=>{
+    const button=document.createElement("button");button.type="button";button.textContent=crumb.title;button.disabled=crumb.id===activeSubpatchId;
+    button.onclick=()=>navigateSubpatch(crumb.id);
+    return index?[document.createTextNode("›"),button]:[button];
+  }));
+  byId("organization-list").replaceChildren(
+    ...pipeline.presentation.frames.map(frame=>{
+      const item=organizationItem(`Frame: ${frame.title}`,`${frame.node_ids.length} nodes · presentation only`);
+      const move=document.createElement("button");move.type="button";move.textContent="Move frame and contents right";move.onclick=()=>{performGraphEdit("Move frame and contents",()=>moveFrame(pipeline,frame.id,{x:24,y:0},{moveContents:true}));renderGraph();scheduleValidation();};
+      item.append(move);return item;
+    }),
+    ...pipeline.presentation.notes.map(note=>organizationItem(`Note: ${note.text}`,"Presentation only")),
+    ...pipeline.subpatches.map(subpatch=>{
+      const members=new Set(subpatch.node_ids);
+      const diagnosticCount=(validation.diagnostics??[]).filter(item=>members.has(item.target?.node_id)).length;
+      const unavailable=subpatch.node_ids.filter(id=>catalogEntryForNode(pipeline.nodes.find(node=>node.id===id),catalog)?.readiness!=="ready").length;
+      const activity=subpatch.node_ids.map(id=>nodeRuntimeState[id]?.status).filter(status=>["active","failed"].includes(status));
+      const item=organizationItem(subpatch.title,`${subpatch.node_ids.length} internal nodes · ${subpatch.exposed_ports.length} reviewed ports · ${diagnosticCount} diagnostics · ${unavailable} unavailable · ${activity.filter(status=>status==="active").length} active · ${activity.filter(status=>status==="failed").length} failed · embedded definition v${subpatch.definition_version}`);
+      const row=document.createElement("div");row.className="row";
+      const open=document.createElement("button");open.type="button";open.textContent="Open";open.onclick=()=>navigateSubpatch(subpatch.id);
+      const collapsed=(pipeline.presentation.collapsed_subpatches??[]).includes(subpatch.id);
+      const toggle=document.createElement("button");toggle.type="button";toggle.textContent=collapsed?"Expand":"Collapse";toggle.setAttribute("aria-pressed",String(collapsed));
+      toggle.onclick=()=>{performGraphEdit(`${collapsed?"Expand":"Collapse"} subpatch`,()=>setSubpatchCollapsed(pipeline,subpatch.id,!collapsed));renderGraph();scheduleValidation();};
+      row.append(open,toggle);item.append(row);return item;
+    }),
+  );
+}
+function organizationItem(title,detail){
+  const item=document.createElement("section");item.className="organization-item";
+  const strong=document.createElement("strong");strong.textContent=title;
+  const paragraph=document.createElement("p");paragraph.textContent=detail;item.append(strong,paragraph);return item;
+}
+function subpatchAncestors(id){
+  const result=[],seen=new Set();let current=pipeline.subpatches.find(item=>item.id===id);
+  while(current&&!seen.has(current.id)&&result.length<8){seen.add(current.id);result.unshift({id:current.id,title:current.title});current=pipeline.subpatches.find(item=>item.id===current.parent_subpatch_id);}
+  return result;
+}
+function navigateSubpatch(id,{replace=false}={}){
+  activeSubpatchId=id;
+  const url=id?subpatchUrl(pipeline.graph_id,id):graphRoute(pipeline.graph_id);
+  history[replace?"replaceState":"pushState"]({subpatch:id},"",url);
+  const members=id?new Set(pipeline.subpatches.find(item=>item.id===id)?.node_ids??[]):null;
+  if(members){selectedNodes=new Set([...selectedNodes].filter(nodeId=>members.has(nodeId)));selectedNode=[...selectedNodes].at(-1)??null;}
+  renderGraph();announce(id?`Opened subpatch ${pipeline.subpatches.find(item=>item.id===id)?.title}.`:"Returned to the root graph.");
 }
 
 function renderOutline(){
-  byId("graph-outline").replaceChildren(...pipeline.nodes.map(node=>{
+  const visibleIds=activeSubpatchId?new Set(pipeline.subpatches.find(item=>item.id===activeSubpatchId)?.node_ids??[]):null;
+  byId("graph-outline").replaceChildren(...pipeline.nodes.filter(node=>!visibleIds||visibleIds.has(node.id)).map(node=>{
     const item=document.createElement("li"),button=document.createElement("button");
     button.textContent=nodeTitle(node);
     button.setAttribute("aria-pressed",String(selectedNodes.has(node.id)));
@@ -798,6 +855,8 @@ function renderEdgeInspector(edge){
   const port=portsFor(source,"output",discovery).find(item=>item.id===edge.from.port_id);
   byId("edge-title").textContent=`${source?nodeTitle(source):"Unknown module"} → ${target?nodeTitle(target):"Unknown module"}`;
   byId("edge-type").textContent=`${edge.from.port_id} → ${edge.to.port_id} · ${port?.value_type??"unknown"}`;byId("edge-capacity").value=edge.capacity;
+  const presentation=pipeline.presentation.cables[edge.id]??{};
+  byId("cable-routing").value=presentation.routing??"curved";byId("cable-emphasized").checked=Boolean(presentation.emphasized);
   renderDiagnostics(byId("edge-diagnostics"),diagnosticsByTarget(validation).edges[edge.id]??[]);
 }
 function renderDiagnostics(container,items){container.replaceChildren(...items.map(item=>{const p=document.createElement("p");p.className="diagnostic";p.textContent=[item.message,...(item.suggestions??[])].join(" ");return p;}));}
@@ -1159,6 +1218,34 @@ function fitSelectedObjects(){
   const collection=cy.collection(ids.map(id=>cy.getElementById(id)));cy.fit(collection,48);
   announce(`Fit ${ids.length} selected object${ids.length===1?"":"s"} in view.`);
 }
+function openOrganizationDialog(mode){
+  organizationMode=mode;organizationBoundary=mode==="subpatch"?subpatchBoundaryPorts(pipeline,[...selectedNodes],discovery):[];
+  const labels={frame:"Frame selected nodes without changing execution.",note:"Place a freeform presentation note at the canvas center.",subpatch:"Review every external port before creating an embedded semantic subpatch."};
+  byId("organization-title").textContent={frame:"Create frame",note:"Add note",subpatch:"Create subpatch"}[mode];
+  byId("organization-context").textContent=labels[mode];byId("organization-text").value={frame:"Section",note:"Note",subpatch:"Subpatch"}[mode];
+  byId("organization-color-row").hidden=mode==="subpatch";byId("organization-error").hidden=true;
+  byId("organization-port-review").replaceChildren(...organizationBoundary.map((port,index)=>{
+    const label=document.createElement("label"),checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.checked=true;checkbox.dataset.portIndex=String(index);
+    label.append(checkbox,document.createTextNode(`${port.direction} ${port.label} · ${readableType(port.value_type)} → ${port.internal.node_id}.${port.internal.port_id}`));return label;
+  }));
+  if(mode==="subpatch"&&!selectedNodes.size){byId("organization-error").textContent="Select at least one runtime node.";byId("organization-error").hidden=false;}
+  byId("organization-dialog").showModal();byId("organization-text").focus();
+}
+function applyOrganization(){
+  try{
+    const title=byId("organization-text").value.trim();
+    if(!title)throw new Error("Enter a title or note.");
+    performGraphEdit({frame:"Create frame",note:"Add note",subpatch:"Create subpatch"}[organizationMode],()=>{
+      if(organizationMode==="frame")return createFrame(pipeline,[...selectedNodes],{title,color:byId("organization-color").value});
+      if(organizationMode==="note")return addNote(pipeline,{text:title,position:canvasCenterPoint(),color:byId("organization-color").value});
+      const reviewed=[...byId("organization-port-review").querySelectorAll("[data-port-index]")].filter(input=>input.checked).map(input=>organizationBoundary[Number(input.dataset.portIndex)]);
+      if(reviewed.length!==organizationBoundary.length)throw new Error("Every current external boundary must be explicitly reviewed and exposed.");
+      return createEmbeddedSubpatch(pipeline,[...selectedNodes],{title,exposed_ports:reviewed,parent_subpatch_id:activeSubpatchId},discovery);
+    });
+    byId("organization-dialog").close();renderGraph();scheduleValidation();announce(`${title} created as ${organizationMode==="subpatch"?"an embedded semantic subpatch":"presentation organization"}.`);
+  }catch(error){byId("organization-error").textContent=error.message;byId("organization-error").hidden=false;}
+}
+
 function deleteSelectedNode(){deleteSelectedObjects();}
 function disableSelectedNode(){
   const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;
@@ -1181,6 +1268,10 @@ byId("delete-selection").onclick=()=>deleteSelectedObjects();
 byId("align-horizontal").onclick=()=>arrangeSelection("Align top",ids=>alignGraphSelection(pipeline,ids,"y","start"));
 byId("distribute-horizontal").onclick=()=>arrangeSelection("Distribute horizontally",ids=>distributeGraphSelection(pipeline,ids,"x"),3);
 byId("tidy-selection").onclick=()=>arrangeSelection("Tidy selection",ids=>tidyGraphSelection(pipeline,ids));
+byId("frame-selection").onclick=()=>openOrganizationDialog("frame");byId("note").onclick=()=>openOrganizationDialog("note");byId("create-subpatch").onclick=()=>openOrganizationDialog("subpatch");
+byId("organization-apply").onclick=applyOrganization;
+byId("cable-opacity").onchange=event=>{performGraphEdit("Set cable opacity",()=>{pipeline.presentation.global_cable_opacity=Number(event.target.value);touch(pipeline);});renderGraph();scheduleValidation();};
+byId("focus-path").onclick=()=>{performGraphEdit("Toggle selected path focus",()=>{pipeline.presentation.selected_path_focus=!pipeline.presentation.selected_path_focus;touch(pipeline);});byId("focus-path").setAttribute("aria-pressed",String(pipeline.presentation.selected_path_focus));renderGraph();};
 byId("snap-grid").onclick=()=>{snapToGrid=!snapToGrid;byId("snap-grid").setAttribute("aria-pressed",String(snapToGrid));byId("snap-grid").textContent=snapToGrid?"Snap on":"Snap off";announce(`Grid snapping ${snapToGrid?"enabled":"disabled"}.`);};
 byId("fit-selection").onclick=fitSelectedObjects;
 byId("pipeline-name").onchange=()=>{syncName();scheduleValidation();};
@@ -1191,8 +1282,13 @@ byId("replace").onclick=openReplacementPicker;
 byId("apply-config").onclick=applyConfig;byId("cancel-connect").onclick=()=>{connecting=null;cy.nodes().removeClass("compatible");renderInspector();announce("Connection cancelled.");};
 byId("apply-edge").onclick=()=>{
   const edge=pipeline.edges.find(item=>item.id===selectedEdge);if(!edge)return;
-  performGraphEdit("Edit cable capacity",()=>{edge.capacity=Math.max(1,Number(byId("edge-capacity").value)||1);touch(pipeline);});
+  performGraphEdit("Edit cable",()=>{edge.capacity=Math.max(1,Number(byId("edge-capacity").value)||1);setCablePresentation(pipeline,edge.id,{...(pipeline.presentation.cables[edge.id]??{}),routing:byId("cable-routing").value,emphasized:byId("cable-emphasized").checked});});
   renderGraph();scheduleValidation();
+};
+byId("add-reroute").onclick=()=>{
+  const edge=pipeline.edges.find(item=>item.id===selectedEdge);if(!edge)return;const current=pipeline.presentation.cables[edge.id]??{};
+  performGraphEdit("Add cable reroute",()=>setCablePresentation(pipeline,edge.id,{...current,reroute_points:[...(current.reroute_points??[]),canvasCenterPoint()]}));
+  renderGraph();scheduleValidation();announce("Presentation-only cable reroute point added.");
 };
 byId("delete-edge").onclick=()=>{
   const edgeId=selectedEdge;if(!edgeId)return;
@@ -1213,6 +1309,7 @@ byId("replacement-dialog").addEventListener("cancel",event=>{event.preventDefaul
 byId("replacement-dialog").addEventListener("click",event=>{if(event.target===byId("replacement-dialog"))closeReplacementPicker();});
 byId("quick-add-search").oninput=renderQuickAdd;byId("quick-add-cancel").onclick=()=>closeQuickAdd();
 byId("quick-add-dialog").addEventListener("cancel",event=>{event.preventDefault();closeQuickAdd();});
+window.addEventListener("popstate",()=>{const requested=new URLSearchParams(location.search).get("subpatch");activeSubpatchId=pipeline?.subpatches?.some(item=>item.id===requested)?requested:null;renderGraph();});
 document.onkeydown=event=>{
   if(event.key==="Escape"&&connecting){connecting=null;cy.nodes().removeClass("compatible");renderInspector();announce("Connection cancelled.");}
   const editable=["INPUT","TEXTAREA","SELECT"].includes(event.target?.tagName)||event.target?.isContentEditable;

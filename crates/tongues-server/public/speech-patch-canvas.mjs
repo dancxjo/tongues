@@ -26,7 +26,19 @@ export function signalFamily(valueType) {
   return "data";
 }
 
-export function cablePath(from, to) {
+export function cablePath(from, to, points = [], routing = "curved") {
+  const route=[from,...points,to];
+  if(routing==="straight")return route.map((point,index)=>`${index?"L":"M"} ${point.x} ${point.y}`).join(" ");
+  if(routing==="orthogonal"){
+    let path=`M ${from.x} ${from.y}`;
+    for(const point of route.slice(1)){const previous=route[route.indexOf(point)-1],middle=(previous.x+point.x)/2;path+=` L ${middle} ${previous.y} L ${middle} ${point.y} L ${point.x} ${point.y}`;}
+    return path;
+  }
+  if(points.length){
+    let path=`M ${from.x} ${from.y}`;
+    for(let index=1;index<route.length;index++){const previous=route[index-1],point=route[index],distance=Math.max(28,Math.abs(point.x-previous.x)*.35);path+=` C ${previous.x+distance} ${previous.y}, ${point.x-distance} ${point.y}, ${point.x} ${point.y}`;}
+    return path;
+  }
   const distance = Math.max(56, Math.abs(to.x - from.x) * 0.45);
   return `M ${from.x} ${from.y} C ${from.x + distance} ${from.y}, ${to.x - distance} ${to.y}, ${to.x} ${to.y}`;
 }
@@ -64,9 +76,14 @@ function injectStyles(document) {
   style.dataset.speechPatchCanvas = "";
   style.textContent = `
     .patch-cables,.patch-jacks{position:absolute;inset:0;z-index:2;pointer-events:none}
+    .patch-organization{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+    .patch-frame{position:absolute;border:2px solid var(--frame-color,#527084);background:color-mix(in srgb,var(--frame-color,#527084) 12%,transparent);border-radius:.65rem;color:#edf5ff;padding:.45rem;font-weight:700}
+    .patch-note{position:absolute;max-width:15rem;padding:.45rem .6rem;border:1px solid #8f8050;border-radius:.35rem;background:var(--note-color,#594c2c);color:#fff7d8;white-space:pre-wrap;box-shadow:0 5px 12px #0007}
+    .patch-subpatch-summary{position:absolute;transform:translate(-50%,-50%);min-width:15rem;padding:.65rem;border:2px solid #dca3ff;border-radius:.65rem;background:#241d36ee;color:#fff;box-shadow:0 8px 20px #000a}.patch-subpatch-summary small{display:block;color:#cabce0;margin-top:.2rem}
     .patch-cables{width:100%;height:100%;overflow:visible}
     .patch-cable{fill:none;stroke:#8da4ba;stroke-width:4;pointer-events:none}
     .patch-cable-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
+    .patch-reroute{fill:#101923;stroke:#f7fffd;stroke-width:2;pointer-events:all;cursor:move}
     .patch-cable.signal-audio{stroke:#70d6a4;stroke-width:5}
     .patch-cable.signal-text{stroke:#dca3ff;stroke-dasharray:10 5}
     .patch-cable.signal-control{stroke:#ffca70;stroke-dasharray:3 5}
@@ -165,6 +182,7 @@ export function createPatchCanvas(options) {
     onBypassNode = () => {},
     onDisableNode = () => {},
     isRunLocked = () => false,
+    getVisibleNodeIds = () => null,
     onAnnounce,
   } = options;
   const document = container.ownerDocument;
@@ -175,6 +193,8 @@ export function createPatchCanvas(options) {
     class: "patch-cables",
     "aria-hidden": "true",
   });
+  const organizationLayer=document.createElement("div");
+  organizationLayer.className="patch-organization";
   const jackLayer = document.createElement("div");
   jackLayer.className = "patch-jacks";
   const cardLayer = document.createElement("div");
@@ -182,7 +202,7 @@ export function createPatchCanvas(options) {
   const connectionList = document.createElement("ol");
   connectionList.className = "patch-connection-list";
   connectionList.setAttribute("aria-label", "Graph connections");
-  container.parentElement.append(svg, jackLayer, cardLayer, connectionList);
+  container.parentElement.append(organizationLayer,svg, jackLayer, cardLayer, connectionList);
 
   let gesture = null;
   let previewPoint = null;
@@ -523,7 +543,8 @@ export function createPatchCanvas(options) {
     }
     cardRenderAt = now;
     cardLayer.replaceChildren();
-    for (const node of pipeline().nodes) {
+    const visibleIds=getVisibleNodeIds();
+    for (const node of pipeline().nodes.filter(node=>!visibleIds||visibleIds.has(node.id))) {
       const card = renderNodeCard(node);
       if (!card) continue;
       const collapsed = card.dataset.state === "collapsed";
@@ -553,7 +574,8 @@ export function createPatchCanvas(options) {
     svg.replaceChildren();
     connectionList.replaceChildren();
     const grouped = options.diagnosticsByEdge?.() ?? {};
-    for (const edge of pipeline().edges) {
+    const visibleIds=getVisibleNodeIds();
+    for (const edge of pipeline().edges.filter(edge=>!visibleIds||(visibleIds.has(edge.from.node_id)&&visibleIds.has(edge.to.node_id)))) {
       const from = anchor(edge.from, "output");
       const to = anchor(edge.to, "input");
       if (!from || !to) continue;
@@ -561,13 +583,18 @@ export function createPatchCanvas(options) {
       const output = nodePorts(source, "output").find(port => port.id === edge.from.port_id);
       const runtime = edgeRuntime(edge.id);
       const edgeState = runtime?.status ?? "ready";
-      const path = cablePath(from, to);
+      const cable=pipeline().presentation?.cables?.[edge.id]??{};
+      const pan=cy.pan?.()??{x:0,y:0},zoom=cy.zoom?.()??1;
+      const points=(cable.reroute_points??[]).map(point=>({x:point.x*zoom+pan.x,y:point.y*zoom+pan.y}));
+      const path = cablePath(from, to, points, cable.routing??"curved");
       const hit = svgElement(document, "path", {d: path, class: "patch-cable-hit", "data-edge-id": edge.id});
       const visible = svgElement(document, "path", {
         d: path,
         "data-edge-id": edge.id,
         class: `patch-cable signal-${signalFamily(output?.value_type)}${edgeState ? ` edge-state-${edgeState}` : ""}${isEdgeSelected(edge.id) ? " selected" : ""}${grouped[edge.id]?.length ? " invalid" : ""}`,
       });
+      const focused=pipeline().presentation?.selected_path_focus&&getSelectedEdgeId();
+      visible.style.opacity=String(isEdgeSelected(edge.id)||cable.emphasized?1:focused?.15:pipeline().presentation?.global_cable_opacity??1);
       hit.addEventListener("pointerdown", event => {
         event.stopPropagation();
         onSelectEdge(edge.id);
@@ -579,6 +606,7 @@ export function createPatchCanvas(options) {
         event.preventDefault();onDropCatalogOnEdge?.({catalog_id:catalogId,edge_id:edge.id,clientX:event.clientX,clientY:event.clientY});
       });
       svg.append(hit, visible);
+      if(isEdgeSelected(edge.id))points.forEach((point,index)=>svg.append(svgElement(document,"circle",{cx:point.x,cy:point.y,r:7,class:"patch-reroute","data-edge-id":edge.id,"data-reroute-index":index,"aria-label":`Cable reroute point ${index+1}`})));
 
       const item = document.createElement("li");
       const button = document.createElement("button");
@@ -601,6 +629,39 @@ export function createPatchCanvas(options) {
     renderPreview();
   }
 
+  function renderOrganizationLayer(){
+    organizationLayer.replaceChildren();
+    const pan=cy.pan?.()??{x:0,y:0},zoom=cy.zoom?.()??1;
+    for(const frame of pipeline().presentation?.frames??[]){
+      const element=document.createElement("section");element.className="patch-frame";element.textContent=frame.title;
+      element.style.setProperty("--frame-color",frame.color||"#527084");
+      element.style.left=`${frame.origin.x*zoom+pan.x}px`;element.style.top=`${frame.origin.y*zoom+pan.y}px`;
+      element.style.width=`${frame.size.x*zoom}px`;element.style.height=`${frame.size.y*zoom}px`;
+      organizationLayer.append(element);
+    }
+    for(const note of pipeline().presentation?.notes??[]){
+      const element=document.createElement("aside");element.className="patch-note";element.textContent=note.text;
+      element.style.setProperty("--note-color",note.color||"#594c2c");
+      element.style.left=`${note.position.x*zoom+pan.x}px`;element.style.top=`${note.position.y*zoom+pan.y}px`;
+      organizationLayer.append(element);
+    }
+    const collapsed=new Set(pipeline().presentation?.collapsed_subpatches??[]);
+    for(const subpatch of pipeline().subpatches?.filter(item=>collapsed.has(item.id))??[]){
+      const points=subpatch.node_ids.map(id=>cy.getElementById(id)).filter(node=>node?.length).map(node=>node.renderedPosition());
+      if(!points.length)continue;
+      const states=subpatch.node_ids.map(id=>getNodeRuntimeState(id)?.status);
+      const unavailable=subpatch.node_ids.filter(id=>{
+        const node=pipeline().nodes.find(item=>item.id===id);
+        return catalogEntryForNode(node,catalog())?.readiness!=="ready";
+      }).length;
+      const element=document.createElement("section");element.className="patch-subpatch-summary";
+      element.style.left=`${points.reduce((sum,point)=>sum+point.x,0)/points.length}px`;element.style.top=`${points.reduce((sum,point)=>sum+point.y,0)/points.length}px`;
+      const title=document.createElement("strong");title.textContent=subpatch.title;
+      const detail=document.createElement("small");detail.textContent=`${subpatch.node_ids.length} nodes · ${subpatch.exposed_ports.length} ports · ${unavailable} unavailable · ${states.filter(state=>state==="active").length} active · ${states.filter(state=>state==="failed").length} failed`;
+      element.append(title,detail);organizationLayer.append(element);
+    }
+  }
+
   function portConnections(nodeId, portId, direction) {
     return pipeline().edges.filter(edge => {
       const endpoint = direction === "output" ? edge.from : edge.to;
@@ -617,7 +678,8 @@ export function createPatchCanvas(options) {
 
   function renderJacks() {
     jackLayer.replaceChildren();
-    for (const node of pipeline().nodes) {
+    const visibleIds=getVisibleNodeIds();
+    for (const node of pipeline().nodes.filter(node=>!visibleIds||visibleIds.has(node.id))) {
       const cyNode = cy.getElementById(node.id);
       if (!cyNode?.length) continue;
       for (const direction of ["input", "output"]) {
@@ -676,6 +738,7 @@ export function createPatchCanvas(options) {
 
   function render() {
     if (destroyed) return;
+    renderOrganizationLayer();
     renderNodeCards();
     renderConnections();
     renderJacks();
@@ -952,6 +1015,7 @@ export function createPatchCanvas(options) {
       jackLayer.remove();
       cardLayer.remove();
       connectionList.remove();
+      organizationLayer.remove();
     },
   };
 }

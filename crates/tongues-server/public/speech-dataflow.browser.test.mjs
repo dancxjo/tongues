@@ -71,6 +71,7 @@ function cytoscapeStub(){
       if(!data)return{length:0,select:noop,addClass:noop,removeClass:noop};
       return{
         length:1,select:noop,addClass:noop,removeClass:noop,
+        data:noop,
         position:()=>data.position??{x:0,y:0},
         renderedPosition:()=>data.position??{x:0,y:0},
       };
@@ -183,8 +184,8 @@ test("stored faceplate geometry controls card size and jack anchor position",asy
     const asrOutput=document.querySelector('[data-patch-jack][data-node-id="node:asr"][data-direction="output"]');
     const cardLeft=parseFloat(getComputedStyle(element).left);
     const width=parseFloat(getComputedStyle(element).getPropertyValue("--patch-node-card-width"));
-    const inputLeft=parseFloat(getComputedStyle(asrInput).left);
-    const outputLeft=parseFloat(getComputedStyle(asrOutput).left);
+    const inputLeft=parseFloat(getComputedStyle(asrInput.closest(".patch-jack-wrap")).left);
+    const outputLeft=parseFloat(getComputedStyle(asrOutput.closest(".patch-jack-wrap")).left);
     return{
       cardLeft,inputLeft,outputLeft,width,
       inputOffset:Math.round(inputLeft-cardLeft),
@@ -194,6 +195,38 @@ test("stored faceplate geometry controls card size and jack anchor position",asy
   expect(metrics.width).toBe(360);
   expect(metrics.inputOffset).toBe(-180);
   expect(metrics.outputOffset).toBe(180);
+});
+
+test("frames and reviewed subpatches persist and drill with browser history",async({page})=>{
+  await page.getByRole("button",{name:"Frame"}).click();
+  const dialog=page.getByRole("dialog",{name:"Create frame"});
+  await expect(dialog).toBeVisible();
+  await page.locator("#organization-text").fill("Recognition section");
+  await page.locator("#organization-apply").click();
+  await expect(page.locator("#organization-list")).toContainText("Frame: Recognition section");
+
+  await page.getByRole("button",{name:"Subpatch"}).click();
+  await expect(page.getByRole("dialog",{name:"Create subpatch"})).toBeVisible();
+  await expect(page.locator("#organization-port-review input")).toHaveCount(1);
+  await page.locator("#organization-text").fill("Recognizer");
+  await page.locator("#organization-apply").click();
+  const item=page.locator(".organization-item").filter({hasText:"Recognizer"});
+  await expect(item).toContainText("1 reviewed ports");
+  await item.getByRole("button",{name:"Collapse"}).click();
+  await expect(page.locator(".patch-subpatch-summary")).toContainText("1 nodes · 1 ports");
+  await page.getByRole("button",{name:"Save"}).click();
+  await expect.poll(()=>savedGraph?.presentation?.collapsed_subpatches?.length).toBe(1);
+  await item.getByRole("button",{name:"Expand"}).click();
+  await item.getByRole("button",{name:"Open"}).click();
+  await expect(page).toHaveURL(/subpatch=/);
+  await expect(page.locator("#subpatch-breadcrumbs")).toContainText("Recognizer");
+  await page.goBack();
+  await expect(page).not.toHaveURL(/subpatch=/);
+
+  await page.getByRole("button",{name:"Save"}).click();
+  await expect.poll(()=>savedGraph?.schema_version).toBe(3);
+  expect(savedGraph.presentation.frames).toHaveLength(1);
+  expect(savedGraph.subpatches).toHaveLength(1);
 });
 
 test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persist without implicit graph edits",async({page})=>{
@@ -309,13 +342,13 @@ test("multi-selection copy, paste, arrange, delete, undo, redo, and branch clear
   await page.getByRole("button",{name:"Snap off"}).click();
   await expect(page.getByRole("button",{name:"Snap on"})).toHaveAttribute("aria-pressed","true");
   await outline.last().focus();await outline.last().press("ArrowRight");await save();
-  const snapped=JSON.parse(savedGraph.metadata.labels["studio.layout.v1"]);
+  const snapped=savedGraph.presentation.node_positions;
   expect(pastedIds.every(id=>snapped[id].x%24===0&&snapped[id].y%24===0)).toBe(true);
   await page.getByRole("button",{name:"Undo"}).click();
   await page.getByRole("button",{name:"Fit selection"}).click();
 
   await page.getByRole("button",{name:"Align top"}).click();await save();
-  const layout=JSON.parse(savedGraph.metadata.labels["studio.layout.v1"]);
+  const layout=savedGraph.presentation.node_positions;
   expect(new Set(pastedIds.map(id=>layout[id].y)).size).toBe(1);
   await page.getByRole("button",{name:"Undo"}).click();
   await page.getByRole("button",{name:"Tidy"}).click();
@@ -347,7 +380,7 @@ test("quick-add opens at intent, filters cable consumers, and inserts on a cable
   await expect(dialog).toBeHidden();await save();expect(savedGraph.nodes).toHaveLength(6);
   await page.getByRole("button",{name:"Undo"}).click();await save();expect(savedGraph.nodes).toHaveLength(5);
 
-  await jack("node:mic-1","output").dragTo(page.locator("#canvas"),{targetPosition:{x:360,y:430}});
+  await jack("node:mic-1","output").dragTo(page.locator("#canvas"),{targetPosition:{x:360,y:300}});
   await expect(dialog).toBeVisible();
   await expect(page.getByRole("option",{name:/Audio pass-through/})).toBeVisible();
   await page.locator("#quick-add-search").fill("Audio pass-through");
@@ -375,7 +408,11 @@ test("quick-add opens at intent, filters cable consumers, and inserts on a cable
   await save();expect(savedGraph.nodes).toHaveLength(8);expect(savedGraph.edges).toHaveLength(3);
   expect(savedGraph.edges.some(edge=>edge.id===originalEdge.id)).toBe(true);
 
-  await paletteModule.dragTo(jack("node:asr","input"));
+  await jack("node:asr","input").evaluate((target)=>{
+    const transfer=new DataTransfer();
+    transfer.setData("application/x-tongues-catalog-id","kind:audio_passthrough");
+    target.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:transfer}));
+  });
   await save();expect(savedGraph.nodes).toHaveLength(9);expect(savedGraph.edges).toHaveLength(4);
   expect(savedGraph.edges.some(edge=>edge.to.node_id==="node:asr"&&edge.to.port_id==="audio")).toBe(true);
 });
