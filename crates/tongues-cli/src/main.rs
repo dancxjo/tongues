@@ -21,7 +21,6 @@ use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{any::Any, panic};
 
@@ -1283,7 +1282,7 @@ enum CommonPhoneCommands {
         #[arg(long, default_value = "cpu")]
         device: String,
 
-        /// CPAL input device name substring
+        /// Exact backend-owned input device id from listen-devices
         #[arg(long)]
         input_device: Option<String>,
 
@@ -8220,27 +8219,20 @@ struct CommonPhoneListenOptions {
 }
 
 fn cmd_common_phone_listen_devices() -> Result<()> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-
-    let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
-    println!("CPAL input devices:");
-    for device in host.input_devices()? {
-        let name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
-        let marker = if Some(name.as_str()) == default_name.as_deref() {
+    println!("Audio input devices:");
+    for device in tongues_audio::input_device_inventory()? {
+        let marker = if device.is_default {
             " (default)"
         } else {
             ""
         };
-        println!("  {name}{marker}");
+        println!("  {}{marker}", device.id);
     }
     Ok(())
 }
 
 fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
-    use cpal::traits::{DeviceTrait, StreamTrait};
+    use tongues_audio::{AudioSource, AudioSourceEvent};
 
     anyhow::ensure!(
         options.dry_run || options.model.is_some(),
@@ -8264,56 +8256,16 @@ fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
     };
     frame_config.sample_rate_hz = options.sample_rate;
 
-    let host = cpal::default_host();
-    let device = select_input_device(&host, options.input_device.as_deref())?;
-    let device_name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
-    let supported = device.default_input_config()?;
-    let native_sample_rate = supported.sample_rate().0;
-    let channels = supported.channels() as usize;
-    let stream_config: cpal::StreamConfig = supported.clone().into();
-    let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let err_fn = |err| eprintln!("common-phone listen stream error: {err}");
-    let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => {
-            let callback_buffer = Arc::clone(&buffer);
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _| append_mono_samples(data, channels, &callback_buffer),
-                err_fn,
-                None,
-            )?
-        }
-        cpal::SampleFormat::I16 => {
-            let callback_buffer = Arc::clone(&buffer);
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[i16], _| {
-                    let converted = data
-                        .iter()
-                        .map(|sample| *sample as f32 / i16::MAX as f32)
-                        .collect::<Vec<_>>();
-                    append_mono_samples(&converted, channels, &callback_buffer);
-                },
-                err_fn,
-                None,
-            )?
-        }
-        cpal::SampleFormat::U16 => {
-            let callback_buffer = Arc::clone(&buffer);
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[u16], _| {
-                    let converted = data
-                        .iter()
-                        .map(|sample| (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0)
-                        .collect::<Vec<_>>();
-                    append_mono_samples(&converted, channels, &callback_buffer);
-                },
-                err_fn,
-                None,
-            )?
-        }
-        other => anyhow::bail!("unsupported CPAL input sample format: {other:?}"),
+    let mut source = tongues_audio::CpalAudioSource::open(
+        options.input_device.as_deref(),
+        32,
+    )?;
+    let native_sample_rate = source.descriptor().decoded_format.sample_rate_hz;
+    let device_name = match &source.descriptor().source {
+        speaking::StreamSource::Live {
+            device: Some(device),
+        } => device.clone(),
+        _ => source.descriptor().id.clone(),
     };
 
     println!("listening on {device_name}...");
@@ -8333,26 +8285,47 @@ fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
         println!("context_ms: {}", options.context_ms);
         println!("frame_dim: {}", frame_config.feature_bins);
     }
-    stream.play()?;
     let mut elapsed_ms = 0u64;
     let mut in_speech = false;
     let mut last_line = String::new();
+    let mut buffer = Vec::<f32>::new();
+    let mut new_frames = 0usize;
     let context_samples_native =
         (native_sample_rate as usize * options.context_ms as usize / 1000).max(1);
+    let process_frames =
+        (native_sample_rate as usize * options.chunk_ms.max(10) as usize / 1000).max(1);
     loop {
-        std::thread::sleep(Duration::from_millis(options.chunk_ms.max(10)));
-        elapsed_ms += options.chunk_ms.max(10);
-        let window = {
-            let mut guard = buffer.lock().expect("common phone audio buffer poisoned");
-            if guard.len() > context_samples_native {
-                let remove = guard.len() - context_samples_native;
-                guard.drain(..remove);
+        match source.next_event()? {
+            AudioSourceEvent::Audio(chunk) => {
+                let mono = chunk.audio.to_mono()?;
+                new_frames = new_frames.saturating_add(mono.len());
+                buffer.extend(mono);
             }
-            guard.clone()
-        };
-        if window.len() < (native_sample_rate as usize * options.chunk_ms as usize / 1000).max(1) {
+            AudioSourceEvent::Discontinuity(gap) => {
+                eprintln!(
+                    "audio discontinuity: expected chunk {}, received {} ({})",
+                    gap.expected_chunk_sequence, gap.received_chunk_sequence, gap.reason
+                );
+                buffer.clear();
+                new_frames = 0;
+                in_speech = false;
+                last_line.clear();
+                continue;
+            }
+            AudioSourceEvent::EndOfStream => {
+                anyhow::bail!("audio input ended");
+            }
+        }
+        if new_frames < process_frames {
             continue;
         }
+        new_frames %= process_frames;
+        elapsed_ms = elapsed_ms.saturating_add(options.chunk_ms.max(10));
+        if buffer.len() > context_samples_native {
+            let remove = buffer.len() - context_samples_native;
+            buffer.drain(..remove);
+        }
+        let window = buffer.clone();
         let stats =
             tongues_common_phone::live_frame_stats(&window, native_sample_rate, &frame_config);
         let speech = stats.vad > 0.15 || stats.rms > 0.01;
@@ -8400,31 +8373,6 @@ fn cmd_common_phone_listen(options: CommonPhoneListenOptions) -> Result<()> {
         if options.show_features && !feature_line.is_empty() {
             println!("features: {feature_line}");
         }
-    }
-}
-
-fn select_input_device(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-
-    if let Some(name) = name {
-        let needle = name.to_lowercase();
-        for device in host.input_devices()? {
-            let device_name = device.name().unwrap_or_default();
-            if device_name.to_lowercase().contains(&needle) {
-                return Ok(device);
-            }
-        }
-        anyhow::bail!("no CPAL input device matching `{name}`");
-    }
-    host.default_input_device()
-        .ok_or_else(|| anyhow::anyhow!("no default CPAL input device available"))
-}
-
-fn append_mono_samples(samples: &[f32], channels: usize, buffer: &Arc<Mutex<Vec<f32>>>) {
-    let channels = channels.max(1);
-    let mut guard = buffer.lock().expect("common phone audio buffer poisoned");
-    for frame in samples.chunks(channels) {
-        guard.push(frame.iter().copied().sum::<f32>() / frame.len().max(1) as f32);
     }
 }
 

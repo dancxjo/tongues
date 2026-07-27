@@ -13,6 +13,7 @@
         values: new Map(),
         samples: [],
         emotions: [],
+        audioInputCapabilities: null,
         audioUrl: null,
         runtimeTimer: null,
         runtimePollController: null,
@@ -1345,6 +1346,21 @@
             ownership = 'The named standardizer is an explicit part of this adapter and vocoder stage.';
         }
         const statuses = component?.statuses || path.statuses || [];
+        const audioInput = stage === 'input' ? state.audioInputCapabilities : null;
+        const sourceKinds = (audioInput?.source_kinds || [])
+            .map((kind) => kind.replaceAll('_', ' '))
+            .join(', ');
+        const inputDiscovery = audioInput ? `
+            <h4>Recognition input discovery</h4>
+            <p>${escapeHtml(sourceKinds || 'No source adapters reported.')}</p>
+            <p>${escapeHtml(
+                (audioInput.devices || []).length
+                    ? (audioInput.devices || []).map((device) => (
+                        `${device.display_name}${device.is_default ? ' (default)' : ''}`
+                    )).join(', ')
+                    : (audioInput.device_discovery_error || 'No local microphone devices reported.')
+            )}</p>
+        ` : '';
         target.innerHTML = `
             <p class="eyebrow">${escapeHtml(stage.replaceAll('_', ' '))}</p>
             <h3>${escapeHtml(component?.display_name || stage)}</h3>
@@ -1358,6 +1374,7 @@
             <ul>${contractList(component?.produces, stage === 'output' ? 'Downloadable WAV audio' : 'No separate output contract')}</ul>
             <h4>Ownership and compatibility</h4>
             <p>${escapeHtml(ownership)}</p>
+            ${inputDiscovery}
         `;
     }
 
@@ -2134,9 +2151,14 @@
     }
 
     async function loadAuxiliaryDiscovery() {
-        const [sampleResponse, emotionResponse] = await Promise.allSettled([
+        const [sampleResponse, emotionResponse, audioInputResponse] = await Promise.allSettled([
             fetch('/api/styletts2-samples').then((response) => response.json()),
             fetch('/api/emotions').then((response) => response.json()),
+            fetch('/api/audio-input/capabilities', { cache: 'no-store' })
+                .then((response) => {
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                }),
         ]);
         state.samples = sampleResponse.status === 'fulfilled'
             ? (sampleResponse.value.samples || [])
@@ -2144,6 +2166,9 @@
         state.emotions = emotionResponse.status === 'fulfilled'
             ? (emotionResponse.value.emotions || [])
             : [];
+        state.audioInputCapabilities = audioInputResponse.status === 'fulfilled'
+            ? audioInputResponse.value
+            : null;
     }
 
     function acceptDiscovery(discovery, allowVerificationReset = false, append = false) {

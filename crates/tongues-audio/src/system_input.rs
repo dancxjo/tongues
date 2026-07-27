@@ -27,6 +27,8 @@ pub struct AudioInputCapabilities {
     pub source_kinds: Vec<AudioSourceKind>,
     pub raw_pcm_encodings: Vec<crate::PcmEncoding>,
     pub devices: Vec<InputDeviceInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_discovery_error: Option<String>,
     pub bounded_queues: bool,
     pub explicit_discontinuities: bool,
 }
@@ -53,8 +55,12 @@ pub fn input_device_inventory() -> Result<Vec<InputDeviceInfo>> {
     Ok(devices)
 }
 
-pub fn input_capabilities() -> Result<AudioInputCapabilities> {
-    Ok(AudioInputCapabilities {
+pub fn input_capabilities() -> AudioInputCapabilities {
+    let (devices, device_discovery_error) = match input_device_inventory() {
+        Ok(devices) => (devices, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    AudioInputCapabilities {
         source_kinds: vec![
             AudioSourceKind::File,
             AudioSourceKind::Stdin,
@@ -69,10 +75,11 @@ pub fn input_capabilities() -> Result<AudioInputCapabilities> {
             crate::PcmEncoding::Signed16Le,
             crate::PcmEncoding::Float32Le,
         ],
-        devices: input_device_inventory()?,
+        devices,
+        device_discovery_error,
         bounded_queues: true,
         explicit_discontinuities: true,
-    })
+    }
 }
 
 pub struct CpalAudioSource {

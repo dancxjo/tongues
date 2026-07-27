@@ -46,6 +46,33 @@ pub struct AudioSourceDescriptor {
 }
 
 impl AudioSourceDescriptor {
+    pub fn live_pcm(
+        id: impl Into<String>,
+        kind: AudioSourceKind,
+        device: Option<String>,
+        sample_rate_hz: u32,
+        channels: u16,
+    ) -> Result<Self> {
+        if sample_rate_hz == 0 {
+            return Err(invalid("live PCM sample rate must be positive"));
+        }
+        if channels == 0 {
+            return Err(invalid("live PCM channel count must be positive"));
+        }
+        if matches!(kind, AudioSourceKind::File | AudioSourceKind::Fixture) {
+            return Err(invalid("live PCM descriptors require a live source kind"));
+        }
+        Ok(Self {
+            id: id.into(),
+            kind,
+            source: StreamSource::Live { device },
+            decoded_format: decoded_format(sample_rate_hz, channels),
+            live: true,
+            seekable: false,
+            metadata: BTreeMap::new(),
+        })
+    }
+
     pub fn stream_opened_event(&self, clock: ClockOrigin) -> StreamEvent {
         StreamEvent::StreamOpened {
             source: self.source.clone(),

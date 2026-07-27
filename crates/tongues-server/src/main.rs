@@ -268,6 +268,10 @@ async fn run_server() -> Result<(), StartupError> {
 fn build_app(state: AppState) -> Router {
     let static_dir = state.static_dir.clone();
     Router::new()
+        .route(
+            "/api/audio-input/capabilities",
+            get(get_audio_input_capabilities),
+        )
         .route("/api/emotions", get(get_emotions))
         .route("/api/cli/schema", get(get_cli_schema))
         .route("/api/files", get(list_files))
@@ -331,6 +335,10 @@ async fn get_live_providers() -> impl IntoResponse {
     Json(json!({
         "providers": live::provider_discovery().await,
     }))
+}
+
+async fn get_audio_input_capabilities() -> impl IntoResponse {
+    Json(tongues_audio::input_capabilities())
 }
 
 async fn get_cli_schema() -> impl IntoResponse {
