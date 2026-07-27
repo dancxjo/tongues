@@ -253,56 +253,8 @@ async fn browser_audio_session(mut socket: WebSocket) {
                 return;
             }
         };
-        let language_capabilities = tongues_cli::language_routing_cmd::capabilities();
-        let mut language_router = match consumer_language_routing.as_ref() {
-            Some(config) => match LanguageRouter::new(
-                config.mode.clone(),
-                config.switching,
-                config.unsupported.clone(),
-                language_capabilities.asr_providers.clone(),
-            ) {
-                Ok(router) => Some(router),
-                Err(error) => {
-                    let _ = probe_tx.blocking_send(ProbeEvent::Error {
-                        code: "invalid_language_routing",
-                        message: error.to_string(),
-                    });
-                    return;
-                }
-            },
-            None => None,
-        };
-        let mut language_identifier = if matches!(
-            consumer_language_routing
-                .as_ref()
-                .map(|config| &config.mode),
-            Some(LanguageSelectionMode::Detect { .. })
-        ) {
-            let Some(detector) = language_capabilities
-                .detectors
-                .iter()
-                .find(|detector| detector.installed)
-            else {
-                let _ = probe_tx.blocking_send(ProbeEvent::Error {
-                    code: "language_detector_unavailable",
-                    message: "no installed language detector is available".into(),
-                });
-                return;
-            };
-            match WhisperLanguageIdentifier::new_quiet(&detector.model_id) {
-                Ok(identifier) => Some(identifier),
-                Err(error) => {
-                    let _ = probe_tx.blocking_send(ProbeEvent::Error {
-                        code: "language_detector_unavailable",
-                        message: error.to_string(),
-                    });
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-        let mut language_sequence = 0_u64;
+        let (mut language_tx, mut language_worker) =
+            spawn_language_worker(consumer_language_routing, probe_tx.clone());
         loop {
             let probe = match pipeline.next_event() {
                 Ok(Some(VadPipelineEvent::VadDecision { frame, decision })) => ProbeEvent::Level {
@@ -352,34 +304,15 @@ async fn browser_audio_session(mut socket: WebSocket) {
                         if probe_tx.blocking_send(final_probe).is_err() {
                             break;
                         }
-                        if let Some(router) = &mut language_router {
-                            match route_audio_segment(
-                                router,
-                                language_identifier.as_mut(),
-                                language_sequence,
-                                &segment,
-                            ) {
-                                Ok(route) => {
-                                    if probe_tx
-                                        .blocking_send(ProbeEvent::LanguageRouted { route })
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
-                                Err(error) => {
-                                    if probe_tx
-                                        .blocking_send(ProbeEvent::Error {
-                                            code: "language_routing_failed",
-                                            message: error.to_string(),
-                                        })
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
-                            }
-                            language_sequence = language_sequence.saturating_add(1);
+                        if let Some(sender) = &language_tx
+                            && let Err(error) = sender.try_send(segment)
+                        {
+                            let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                                code: "language_backpressure",
+                                message: format!(
+                                    "language identification queue rejected a segment: {error}"
+                                ),
+                            });
                         }
                         continue;
                     }
@@ -395,6 +328,10 @@ async fn browser_audio_session(mut socket: WebSocket) {
                     | SegmentationEvent::SegmentUpdated { .. } => continue,
                 },
                 Ok(Some(VadPipelineEvent::EndOfStream { metrics })) => {
+                    language_tx.take();
+                    if let Some(worker) = language_worker.take() {
+                        let _ = worker.join();
+                    }
                     let _ = probe_tx.blocking_send(ProbeEvent::Ended { metrics });
                     break;
                 }
@@ -410,6 +347,10 @@ async fn browser_audio_session(mut socket: WebSocket) {
             if probe_tx.blocking_send(probe).is_err() {
                 break;
             }
+        }
+        drop(language_tx);
+        if let Some(worker) = language_worker {
+            let _ = worker.join();
         }
     });
     if send_probe(
@@ -622,6 +563,86 @@ fn route_audio_segment(
         })
         .transpose()?;
     router.route(sequence, detection)
+}
+
+fn spawn_language_worker(
+    config: Option<BrowserLanguageRouting>,
+    probe_tx: tokio::sync::mpsc::Sender<ProbeEvent>,
+) -> (
+    Option<std::sync::mpsc::SyncSender<tongues_audio::AudioSegment>>,
+    Option<std::thread::JoinHandle<()>>,
+) {
+    let Some(config) = config else {
+        return (None, None);
+    };
+    let (segment_tx, segment_rx) = std::sync::mpsc::sync_channel(2);
+    let worker = std::thread::spawn(move || {
+        let capabilities = tongues_cli::language_routing_cmd::capabilities();
+        let mut router = match LanguageRouter::new(
+            config.mode.clone(),
+            config.switching,
+            config.unsupported,
+            capabilities.asr_providers,
+        ) {
+            Ok(router) => router,
+            Err(error) => {
+                let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                    code: "invalid_language_routing",
+                    message: error.to_string(),
+                });
+                return;
+            }
+        };
+        let mut identifier = if matches!(config.mode, LanguageSelectionMode::Detect { .. }) {
+            let Some(detector) = capabilities
+                .detectors
+                .iter()
+                .find(|detector| detector.installed)
+            else {
+                let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                    code: "language_detector_unavailable",
+                    message: "no installed language detector is available".into(),
+                });
+                return;
+            };
+            match WhisperLanguageIdentifier::new_quiet(&detector.model_id) {
+                Ok(identifier) => Some(identifier),
+                Err(error) => {
+                    let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                        code: "language_detector_unavailable",
+                        message: error.to_string(),
+                    });
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        for (sequence, segment) in segment_rx.into_iter().enumerate() {
+            match route_audio_segment(&mut router, identifier.as_mut(), sequence as u64, &segment) {
+                Ok(route) => {
+                    if probe_tx
+                        .blocking_send(ProbeEvent::LanguageRouted { route })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    if probe_tx
+                        .blocking_send(ProbeEvent::Error {
+                            code: "language_routing_failed",
+                            message: error.to_string(),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    (Some(segment_tx), Some(worker))
 }
 
 async fn send_error(
