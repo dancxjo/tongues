@@ -615,6 +615,21 @@ a {
     min-width: 8rem;
 }
 
+.browser-mic-probe > label,
+.browser-mic-controls label {
+    color: var(--text-muted);
+    display: grid;
+    font-size: 0.78rem;
+    gap: 0.2rem;
+}
+
+.browser-mic-controls {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(2, minmax(8rem, 1fr));
+    margin-top: 0.5rem;
+}
+
 .browser-mic-probe p {
     flex: 1 0 100%;
     margin: 0;
@@ -622,6 +637,24 @@ a {
 
 .browser-mic-probe p[data-state="failed"] {
     color: var(--accent);
+}
+
+.browser-mic-events {
+    flex: 1 0 100%;
+    margin: 0;
+    max-height: 8rem;
+    overflow: auto;
+    padding-left: 1.5rem;
+}
+
+.browser-mic-events:empty {
+    display: none;
+}
+
+.browser-mic-events li {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    line-height: 1.4;
 }
 
 .copy-row code {

@@ -1369,10 +1369,28 @@
                     : (audioInput.device_discovery_error || 'No local microphone devices reported.')
             )}</p>
             <div class="browser-mic-probe">
+                <label>VAD
+                    <select id="browser-mic-vad">
+                        <option value="web_rtc">WebRTC</option>
+                        <option value="energy">Energy baseline</option>
+                    </select>
+                </label>
+                <details>
+                    <summary>Segmentation controls</summary>
+                    <div class="browser-mic-controls">
+                        <label>Speech start (ms)<input id="browser-mic-speech-start" type="number" min="10" step="10" value="30"></label>
+                        <label>Acoustic end (ms)<input id="browser-mic-acoustic-end" type="number" min="10" step="10" value="300"></label>
+                        <label>Segment close (ms)<input id="browser-mic-segment-end" type="number" min="10" step="10" value="800"></label>
+                        <label>Pre-roll (ms)<input id="browser-mic-pre-roll" type="number" min="0" step="10" value="200"></label>
+                        <label>Minimum speech (ms)<input id="browser-mic-minimum-speech" type="number" min="0" step="10" value="250"></label>
+                        <label>Maximum segment (ms)<input id="browser-mic-maximum-segment" type="number" min="100" step="100" value="30000"></label>
+                    </div>
+                </details>
                 <button id="browser-mic-start" type="button">Test this browser’s microphone</button>
                 <button id="browser-mic-stop" type="button" class="secondary-button" disabled>Stop test</button>
                 <meter id="browser-mic-level" min="0" max="1" value="0" aria-label="Browser microphone level"></meter>
                 <p id="browser-mic-status" aria-live="polite">Uses this browser device, not the server host microphone.</p>
+                <ol id="browser-mic-events" class="browser-mic-events" aria-label="Utterance lifecycle events"></ol>
             </div>
         ` : '';
         target.innerHTML = `
@@ -1410,6 +1428,15 @@
         }
     }
 
+    function appendBrowserMicEvent(message) {
+        const events = byId('browser-mic-events');
+        if (!events) return;
+        const item = document.createElement('li');
+        item.textContent = message;
+        events.prepend(item);
+        while (events.children.length > 6) events.lastElementChild?.remove();
+    }
+
     function browserMicSocketUrl() {
         const scheme = browser.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${scheme}//${browser.location.host}/api/audio-input/browser-stream`;
@@ -1427,6 +1454,18 @@
         stopBrowserMicProbe(false);
         const start = byId('browser-mic-start');
         const stop = byId('browser-mic-stop');
+        const segmentation = {
+            frame_ms: 10,
+            speech_start_ms: Number(byId('browser-mic-speech-start')?.value || 30),
+            acoustic_end_silence_ms: Number(byId('browser-mic-acoustic-end')?.value || 300),
+            segment_end_silence_ms: Number(byId('browser-mic-segment-end')?.value || 800),
+            minimum_speech_ms: Number(byId('browser-mic-minimum-speech')?.value || 250),
+            pre_roll_ms: Number(byId('browser-mic-pre-roll')?.value || 200),
+            maximum_segment_ms: Number(byId('browser-mic-maximum-segment')?.value || 30000),
+        };
+        const vadBackend = byId('browser-mic-vad')?.value || 'web_rtc';
+        const events = byId('browser-mic-events');
+        if (events) events.replaceChildren();
         if (start) start.disabled = true;
         setBrowserMicStatus('Requesting browser microphone permission…');
         try {
@@ -1463,6 +1502,8 @@
                         schema_version: 1,
                         sample_rate_hz: context.sampleRate,
                         channels: 1,
+                        vad_backend: vadBackend,
+                        segmentation,
                     }));
                 }, { once: true });
                 socket.addEventListener('message', (event) => {
@@ -1479,9 +1520,24 @@
                         const meter = byId('browser-mic-level');
                         if (meter) meter.value = Math.min(1, Number(message.rms || 0) * 4);
                         setBrowserMicStatus(
-                            `Browser audio reached Tongues: RMS ${Number(message.rms || 0).toFixed(3)}, peak ${Number(message.peak || 0).toFixed(3)}, chunk ${message.chunk_sequence}.`,
+                            `Browser audio reached Tongues: RMS ${Number(message.rms || 0).toFixed(3)}, peak ${Number(message.peak || 0).toFixed(3)}, VAD ${Number(message.speech_probability || 0).toFixed(2)} (${message.is_speech ? 'speech' : 'silence'}), frame ${message.chunk_sequence}.`,
+                        );
+                    } else if (message.type === 'segment_opened') {
+                        appendBrowserMicEvent(
+                            `Segment ${message.segment_id} opened with ${message.pre_roll_frames} pre-roll frames.`,
+                        );
+                    } else if (message.type === 'speech_ended') {
+                        appendBrowserMicEvent(
+                            `Acoustic speech ended for ${message.segment_id}; endpoint latency ${message.endpoint_latency_ms} ms, conversational segment still open.`,
+                        );
+                    } else if (message.type === 'segment_final') {
+                        appendBrowserMicEvent(
+                            `${message.accepted ? 'Finalized' : 'Dropped short'} segment ${message.segment_id}: ${message.speech_duration_ms} ms speech, ${message.reason}.`,
                         );
                     } else if (message.type === 'discontinuity') {
+                        appendBrowserMicEvent(
+                            `Discontinuity: ${message.reason} (expected ${message.expected_chunk_sequence}, received ${message.received_chunk_sequence}).`,
+                        );
                         setBrowserMicStatus(
                             `Browser audio discontinuity: ${message.reason} (expected ${message.expected_chunk_sequence}, received ${message.received_chunk_sequence}).`,
                             true,
@@ -1491,7 +1547,12 @@
                     } else if (message.type === 'ended') {
                         socket.close();
                         stopBrowserMicProbe(false);
-                        setBrowserMicStatus('Browser microphone test stopped.');
+                        appendBrowserMicEvent(
+                            `Stopped: ${Number(message.metrics?.segments_finalized || 0)} finalized, ${Number(message.metrics?.segments_dropped || 0)} dropped, ${Number(message.metrics?.forced_flushes || 0)} forced flushes.`,
+                        );
+                        setBrowserMicStatus(
+                            `Browser microphone test stopped. Speech ratio ${Number(message.metrics?.speech_frames || 0)}/${Number(message.metrics?.frames_observed || 0)}; forced flushes ${Number(message.metrics?.forced_flushes || 0)}.`,
+                        );
                     }
                 });
                 socket.addEventListener('error', () => {

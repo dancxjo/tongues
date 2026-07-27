@@ -7,14 +7,20 @@ use speaking::ChannelLayout;
 use crate::{
     invalid, AudioBuffer, AudioDiscontinuity, AudioSource, AudioSourceEvent, Result,
     SegmentCloseReason, SegmentationEvent, SegmentationFrame, SegmentationMetrics,
-    UtteranceSegmenter, VoiceActivityDetector,
+    UtteranceSegmenter, VadDecision, VoiceActivityDetector,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VadPipelineEvent {
+    VadDecision {
+        frame: SegmentationFrame,
+        decision: VadDecision,
+    },
     Segmentation(SegmentationEvent),
     SourceDiscontinuity(AudioDiscontinuity),
-    EndOfStream { metrics: SegmentationMetrics },
+    EndOfStream {
+        metrics: SegmentationMetrics,
+    },
 }
 
 pub struct VadSegmentationPipeline<S, D> {
@@ -211,6 +217,10 @@ impl<S: AudioSource, D: VoiceActivityDetector> VadSegmentationPipeline<S, D> {
             audio,
         };
         self.next_frame_sequence = self.next_frame_sequence.saturating_add(1);
+        self.queued.push_back(VadPipelineEvent::VadDecision {
+            frame: frame.clone(),
+            decision: decision.clone(),
+        });
         for event in self.segmenter.process_vad(frame, decision)? {
             self.queued.push_back(VadPipelineEvent::Segmentation(event));
         }

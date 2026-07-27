@@ -2,10 +2,12 @@ use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message, WebSocket};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tongues_audio::{
-    AudioSource, AudioSourceDescriptor, AudioSourceEvent, AudioSourceKind, PushedAudioChunk,
-    bounded_audio_input,
+    AudioSourceDescriptor, AudioSourceKind, PushedAudioChunk, SegmentationConfig,
+    SegmentationEvent, UtteranceSegmenter, VadBackendKind, VadPipelineEvent,
+    VadSegmentationPipeline, bounded_audio_input, create_vad_backend,
 };
 
 const BROWSER_AUDIO_SCHEMA_VERSION: u16 = 1;
@@ -20,6 +22,10 @@ enum ClientControl {
         schema_version: u16,
         sample_rate_hz: u32,
         channels: u16,
+        #[serde(default = "default_browser_vad")]
+        vad_backend: VadBackendKind,
+        #[serde(default)]
+        segmentation: SegmentationConfig,
     },
     End,
 }
@@ -32,6 +38,8 @@ enum ProbeEvent {
         sample_rate_hz: u32,
         channels: u16,
         queue_capacity_chunks: usize,
+        vad_backend: VadBackendKind,
+        segmentation: SegmentationConfig,
     },
     Level {
         chunk_sequence: u64,
@@ -39,17 +47,40 @@ enum ProbeEvent {
         frame_count: usize,
         rms: f32,
         peak: f32,
+        speech_probability: f32,
+        is_speech: bool,
+    },
+    SegmentOpened {
+        segment_id: String,
+        pre_roll_frames: usize,
+    },
+    SpeechEnded {
+        segment_id: String,
+        endpoint_latency_ms: u64,
+    },
+    SegmentFinal {
+        segment_id: String,
+        accepted: bool,
+        reason: tongues_audio::SegmentCloseReason,
+        speech_duration_ms: u64,
+        total_duration_ms: u64,
     },
     Discontinuity {
         expected_chunk_sequence: u64,
         received_chunk_sequence: u64,
         reason: String,
     },
-    Ended,
+    Ended {
+        metrics: tongues_audio::SegmentationMetrics,
+    },
     Error {
         code: &'static str,
         message: String,
     },
+}
+
+fn default_browser_vad() -> VadBackendKind {
+    VadBackendKind::WebRtc
 }
 
 pub(crate) async fn browser_audio_upgrade(
@@ -92,6 +123,8 @@ async fn browser_audio_session(mut socket: WebSocket) {
         schema_version,
         sample_rate_hz,
         channels,
+        vad_backend,
+        segmentation,
     } = control
     else {
         let _ = send_error(
@@ -122,6 +155,15 @@ async fn browser_audio_session(mut socket: WebSocket) {
         .await;
         return;
     }
+    if let Err(error) = segmentation.validate() {
+        let _ = send_error(
+            &mut socket,
+            "invalid_segmentation_config",
+            error.to_string(),
+        )
+        .await;
+        return;
+    }
     let descriptor = match AudioSourceDescriptor::live_pcm(
         "browser-microphone",
         AudioSourceKind::Browser,
@@ -135,39 +177,103 @@ async fn browser_audio_session(mut socket: WebSocket) {
             return;
         }
     };
-    let (source_tx, mut source) = match bounded_audio_input(descriptor, BROWSER_AUDIO_QUEUE_CHUNKS)
-    {
+    let (source_tx, source) = match bounded_audio_input(descriptor, BROWSER_AUDIO_QUEUE_CHUNKS) {
         Ok(input) => input,
         Err(error) => {
             let _ = send_error(&mut socket, "input_unavailable", error.to_string()).await;
             return;
         }
     };
-    let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel(2);
+    let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel(64);
+    let consumer_segmentation = segmentation.clone();
     let consumer = tokio::task::spawn_blocking(move || {
+        // The WebRTC implementation owns a native handle that is not `Send`.
+        // Construct and consume it wholly within this blocking worker.
+        let segmenter = match UtteranceSegmenter::new("browser-microphone", consumer_segmentation) {
+            Ok(segmenter) => segmenter,
+            Err(error) => {
+                let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                    code: "invalid_segmentation_config",
+                    message: error.to_string(),
+                });
+                return;
+            }
+        };
+        let mut pipeline = match VadSegmentationPipeline::new(
+            source,
+            create_vad_backend(vad_backend),
+            segmenter,
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                    code: "vad_pipeline_unavailable",
+                    message: error.to_string(),
+                });
+                return;
+            }
+        };
         loop {
-            let probe = match source.next_event() {
-                Ok(AudioSourceEvent::Audio(chunk)) => ProbeEvent::Level {
-                    chunk_sequence: chunk.sequence,
-                    start_frame: chunk.start_frame,
-                    frame_count: chunk.audio.frames(),
-                    rms: tongues_audio::rms(&chunk.audio.samples),
-                    peak: chunk
+            let probe = match pipeline.next_event() {
+                Ok(Some(VadPipelineEvent::VadDecision { frame, decision })) => ProbeEvent::Level {
+                    chunk_sequence: frame.sequence,
+                    start_frame: Some(frame.start_frame),
+                    frame_count: frame.audio.frames(),
+                    rms: decision.rms,
+                    peak: frame
                         .audio
                         .samples
                         .iter()
                         .map(|sample| sample.abs())
                         .fold(0.0, f32::max),
+                    speech_probability: decision.speech_probability,
+                    is_speech: decision.is_speech,
                 },
-                Ok(AudioSourceEvent::Discontinuity(gap)) => ProbeEvent::Discontinuity {
+                Ok(Some(VadPipelineEvent::SourceDiscontinuity(gap))) => ProbeEvent::Discontinuity {
                     expected_chunk_sequence: gap.expected_chunk_sequence,
                     received_chunk_sequence: gap.received_chunk_sequence,
                     reason: gap.reason,
                 },
-                Ok(AudioSourceEvent::EndOfStream) => {
-                    let _ = probe_tx.blocking_send(ProbeEvent::Ended);
+                Ok(Some(VadPipelineEvent::Segmentation(event))) => match event {
+                    SegmentationEvent::SegmentOpened {
+                        segment_id,
+                        pre_roll_frames,
+                        ..
+                    } => ProbeEvent::SegmentOpened {
+                        segment_id: segment_id.0,
+                        pre_roll_frames,
+                    },
+                    SegmentationEvent::SpeechEnded {
+                        segment_id,
+                        endpoint_latency_ms,
+                        ..
+                    } => ProbeEvent::SpeechEnded {
+                        segment_id: segment_id.0,
+                        endpoint_latency_ms,
+                    },
+                    SegmentationEvent::SegmentFinalized(segment) => ProbeEvent::SegmentFinal {
+                        segment_id: segment.id.0,
+                        accepted: true,
+                        reason: segment.close_reason,
+                        speech_duration_ms: segment.speech_duration_ms,
+                        total_duration_ms: segment.total_duration_ms,
+                    },
+                    SegmentationEvent::SegmentDropped(segment) => ProbeEvent::SegmentFinal {
+                        segment_id: segment.id.0,
+                        accepted: false,
+                        reason: segment.close_reason,
+                        speech_duration_ms: segment.speech_duration_ms,
+                        total_duration_ms: segment.total_duration_ms,
+                    },
+                    SegmentationEvent::SpeechStarted { .. }
+                    | SegmentationEvent::SpeechResumed { .. }
+                    | SegmentationEvent::SegmentUpdated { .. } => continue,
+                },
+                Ok(Some(VadPipelineEvent::EndOfStream { metrics })) => {
+                    let _ = probe_tx.blocking_send(ProbeEvent::Ended { metrics });
                     break;
                 }
+                Ok(None) => break,
                 Err(error) => {
                     let _ = probe_tx.blocking_send(ProbeEvent::Error {
                         code: "audio_input_failed",
@@ -188,6 +294,8 @@ async fn browser_audio_session(mut socket: WebSocket) {
             sample_rate_hz,
             channels,
             queue_capacity_chunks: BROWSER_AUDIO_QUEUE_CHUNKS,
+            vad_backend,
+            segmentation,
         },
     )
     .await
@@ -198,81 +306,79 @@ async fn browser_audio_session(mut socket: WebSocket) {
         return;
     }
 
-    'session: while let Some(message) = socket.recv().await {
-        match message {
-            Ok(Message::Binary(bytes)) => {
-                let chunk = match decode_chunk(&bytes, sample_rate_hz, channels) {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        if send_error(&mut socket, "invalid_audio_chunk", error)
-                            .await
-                            .is_err()
-                        {
+    let (mut socket_tx, mut socket_rx) = socket.split();
+    let mut input_open = true;
+    loop {
+        tokio::select! {
+            message = socket_rx.next(), if input_open => match message {
+                Some(Ok(Message::Binary(bytes))) => {
+                    let chunk = match decode_chunk(&bytes, sample_rate_hz, channels) {
+                        Ok(chunk) => chunk,
+                        Err(error) => {
+                            if send_probe_sink(
+                                &mut socket_tx,
+                                &ProbeEvent::Error {
+                                    code: "invalid_audio_chunk",
+                                    message: error,
+                                },
+                            ).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    if let Err(error) = source_tx.try_send(chunk)
+                        && send_probe_sink(
+                            &mut socket_tx,
+                            &ProbeEvent::Error {
+                                code: "audio_backpressure",
+                                message: error.to_string(),
+                            },
+                        ).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientControl>(&text) {
+                    Ok(ClientControl::End) => {
+                        let _ = source_tx.end();
+                        input_open = false;
+                    }
+                    Ok(ClientControl::Open { .. }) => {
+                        if send_probe_sink(
+                            &mut socket_tx,
+                            &ProbeEvent::Error {
+                                code: "already_open",
+                                message: "the browser audio stream is already open".into(),
+                            },
+                        ).await.is_err() {
                             break;
                         }
-                        continue;
                     }
+                    Err(error) => {
+                        if send_probe_sink(
+                            &mut socket_tx,
+                            &ProbeEvent::Error {
+                                code: "invalid_control",
+                                message: format!("invalid browser audio control message: {error}"),
+                            },
+                        ).await.is_err() {
+                            break;
+                        }
+                    }
+                },
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+            },
+            probe = probe_rx.recv() => {
+                let Some(probe) = probe else {
+                    break;
                 };
-                if let Err(error) = source_tx.try_send(chunk) {
-                    if send_error(&mut socket, "audio_backpressure", error.to_string())
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    continue;
-                }
-                loop {
-                    let Some(probe) = probe_rx.recv().await else {
-                        break 'session;
-                    };
-                    let chunk_acknowledged = matches!(
-                        probe,
-                        ProbeEvent::Level { .. } | ProbeEvent::Error { .. } | ProbeEvent::Ended
-                    );
-                    if send_probe(&mut socket, &probe).await.is_err() {
-                        break 'session;
-                    }
-                    if chunk_acknowledged {
-                        break;
-                    }
-                }
-            }
-            Ok(Message::Text(text)) => match serde_json::from_str::<ClientControl>(&text) {
-                Ok(ClientControl::End) => {
-                    let _ = source_tx.end();
-                    if let Some(probe) = probe_rx.recv().await {
-                        let _ = send_probe(&mut socket, &probe).await;
-                    }
+                let ended = matches!(probe, ProbeEvent::Ended { .. });
+                if send_probe_sink(&mut socket_tx, &probe).await.is_err() || ended {
                     break;
                 }
-                Ok(ClientControl::Open { .. }) => {
-                    if send_error(
-                        &mut socket,
-                        "already_open",
-                        "the browser audio stream is already open",
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    if send_error(
-                        &mut socket,
-                        "invalid_control",
-                        format!("invalid browser audio control message: {error}"),
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
-                }
-            },
-            Ok(Message::Close(_)) | Err(_) => break,
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
+            }
         }
     }
     drop(source_tx);
@@ -335,6 +441,14 @@ async fn send_error(
 }
 
 async fn send_probe(socket: &mut WebSocket, event: &ProbeEvent) -> Result<(), axum::Error> {
+    let encoded = serde_json::to_string(event).expect("probe events contain only finite values");
+    socket.send(Message::Text(encoded.into())).await
+}
+
+async fn send_probe_sink(
+    socket: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    event: &ProbeEvent,
+) -> Result<(), axum::Error> {
     let encoded = serde_json::to_string(event).expect("probe events contain only finite values");
     socket.send(Message::Text(encoded.into())).await
 }

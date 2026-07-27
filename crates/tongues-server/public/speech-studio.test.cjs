@@ -640,6 +640,13 @@ test('browser microphone capture crosses the shared bounded server input', () =>
     assert.match(studioSource, /header\.setBigUint64\(0, BigInt\(state\.browserMicSequence\)/);
     assert.match(studioSource, /header\.setBigUint64\(8, BigInt\(state\.browserMicStartFrame\)/);
     assert.match(studioSource, /Browser audio reached Tongues: RMS/);
+    assert.match(studioSource, /vad_backend: vadBackend/);
+    assert.match(studioSource, /segmentation,/);
+    assert.match(studioSource, /message\.speech_probability/);
+    assert.match(studioSource, /message\.type === 'segment_opened'/);
+    assert.match(studioSource, /message\.type === 'speech_ended'/);
+    assert.match(studioSource, /message\.type === 'segment_final'/);
+    assert.match(studioSource, /browser-mic-events/);
     assert.match(stylesSource, /\.browser-mic-probe/);
 });
 
