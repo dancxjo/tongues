@@ -473,7 +473,7 @@ impl VocoderTrainingState {
         Self {
             global_step: 0,
             epoch: 0,
-            best_loss: f64::INFINITY,
+            best_loss: f64::MAX,
             saved_at: None,
             batch_in_epoch: 0,
             generator_learning_rate: 0.0,
@@ -549,7 +549,7 @@ mod tests {
         let state = VocoderTrainingState::initial();
         assert_eq!(state.global_step, 0);
         assert_eq!(state.epoch, 0);
-        assert!(state.best_loss.is_infinite());
+        assert_eq!(state.best_loss, f64::MAX);
     }
 
     #[test]

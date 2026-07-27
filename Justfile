@@ -183,6 +183,13 @@ vits *args:
 vits-fixture:
     cargo run --release --bin tongues -- --cpu vits fixture --out target/vits-fixture --epochs 4
 
+# Native HiFi-GAN, MelGAN, and MultiBand-MelGAN training workflows
+vocoder *args:
+    cargo run --bin tongues -- vocoder "$@"
+
+vocoder-fixture:
+    cargo run --release --bin tongues -- --cpu vocoder fixture --kind all --out target/vocoder-fixture --epochs 2
+
 # Alias for the canonical common-phone spelling
 commonphone *args:
     cargo run --bin tongues -- common-phone "$@"

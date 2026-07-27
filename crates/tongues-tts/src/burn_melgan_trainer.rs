@@ -72,6 +72,13 @@ fn generator_output<B: Backend>(
     progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
     let weights = loss_weights.to_weights();
+    let target_dims = target_waveform.dims();
+    let predicted_dims = predicted_waveform.dims();
+    let aligned_samples = target_dims[2].min(predicted_dims[2]);
+    let target_waveform =
+        target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
+    let predicted_waveform =
+        predicted_waveform.slice([0..predicted_dims[0], 0..1, 0..aligned_samples]);
     let real = target_waveform.clone().detach();
     let msd_real = msd.forward(real.clone());
     let msd_fake = msd.forward(predicted_waveform.clone());
@@ -85,7 +92,7 @@ fn generator_output<B: Backend>(
         let real_dims = real.dims();
         let fake_dims = predicted_waveform.dims();
         let min_len = real_dims[2].min(fake_dims[2]);
-        let real_slice = real.slice([0..real_dims[0], 0..1, 0..min_len]);
+        let real_slice = real.clone().slice([0..real_dims[0], 0..1, 0..min_len]);
         let fake_slice = predicted_waveform
             .clone()
             .slice([0..fake_dims[0], 0..1, 0..min_len]);
@@ -124,6 +131,13 @@ fn discriminator_output<B: Backend>(
     predicted_waveform: Tensor<B, 3>,
     progress: VocoderTrainingProgress,
 ) -> Result<BurnVocoderTrainingOutput<B>> {
+    let target_dims = target_waveform.dims();
+    let predicted_dims = predicted_waveform.dims();
+    let aligned_samples = target_dims[2].min(predicted_dims[2]);
+    let target_waveform =
+        target_waveform.slice([0..target_dims[0], 0..1, 0..aligned_samples]);
+    let predicted_waveform =
+        predicted_waveform.slice([0..predicted_dims[0], 0..1, 0..aligned_samples]);
     let msd_real = msd.forward(target_waveform);
     let msd_fake = msd.forward(predicted_waveform.clone().detach());
 

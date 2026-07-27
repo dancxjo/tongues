@@ -89,6 +89,7 @@ mod vits_projector;
 pub mod vits_recipe;
 pub mod vits_trainer;
 pub mod vocoder_recipe;
+pub mod vocoder_trainer;
 pub mod wavlm;
 pub mod xtts;
 
@@ -307,6 +308,11 @@ pub use vits_trainer::{
 pub use vocoder_recipe::{
     HifiganTrainingRecipe, MelganTrainingRecipe, RecipeMelContract, SerializableLossWeights,
     VocoderTrainingHyperparams, VocoderTrainingState, RECIPE_SCHEMA_VERSION,
+};
+pub use vocoder_trainer::{
+    evaluate_vocoder, export_vocoder, load_vocoder_examples, train_vocoder,
+    NativeVocoderKind, NativeVocoderRecipe, VocoderEvaluationReport, VocoderPreparedExample,
+    VocoderTrainingProgress as NativeVocoderTrainingProgress, VocoderTrainingReport,
 };
 pub use wavlm::{WavLm, WavLmConfig};
 pub use xtts::{
