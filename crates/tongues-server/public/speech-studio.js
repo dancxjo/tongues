@@ -392,6 +392,7 @@
             <main class="glass-panel speech-studio">
                 <nav class="studio-workflows" role="tablist" aria-label="Speech Studio workflows">
                     ${workflowTabs}
+                    <a href="/wavedeck.html" aria-label="Open speech timeline editor">Timeline</a>
                 </nav>
 
                 <section id="speech-workflow-speak" class="studio-workflow" data-workflow="speak"
