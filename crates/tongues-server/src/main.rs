@@ -43,6 +43,7 @@ use tongues_duplex::{
 };
 use tower_http::services::ServeDir;
 
+mod asr_api;
 mod audio_input_ws;
 mod live;
 
@@ -97,6 +98,7 @@ struct AppState {
     speech_phase: Arc<AtomicU8>,
     speech_device: tongues_tts::ResolvedSpeechDevice,
     live_turns: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    asr: asr_api::AsrApiState,
 }
 
 type JobRegistry = Arc<Mutex<HashMap<String, JobRecord>>>;
@@ -199,6 +201,8 @@ async fn run_server() -> Result<(), StartupError> {
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
         speech_device,
         live_turns: Arc::new(Mutex::new(HashMap::new())),
+        asr: asr_api::AsrApiState::new()
+            .map_err(|error| StartupError::new("initializing ASR APIs", error.to_string()))?,
     };
 
     let app = build_app(state);
@@ -277,6 +281,12 @@ fn build_app(state: AppState) -> Router {
             "/api/audio-input/browser-stream",
             get(audio_input_ws::browser_audio_upgrade),
         )
+        .route("/api/asr/capabilities", get(asr_api::capabilities))
+        .route(
+            "/api/asr/transcriptions",
+            post(asr_api::transcribe).layer(DefaultBodyLimit::max(asr_api::MAX_FILE_BYTES)),
+        )
+        .route("/api/asr/stream", get(asr_api::stream_upgrade))
         .route(
             "/api/language-routing/capabilities",
             get(get_language_routing_capabilities),

@@ -1,0 +1,80 @@
+openapi: 3.1.0
+info:
+  title: Tongues ASR API
+  version: 1.0.0
+paths:
+  /api/asr/capabilities:
+    get:
+      summary: Discover ASR providers, sources, transports, and limits
+      responses:
+        "200":
+          description: Current backend-derived capability inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema_version, providers, sources, limits, retention, streaming]
+  /api/asr/transcriptions:
+    post:
+      summary: Transcribe a WAV file offline
+      parameters:
+        - in: query
+          name: provider
+          schema: { type: string, default: whisper.cpp }
+        - in: query
+          name: language
+          schema: { type: string }
+        - in: query
+          name: timeout_ms
+          schema: { type: integer, minimum: 1, maximum: 300000, default: 120000 }
+      requestBody:
+        required: true
+        content:
+          audio/wav:
+            schema: { type: string, contentMediaType: audio/wav, contentEncoding: binary }
+      responses:
+        "200":
+          description: Ordered provider-neutral recognition events and committed transcript
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema_version, provider, transcript, events, audio_retained]
+        "413": { $ref: "#/components/responses/Capacity" }
+        "415": { $ref: "#/components/responses/UnsupportedFormat" }
+        "422": { $ref: "#/components/responses/UnsupportedConfiguration" }
+        "429": { $ref: "#/components/responses/Capacity" }
+        "503": { $ref: "#/components/responses/UnavailableModel" }
+components:
+  responses:
+    UnsupportedFormat:
+      description: Unsupported audio format
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UnsupportedConfiguration:
+      description: Unsupported provider configuration
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Capacity:
+      description: A size, duration, or concurrency limit was exhausted
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UnavailableModel:
+      description: The requested provider or model is unavailable
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }

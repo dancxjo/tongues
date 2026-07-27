@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tongues ASR WebSocket example</title>
+<button id="start">Start microphone</button>
+<button id="stop" disabled>Stop</button>
+<pre id="events"></pre>
+<script>
+let socket, context, source, processor, stream;
+const events = document.querySelector("#events");
+document.querySelector("#start").onclick = async () => {
+  stream = await navigator.mediaDevices.getUserMedia({audio: {channelCount: 1}});
+  context = new AudioContext({sampleRate: 16000});
+  source = context.createMediaStreamSource(stream);
+  processor = context.createScriptProcessor(4096, 1, 1);
+  socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/asr/stream`);
+  socket.binaryType = "arraybuffer";
+  socket.onmessage = message => events.textContent += `${message.data}\n`;
+  socket.onopen = () => socket.send(JSON.stringify({
+    type: "open", schema_version: 1, provider: "fixture",
+    sample_rate_hz: context.sampleRate, channels: 1, language: "en"
+  }));
+  processor.onaudioprocess = event => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(event.inputBuffer.getChannelData(0).slice().buffer);
+    }
+  };
+  source.connect(processor);
+  processor.connect(context.destination);
+  document.querySelector("#start").disabled = true;
+  document.querySelector("#stop").disabled = false;
+};
+document.querySelector("#stop").onclick = async () => {
+  if (socket?.readyState === WebSocket.OPEN) socket.send('{"type":"end"}');
+  processor?.disconnect();
+  source?.disconnect();
+  stream?.getTracks().forEach(track => track.stop());
+  await context?.close();
+  document.querySelector("#stop").disabled = true;
+};
+</script>
