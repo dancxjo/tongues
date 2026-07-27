@@ -398,7 +398,7 @@ export function createPatchCanvas(options) {
     const inputs = ports.filter(port => port.direction === "input");
     const outputs = ports.filter(port => port.direction === "output");
     const cardDisplayTitle = cardTitle(node.id) ?? (entry?.label ? entry.label.split(" · ")[0] : node.kind);
-    const role = formatNodeRole(node, entry);
+    const nodeRole = formatNodeRole(node, entry);
     const status = runtime?.status ?? (node.disabled ? "inactive" : node.bypassed ? "bypassed" : "ready");
     const card = document.createElement("article");
     card.dataset.nodeCard = node.id;
@@ -412,7 +412,7 @@ export function createPatchCanvas(options) {
     card.style.setProperty("--patch-node-card-collapsed-height", `${Math.max(1, Math.round(geometry.collapsed_height))}px`);
     card.style.left = `${cyNode.renderedPosition().x}px`;
     card.style.top = `${cyNode.renderedPosition().y}px`;
-    const position = role ? role : "";
+    const position = nodeRole ? nodeRole : "";
     const title = document.createElement("div");
     title.className = "patch-node-card-title";
     const name = document.createElement("strong");
@@ -429,8 +429,8 @@ export function createPatchCanvas(options) {
 
     const meta = document.createElement("div");
     meta.className = "patch-node-card-meta";
-    const role = document.createElement("small");
-    role.textContent = position;
+    const roleLabel = document.createElement("small");
+    roleLabel.textContent = position;
     const state = document.createElement("span");
     state.className = `patch-node-card-status ${status}`;
     const latency = runtime?.lastElapsedMs != null ? ` · ${runtime.lastElapsedMs} ms` : "";
@@ -441,7 +441,7 @@ export function createPatchCanvas(options) {
       : runtime?.status
       ? `${runtime.status}${latency}`
       : "ready";
-    meta.append(role, state);
+    meta.append(roleLabel, state);
     card.append(meta);
 
     const controlsPanel = document.createElement("section");
