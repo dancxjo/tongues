@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::data::variety_by_code;
 use crate::ids::VarietyId;
 use crate::syntax::{GrammarBackend, GrammarParserBackend};
+use crate::syntax_link_grammar::link_grammar_readiness;
 
 pub const DEFAULT_UDPIPE_TIMEOUT_MS: u64 = 2_000;
 pub const DEFAULT_UDPIPE_MAX_INPUT_BYTES: usize = 64 * 1024;
@@ -84,7 +85,10 @@ impl GrammarBackendAttempt {
 #[serde(rename_all = "snake_case")]
 pub enum GrammarBackendState {
     Ready,
+    FeatureDisabled,
     UnsupportedVariety,
+    UnavailableExecutable,
+    UnavailableDictionary,
     UnavailableModel,
     SpawnFailure,
     Timeout,
@@ -253,6 +257,7 @@ pub fn grammar_backend_catalog(variety: VarietyId) -> GrammarBackendCatalog {
         backends: vec![
             native_readiness(&variety),
             udpipe_readiness(&variety),
+            link_grammar_readiness(&variety),
         ],
         variety,
         auto_policy: "use UDPipe only when configured for the requested variety and its projection is complete; otherwise retain the external attempt and fall back to native rules".into(),
@@ -330,14 +335,40 @@ pub(crate) fn execute_udpipe(
     input: &[u8],
     cancelled: Option<&AtomicBool>,
 ) -> UdPipeExecution {
+    let args = vec![
+        "--input=horizontal".into(),
+        "--tag".into(),
+        "--parse".into(),
+        config.model_path.display().to_string(),
+    ];
+    execute_bounded_command(
+        &config.command,
+        &args,
+        input,
+        &[config.model_path.as_path()],
+        config.limits,
+        cancelled,
+        "UDPipe",
+    )
+}
+
+pub(crate) fn execute_bounded_command(
+    command: &str,
+    args: &[String],
+    input: &[u8],
+    redacted_paths: &[&Path],
+    limits: UdPipeExecutionLimits,
+    cancelled: Option<&AtomicBool>,
+    backend_name: &str,
+) -> UdPipeExecution {
     let started = Instant::now();
-    if input.len() > config.limits.max_input_bytes {
+    if input.len() > limits.max_input_bytes {
         return execution_failure(
             GrammarBackendState::InputTooLarge,
             format!(
-                "UDPipe input was {} bytes; limit is {}",
+                "{backend_name} input was {} bytes; limit is {}",
                 input.len(),
-                config.limits.max_input_bytes
+                limits.max_input_bytes
             ),
             started,
         );
@@ -345,16 +376,13 @@ pub(crate) fn execute_udpipe(
     if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
         return execution_failure(
             GrammarBackendState::Cancelled,
-            "UDPipe request was cancelled before spawn".into(),
+            format!("{backend_name} request was cancelled before spawn"),
             started,
         );
     }
 
-    let mut child = match Command::new(&config.command)
-        .arg("--input=horizontal")
-        .arg("--tag")
-        .arg("--parse")
-        .arg(&config.model_path)
+    let mut child = match Command::new(command)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -364,7 +392,7 @@ pub(crate) fn execute_udpipe(
         Err(error) => {
             return execution_failure(
                 GrammarBackendState::SpawnFailure,
-                format!("failed to spawn UDPipe: {error}"),
+                format!("failed to spawn {backend_name}: {error}"),
                 started,
             );
         }
@@ -373,35 +401,38 @@ pub(crate) fn execute_udpipe(
     let stdout_reader = child
         .stdout
         .take()
-        .map(|stdout| read_bounded(stdout, config.limits.max_stdout_bytes));
+        .map(|stdout| read_bounded(stdout, limits.max_stdout_bytes));
     let stderr_reader = child
         .stderr
         .take()
-        .map(|stderr| read_bounded(stderr, config.limits.max_stderr_bytes));
+        .map(|stderr| read_bounded(stderr, limits.max_stderr_bytes));
     let stdin_writer = child.stdin.take().map(|mut stdin| {
         let input = input.to_vec();
+        let backend_name = backend_name.to_string();
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let result = stdin
                 .write_all(&input)
-                .map_err(|error| format!("failed to write UDPipe input: {error}"));
+                .map_err(|error| format!("failed to write {backend_name} input: {error}"));
             let _ = sender.send(result);
         });
         receiver
     });
 
-    let (state, status) = wait_bounded(&mut child, config.limits, cancelled);
+    let (state, status) = wait_bounded(&mut child, limits, cancelled);
     let stdin_error =
         stdin_writer.and_then(
             |writer| match writer.recv_timeout(Duration::from_millis(100)) {
                 Ok(Ok(())) => None,
                 Ok(Err(error)) => Some(error),
-                Err(_) => Some("UDPipe stdin writer did not terminate after child exit".into()),
+                Err(_) => Some(format!(
+                    "{backend_name} stdin writer did not terminate after child exit"
+                )),
             },
         );
     let stdout = join_reader(stdout_reader);
     let stderr = join_reader(stderr_reader);
-    let mut redacted_stderr = redact_stderr(&stderr.bytes, &config.model_path);
+    let mut redacted_stderr = redact_stderr(&stderr.bytes, redacted_paths);
     if stderr.truncated {
         redacted_stderr.push_str(" [stderr truncated]");
     }
@@ -581,9 +612,12 @@ fn join_reader(reader: Option<Receiver<BoundedRead>>) -> BoundedRead {
         .unwrap_or_default()
 }
 
-fn redact_stderr(stderr: &[u8], model_path: &Path) -> String {
-    String::from_utf8_lossy(stderr)
-        .replace(&model_path.display().to_string(), "[model]")
+fn redact_stderr(stderr: &[u8], paths: &[&Path]) -> String {
+    let mut stderr = String::from_utf8_lossy(stderr).into_owned();
+    for path in paths {
+        stderr = stderr.replace(&path.display().to_string(), "[model]");
+    }
+    stderr
         .split_whitespace()
         .map(|token| {
             let lowercase = token.to_ascii_lowercase();
@@ -621,7 +655,7 @@ fn elapsed_ms(started: Instant) -> u64 {
 type ChecksumKey = (PathBuf, u64, Option<SystemTime>);
 static MODEL_CHECKSUMS: OnceLock<Mutex<HashMap<ChecksumKey, String>>> = OnceLock::new();
 
-fn model_sha256(path: &Path) -> Option<String> {
+pub(crate) fn model_sha256(path: &Path) -> Option<String> {
     let metadata = path.metadata().ok()?;
     let key = (path.to_path_buf(), metadata.len(), metadata.modified().ok());
     if let Some(checksum) = MODEL_CHECKSUMS
@@ -658,7 +692,7 @@ fn model_sha256(path: &Path) -> Option<String> {
 
 static COMMAND_VERSIONS: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
-fn command_version(command: &str, limits: UdPipeExecutionLimits) -> Option<String> {
+pub(crate) fn command_version(command: &str, limits: UdPipeExecutionLimits) -> Option<String> {
     if let Some(version) = COMMAND_VERSIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()

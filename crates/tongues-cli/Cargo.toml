@@ -54,3 +54,4 @@ serde_json = { workspace = true }
 default = ["styletts2-onnx", "onnx-tts"]
 styletts2-onnx = ["styletts2/styletts2-onnx"]
 onnx-tts = ["tongues-tts/onnx-tts"]
+link-grammar-oracle = ["speaking/link-grammar-oracle"]

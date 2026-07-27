@@ -124,6 +124,32 @@ conformance harness pins revision
 `6488045bfba1975602288de07a58570c7b4d66ea` and verifies the checkpoint
 checksum before reference inference.
 
+## Link Grammar
+
+Project: [OpenCog Link Grammar](https://github.com/opencog/link-grammar)
+
+Tongues can optionally invoke an operator-installed `link-parser` 5.12 or 5.13
+executable as a development-time grammar parity oracle. The integration is a
+separate-process text-protocol adapter behind the non-default
+`link-grammar-oracle` feature. Tongues does not link the Link Grammar library,
+copy its source expression, or redistribute its dictionaries, word lists, or
+grammar rules.
+
+The upstream source repository declares LGPL-2.1 in its
+[LICENSE](https://github.com/opencog/link-grammar/blob/master/LICENSE).
+Installed dictionaries and any operator-selected dictionary path remain
+separate upstream or operator-provided data; their licensing and distribution
+terms must be reviewed with the package or data source that supplied them.
+Enabling the adapter does not relicense those artifacts under Tongues' MIT
+license.
+
+Each oracle report records the executable command and version, process
+protocol, dictionary selector or path, optional checksum when the dictionary
+selector is a file, upstream URL, LGPL identifier, and a statement that the
+resource is not redistributed by Tongues. Raw output and unknown link labels
+are retained for inspection. Agreement metrics are diagnostic and do not
+assert that Link Grammar is ground truth.
+
 ## Piper
 
 Project: [rhasspy/piper](https://github.com/rhasspy/piper)

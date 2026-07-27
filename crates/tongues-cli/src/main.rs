@@ -988,6 +988,16 @@ enum GrammarParserCommands {
         /// Sentence to parse
         text: String,
     },
+
+    /// Compare native, UDPipe, and optional Link Grammar parses
+    Compare {
+        /// Speaking variety used by all three backends
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+
+        /// One fixture to compare; omit it to run the bounded curated set
+        text: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -3044,6 +3054,22 @@ fn run_grammar_parser_command(command: GrammarParserCommands) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&analysis)?);
             Ok(())
         }
+        GrammarParserCommands::Compare { variety, text } => {
+            anyhow::ensure!(
+                speaking::data::variety_by_code(&variety).is_some(),
+                "unknown speaking variety `{variety}`"
+            );
+            let variety = VarietyId(variety);
+            if let Some(text) = text {
+                let (words, terminal) = grammar_text_parts(&text, false);
+                let report = speaking::compare_grammar_backends(variety, &words, terminal, None);
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let report = speaking::evaluate_curated_grammar_parity(variety, None);
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -3057,6 +3083,16 @@ fn parse_grammar_text(
         speaking::data::variety_by_code(variety).is_some(),
         "unknown speaking variety `{variety}`"
     );
+    let (words, terminal) = grammar_text_parts(text, lowercase);
+    let parser =
+        speaking::VarietyGrammarParser::with_backend(VarietyId(variety.to_string()), backend);
+    Ok(speaking::GrammarParser::parse(&parser, &words, terminal))
+}
+
+fn grammar_text_parts(
+    text: &str,
+    lowercase: bool,
+) -> (Vec<String>, Option<speaking::TerminalPunctuation>) {
     let words = text
         .split_whitespace()
         .map(|word| {
@@ -3075,9 +3111,7 @@ fn parse_grammar_text(
         Some('.') => Some(speaking::TerminalPunctuation::Period),
         _ => None,
     };
-    let parser =
-        speaking::VarietyGrammarParser::with_backend(VarietyId(variety.to_string()), backend);
-    Ok(speaking::GrammarParser::parse(&parser, &words, terminal))
+    (words, terminal)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -13734,6 +13768,31 @@ mod tests {
             health.command,
             Some(Commands::GrammarParser {
                 command: GrammarParserCommands::Health { .. }
+            })
+        ));
+
+        let comparison = Cli::try_parse_from([
+            "tongues",
+            "grammar-parser",
+            "compare",
+            "--variety",
+            "en-US",
+            "The fox jumps.",
+        ])
+        .expect("grammar-parser compare should parse");
+        assert!(matches!(
+            comparison.command,
+            Some(Commands::GrammarParser {
+                command: GrammarParserCommands::Compare { text: Some(_), .. }
+            })
+        ));
+
+        let curated = Cli::try_parse_from(["tongues", "grammar-parser", "compare"])
+            .expect("grammar-parser curated comparison should parse");
+        assert!(matches!(
+            curated.command,
+            Some(Commands::GrammarParser {
+                command: GrammarParserCommands::Compare { text: None, .. }
             })
         ));
 

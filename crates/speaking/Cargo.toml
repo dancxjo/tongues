@@ -22,3 +22,4 @@ whisper-cpp-plus = { workspace = true, optional = true }
 [features]
 default = []
 asr-whisper = ["dep:whisper-cpp-plus"]
+link-grammar-oracle = []

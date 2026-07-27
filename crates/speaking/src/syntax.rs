@@ -240,6 +240,7 @@ pub enum GrammarBackend {
     #[default]
     TonguesRules,
     UdPipe,
+    LinkGrammarOracle,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,6 +279,7 @@ pub enum SyntacticLinkSource {
     #[serde(alias = "link_grammar_projection")]
     GrammarProjection,
     UdPipeProjection,
+    LinkGrammarOracleProjection,
     AmbiguityVariant,
 }
 
@@ -341,6 +343,7 @@ pub enum GrammarParserBackend {
     Auto,
     TonguesRules,
     UdPipe,
+    LinkGrammarOracle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,6 +441,13 @@ impl GrammarParser for VarietyGrammarParser {
             }
             GrammarParserBackend::UdPipe => {
                 parse_udpipe_for_variety(&self.variety, words, terminal, self.udpipe.as_ref())
+            }
+            GrammarParserBackend::LinkGrammarOracle => {
+                crate::syntax_link_grammar::parse_link_grammar_for_variety(
+                    &self.variety,
+                    words,
+                    terminal,
+                )
             }
         }
     }

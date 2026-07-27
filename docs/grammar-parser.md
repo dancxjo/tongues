@@ -10,6 +10,7 @@ just grammar-parser parse "The quick brown fox jumps."
 just grammar-parser parse --variety fr-FR-Standard --backend tongues-rules \
   "Je vois la maison."
 just grammar-parser health --variety en-US
+just grammar-parser compare "The quick brown fox jumps."
 ```
 
 The canonical JSON shape uses:
@@ -17,7 +18,8 @@ The canonical JSON shape uses:
 - `ranked_parses` for ranked, projected grammar parses;
 - `backend_parses` for backend-native diagnostic metadata;
 - `backend = "tongues_rules"` for native variety-owned rules;
-- `backend = "ud_pipe"` for a UDPipe projection.
+- `backend = "ud_pipe"` for a UDPipe projection;
+- `backend = "link_grammar_oracle"` only for the optional comparison oracle.
 
 `auto` tries a configured UDPipe model and falls back to native Tongues rules.
 `tongues-rules` selects only the native rules. `ud-pipe` selects UDPipe and
@@ -26,7 +28,8 @@ backend is unavailable; it does not claim a native parse came from UDPipe.
 
 Every analysis includes a `backend_report`:
 
-- `requested` records `auto`, `tongues_rules`, or `ud_pipe`;
+- `requested` records `auto`, `tongues_rules`, `ud_pipe`, or an explicit
+  `link_grammar_oracle` comparison request;
 - `selected` names the backend whose analysis was returned;
 - `attempts` retain each backend identity, terminal state, bounded diagnostic,
   elapsed time, process exit code, projection loss, and native coverage;
@@ -59,7 +62,9 @@ UDPipe discovery checks these variables:
 command version probe, and reports the command, version, model path, SHA-256,
 and declared varieties without running a parse or synthesis pipeline.
 Programmatic callers can use `grammar_backend_catalog` for the same serializable
-readiness contract.
+readiness contract. The catalog also reports the optional Link Grammar oracle
+as `feature_disabled`, `unavailable_executable`, `unavailable_dictionary`,
+`unsupported_variety`, or `ready`; it is never selected by `auto`.
 
 `auto` uses UDPipe only when it is configured for the exact requested variety
 and returns a complete projection. Otherwise the external attempt remains in
@@ -89,6 +94,74 @@ omits it still decodes with an empty `auto` report; newly produced analyses
 always populate the report at the `VarietyGrammarParser` or UDPipe boundary.
 Backend-native links and costs remain inside the explicit `backend_parses`
 envelope rather than being copied into normalized rank or confidence fields.
+
+## Optional Link Grammar parity oracle
+
+Link Grammar is a development-time comparison oracle, not a production parser
+dependency or source of ground truth. The adapter is absent from default
+features and cannot be selected by `grammar-parser parse` or `auto`. A default
+build still accepts:
+
+```sh
+just grammar-parser compare "I saw the man with the telescope."
+```
+
+Its JSON includes native and UDPipe results and says that Link Grammar is
+`feature_disabled`. Omitting the text runs five bounded curated fixtures and
+labels the resulting agreement numbers as diagnostic parity:
+
+```sh
+just grammar-parser compare
+```
+
+To use an installed Link Grammar 5.12 or 5.13 `link-parser`:
+
+```sh
+cargo run -p tongues-cli --features link-grammar-oracle -- \
+  grammar-parser compare "I saw the man with the telescope."
+```
+
+The adapter discovers:
+
+| Variable | Meaning |
+|---|---|
+| `TONGUES_LINK_GRAMMAR_COMMAND` | `link-parser` executable; defaults to `link-parser`. |
+| `TONGUES_LINK_GRAMMAR_DICTIONARY` | Installed language code such as `en`, or an explicit dictionary path. English varieties default to `en`; other varieties require this setting. |
+
+The enabled adapter probes `--version`, invokes the executable as a separate
+bounded process, and asks for complete link rows with at most eight linkage
+alternatives. It uses the same 2-second, 64 KiB input, 2 MiB stdout, 16 KiB
+stderr, concurrent pipe-draining, cancellation, kill/reap, and secret-redaction
+controls as UDPipe. A missing executable, missing configured dictionary,
+timeout, oversized output, malformed protocol, parser rejection, partial
+linkage, and token-alignment loss remain distinct states.
+
+One comparison report contains:
+
+- the exact bounded Link Grammar stdout and redacted stderr;
+- executable version, command, dictionary selector/path, optional file
+  checksum, protocol, upstream URL, and license provenance;
+- every linkage cost vector and backend-native link endpoint/label;
+- the projected `GrammarAnalysis` and projection-loss report;
+- unknown Link Grammar labels in both the raw link list and a top-level
+  `unknown_labels` list;
+- pairwise typed-link and endpoint attachment precision/recall/F1;
+- parse acceptance, alternative count/top-rank comparison, and per-token
+  pronunciation-context/prosodic-role agreement.
+
+The conservative projection recognizes subject (`S*`), object (`O*`),
+determiner (`D*`), modifier (`A*`, `M*`, `R*`), infinitival (`I*`, `TO*`),
+auxiliary (`SI*`, `PP*`, `PG*`), preposition (`J*`, `IN*`), coordination
+(`CO*`), and selected complement (`B*`, `C*`) families. Unrecognized labels
+are not coerced to a generic kind or discarded; they stay inspectable in the
+raw envelope and `BackendParse`.
+
+Tongues does not link or redistribute Link Grammar code, English dictionaries,
+or rules. The separately installed upstream project is LGPL-2.1, and dictionary
+data remains part of that installation or an operator-supplied path. The
+runtime provenance records what was actually invoked. See
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) and the official
+[Link Grammar repository](https://github.com/opencog/link-grammar).
 
 ## Ranked alternatives
 

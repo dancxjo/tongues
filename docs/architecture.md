@@ -343,6 +343,10 @@ selected backends, every attempt and fallback reason, native coverage, external
 identity/version/model checksum, and token projection loss. UDPipe runs behind
 bounded input/output, timeout, cancellation, and stderr-redaction controls.
 `grammar-parser health` exposes the same readiness contract without parsing.
+The separately feature-gated `grammar-parser compare` path can run an installed
+Link Grammar process as a parity oracle. It retains raw link labels and costs,
+projects only known families, reports pairwise link/attachment/ambiguity and
+downstream decision agreement, and never participates in `auto` selection.
 
 ## Rule-Based Speech Helpers
 

@@ -732,6 +732,7 @@ fn parse_id(
     let backend = match backend {
         GrammarBackend::TonguesRules => "tongues-rules",
         GrammarBackend::UdPipe => "ud-pipe",
+        GrammarBackend::LinkGrammarOracle => "link-grammar-oracle",
     };
     let variant = match variant {
         GrammarParseVariant::BackendPrimary => "primary".to_string(),
