@@ -1,14 +1,11 @@
-//! `tongues` CLI – neural lexical and speech-front-end model families.
-//!
-//! # Commands
-//!
-//! ```text
-//! tongues g2p2g prepare --out datasets/g2p2g/openepd-v0
-//! tongues g2p2g train --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0
-//! tongues g2p2g eval --model models/g2p2g/openepd-v0 --split test
-//! tongues g2p2g infer --model models/g2p2g/openepd-v0 "charlotte"
-//! tongues sentence-parser parse --model models/sentence-parser/v0 "The quick fox jumps."
-//! ```
+// `tongues` CLI – neural lexical and speech-front-end model families.
+//
+// Examples:
+// tongues g2p2g prepare --out datasets/g2p2g/openepd-v0
+// tongues g2p2g train --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0
+// tongues g2p2g eval --model models/g2p2g/openepd-v0 --split test
+// tongues g2p2g infer --model models/g2p2g/openepd-v0 "charlotte"
+// tongues sentence-parser parse --model models/sentence-parser/v0 "The quick fox jumps."
 
 mod duplex_cmd;
 mod fetch_corpora;
@@ -18,6 +15,7 @@ mod speech_corpus;
 mod styletts2_cmds;
 mod vits_cmds;
 mod vocoder_cmds;
+mod web_cli_schema;
 
 use std::fs;
 use std::io::{BufRead, Read, Write};
@@ -28,7 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{any::Any, panic};
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -1886,6 +1884,18 @@ fn format_panic_payload(payload: &(dyn Any + Send)) -> String {
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
+
+pub use web_cli_schema::{
+    WebCliArgument, WebCliArgumentKind, WebCliCardinality, WebCliCommand, WebCliSchema,
+};
+
+/// Build a machine-readable browser catalog from the real Clap command tree.
+///
+/// Only leaf command IDs named by the server are included. This keeps Web CLI
+/// exposure explicit without duplicating help, defaults, aliases, or arguments.
+pub fn web_cli_schema(exposed_command_ids: &[&str]) -> WebCliSchema {
+    web_cli_schema::build(Cli::command(), exposed_command_ids)
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

@@ -265,6 +265,7 @@ fn build_app(state: AppState) -> Router {
     let static_dir = state.static_dir.clone();
     Router::new()
         .route("/api/emotions", get(get_emotions))
+        .route("/api/cli/schema", get(get_cli_schema))
         .route("/api/files", get(list_files))
         .route("/api/files/download/{*path}", get(download_file))
         .route("/api/jobs", get(list_jobs).post(start_job))
@@ -326,6 +327,10 @@ async fn get_live_providers() -> impl IntoResponse {
     Json(json!({
         "providers": live::provider_discovery().await,
     }))
+}
+
+async fn get_cli_schema() -> impl IntoResponse {
+    Json(tongues_cli::web_cli_schema(WEB_EXPOSED_COMMAND_IDS))
 }
 
 #[derive(Deserialize)]
@@ -1276,179 +1281,64 @@ struct StartJobRequest {
     args: Vec<String>,
 }
 
-const ALLOWED_JOB_PREFIXES: &[&[&str]] = &[
-    &["discrepancies"],
-    &["emotions", "eval"],
-    &["emotions", "infer"],
-    &["emotions", "prepare"],
-    &["emotions", "train"],
-    &["eval"],
-    &["fetch-cmudict"],
-    &["fetch-corpora"],
-    &["g2p2g", "clean"],
-    &["g2p2g", "eval"],
-    &["g2p2g", "infer"],
-    &["g2p2g", "prepare"],
-    &["g2p2g", "refine"],
-    &["g2p2g", "repl"],
-    &["g2p2g", "train"],
-    &["head2phones", "clean"],
-    &["head2phones", "infer"],
-    &["head2phones", "prepare"],
-    &["head2phones", "train"],
-    &["head2phones", "verify"],
-    &["interpretation", "clean"],
-    &["interpretation", "eval"],
-    &["interpretation", "prepare"],
-    &["interpretation", "stream"],
-    &["interpretation", "train"],
-    &["models", "fetch"],
-    &["models", "install"],
-    &["models", "list"],
-    &["models", "menu"],
-    &["models", "path"],
-    &["models", "status"],
-    &["models", "use"],
-    &["phonemes"],
-    &["phones"],
-    &["predict"],
-    &["prepare"],
-    &["refine"],
-    &["repl"],
-    &["sentence-parser", "clean"],
-    &["sentence-parser", "eval"],
-    &["sentence-parser", "infer"],
-    &["sentence-parser", "parse"],
-    &["sentence-parser", "prepare"],
-    &["sentence-parser", "stream"],
-    &["sentence-parser", "train"],
-    &["speak"],
-    &["speaking"],
-    &["styletts2", "discover"],
-    &["styletts2", "emotion-signatures"],
-    &["styletts2", "encode-style"],
-    &["train"],
-    &["wiktionary", "clean"],
-    &["wiktionary", "infer"],
-    &["wiktionary", "prepare"],
-    &["wiktionary", "train"],
-];
-
-const FLAG_ONLY_JOB_ARGS: &[&str] = &[
-    "--all",
-    "--careful-style",
-    "--cpu",
-    "--debug-pronunciation",
-    "--fail-on-guessed-pronunciation",
-    "--force",
-    "--json",
-    "--list",
-    "--no-create",
-    "--no-download-wiktionary-audio",
-    "--no-full-cut",
-    "--no-g2p2g",
-    "--no-tts-chunking",
-    "--no-whisper-transcripts",
-    "--no-wiktionary",
-    "--no-wiktionary-audio",
-    "--ollama-strict",
-    "--prepare",
-    "--quiet",
-    "--raw",
-    "--strict",
-    "--timings",
-    "--verbose",
-    "--verify-ollama",
-    "--wait-for-prepare",
-];
-
-const VALUE_JOB_ARGS: &[&str] = &[
-    "--archive-dir",
-    "--backend",
-    "--batch-size",
-    "--cache-dir",
-    "--config",
-    "--corpus",
-    "--cuts-per-wav",
-    "--data",
-    "--diffusion-steps",
-    "--dropout",
-    "--dump",
-    "--durations",
-    "--embedding-scale",
-    "--emotion",
-    "--emotion-signatures",
-    "--emotion-strength",
-    "--epochs",
-    "--g2p2g-model",
-    "--head2phones-model",
-    "--input",
-    "--labels",
-    "--lang",
-    "--learning-rate",
-    "--limit",
-    "--mask-policy",
-    "--max-chars",
-    "--max-cut-ms",
-    "--max-mask-rate",
-    "--max-rarity",
-    "--max-tts-symbols",
-    "--max-utterances",
-    "--max-whisper-wer",
-    "--max-wiktionary-audio",
-    "--mel-bins",
-    "--method",
-    "--min-cut-ms",
-    "--model",
-    "--notation",
-    "--num-samples",
-    "--ollama-max-chars",
-    "--ollama-model",
-    "--ollama-rows",
-    "--ollama-url",
-    "--out",
-    "--out-dir",
-    "--output",
-    "--patience",
-    "--pitch",
-    "--pitch-scale",
-    "--pitch-shift",
-    "--previous",
-    "--quality",
-    "--references-dir",
-    "--repair-control",
-    "--run-id",
-    "--sample-rate-hz",
-    "--seed",
-    "--sight-words",
-    "--source",
-    "--source-manifest",
-    "--span-mask-prob",
-    "--speaker",
-    "--speaker-reference-strength",
-    "--speed",
-    "--split",
-    "--splits",
-    "--style-alpha",
-    "--style-beta",
-    "--style-reference-strength",
-    "--style-seed",
-    "--style-wav",
-    "--subset",
-    "--task",
-    "--tier",
-    "--train-frac",
-    "--training-set",
-    "--valid-frac",
-    "--variety",
-    "--voice-wav",
-    "--wav",
-    "--weight-decay",
-    "--whisper-model",
-    "--wiktionary-audio-data",
-    "--wiktionary-model",
-    "--word",
-    "--words-file",
+/// Browser execution is deny-by-default. Adding a Clap command does not expose
+/// it: the server must opt into the stable capability ID here.
+const WEB_EXPOSED_COMMAND_IDS: &[&str] = &[
+    "discrepancies",
+    "emotions/eval",
+    "emotions/infer",
+    "emotions/prepare",
+    "emotions/train",
+    "eval",
+    "fetch-cmudict",
+    "fetch-corpora",
+    "g2p2g/clean",
+    "g2p2g/eval",
+    "g2p2g/infer",
+    "g2p2g/prepare",
+    "g2p2g/refine",
+    "g2p2g/repl",
+    "g2p2g/train",
+    "head2phones/clean",
+    "head2phones/infer",
+    "head2phones/prepare",
+    "head2phones/train",
+    "head2phones/verify",
+    "interpretation/clean",
+    "interpretation/eval",
+    "interpretation/prepare",
+    "interpretation/stream",
+    "interpretation/train",
+    "models/fetch",
+    "models/install",
+    "models/list",
+    "models/menu",
+    "models/path",
+    "models/status",
+    "models/use",
+    "phonemes",
+    "phones",
+    "predict",
+    "prepare",
+    "refine",
+    "repl",
+    "sentence-parser/clean",
+    "sentence-parser/eval",
+    "sentence-parser/infer",
+    "sentence-parser/parse",
+    "sentence-parser/prepare",
+    "sentence-parser/stream",
+    "sentence-parser/train",
+    "speak",
+    "speaking",
+    "styletts2/discover",
+    "styletts2/emotion-signatures",
+    "styletts2/encode-style",
+    "train",
+    "wiktionary/clean",
+    "wiktionary/infer",
+    "wiktionary/prepare",
+    "wiktionary/train",
 ];
 
 #[derive(Serialize)]
@@ -2119,48 +2009,166 @@ fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> R
         return Err("short flags are not available through the web job API".into());
     }
     let args = &payload.args[4..];
+    let schema = tongues_cli::web_cli_schema(WEB_EXPOSED_COMMAND_IDS);
     let mut cursor = 0;
-    while matches!(
-        args.get(cursor).map(String::as_str),
-        Some("--cpu" | "--quiet" | "--verbose")
-    ) {
+    let exemplar = first_exposed_web_cli_command(&schema.commands)
+        .ok_or_else(|| "Web CLI exposure list is empty".to_string())?;
+    let global_arguments = exemplar
+        .arguments
+        .iter()
+        .filter(|argument| argument.global)
+        .collect::<Vec<_>>();
+    let mut leading_globals = Vec::new();
+    while let Some(token) = args.get(cursor).filter(|token| token.starts_with("--")) {
+        let Some(argument) = global_arguments.iter().find(|argument| {
+            argument.name == *token || argument.aliases.iter().any(|alias| alias == token)
+        }) else {
+            break;
+        };
+        let value = if argument.kind == tongues_cli::WebCliArgumentKind::Flag {
+            None
+        } else {
+            let value = args
+                .get(cursor + 1)
+                .ok_or_else(|| format!("missing value for global argument `{token}`"))?;
+            cursor += 1;
+            Some(value.as_str())
+        };
+        leading_globals.push((*argument, value));
         cursor += 1;
     }
-    let Some(prefix_len) = ALLOWED_JOB_PREFIXES
+    let Some(command_id) = WEB_EXPOSED_COMMAND_IDS
         .iter()
-        .filter(|prefix| {
-            args.len() >= cursor + prefix.len()
-                && prefix
+        .filter(|command_id| {
+            let command = command_id.split('/').collect::<Vec<_>>();
+            args.len() >= cursor + command.len()
+                && command
                     .iter()
-                    .zip(&args[cursor..cursor + prefix.len()])
+                    .zip(&args[cursor..cursor + command.len()])
                     .all(|(expected, actual)| *expected == actual)
         })
-        .map(|prefix| prefix.len())
-        .max()
+        .max_by_key(|command_id| command_id.split('/').count())
     else {
         return Err("job args do not match an approved Tongues command".into());
     };
+    let command = find_web_cli_command(&schema.commands, command_id)
+        .ok_or_else(|| format!("approved command `{command_id}` is absent from the Clap schema"))?;
+    let prefix_len = command.command.len();
     cursor += prefix_len;
-    let command_prefix = &args[cursor - prefix_len..cursor];
+    let command_prefix = command.command.clone();
+    let mut seen = Vec::<String>::new();
+
+    for (argument, value) in leading_globals {
+        validate_web_cli_conflicts(argument, &seen)?;
+        if let Some(value) = value {
+            if !argument.value_enum.is_empty()
+                && !argument
+                    .value_enum
+                    .iter()
+                    .any(|candidate| candidate == value)
+            {
+                return Err(format!(
+                    "invalid value `{value}` for {}; expected one of {}",
+                    argument.name,
+                    argument.value_enum.join(", ")
+                ));
+            }
+        }
+        seen.push(argument.id.clone());
+    }
+
+    let positionals = command
+        .arguments
+        .iter()
+        .filter(|argument| argument.kind == tongues_cli::WebCliArgumentKind::Positional)
+        .collect::<Vec<_>>();
+    let mut positional_index = 0;
     while cursor < args.len() {
         let token = &args[cursor];
-        if FLAG_ONLY_JOB_ARGS.iter().any(|flag| *flag == token) {
-            cursor += 1;
-            continue;
-        }
-        if VALUE_JOB_ARGS.iter().any(|flag| *flag == token) {
+        if token.starts_with("--") {
+            let argument = command
+                .arguments
+                .iter()
+                .find(|argument| {
+                    argument.name == *token || argument.aliases.iter().any(|alias| alias == token)
+                })
+                .ok_or_else(|| format!("job flag `{token}` is not declared by `{command_id}`"))?;
+            validate_web_cli_conflicts(argument, &seen)?;
+            if !argument.cardinality.repeatable && seen.iter().any(|id| id == &argument.id) {
+                return Err(format!("job flag `{token}` may not be repeated"));
+            }
+            seen.push(argument.id.clone());
+            if argument.kind == tongues_cli::WebCliArgumentKind::Flag {
+                cursor += 1;
+                continue;
+            }
             let Some(value) = args.get(cursor + 1) else {
                 return Err(format!("missing value for {token}"));
             };
-            validate_job_argument_value(workspace_root, command_prefix, token, value)?;
+            if !argument.value_enum.is_empty()
+                && !argument
+                    .value_enum
+                    .iter()
+                    .any(|candidate| candidate == value)
+            {
+                return Err(format!(
+                    "invalid value `{value}` for {token}; expected one of {}",
+                    argument.value_enum.join(", ")
+                ));
+            }
+            validate_job_argument_value(workspace_root, &command_prefix, token, value)?;
             cursor += 2;
             continue;
         }
-        if token.starts_with("--") {
-            return Err(format!("job flag `{token}` is not approved"));
+        let positional = positionals.get(positional_index).ok_or_else(|| {
+            format!("unexpected positional argument `{token}` for `{command_id}`")
+        })?;
+        validate_web_cli_conflicts(positional, &seen)?;
+        seen.push(positional.id.clone());
+        validate_job_positional_value(workspace_root, &command_prefix, token)?;
+        if !positional.cardinality.repeatable {
+            positional_index += 1;
         }
-        validate_job_positional_value(workspace_root, command_prefix, token)?;
         cursor += 1;
+    }
+    Ok(())
+}
+
+fn find_web_cli_command<'a>(
+    commands: &'a [tongues_cli::WebCliCommand],
+    id: &str,
+) -> Option<&'a tongues_cli::WebCliCommand> {
+    commands.iter().find_map(|command| {
+        (command.id == id)
+            .then_some(command)
+            .or_else(|| find_web_cli_command(&command.subcommands, id))
+    })
+}
+
+fn first_exposed_web_cli_command(
+    commands: &[tongues_cli::WebCliCommand],
+) -> Option<&tongues_cli::WebCliCommand> {
+    commands.iter().find_map(|command| {
+        command
+            .exposed
+            .then_some(command)
+            .or_else(|| first_exposed_web_cli_command(&command.subcommands))
+    })
+}
+
+fn validate_web_cli_conflicts(
+    argument: &tongues_cli::WebCliArgument,
+    seen: &[String],
+) -> Result<(), String> {
+    if let Some(conflict) = argument
+        .conflicts
+        .iter()
+        .find(|conflict| seen.iter().any(|id| id == *conflict))
+    {
+        return Err(format!(
+            "job argument `{}` conflicts with `{conflict}`",
+            argument.name
+        ));
     }
     Ok(())
 }
@@ -8513,6 +8521,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_server_exposure_resolves_to_one_current_clap_leaf() {
+        let schema = tongues_cli::web_cli_schema(WEB_EXPOSED_COMMAND_IDS);
+        let mut routes = std::collections::BTreeSet::new();
+        for id in WEB_EXPOSED_COMMAND_IDS {
+            let command = find_web_cli_command(&schema.commands, id)
+                .unwrap_or_else(|| panic!("server exposure `{id}` is missing from Clap"));
+            assert!(command.exposed, "`{id}` must be an exposed leaf");
+            assert!(
+                routes.insert(command.route.clone()),
+                "duplicate Web CLI route {}",
+                command.route
+            );
+        }
+        assert_eq!(routes.len(), WEB_EXPOSED_COMMAND_IDS.len());
+        assert!(routes.contains("/sentence-parser/train"));
+        assert!(routes.contains("/cli/speak"));
+        assert!(routes.contains("/cli/predict"));
+    }
+
+    #[test]
     fn vits_speaker_enumeration_preserves_model_names_and_embedding_ids() {
         let mortar_home =
             std::env::temp_dir().join(format!("tongues-server-speakers-{}", uuid::Uuid::new_v4()));
@@ -9769,6 +9797,55 @@ mod tests {
             ],
         };
         assert!(validate_job_request(&workspace, &bad_positional_path).is_err());
+
+        let conflicting_globals = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "--quiet".into(),
+                "--verbose".into(),
+                "phones".into(),
+                "hello".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &conflicting_globals).is_err());
+
+        let invalid_enum = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "g2p2g".into(),
+                "train".into(),
+                "--mask-policy".into(),
+                "invented".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &invalid_enum).is_err());
+
+        let repeatable_enum = StartJobRequest {
+            label: None,
+            command: "cargo".into(),
+            args: vec![
+                "run".into(),
+                "--bin".into(),
+                "tongues".into(),
+                "--".into(),
+                "fetch-corpora".into(),
+                "--corpus".into(),
+                "ravdess".into(),
+                "--corpus".into(),
+                "tess".into(),
+            ],
+        };
+        assert!(validate_job_request(&workspace, &repeatable_enum).is_ok());
 
         std::fs::remove_dir_all(workspace).expect("remove job workspace");
     }
