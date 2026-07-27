@@ -301,6 +301,10 @@ pub struct PronunciationSelectionRule {
     pub part_of_speech: Option<PartOfSpeech>,
     #[serde(default)]
     pub next_part_of_speech: Option<PartOfSpeech>,
+    /// Nearby lexical cues that support this pronunciation when POS alone is
+    /// insufficient (for example musical versus fish senses of `bass`).
+    #[serde(default)]
+    pub context_words: Vec<String>,
     #[serde(default)]
     pub source_pronunciation: Vec<String>,
     #[serde(default)]

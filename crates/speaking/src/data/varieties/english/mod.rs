@@ -536,6 +536,7 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
             lexical_item: spec.word.into(),
             part_of_speech: Some(spec.part_of_speech),
             next_part_of_speech: None,
+            context_words: Vec::new(),
             source_pronunciation: spec.symbols.iter().map(|symbol| (*symbol).into()).collect(),
             source_pronunciation_notation: Some("arpabet".into()),
         })
@@ -543,12 +544,45 @@ fn pronunciation_selection_rules() -> Vec<PronunciationSelectionRule> {
             lexical_item: "st".into(),
             part_of_speech: None,
             next_part_of_speech: Some(PartOfSpeech::ProperName),
+            context_words: Vec::new(),
             source_pronunciation: ["S", "EY1", "N", "T"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
             source_pronunciation_notation: Some("arpabet".into()),
         }))
+        .chain([
+            PronunciationSelectionRule {
+                lexical_item: "bass".into(),
+                part_of_speech: Some(PartOfSpeech::Noun),
+                next_part_of_speech: None,
+                context_words: [
+                    "guitar", "line", "player", "clef", "note", "music", "drum",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+                source_pronunciation: ["B", "EY1", "S"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                source_pronunciation_notation: Some("arpabet".into()),
+            },
+            PronunciationSelectionRule {
+                lexical_item: "bass".into(),
+                part_of_speech: Some(PartOfSpeech::Noun),
+                next_part_of_speech: None,
+                context_words: ["fish", "lake", "river", "caught", "catch"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                source_pronunciation: ["B", "AE1", "S"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                source_pronunciation_notation: Some("arpabet".into()),
+            },
+        ])
         .collect()
 }
 
