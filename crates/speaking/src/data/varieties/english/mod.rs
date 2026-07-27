@@ -25,7 +25,7 @@ use crate::rules::{
     AllophoneRule, EpenthesisRule, PhonePattern, PhonemePattern, PhonotacticConstraint,
     Phonotactics, RuleCondition, RuleStatus, SyllableShape,
 };
-use crate::segment::{Environment, SegmentMatcher, SyllablePosition, WordPosition};
+use crate::segment::{Environment, SegmentMatcher, SyllablePosition, SymbolAlias, WordPosition};
 use crate::spec::Spec;
 use crate::syntax::PartOfSpeech;
 use crate::variety::{
@@ -705,6 +705,16 @@ fn phoneme_inventory(variety_id: &str) -> PhonemeInventory {
         ah.default_phone = Some(SCHWA);
         if !ah.possible_phones.contains(&SCHWA) {
             ah.possible_phones.insert(0, SCHWA);
+        }
+        if !ah
+            .aliases
+            .iter()
+            .any(|alias| alias.system == "ipa" && alias.symbol == "ə")
+        {
+            ah.aliases.push(SymbolAlias {
+                system: "ipa".into(),
+                symbol: "ə".into(),
+            });
         }
     }
     if let Some(er) = phonemes.get_mut(&english_phoneme_id(variety_id, "ER")) {

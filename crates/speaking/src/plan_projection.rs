@@ -236,7 +236,12 @@ fn syllables_to_phonemes_ipa(
 ) -> String {
     format_syllables(syllables, |phone| {
         find_phoneme_for_phone(phone, phonemes)
-            .map(|id| phoneme_default_phone_display_symbol(&id, variety))
+            .and_then(|token| match &token.phoneme {
+                Spec::Known(id) => Some(phoneme_token_default_phone_display_symbol(
+                    token, id, variety,
+                )),
+                _ => None,
+            })
             .unwrap_or_else(|| match &phone.phone {
                 Spec::Known(id) => phone_display_symbol(id).to_string(),
                 _ => String::new(),
@@ -251,13 +256,18 @@ fn syllables_to_intended_phonemes_ipa(
 ) -> String {
     format_syllables(syllables, |phone| {
         find_phoneme_for_phone(phone, phonemes)
-            .map(|id| phoneme_default_phone_display_symbol(&id, variety))
+            .and_then(|token| match &token.phoneme {
+                Spec::Known(id) => Some(phoneme_token_default_phone_display_symbol(
+                    token, id, variety,
+                )),
+                _ => None,
+            })
             .unwrap_or_default()
     })
 }
 
 fn display_phoneme_token(token: &PhonemeToken, id: &PhonemeId, variety: &VarietyId) -> String {
-    let mut symbol = phoneme_default_phone_display_symbol(id, variety);
+    let mut symbol = phoneme_token_default_phone_display_symbol(token, id, variety);
     if let Some(stress) = token_stress(token) {
         symbol.insert_str(
             0,
@@ -269,6 +279,33 @@ fn display_phoneme_token(token: &PhonemeToken, id: &PhonemeId, variety: &Variety
         );
     }
     symbol
+}
+
+fn phoneme_token_default_phone_display_symbol(
+    token: &PhonemeToken,
+    id: &PhonemeId,
+    variety: &VarietyId,
+) -> String {
+    let merged_strut_about = ["phonology.canonical_base_symbol", "phonology.base_symbol"]
+        .into_iter()
+        .any(|feature| {
+            matches!(
+                token.features.values.get(&FeatureId(feature.into())),
+                Some(Spec::Known(
+                    FeatureValue::Category(value) | FeatureValue::Text(value)
+                )) if value == "AH"
+            )
+        });
+    if variety.0 == "en-GB-RP"
+        && merged_strut_about
+        && let Some(Spec::Known(FeatureValue::Category(phone) | FeatureValue::Text(phone))) = token
+            .features
+            .values
+            .get(&FeatureId("phonology.default_phone".into()))
+    {
+        return phone_display_symbol(&crate::PhoneId::from(phone.clone())).to_string();
+    }
+    phoneme_default_phone_display_symbol(id, variety)
 }
 
 fn format_syllables(
@@ -302,7 +339,10 @@ fn format_syllables(
         .collect()
 }
 
-fn find_phoneme_for_phone(phone: &PhoneToken, phonemes: &[PhonemeToken]) -> Option<PhonemeId> {
+fn find_phoneme_for_phone<'a>(
+    phone: &PhoneToken,
+    phonemes: &'a [PhonemeToken],
+) -> Option<&'a PhonemeToken> {
     phonemes.iter().find_map(|phoneme_token| {
         phoneme_token
             .realized_as
@@ -312,11 +352,7 @@ fn find_phoneme_for_phone(phone: &PhoneToken, phonemes: &[PhonemeToken]) -> Opti
                     && realized.features == phone.features
                     && realized.span == phone.span
             })
-            .then(|| match &phoneme_token.phoneme {
-                Spec::Known(id) => Some(id.clone()),
-                _ => None,
-            })
-            .flatten()
+            .then_some(phoneme_token)
     })
 }
 

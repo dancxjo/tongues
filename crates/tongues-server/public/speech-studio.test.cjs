@@ -274,6 +274,60 @@ test('live turn records the overlap and exact-transcript acceptance evidence', (
     );
 });
 
+test('three sequential live turns retain distinct ordered assistant messages', () => {
+    const conversation = studio.createLiveConversation();
+    for (const [index, answer] of ['one', 'two', 'three'].entries()) {
+        const turnId = `turn-${index + 1}`;
+        studio.beginLiveConversationTurn(conversation, turnId, `question ${index + 1}`);
+        assert.equal(studio.updateLiveAssistant(conversation, turnId, answer), true);
+        assert.equal(studio.finishLiveAssistant(conversation, turnId, 'completed'), true);
+    }
+    assert.deepEqual(
+        conversation.messages.map(({ id, content, status }) => ({ id, content, status })),
+        [
+            { id: 'turn-1:user', content: 'question 1', status: 'completed' },
+            { id: 'turn-1:assistant', content: 'one', status: 'completed' },
+            { id: 'turn-2:user', content: 'question 2', status: 'completed' },
+            { id: 'turn-2:assistant', content: 'two', status: 'completed' },
+            { id: 'turn-3:user', content: 'question 3', status: 'completed' },
+            { id: 'turn-3:assistant', content: 'three', status: 'completed' },
+        ],
+    );
+    assert.equal(studio.updateLiveAssistant(conversation, 'turn-1', 'late'), false);
+    assert.equal(conversation.messages[1].content, 'one');
+});
+
+test('interrupted live turn is explicit and rejects late chunks after the next turn starts', () => {
+    const conversation = studio.createLiveConversation();
+    studio.beginLiveConversationTurn(conversation, 'turn-old', 'old question');
+    studio.updateLiveAssistant(conversation, 'turn-old', 'partial');
+    studio.finishLiveAssistant(conversation, 'turn-old', 'stopped');
+    studio.beginLiveConversationTurn(conversation, 'turn-new', 'new question');
+    studio.updateLiveAssistant(conversation, 'turn-new', 'new answer');
+
+    assert.equal(studio.updateLiveAssistant(conversation, 'turn-old', 'stale overwrite'), false);
+    assert.equal(conversation.messages[1].content, 'partial');
+    assert.equal(conversation.messages[1].status, 'stopped');
+    assert.equal(conversation.messages[3].content, 'new answer');
+});
+
+test('durable live conversation snapshot reconstructs identical provider history', () => {
+    const original = studio.createLiveConversation();
+    studio.beginLiveConversationTurn(original, 'turn-1', 'hello');
+    studio.updateLiveAssistant(original, 'turn-1', 'hi');
+    studio.finishLiveAssistant(original, 'turn-1', 'completed');
+    studio.beginLiveConversationTurn(original, 'turn-2', 'stop');
+    studio.finishLiveAssistant(original, 'turn-2', 'stopped');
+    const restored = studio.createLiveConversation(JSON.parse(JSON.stringify(original)));
+
+    assert.deepEqual(restored, original);
+    assert.deepEqual(studio.liveProviderMessages(restored), [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+        { role: 'user', content: 'stop' },
+    ]);
+});
+
 test('central stream contract applies exact revisions and rejects out-of-order events', () => {
     const contract = studio.createStreamContractState();
     const envelope = (sequence, type, data) => ({

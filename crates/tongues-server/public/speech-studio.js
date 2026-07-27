@@ -32,6 +32,9 @@
         jobStreams: new Map(),
         liveProviders: [],
         liveMessages: [],
+        liveConversation: { schema_version: 1, messages: [] },
+        liveSessionId: null,
+        liveDurableEvents: [],
         liveJournal: [],
         liveTurn: null,
         liveGeneration: 0,
@@ -71,6 +74,8 @@
     const CATALOG_CACHE_NAME = 'tongues.speech.catalog.v4';
     const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
     const catalogPageCache = new Map();
+    const LIVE_CONVERSATION_SCHEMA_VERSION = 1;
+    const LIVE_TERMINAL_MESSAGE_STATES = new Set(['completed', 'stopped', 'failed']);
     const WORKFLOWS = {
         speak: {
             path: '/speech',
@@ -105,6 +110,83 @@
     };
 
     const pathKey = (path) => `${path.backend}::${path.model}`;
+    function createLiveConversation(snapshot = {}) {
+        const messages = structuredClone(snapshot.messages || []);
+        if (
+            snapshot.schema_version != null
+            && snapshot.schema_version !== LIVE_CONVERSATION_SCHEMA_VERSION
+        ) {
+            throw new Error(
+                `Live conversation schema ${snapshot.schema_version} is unsupported.`,
+            );
+        }
+        const ids = new Set();
+        for (const message of messages) {
+            if (
+                !message.id
+                || !message.turn_id
+                || !['user', 'assistant'].includes(message.role)
+                || typeof message.content !== 'string'
+                || !ids.add(message.id)
+            ) throw new Error('Live conversation contains an invalid or duplicate message.');
+            if (
+                message.role === 'assistant'
+                && !['pending', 'streaming', ...LIVE_TERMINAL_MESSAGE_STATES]
+                    .includes(message.status)
+            ) throw new Error(`Assistant message ${message.id} has an invalid state.`);
+        }
+        return { schema_version: LIVE_CONVERSATION_SCHEMA_VERSION, messages };
+    }
+    function beginLiveConversationTurn(conversation, turnId, userText) {
+        if (conversation.messages.some((message) => message.turn_id === turnId)) {
+            throw new Error(`Live turn ${turnId} already exists.`);
+        }
+        conversation.messages.push(
+            {
+                id: `${turnId}:user`,
+                turn_id: turnId,
+                role: 'user',
+                content: userText,
+                status: 'completed',
+            },
+            {
+                id: `${turnId}:assistant`,
+                turn_id: turnId,
+                role: 'assistant',
+                content: '',
+                status: 'pending',
+            },
+        );
+        return `${turnId}:assistant`;
+    }
+    function updateLiveAssistant(conversation, turnId, content) {
+        const message = conversation.messages.find((candidate) => (
+            candidate.id === `${turnId}:assistant`
+        ));
+        if (!message || LIVE_TERMINAL_MESSAGE_STATES.has(message.status)) return false;
+        message.content = content;
+        message.status = 'streaming';
+        return true;
+    }
+    function finishLiveAssistant(conversation, turnId, status) {
+        if (!LIVE_TERMINAL_MESSAGE_STATES.has(status)) {
+            throw new Error(`Invalid terminal assistant state ${status}.`);
+        }
+        const message = conversation.messages.find((candidate) => (
+            candidate.id === `${turnId}:assistant`
+        ));
+        if (!message || LIVE_TERMINAL_MESSAGE_STATES.has(message.status)) return false;
+        message.status = status === 'completed' && !message.content ? 'failed' : status;
+        return true;
+    }
+    function liveProviderMessages(conversation) {
+        return conversation.messages
+            .filter((message) => (
+                message.role === 'user'
+                || (message.role === 'assistant' && message.status === 'completed')
+            ))
+            .map(({ role, content }) => ({ role, content }));
+    }
     const compositionGenerator = (composition) => (
         composition?.pipeline?.end_to_end || composition?.pipeline?.acoustic_model || ''
     );
@@ -2973,7 +3055,49 @@
         journal.scrollTop = journal.scrollHeight;
     }
 
-    function resetLiveTurn(userText) {
+    function renderLiveConversation() {
+        const conversation = byId('live-conversation');
+        const message = (record) => {
+            const article = document.createElement('article');
+            article.className = `live-message ${record.role}`;
+            article.dataset.messageId = record.id;
+            article.dataset.turnId = record.turn_id;
+            article.dataset.state = record.status;
+            const label = document.createElement('strong');
+            label.textContent = record.role === 'user' ? 'You' : 'Tongues';
+            const body = document.createElement('p');
+            body.className = record.role === 'assistant' ? 'live-assistant-text' : '';
+            body.textContent = record.content;
+            if (
+                record.role === 'assistant'
+                && !record.content
+                && LIVE_TERMINAL_MESSAGE_STATES.has(record.status)
+            ) {
+                body.textContent = record.status === 'stopped'
+                    ? 'Stopped before a response was produced.'
+                    : 'This turn failed before a response was produced.';
+            }
+            article.append(label, body);
+            if (record.role === 'assistant' && record.status !== 'completed') {
+                const status = document.createElement('small');
+                status.className = 'live-message-status';
+                status.textContent = record.status;
+                article.append(status);
+            }
+            return article;
+        };
+        conversation.replaceChildren(...state.liveConversation.messages.map(message));
+        if (!state.liveConversation.messages.length) {
+            const empty = document.createElement('p');
+            empty.className = 'live-empty';
+            empty.textContent =
+                'Start a turn to watch generation, planning, and playback move independently.';
+            conversation.append(empty);
+        }
+        conversation.scrollTop = conversation.scrollHeight;
+    }
+
+    function resetLiveTurn(turnId, userText) {
         state.liveGenerated = '';
         state.liveCommitted = '';
         state.liveSpoken = '';
@@ -2991,29 +3115,22 @@
         byId('live-replay').disabled = true;
         byId('live-download').classList.add('hidden');
         byId('live-session-link').classList.add('hidden');
-        const conversation = byId('live-conversation');
-        conversation.querySelector('.live-empty')?.remove();
-        const message = (role, text, className) => {
-            const article = document.createElement('article');
-            article.className = `live-message ${className}`;
-            const label = document.createElement('strong');
-            label.textContent = role;
-            const body = document.createElement('p');
-            body.textContent = text;
-            article.append(label, body);
-            return article;
-        };
-        conversation.append(message('You', userText, 'user'));
-        const assistant = message('Tongues', '', 'assistant');
-        assistant.querySelector('p').id = 'live-assistant-text';
-        assistant.querySelector('p').className = 'live-assistant-text';
-        conversation.append(assistant);
-        conversation.scrollTop = conversation.scrollHeight;
+        beginLiveConversationTurn(state.liveConversation, turnId, userText);
+        renderLiveConversation();
     }
 
-    function renderLiveAssistant() {
-        const body = byId('live-assistant-text');
+    function renderLiveAssistant(turnId = state.liveTurn?.id) {
+        if (!turnId || !updateLiveAssistant(state.liveConversation, turnId, state.liveGenerated)) {
+            return;
+        }
+        const messageId = `${turnId}:assistant`;
+        const article = [...byId('live-conversation').querySelectorAll('[data-message-id]')]
+            .find((candidate) => candidate.dataset.messageId === messageId);
+        const body = article?.querySelector('.live-assistant-text');
         if (!body) return;
+        article.dataset.state = 'streaming';
+        const status = article.querySelector('.live-message-status');
+        if (status) status.textContent = 'streaming';
         body.replaceChildren();
         let plannedChars = 0;
         for (const segment of state.liveSegments.values()) {
@@ -3132,7 +3249,7 @@
         const segment = state.liveSegments.get(segmentId);
         if (!segment) return;
         segment.playback = playback;
-        renderLiveAssistant();
+        renderLiveAssistant(state.liveTurn?.id);
     }
 
     async function scheduleLiveAudioSegment(event, generation, signal) {
@@ -3198,7 +3315,7 @@
             renderConversationLatencies(state.liveTurn.times);
         }
         state.liveCommitted += event.text;
-        renderLiveAssistant();
+        renderLiveAssistant(state.liveTurn?.id);
     }
 
     function enqueueLiveAudio(event, generation, signal) {
@@ -3282,11 +3399,18 @@
             method: 'POST',
         }).catch(() => {});
         state.liveTurn = null;
+        finishLiveAssistant(state.liveConversation, turn.id, 'stopped');
+        renderLiveConversation();
         byId('live-state').dataset.state = 'failed';
         byId('live-state').textContent = 'Stopped';
         byId('live-stop').disabled = true;
         byId('live-send').disabled = false;
         appendLiveJournal({ type: 'turn_cancelled', turn_id: turn.id, at_ms: Date.now() });
+        try {
+            await saveLiveConversationSession();
+        } catch (error) {
+            showError(`Stopped turn could not be saved: ${error.message}`, byId('live-error'));
+        }
     }
 
     async function startLiveTurn(userText) {
@@ -3311,13 +3435,13 @@
             },
         };
         state.liveSynthesisTail = Promise.resolve();
-        resetLiveTurn(userText);
+        resetLiveTurn(turnId, userText);
         clearError(byId('live-error'));
         byId('live-state').dataset.state = 'busy';
         byId('live-state').textContent = 'Generating';
         byId('live-stop').disabled = false;
         byId('live-send').disabled = true;
-        state.liveMessages.push({ role: 'user', content: userText });
+        state.liveMessages = liveProviderMessages(state.liveConversation);
         const synthesis = buildPayload(
             path,
             state.values,
@@ -3350,7 +3474,7 @@
                     renderConversationLatencies(state.liveTurn.times);
                 }
                 state.liveGenerated = event.text;
-                renderLiveAssistant();
+                renderLiveAssistant(turnId);
             } else if (event.type === 'committed_segment' && event.role === 'generation') {
                 enqueueLiveSegment(event, generation, controller.signal);
             } else if (event.type === 'audio_chunk' && event.direction === 'output') {
@@ -3369,7 +3493,9 @@
         if (!completedEvent || state.liveGenerated !== state.liveCommitted) {
             throw new Error('Committed speech transcript does not exactly match generated text.');
         }
-        state.liveMessages.push({ role: 'assistant', content: state.liveGenerated });
+        finishLiveAssistant(state.liveConversation, turnId, 'completed');
+        state.liveMessages = liveProviderMessages(state.liveConversation);
+        renderLiveConversation();
         const overlap = state.liveFirstAudioAt > 0
             && state.liveFirstAudioAt < state.liveFinalTokenAt;
         appendLiveJournal({
@@ -3381,33 +3507,12 @@
             committed_chars: [...state.liveCommitted].length,
             at_ms: Date.now(),
         });
-        const { sessionFromEvents } = await import('/wavedeck-model.mjs');
         const durableEvents = state.liveJournal.filter((item) => (
-            item?.event?.data?.type === 'committed_segment'
+            item?.event?.type === 'committed_segment'
+            || item?.event?.data?.type === 'committed_segment'
         ));
-        const sessionId = `conversation:${turnId}`;
-        const session = sessionFromEvents(sessionId, durableEvents);
-        const sessionResponse = await fetch(
-            `/api/timeline/sessions/${encodeURIComponent(sessionId)}`,
-            {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    schema_version: 1,
-                    session,
-                    context: {
-                        graph_id: 'starter:live_conversation',
-                        source: `conversation turn ${turnId}`,
-                    },
-                }),
-            },
-        );
-        if (!sessionResponse.ok) {
-            throw new Error(`Conversation completed but its session could not be saved: ${await sessionResponse.text()}`);
-        }
-        const sessionLink = byId('live-session-link');
-        sessionLink.href = `/sessions/${encodeURIComponent(sessionId)}/correct`;
-        sessionLink.classList.remove('hidden');
+        state.liveDurableEvents.push(...durableEvents);
+        await saveLiveConversationSession();
         const wav = wavBlobFromBuffers(state.liveAudioBuffers);
         if (wav) {
             const download = byId('live-download');
@@ -3421,6 +3526,59 @@
         byId('live-state').textContent = overlap ? 'Streamed' : 'Completed';
         byId('live-stop').disabled = true;
         byId('live-send').disabled = false;
+    }
+
+    async function saveLiveConversationSession() {
+        if (!state.liveSessionId) {
+            state.liveSessionId =
+                `conversation:${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        }
+        const { sessionFromEvents } = await import('/wavedeck-model.mjs');
+        const session = sessionFromEvents(state.liveSessionId, state.liveDurableEvents);
+        const response = await fetch(
+            `/api/timeline/sessions/${encodeURIComponent(state.liveSessionId)}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: 1,
+                    session,
+                    context: {
+                        graph_id: 'starter:live_conversation',
+                        source: 'live conversation',
+                        conversation: structuredClone(state.liveConversation),
+                    },
+                }),
+            },
+        );
+        if (!response.ok) {
+            throw new Error(`Conversation session could not be saved: ${await response.text()}`);
+        }
+        const sessionLink = byId('live-session-link');
+        sessionLink.href = `/sessions/${encodeURIComponent(state.liveSessionId)}/correct`;
+        sessionLink.classList.remove('hidden');
+        const liveUrl = new URL(browser.location.href);
+        liveUrl.searchParams.set('session', state.liveSessionId);
+        browser.history.replaceState({ workflow: 'live' }, '', liveUrl);
+    }
+
+    async function restoreLiveConversationSession() {
+        const sessionId = new URL(browser.location.href).searchParams.get('session');
+        if (!sessionId) return;
+        const response = await fetch(
+            `/api/timeline/sessions/${encodeURIComponent(sessionId)}`,
+            { cache: 'no-store' },
+        );
+        if (!response.ok) throw new Error(await response.text());
+        const record = await response.json();
+        state.liveConversation = createLiveConversation(record.context?.conversation);
+        state.liveSessionId = sessionId;
+        state.liveDurableEvents = structuredClone(record.session?.source_events || []);
+        state.liveMessages = liveProviderMessages(state.liveConversation);
+        renderLiveConversation();
+        const sessionLink = byId('live-session-link');
+        sessionLink.href = `/sessions/${encodeURIComponent(sessionId)}/correct`;
+        sessionLink.classList.remove('hidden');
     }
 
     function renderConversationLatencies(times = {}) {
@@ -3946,6 +4104,11 @@
             });
         });
         setWorkflow(browser?.location?.pathname || '/speech');
+        try {
+            await restoreLiveConversationSession();
+        } catch (error) {
+            showError(`Conversation history could not be restored: ${error.message}`, byId('live-error'));
+        }
         const submit = byId('submit-btn');
         try {
             await loadAuxiliaryDiscovery();
@@ -4026,6 +4189,12 @@
             input.value = '';
             startLiveTurn(text).catch((error) => {
                 if (error.name === 'AbortError') return;
+                const failedTurn = state.liveTurn;
+                if (failedTurn) {
+                    finishLiveAssistant(state.liveConversation, failedTurn.id, 'failed');
+                    renderLiveConversation();
+                    saveLiveConversationSession().catch(() => {});
+                }
                 showError(`Live turn failed: ${error.message}`, byId('live-error'));
                 byId('live-state').dataset.state = 'failed';
                 byId('live-state').textContent = 'Failed';
@@ -4374,6 +4543,7 @@
         availablePaths,
         applyStreamEnvelope,
         availableCompositions,
+        beginLiveConversationTurn,
         buildPayload,
         buildDuplexRequest,
         compatibilityFor,
@@ -4381,10 +4551,12 @@
         controlDefault,
         controlsForPath,
         createStreamContractState,
+        createLiveConversation,
         defaultControlValues,
         deleteUserRecipe,
         cliRepresentation,
         duplexLines,
+        finishLiveAssistant,
         init,
         parseNumberArray,
         pathKey,
@@ -4405,6 +4577,8 @@
         setWorkflow,
         speechInstructionForPath,
         studioShell,
+        liveProviderMessages,
+        updateLiveAssistant,
         varietiesForPath,
         workflowForPath,
     };

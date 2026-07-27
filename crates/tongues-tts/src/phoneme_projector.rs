@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use speaking::{
-    phoneme_default_phone_display_symbol, FeatureBundle, FeatureId, FeatureValue, PauseKind, Spec,
-    TerminalPunctuation, UtterancePlan,
+    phone_display_symbol, phoneme_default_phone_display_symbol, realize_phoneme_at, token_stress,
+    variety_by_code, FeatureBundle, FeatureId, FeatureValue, PauseKind, PhoneDecompositionPolicy,
+    RealizationOptions, Spec, Stress, TerminalPunctuation, UtterancePlan,
 };
 
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};
@@ -293,7 +294,7 @@ pub(crate) fn project_plan_symbols(
     if !plan.intended_phonemes.is_empty() {
         let mut previous_word = None;
         let mut saw_indexed_word = false;
-        for token in &plan.intended_phonemes {
+        for (index, token) in plan.intended_phonemes.iter().enumerate() {
             let word_index = token_word_index(&token.features);
             if let (Some(previous), Some(current)) = (previous_word, word_index) {
                 if previous != current {
@@ -304,7 +305,7 @@ pub(crate) fn project_plan_symbols(
             let Spec::Known(id) = &token.phoneme else {
                 continue;
             };
-            let ipa = phoneme_default_phone_display_symbol(id, &plan.variety);
+            let ipa = projected_phoneme_ipa(plan, token, index, id);
             push_phoneme(&mut output, &ipa);
             if word_index.is_some() {
                 saw_indexed_word = true;
@@ -348,6 +349,56 @@ pub(crate) fn project_plan_symbols(
         "{model_label} projection produced no symbols"
     );
     Ok(output)
+}
+
+fn projected_phoneme_ipa(
+    plan: &UtterancePlan,
+    token: &speaking::PhonemeToken,
+    index: usize,
+    id: &speaking::PhonemeId,
+) -> String {
+    let inventory_default = phoneme_default_phone_display_symbol(id, &plan.variety);
+    let stressed = matches!(
+        token_stress(token),
+        Some(Stress::Primary | Stress::Secondary)
+    );
+    if !stressed || !matches!(inventory_default.as_str(), "ə" | "ɚ") {
+        return inventory_default;
+    }
+
+    // A reduced inventory default is not a valid checkpoint symbol for a
+    // lexically stressed token. Re-run the variety-owned contextual realizer
+    // at this stored-plan/model boundary. This also migrates historical plans
+    // whose `realized_as` field is empty or contains the old schwa fallback.
+    let Some(variety) = variety_by_code(&plan.variety.0) else {
+        return inventory_default;
+    };
+    let careful_style = plan.intended_phonemes.iter().any(|token| {
+        feature_category(&token.features, "phonology.speaking_style") == Some("careful")
+    });
+    let realized = realize_phoneme_at(
+        &variety,
+        &plan.intended_phonemes,
+        index,
+        &RealizationOptions {
+            careful_style,
+            phone_decomposition: PhoneDecompositionPolicy::KeepPhonemic,
+            syntax: Default::default(),
+        },
+    );
+    match realized.phone {
+        Spec::Known(phone) => phone_display_symbol(&phone).to_string(),
+        _ => inventory_default,
+    }
+}
+
+fn feature_category<'a>(features: &'a FeatureBundle, id: &str) -> Option<&'a str> {
+    match features.values.get(&FeatureId(id.into()))? {
+        Spec::Known(FeatureValue::Category(value)) | Spec::Known(FeatureValue::Text(value)) => {
+            Some(value)
+        }
+        _ => None,
+    }
 }
 
 fn token_word_index(features: &FeatureBundle) -> Option<usize> {
@@ -612,6 +663,67 @@ mod tests {
                 .map(|symbol| projector.symbol_id(symbol).unwrap())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn checkpoint_lowering_never_uses_schwa_for_a_stressed_merged_vowel() {
+        let mut ducks = crate::utterance_plan_from_text(crate::SpeechRequest {
+            text: "ducks".into(),
+            variety: "en-US".into(),
+        })
+        .expect("ducks plan");
+        let vowel_index = ducks
+            .intended_phonemes
+            .iter()
+            .position(|token| {
+                matches!(
+                    speaking::token_stress(token),
+                    Some(speaking::Stress::Primary)
+                ) && phoneme_default_phone_display_symbol(
+                    match &token.phoneme {
+                        Spec::Known(id) => id,
+                        _ => return false,
+                    },
+                    &ducks.variety,
+                ) == "ə"
+            })
+            .expect("stressed merged vowel");
+        // Reproduce a historical/stale plan that carried the wrong surface
+        // phone. Lowering must use current variety realization from the
+        // underlying phoneme plus lexical stress.
+        ducks.intended_phonemes[vowel_index].realized_as = vec![phone("ipa.phone.ə")];
+
+        let projected = project_plan_symbols(
+            &ducks,
+            |output, ipa| output.push_str(ipa),
+            "regression fixture",
+        )
+        .expect("ducks projection");
+
+        assert!(projected.contains("dʌks"), "{projected}");
+        assert!(!projected.contains("dəks"), "{projected}");
+    }
+
+    #[test]
+    fn merged_vowel_checkpoint_lowering_remains_variety_owned() {
+        for (word, variety, expected) in [
+            ("about", "en-US", "əbaʊt"),
+            ("cut", "en-US", "kʌt"),
+            ("cut", "en-GB-RP", "kʌt"),
+        ] {
+            let plan = crate::utterance_plan_from_text(crate::SpeechRequest {
+                text: word.into(),
+                variety: variety.into(),
+            })
+            .unwrap_or_else(|error| panic!("{word} {variety}: {error}"));
+            let projected =
+                project_plan_symbols(&plan, |output, ipa| output.push_str(ipa), "fixture")
+                    .unwrap_or_else(|error| panic!("{word} {variety}: {error}"));
+            assert!(
+                projected.contains(expected),
+                "{word} {variety}: {projected}"
+            );
+        }
     }
 
     #[test]

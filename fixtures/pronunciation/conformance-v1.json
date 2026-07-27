@@ -369,13 +369,13 @@
           "required": "umbrella up"
         },
         "lexical_candidates": {
-          "required": ["əmbɹelə", "ʌmbɹelə", "ʌp"]
+          "required": ["ʌmbɹelʌ", "ʌmbɹelʌ", "ʌp"]
         },
         "broad_phonemes": {
           "required": "əmˈbɹe.lə ˈʌp"
         },
         "broad_phoneme_ids": {
-          "required": "ə m b ɹ e l ə ʌ p"
+          "required": "ʌ m b ɹ e l ʌ ʌ p"
         },
         "realized_phones": {
           "required": "əmˈbɹe.ləɹ ˈʌp"
@@ -395,13 +395,13 @@
           "required": "umbrella stand"
         },
         "lexical_candidates": {
-          "required": ["əmbɹelə", "ʌmbɹelə", "stænd"]
+          "required": ["ʌmbɹelʌ", "ʌmbɹelʌ", "stænd"]
         },
         "broad_phonemes": {
           "required": "əmˈbɹe.lə ˈstænd"
         },
         "broad_phoneme_ids": {
-          "required": "ə m b ɹ e l ə s t æ n d"
+          "required": "ʌ m b ɹ e l ʌ s t æ n d"
         },
         "realized_phones": {
           "required": "əmˈbɹe.lə ˈst˭ænd"

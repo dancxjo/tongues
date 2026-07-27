@@ -4,7 +4,7 @@ use crate::data::notation::PronunciationNotation;
 
 pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
     id: CMUDICT_RP_ID,
-    notation: PronunciationNotation::Arpabet,
+    notation: PronunciationNotation::Cmudict,
     lookup,
 }];
 
@@ -148,8 +148,11 @@ fn adapt_segment(word: &str, phoneme: &CmuPhoneme, word_final: bool) -> String {
                 RP_TRAP
             }
         }
-        "AH" if phoneme.stress == Some(CmuStress::Unstressed) => RP_SCHWA,
-        "AH" => RP_STRUT,
+        // Keep the original AH token: the RP inventory aliases AH to its
+        // merged STRUT/ABOUT phoneme and the realizer chooses schwa for
+        // unstressed context. Rewriting AH0 to RP_SCHWA would encode
+        // reduction in phoneme identity and discard the source token.
+        "AH" => return phoneme.raw_symbol(),
         "AO" => RP_THOUGHT,
         "AW" => RP_MOUTH,
         "AY" => RP_PRICE,

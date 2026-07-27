@@ -7,25 +7,29 @@ use serde::{Deserialize, Serialize};
 use crate::VarietyId;
 use crate::{
     EvidenceProvenance, EvidenceSource, PhonemicizeError, PhonemicizeOutput, PhonemicizeRequest,
-    Spec, UtterancePlan, display_plan_connected_speech, display_plan_phonemes, display_plan_phones,
-    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
+    Spec, Stress, UtterancePlan, display_plan_connected_speech, display_plan_phonemes,
+    display_plan_phones, phone_display_symbol, phoneme_default_phone_display_symbol,
+    phonemicizer_for_variety, token_stress,
 };
 
-pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
+pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 3;
 pub const PRONUNCIATION_CONFORMANCE_SCHEMA_VERSION: u32 = 1;
 const PRONUNCIATION_CONFORMANCE_CORPUS_JSON: &str =
     include_str!("../../../fixtures/pronunciation/conformance-v1.json");
 
 /// Versioned pronunciation diagnostics.
 ///
-/// Schema v2 stores one typed [`UtterancePlan`]. IPA strings are pure computed
-/// projections exposed by the accessor methods below.
+/// Schema v3 stores one typed [`UtterancePlan`] plus a per-segment realization
+/// trace. IPA strings remain pure computed projections exposed by the accessor
+/// methods below.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PronunciationAnalysis {
     pub schema_version: u32,
     pub normalized_text: String,
     pub lexical_candidates: Vec<LexicalCandidateAnalysis>,
     pub trace: Vec<PronunciationTraceStep>,
+    #[serde(default)]
+    pub segment_trace: Vec<SegmentRealizationTrace>,
     pub plan: UtterancePlan,
 }
 
@@ -47,6 +51,32 @@ pub struct PronunciationTraceStep {
     pub before: String,
     pub after: String,
     pub confidence: f32,
+}
+
+/// A lossless, per-segment account of phonemic identity and phonetic
+/// realization. Schema-v2 analyses remain readable because this collection
+/// defaults to empty; schema v3 emits it from the canonical plan tokens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SegmentRealizationTrace {
+    pub segment_index: usize,
+    pub word_index: Option<usize>,
+    pub word: Option<String>,
+    pub source_schema: Option<String>,
+    pub source_notation: Option<String>,
+    pub source_token: Option<String>,
+    pub underlying_phoneme: String,
+    pub lexical_stress: Option<Stress>,
+    pub syllable_position: Option<String>,
+    pub reduction_source: Option<String>,
+    pub surface_phone: Option<String>,
+    pub realization_rule_id: Option<String>,
+    pub variety: String,
+    pub style: Option<String>,
+    pub confidence: f32,
+    pub status: String,
+    pub fallback_reason: Option<String>,
+    pub realizer_version: Option<String>,
+    pub acoustic_evidence_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -161,12 +191,14 @@ impl PronunciationAnalysis {
             after: broad_phonemes.clone(),
             confidence: minimum_phoneme_confidence(&output),
         });
+        let segment_trace = segment_realization_trace(&output);
 
         Self {
             schema_version: PRONUNCIATION_ANALYSIS_SCHEMA_VERSION,
             normalized_text: output.normalized_text.clone(),
             lexical_candidates,
             trace,
+            segment_trace,
             plan,
         }
     }
@@ -185,6 +217,102 @@ impl PronunciationAnalysis {
 
     pub fn connected_speech(&self) -> String {
         display_plan_connected_speech(&self.plan)
+    }
+}
+
+fn segment_realization_trace(output: &PhonemicizeOutput) -> Vec<SegmentRealizationTrace> {
+    output
+        .phonemes
+        .iter()
+        .enumerate()
+        .filter_map(|(segment_index, phoneme)| {
+            let Spec::Known(phoneme_id) = &phoneme.phoneme else {
+                return None;
+            };
+            let phone = phoneme.realized_as.first();
+            let surface_phone = phone.and_then(|phone| match &phone.phone {
+                Spec::Known(id) => Some(phone_display_symbol(id).to_string()),
+                _ => None,
+            });
+            let word_index = number_feature(&phoneme.features, "orthography.word_index");
+            let word = word_index.and_then(|word_index| {
+                output
+                    .lexical_candidates
+                    .iter()
+                    .find(|candidate| candidate.word_index == word_index)
+                    .map(|candidate| candidate.token.clone())
+            });
+            let source_token = text_feature(&phoneme.features, "phonology.source_token")
+                .map(str::to_string)
+                .or_else(|| {
+                    let symbol = crate::phoneme_display_symbol(phoneme_id);
+                    matches!(symbol.chars().last(), Some('0' | '1' | '2'))
+                        .then(|| symbol.to_string())
+                });
+            let phone_features = phone.map(|phone| &phone.features);
+            let feature = |name: &str| {
+                phone_features
+                    .and_then(|features| text_feature(features, name))
+                    .or_else(|| text_feature(&phoneme.features, name))
+                    .map(str::to_string)
+            };
+            let is_vowel = bool_feature(&phoneme.features, "phonology.syllabic") == Some(true);
+            Some(SegmentRealizationTrace {
+                segment_index,
+                word_index,
+                word,
+                source_schema: feature("phonology.source_schema"),
+                source_notation: feature("phonology.source_notation")
+                    .or_else(|| feature("phonology.notation")),
+                source_token,
+                underlying_phoneme: phoneme_id.0.clone(),
+                lexical_stress: token_stress(phoneme),
+                syllable_position: is_vowel.then(|| "nucleus".into()),
+                reduction_source: feature("phonology.reduction_source"),
+                surface_phone,
+                realization_rule_id: feature("phonology.realization_rule_id"),
+                variety: output.variety.0.clone(),
+                style: feature("phonology.speaking_style"),
+                confidence: phone
+                    .map(|phone| phone.confidence)
+                    .unwrap_or(phoneme.confidence),
+                status: if phone.is_some() {
+                    "selected".into()
+                } else {
+                    "unrealized".into()
+                },
+                fallback_reason: feature("phonology.fallback_reason"),
+                realizer_version: feature("phonology.realizer_version")
+                    .or_else(|| phone.and_then(|phone| phone.provenance.version.clone())),
+                acoustic_evidence_count: phone
+                    .map(|phone| phone.acoustic_evidence.len())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn text_feature<'a>(features: &'a crate::FeatureBundle, id: &str) -> Option<&'a str> {
+    match features.values.get(&crate::FeatureId(id.into()))? {
+        Spec::Known(crate::FeatureValue::Category(value))
+        | Spec::Known(crate::FeatureValue::Text(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn bool_feature(features: &crate::FeatureBundle, id: &str) -> Option<bool> {
+    match features.values.get(&crate::FeatureId(id.into()))? {
+        Spec::Known(crate::FeatureValue::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn number_feature(features: &crate::FeatureBundle, id: &str) -> Option<usize> {
+    match features.values.get(&crate::FeatureId(id.into()))? {
+        Spec::Known(crate::FeatureValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+            Some(*value as usize)
+        }
+        _ => None,
     }
 }
 
@@ -555,5 +683,113 @@ mod tests {
 
         assert_eq!(analysis.broad_phonemes(), "əmˈbɹe.lə ˈʌp");
         assert_eq!(analysis.connected_speech(), "əmˈbɹe.ləɹ | ˈʌp ↘ .");
+    }
+
+    #[test]
+    fn segment_trace_distinguishes_merged_phoneme_context_and_surface_phone() {
+        let analysis = analyze_pronunciation(&PhonemicizeRequest {
+            text: "duck ducks cut about above".into(),
+            variety: VarietyId("en-US".into()),
+            style: None,
+        })
+        .expect("analysis");
+        let ah = analysis
+            .segment_trace
+            .iter()
+            .filter(|segment| {
+                matches!(segment.source_token.as_deref(), Some("AH0" | "AH1" | "AH2"))
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!ah.is_empty());
+        assert!(
+            ah.windows(2)
+                .all(|pair| pair[0].underlying_phoneme == pair[1].underlying_phoneme)
+        );
+        for segment in &ah {
+            assert_eq!(segment.source_schema.as_deref(), Some("cmudict"));
+            assert_eq!(segment.source_notation.as_deref(), Some("arpabet"));
+            assert_eq!(segment.syllable_position.as_deref(), Some("nucleus"));
+            match segment.lexical_stress {
+                Some(Stress::Primary | Stress::Secondary) => {
+                    assert_eq!(segment.surface_phone.as_deref(), Some("ʌ"));
+                    assert!(
+                        segment
+                            .realization_rule_id
+                            .as_deref()
+                            .is_some_and(|rule| rule.contains("stressed_ah"))
+                    );
+                }
+                Some(Stress::Unstressed | Stress::Reduced) => {
+                    assert_eq!(segment.surface_phone.as_deref(), Some("ə"));
+                }
+                None => panic!("CMUDICT AH token lost lexical stress: {segment:?}"),
+            }
+        }
+        assert!(
+            ah.iter()
+                .any(|segment| segment.word.as_deref() == Some("ducks"))
+        );
+        assert!(
+            ah.iter()
+                .any(|segment| segment.word.as_deref() == Some("about")
+                    && segment.surface_phone.as_deref() == Some("ə"))
+        );
+        let above = ah
+            .iter()
+            .filter(|segment| segment.word.as_deref() == Some("above"))
+            .map(|segment| segment.surface_phone.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(above, [Some("ə"), Some("ʌ")]);
+
+        let rp = analyze_pronunciation(&PhonemicizeRequest {
+            text: "umbrella up".into(),
+            variety: VarietyId("en-GB-RP".into()),
+            style: None,
+        })
+        .expect("RP analysis");
+        let rp_ah = rp
+            .segment_trace
+            .iter()
+            .filter(|segment| matches!(segment.source_token.as_deref(), Some("AH0" | "AH1")))
+            .collect::<Vec<_>>();
+        assert!(rp_ah.len() >= 3);
+        assert!(
+            rp_ah
+                .windows(2)
+                .all(|pair| pair[0].underlying_phoneme == pair[1].underlying_phoneme)
+        );
+        assert!(
+            rp_ah
+                .iter()
+                .any(|segment| segment.surface_phone.as_deref() == Some("ə"))
+        );
+        assert!(rp_ah.iter().any(|segment| {
+            segment.surface_phone.as_deref() == Some("ʌ")
+                && segment
+                    .realization_rule_id
+                    .as_deref()
+                    .is_some_and(|rule| rule.starts_with("received_pronunciation_"))
+        }));
+    }
+
+    #[test]
+    fn schema_v2_analysis_without_segment_trace_remains_readable() {
+        let analysis = analyze_pronunciation(&PhonemicizeRequest {
+            text: "ducks".into(),
+            variety: VarietyId("en-US".into()),
+            style: None,
+        })
+        .expect("analysis");
+        let mut json = serde_json::to_value(analysis).expect("analysis JSON");
+        json["schema_version"] = serde_json::json!(2);
+        json.as_object_mut()
+            .expect("analysis object")
+            .remove("segment_trace");
+
+        let restored: PronunciationAnalysis =
+            serde_json::from_value(json).expect("schema-v2 compatibility");
+        assert_eq!(restored.schema_version, 2);
+        assert!(restored.segment_trace.is_empty());
     }
 }

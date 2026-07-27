@@ -10063,6 +10063,36 @@ fn cmd_pronunciation(text: &str, variety: &str, careful_style: bool, json: bool)
             step.stage, step.before, step.after, step.method, step.confidence
         );
     }
+    println!("segment realization:");
+    for segment in &analysis.segment_trace {
+        println!(
+            "  word={} source_schema={} source_notation={} source_token={} underlying_phoneme={} stress={} \
+             syllable_position={} reduction_source={} surface_phone={} rule={} variety={} \
+             style={} status={} confidence={:.3} fallback_reason={}",
+            segment.word.as_deref().unwrap_or("unknown"),
+            segment.source_schema.as_deref().unwrap_or("unknown"),
+            segment.source_notation.as_deref().unwrap_or("unknown"),
+            segment.source_token.as_deref().unwrap_or("unknown"),
+            segment.underlying_phoneme,
+            segment
+                .lexical_stress
+                .as_ref()
+                .map(|stress| format!("{stress:?}").to_lowercase())
+                .unwrap_or_else(|| "unknown".into()),
+            segment.syllable_position.as_deref().unwrap_or("unknown"),
+            segment.reduction_source.as_deref().unwrap_or("unknown"),
+            segment.surface_phone.as_deref().unwrap_or("unknown"),
+            segment
+                .realization_rule_id
+                .as_deref()
+                .unwrap_or("unknown"),
+            segment.variety,
+            segment.style.as_deref().unwrap_or("unknown"),
+            segment.status,
+            segment.confidence,
+            segment.fallback_reason.as_deref().unwrap_or("none"),
+        );
+    }
     Ok(())
 }
 

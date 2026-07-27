@@ -886,8 +886,15 @@ fn cmudict_backend_alias(token: &PhonemeToken) -> Option<String> {
     if source != "cmudict" && source != "arpabet" {
         return None;
     }
-    let base = phoneme_feature_category(token, "phonology.base_symbol")?;
-    let stress = phoneme_feature_category(token, "phonology.stress").and_then(stress_digit);
+    let base = phoneme_feature_category(token, "phonology.canonical_base_symbol")
+        .or_else(|| phoneme_feature_category(token, "phonology.base_symbol"))?;
+    let stress = phoneme_feature_category(token, "phonology.stress")
+        .and_then(stress_digit)
+        .or_else(|| {
+            (phoneme_feature_category(token, "phonology.reduction_source")
+                == Some("explicit_source_symbol"))
+            .then_some("0")
+        });
     Some(format!(
         "en-US.arpabet.{base}{}",
         stress.unwrap_or_default()

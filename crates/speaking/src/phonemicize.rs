@@ -334,6 +334,18 @@ pub trait PronunciationPipeline {
             warnings.extend(pronunciation.warnings.clone());
             let mut word_phonemes =
                 self.phoneme_planner(&canonical_variety, word_index, &pronunciation);
+            for phoneme in &mut word_phonemes {
+                phoneme.features.values.insert(
+                    FeatureId("phonology.realization_variety".into()),
+                    Spec::Known(FeatureValue::Category(canonical_variety.0.clone())),
+                );
+                phoneme.features.values.insert(
+                    FeatureId("phonology.speaking_style".into()),
+                    Spec::Known(FeatureValue::Category(
+                        if careful_style { "careful" } else { "default" }.into(),
+                    )),
+                );
+            }
             let mut word_phones =
                 self.phone_realizer(&variety, &word_phonemes, careful_style, &syntax);
 

@@ -77,7 +77,7 @@ wordiness W ER1 D IY0 N AH0 S
 
 pub const REGISTRATIONS: &[LexiconAdapter] = &[LexiconAdapter {
     id: CMUDICT_ID,
-    notation: PronunciationNotation::Arpabet,
+    notation: PronunciationNotation::Cmudict,
     lookup,
 }];
 

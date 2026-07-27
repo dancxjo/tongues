@@ -385,7 +385,7 @@ fn phone_from_rule(
     rule: &AllophoneRule,
 ) -> PhoneToken {
     let phone = rule.output.phone.clone();
-    let features = match &phone {
+    let mut features = match &phone {
         Spec::Known(id) => {
             let mut features = default_phone.features.clone();
             if let Some(phone) = variety.phones.phones.get(id) {
@@ -396,6 +396,9 @@ fn phone_from_rule(
         }
         _ => rule.output.features.clone(),
     };
+    put_token_metadata(&mut features, "realization_rule_id", &rule.id);
+    put_token_metadata(&mut features, "realization_variety", &variety.id.0);
+    put_token_metadata(&mut features, "realizer_version", "0.2");
 
     PhoneToken {
         phone,
@@ -406,7 +409,7 @@ fn phone_from_rule(
         provenance: EvidenceProvenance {
             source: EvidenceSource::Rule,
             method: format!("{} allophone rule {}", variety.id.0, rule.id),
-            version: Some("0.1".into()),
+            version: Some("0.2".into()),
         },
     }
 }
@@ -453,6 +456,31 @@ fn default_phone_token(variety: &LinguisticVariety, token: &PhonemeToken) -> Pho
         _ => FeatureBundle::default(),
     };
     merge_features(&mut features, &token.features);
+    put_token_metadata(&mut features, "realization_rule_id", "inventory_default");
+    put_token_metadata(&mut features, "realization_variety", &variety.id.0);
+    put_token_metadata(&mut features, "realizer_version", "0.2");
+    let unknown_stress_fallback = token_category_feature(&token.features, "canonical_base_symbol")
+        == Some("AH")
+        && token_stress(token).is_none();
+    if unknown_stress_fallback {
+        put_token_metadata(
+            &mut features,
+            "fallback_reason",
+            "missing_lexical_stress_used_variety_inventory_default",
+        );
+    }
+    let provenance = if unknown_stress_fallback {
+        EvidenceProvenance {
+            source: EvidenceSource::Rule,
+            method: format!(
+                "{} missing lexical stress fallback to variety inventory default",
+                variety.id.0
+            ),
+            version: Some("0.2".into()),
+        }
+    } else {
+        token.provenance.clone()
+    };
 
     PhoneToken {
         phone,
@@ -460,7 +488,7 @@ fn default_phone_token(variety: &LinguisticVariety, token: &PhonemeToken) -> Pho
         features,
         acoustic_evidence: Vec::new(),
         confidence: token.confidence,
-        provenance: token.provenance.clone(),
+        provenance,
     }
 }
 
@@ -468,6 +496,13 @@ fn merge_features(target: &mut FeatureBundle, source: &FeatureBundle) {
     for (id, value) in &source.values {
         target.values.insert(id.clone(), value.clone());
     }
+}
+
+fn put_token_metadata(features: &mut FeatureBundle, name: &str, value: &str) {
+    features.values.insert(
+        FeatureId(format!("phonology.{name}")),
+        Spec::Known(FeatureValue::Category(value.into())),
+    );
 }
 
 fn default_phone_id(variety: &LinguisticVariety, token: &PhonemeToken) -> Spec<PhoneId> {
@@ -805,6 +840,16 @@ mod tests {
         );
 
         assert_eq!(symbols(&default), ["ə"]);
+        assert!(
+            default[0]
+                .provenance
+                .method
+                .contains("missing lexical stress fallback")
+        );
+        assert_eq!(
+            token_category_feature(&default[0].features, "fallback_reason"),
+            Some("missing_lexical_stress_used_variety_inventory_default")
+        );
         assert_eq!(symbols(&primary), ["ʌ"]);
         assert!(
             primary[0]

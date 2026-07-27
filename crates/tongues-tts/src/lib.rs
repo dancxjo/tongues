@@ -1085,7 +1085,8 @@ fn speech_symbol_for_phoneme(token: &PhonemeToken) -> Option<String> {
 }
 
 fn arpabet_symbol_from_features(features: &speaking::FeatureBundle) -> Option<String> {
-    let base = feature_category(features, "phonology.base_symbol")?;
+    let base = feature_category(features, "phonology.canonical_base_symbol")
+        .or_else(|| feature_category(features, "phonology.base_symbol"))?;
     if !is_arpabet_symbol(base) {
         return None;
     }
@@ -1093,6 +1094,11 @@ fn arpabet_symbol_from_features(features: &speaking::FeatureBundle) -> Option<St
         if let Some(stress) = feature_category(features, "phonology.stress").and_then(stress_digit)
         {
             return Some(format!("{base}{stress}"));
+        }
+        if feature_category(features, "phonology.reduction_source")
+            == Some("explicit_source_symbol")
+        {
+            return Some(format!("{base}0"));
         }
     }
     Some(base.to_string())

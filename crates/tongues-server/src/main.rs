@@ -24,7 +24,7 @@ use speaking::{
     timeline::SpeechTimelineSession,
 };
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -1743,6 +1743,55 @@ struct TimelineSessionContext {
     run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation: Option<LiveConversationSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LiveConversationSnapshot {
+    schema_version: u16,
+    messages: Vec<LiveConversationMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LiveConversationMessage {
+    id: String,
+    turn_id: String,
+    role: String,
+    content: String,
+    status: String,
+}
+
+impl LiveConversationSnapshot {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1 {
+            return Err(format!(
+                "live conversation schema {} is unsupported",
+                self.schema_version
+            ));
+        }
+        if self.messages.len() > 1_000 {
+            return Err("live conversation contains too many messages".into());
+        }
+        let mut ids = HashSet::new();
+        for message in &self.messages {
+            if message.id.is_empty()
+                || message.turn_id.is_empty()
+                || !ids.insert(message.id.as_str())
+            {
+                return Err("live conversation contains an empty or duplicate message ID".into());
+            }
+            if !matches!(message.role.as_str(), "user" | "assistant")
+                || !matches!(
+                    message.status.as_str(),
+                    "pending" | "streaming" | "completed" | "stopped" | "failed"
+                )
+            {
+                return Err(format!("live conversation message `{}` is invalid", message.id));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1806,6 +1855,15 @@ async fn save_timeline_session(
             .into_response();
     }
     sanitize_timeline_session(&mut record.session);
+    if let Some(conversation) = &record.context.conversation {
+        if let Err(error) = conversation.validate() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": error})),
+            )
+                .into_response();
+        }
+    }
     if let Err(error) = record.session.validate() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -10701,6 +10759,7 @@ mod tests {
                 graph_id: Some(run.graph_id.clone()),
                 run_id: Some(run.run_id.clone()),
                 source: Some("fixture".into()),
+                conversation: None,
             },
             updated_at_ms: 20,
         };

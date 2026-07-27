@@ -572,6 +572,18 @@ a {
     white-space: pre-wrap;
 }
 
+.live-message-status {
+    color: var(--text-muted);
+    display: block;
+    margin-top: 0.35rem;
+    text-transform: capitalize;
+}
+
+.live-message.assistant[data-state="stopped"],
+.live-message.assistant[data-state="failed"] {
+    border-style: dashed;
+}
+
 .live-message.user {
     background: var(--primary);
     color: white;

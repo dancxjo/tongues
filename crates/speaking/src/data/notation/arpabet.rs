@@ -8,6 +8,7 @@ use crate::spec::Spec;
 
 pub const SOURCE_SCHEMA_ARPABET: &str = "arpabet";
 pub const SOURCE_SCHEMA_CMUDICT: &str = "cmudict";
+pub const SOURCE_SCHEMA_VERSION: &str = "1";
 
 pub fn stress_aware_source_schema(source_schema: &str) -> bool {
     matches!(source_schema, SOURCE_SCHEMA_CMUDICT | SOURCE_SCHEMA_ARPABET)
@@ -127,7 +128,16 @@ pub fn split_stress(symbol: &str) -> (&str, Option<char>) {
 
 pub fn is_vowel(symbol: &str) -> bool {
     let (base, _) = split_stress(symbol);
-    entry(base).is_some_and(|entry| entry.major == "vowel")
+    entry(canonical_base_symbol(base)).is_some_and(|entry| entry.major == "vowel")
+}
+
+/// `AX` is accepted as an external reduced-vowel notation, but it does not
+/// create a second underlying phoneme in Tongues' English inventories.
+pub fn canonical_base_symbol(symbol: &str) -> &str {
+    match symbol {
+        "AX" => "AH",
+        _ => symbol,
+    }
 }
 
 pub fn reduced_phone_for_cmu(base: &str, stress: Option<CmuStress>) -> Option<PhoneId> {
@@ -151,21 +161,45 @@ pub fn reduced_phone_for_stress_label(base: &str, stress: Option<&str>) -> Optio
 }
 
 pub fn is_reduced_vowel(base: &str, stress: Option<CmuStress>) -> bool {
-    matches!((base, stress), ("AH" | "ER", Some(CmuStress::Unstressed)))
+    base == "AX" || matches!((base, stress), ("AH" | "ER", Some(CmuStress::Unstressed)))
 }
 
 pub fn cmu_token_features(cmu: &CmuPhoneme) -> FeatureBundle {
-    let mut bundle = entry(&cmu.base).map(feature_bundle).unwrap_or_default();
-    put(&mut bundle, "source_schema", SOURCE_SCHEMA_CMUDICT);
+    source_token_features(cmu, SOURCE_SCHEMA_CMUDICT)
+}
+
+pub fn source_token_features(cmu: &CmuPhoneme, source_schema: &str) -> FeatureBundle {
+    let canonical_base = canonical_base_symbol(&cmu.base);
+    let mut bundle = entry(canonical_base)
+        .map(feature_bundle)
+        .unwrap_or_default();
+    put(&mut bundle, "source_schema", source_schema);
+    put(&mut bundle, "source_schema_version", SOURCE_SCHEMA_VERSION);
+    put(&mut bundle, "source_notation", "arpabet");
+    put(&mut bundle, "source_token", &cmu.raw_symbol());
     put(&mut bundle, "base_symbol", &cmu.base);
+    put(&mut bundle, "canonical_base_symbol", canonical_base);
     if let Some(stress) = cmu.stress {
         put(&mut bundle, "stress", stress_feature_value(stress));
+    } else {
+        put(&mut bundle, "stress", "unknown");
     }
+    let reduction_source = if cmu.base == "AX" {
+        "explicit_source_symbol"
+    } else if cmu.stress.is_some() {
+        "inferred_from_lexical_stress"
+    } else {
+        "unspecified"
+    };
+    put(&mut bundle, "reduction_source", reduction_source);
     put_bool(
         &mut bundle,
         "reduced_vowel",
         is_reduced_vowel(&cmu.base, cmu.stress),
     );
+    if cmu.base == "AX" {
+        put(&mut bundle, "default_phone", phone_id_for_ipa("ə").as_str());
+    }
     bundle
 }
 
@@ -175,6 +209,7 @@ pub fn phone_id_for_ipa(ipa: &str) -> PhoneId {
 
 pub fn phoneme_id(variety: &str, symbol: &str) -> PhonemeId {
     let (base, _) = split_stress(symbol);
+    let base = canonical_base_symbol(base);
     let canonical = entry(base).map(|entry| entry.ipa).unwrap_or(base);
     PhonemeId(format!("{variety}.phoneme.{canonical}"))
 }
