@@ -20,6 +20,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT"
+
 [workspace.dependencies]
 burn = { version = "0.21", features = ["ndarray", "autodiff"] }
 burn-cuda = { version = "0.21", default-features = false, features = ["std", "fusion"] }

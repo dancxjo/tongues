@@ -32,7 +32,6 @@ target/
 !/models/wiktionary/enwiktionary-2026-06-01-v0-phones/wiktionary_config.json
 /archive/
 *.bin.gz
-Cargo.lock
 target_verify/
 crates/speaking/src/data/lexicons/cmudict.dict
 

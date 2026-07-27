@@ -1,0 +1,8 @@
+[advisories]
+# Every ignored advisory must also have an active row in
+# docs/dependencies.md with an owner, rationale, and review/expiry date.
+ignore = []
+
+[yanked]
+enabled = true
+update_index = true

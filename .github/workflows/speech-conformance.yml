@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           # Install Coqui LJSpeech and VCTK families through the verified catalog.
-          cargo build --release -p tongues-cli
+          cargo build --release -p tongues-cli --locked
           target/release/tongues models install \
             tts_models/en/ljspeech/speedy-speech-hifigan \
             tts_models/en/ljspeech/fast_pitch-HifiGAN \

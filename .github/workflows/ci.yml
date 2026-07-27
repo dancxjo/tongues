@@ -28,17 +28,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Prove lexical assets build offline
         run: |
-          cargo fetch
-          CARGO_NET_OFFLINE=true cargo check -p speaking
+          cargo fetch --locked
+          CARGO_NET_OFFLINE=true cargo check -p speaking --locked
           python3 scripts/check-linguistic-assets.py
       - name: Check repository scripts
         run: bash -n scripts/check-feature-matrix.sh scripts/speech-smoke.sh scripts/speech-conformance.sh
       - name: Check default, no-default, and all-feature workspaces
         run: scripts/check-feature-matrix.sh workspace
       - name: Build the speech CLI in release mode
-        run: cargo build --release -p tongues-cli
+        run: cargo build --release -p tongues-cli --locked
       - name: Test workspace
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --no-fail-fast --locked
       - name: Check server UI JavaScript
         run: |
           node --check crates/tongues-server/public/app.js

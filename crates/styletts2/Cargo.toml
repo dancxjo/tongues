@@ -1,6 +1,7 @@
 [package]
 name = "styletts2"
 version = "0.1.0"
+license.workspace = true
 edition = "2024"
 description = "Backend-gated StyleTTS2 synthesis seam for Mortar speech plans"
 

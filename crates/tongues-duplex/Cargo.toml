@@ -1,6 +1,7 @@
 [package]
 name = "tongues-duplex"
 version = "0.1.0"
+license.workspace = true
 edition = "2024"
 description = "Provider-neutral deterministic duplex completion orchestration"
 

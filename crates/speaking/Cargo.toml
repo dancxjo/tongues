@@ -1,6 +1,7 @@
 [package]
 name = "speaking"
 version = "0.1.0"
+license.workspace = true
 edition = "2024"
 description = "Backend-free linguistic and acoustic speaking ontology"
 

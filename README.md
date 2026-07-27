@@ -272,3 +272,7 @@ terms; the repository license does not erase those terms.
 Review the [third-party notices](THIRD_PARTY_NOTICES.md), [speech provenance
 ledger](docs/provenance.md), and [licensing notes](docs/licensing.md) before
 redistributing source, prepared data, models, or generated artifacts.
+
+Rust dependency locking, advisory/license/source checks, exception ownership,
+system-library boundaries, and release inventories are documented in the
+[dependency audit policy](docs/dependencies.md).

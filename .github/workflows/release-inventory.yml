@@ -1,0 +1,31 @@
+name: Release dependency inventory
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Cargo dependency and license inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - name: Generate locked machine-readable inventory
+        run: |
+          mkdir -p target/release-inventory
+          cargo metadata --locked --format-version 1 \
+            > target/release-inventory/cargo-metadata.json
+          cp Cargo.lock deny.toml target/release-inventory/
+      - name: Upload release inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-inventory-${{ github.ref_name }}-${{ github.run_id }}
+          path: target/release-inventory/
+          retention-days: 90
+          if-no-files-found: error
