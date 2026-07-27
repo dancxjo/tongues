@@ -14,12 +14,13 @@
     .palette-node{text-align:left}.palette-node small{display:block;color:var(--muted)}.palette-node[data-readiness=unavailable]{border-color:var(--bad)}
     .palette-node-title{display:flex;align-items:center;gap:.42rem}
     .palette-node-icon,.replacement-candidate-icon,.quick-add-icon{width:1.35rem;height:1.35rem;display:inline-grid;place-items:center;flex:none;border:1px solid #527084;border-radius:.35rem;background:#142532;color:#8ff0da;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:1rem;font-weight:700;line-height:1;box-shadow:inset 0 0 0 1px #ffffff0a}
-    .canvas-wrap{position:relative;min-width:0}.canvas-help{position:absolute;z-index:3;left:.9rem;top:.75rem;margin:0;padding:.38rem .7rem;background:#0a1119e8;border:1px solid #33465b;border-radius:999px;color:#b8c8d9;box-shadow:0 5px 18px #0005;pointer-events:none}
+    .canvas-wrap{position:relative;min-width:0;overflow:hidden;contain:paint}.canvas-help{position:absolute;z-index:3;left:.9rem;top:.75rem;margin:0;padding:.38rem .7rem;background:#0a1119e8;border:1px solid #33465b;border-radius:999px;color:#b8c8d9;box-shadow:0 5px 18px #0005;pointer-events:none}
     #canvas{position:absolute;inset:0;background-color:#0d151f;background-image:radial-gradient(circle,#3b5269 1.2px,transparent 1.3px);background-size:24px 24px;touch-action:none}
     #canvas[data-connecting=true]{box-shadow:inset 0 0 0 3px var(--accent)}.section{border-top:1px solid var(--line);padding-top:.75rem;margin-top:.75rem}.stack{display:grid;gap:.45rem}.row{display:flex;gap:.4rem;flex-wrap:wrap}.row>*{flex:1}
     .port-list{display:grid;gap:.35rem}.port{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:.35rem;padding:.4rem;border:1px solid var(--line);border-radius:.45rem;text-align:left;background:var(--panel2)}
     .port.compatible{border-color:var(--accent)}.port.missing{border-style:dashed;border-color:var(--warn)}.port-dot{width:.75rem;height:.75rem;border-radius:50%;background:var(--muted)}.port[data-type^=audio] .port-dot{background:var(--audio)}.port[data-type=text] .port-dot,.port[data-type^=transcript] .port-dot{background:var(--text)}.port[data-type=control] .port-dot,.port[data-type=cancellation] .port-dot{background:var(--control)}
     .port small,.muted{color:var(--muted)}.diagnostic{border-left:3px solid var(--warn);padding:.35rem .5rem;margin:.35rem 0;background:#352b1c}.error{color:var(--bad)}.ready{color:var(--accent)}
+    #run-artifacts{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}#run-artifacts strong{margin-right:.15rem}
     #config-fields input,#config-fields select,#config-fields textarea{width:100%}.events{max-height:13rem;overflow:auto;padding-left:1.5rem}.events li{margin:.25rem 0}.events .output{color:var(--accent)}.events .failed{color:var(--bad)}
     .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
     #validation{margin:0;padding:.35rem 1rem;border-bottom:1px solid var(--line)}#validation[data-state=valid]{color:var(--accent)}#validation[data-state=invalid]{color:var(--warn)}
@@ -84,6 +85,7 @@
   <aside id="run-context" class="section" hidden>
     <p><strong id="run-state">Idle</strong><span id="run-id">no run yet</span><span id="run-elapsed"></span></p>
     <p><a id="run-tracks-link" href="/runs">Open execution tracks</a></p>
+    <p id="run-artifacts" hidden><strong>Generated files</strong></p>
   </aside>
   <main class="workspace">
     <aside class="sidebar left" id="palette-panel" aria-labelledby="palette-heading">

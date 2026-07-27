@@ -374,7 +374,10 @@ pub fn spawn_turn(
                 committed.push_str(&segment);
                 let event = StreamEvent::CommittedSegment {
                     role: TextRole::Generation,
-                    segment_id: SegmentId(format!("generation-segment-{segment_id}")),
+                    segment_id: SegmentId(format!(
+                        "generation-{}-segment-{segment_id}",
+                        request.turn_id
+                    )),
                     text: segment,
                     words: Vec::new(),
                     language: None,
@@ -412,7 +415,10 @@ pub fn spawn_turn(
                     if turn_tx
                         .send(StreamEvent::CommittedSegment {
                             role: TextRole::Generation,
-                            segment_id: SegmentId(format!("generation-segment-{segment_id}")),
+                            segment_id: SegmentId(format!(
+                                "generation-{}-segment-{segment_id}",
+                                request.turn_id
+                            )),
                             text: segment,
                             words: Vec::new(),
                             language: None,
@@ -674,6 +680,7 @@ mod tests {
         let mut events = spawn_turn(request, Arc::new(AtomicBool::new(false)));
         let mut generated = String::new();
         let mut committed = String::new();
+        let mut committed_segment_ids = Vec::new();
         let mut saw_delta = false;
         let mut saw_segment_before_done = false;
         while let Some(event) = events.recv().await {
@@ -688,11 +695,13 @@ mod tests {
                 }
                 StreamEvent::CommittedSegment {
                     role: TextRole::Generation,
+                    segment_id,
                     text,
                     ..
                 } => {
                     assert!(saw_delta);
                     saw_segment_before_done = true;
+                    committed_segment_ids.push(segment_id.0);
                     committed.push_str(&text);
                 }
                 StreamEvent::TextCompleted {
@@ -702,6 +711,11 @@ mod tests {
                     assert!(saw_segment_before_done);
                     assert_eq!(text, generated);
                     assert_eq!(committed, generated);
+                    assert!(
+                        committed_segment_ids
+                            .iter()
+                            .all(|id| id.starts_with("generation-turn-stream-order-segment-"))
+                    );
                     return;
                 }
                 _ => {}

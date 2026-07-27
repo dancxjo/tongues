@@ -28,6 +28,7 @@ const PIPELINE_RUN_STATUS_LABELS={
   cancelled:"Cancelled",
 };
 let runState={status:"idle",runId:null,startedAt:0,elapsedMs:0};
+let runArtifacts=new Map();
 let runStatusTimer=null;
 let runTransportRefreshInFlight=false;
 let nodeRuntimeState={};
@@ -63,6 +64,42 @@ function isRunLocked() {
   return isRunActive();
 }
 
+function renderRunArtifacts() {
+  const container=byId("run-artifacts");
+  container.replaceChildren();
+  if(!runArtifacts.size){
+    container.hidden=true;
+    return;
+  }
+  const heading=document.createElement("strong");
+  heading.textContent="Generated files";
+  container.append(heading);
+  for(const artifact of runArtifacts.values()){
+    const link=document.createElement("a");
+    const filename=artifact.path?.split("/").filter(Boolean).at(-1)??"audio.wav";
+    link.className="ui-button";
+    link.href=artifact.download_url;
+    link.download=filename;
+    link.textContent=`Download ${filename}`;
+    link.setAttribute("aria-label",`Download generated WAV ${filename}`);
+    container.append(link);
+  }
+  container.hidden=false;
+}
+
+function setRunArtifacts(artifacts=[]) {
+  runArtifacts=new Map(artifacts
+    .filter(artifact=>artifact?.download_url&&artifact?.path)
+    .map(artifact=>[artifact.download_url,artifact]));
+  renderRunArtifacts();
+}
+
+function addRunArtifact(artifact) {
+  if(!artifact?.download_url||!artifact?.path)return;
+  runArtifacts.set(artifact.download_url,artifact);
+  renderRunArtifacts();
+}
+
 function setRunState(nextState) {
   runState = {...runState, ...nextState};
   byId("run-state").textContent = PIPELINE_RUN_STATUS_LABELS[runState.status] ?? runState.status;
@@ -93,6 +130,7 @@ async function refreshRunStateFromServer(runId = runState.runId) {
     const next = {runId};
     if (run.started_at_ms) next.startedAt = run.started_at_ms;
     if (run.status) next.status = run.status;
+    if (Array.isArray(run.artifacts)) setRunArtifacts(run.artifacts);
     setRunState(next);
   } finally {
     runTransportRefreshInFlight = false;
@@ -114,6 +152,7 @@ function stopRunTransportClock() {
 }
 
 function resetRunState() {
+  setRunArtifacts();
   setRunState({
     status: "idle",
     runId: null,
@@ -504,6 +543,31 @@ function initCanvas(){
     event.preventDefault();openQuickAdd({kind:"empty",position:canvasPoint(event.clientX,event.clientY)});
   });
 }
+
+export const graphStudioTestHooks={
+  renderedNodeBounds(nodeId){
+    const node=cy?.getElementById(nodeId);
+    if(!node?.length)return null;
+    const bounds=node.renderedBoundingBox({includeLabels:false,includeOverlays:false});
+    return{x:bounds.x1,y:bounds.y1,width:bounds.w,height:bounds.h,right:bounds.x2,bottom:bounds.y2};
+  },
+  viewportBounds(){
+    const bounds=byId("canvas").getBoundingClientRect();
+    return{x:0,y:0,width:bounds.width,height:bounds.height,right:bounds.width,bottom:bounds.height};
+  },
+  panBy(offset){cy?.panBy(offset);},
+  zoom(level){cy?.zoom({level,renderedPosition:{x:byId("canvas").clientWidth/2,y:byId("canvas").clientHeight/2}});},
+  teardownAndReinitialize(){
+    patchCanvas?.destroy();
+    patchCanvas=null;
+    cy?.destroy();
+    cy=null;
+    initCanvas();
+    renderGraph();
+    ensurePatchCanvas();
+    patchCanvas.render();
+  },
+};
 
 function renderPalette(){
   const query=byId("palette-search").value.trim().toLowerCase(),groups=new Map();
@@ -1119,6 +1183,7 @@ async function shareGraph(){
 }
 
 function updateRuntimeStateFromEvent(event) {
+  if(event?.artifact)addRunArtifact(event.artifact);
   if (event?.status) setRunState({status: event.status});
   if (event?.run_id) {
     if (runState.runId !== event.run_id) setRunState({runId: event.run_id, startedAt: Date.now(), status: event.status ?? runState.status, elapsedMs: 0});
@@ -1143,6 +1208,7 @@ async function runGraph() {
   }
   syncName();
   byId("run-events").replaceChildren();
+  setRunArtifacts();
   clearRuntimeActivity();
   setRunState({
     status: "preparing",

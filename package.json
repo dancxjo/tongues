@@ -6,6 +6,7 @@
     "test:visual-system": "playwright test crates/tongues-server/public/visual-system.browser.test.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.0"
+    "@playwright/test": "1.62.0",
+    "cytoscape": "3.33.1"
   }
 }

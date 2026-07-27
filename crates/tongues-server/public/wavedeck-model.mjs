@@ -125,21 +125,25 @@ export function redo(session) {
 
 export function sessionFromEvents(sessionId, events) {
   const evidence = [];
+  const segmentOccurrences = new Map();
   for (const envelope of events) {
     const event = envelope.event ?? envelope;
     if (event.type !== "committed_segment") continue;
     const data = event.data ?? event;
     const segment = data.segment_id ?? `segment-${evidence.length}`;
+    const occurrence = (segmentOccurrences.get(segment) ?? 0) + 1;
+    segmentOccurrences.set(segment, occurrence);
+    const evidenceSegment = occurrence === 1 ? segment : `${segment}:occurrence-${occurrence}`;
     const words = data.words ?? [];
     const start = words[0]?.range?.start_ms ?? envelope.received_at_ms ?? 0;
     const end = words.at(-1)?.range?.end_ms ?? Math.max(start + 1, envelope.received_at_ms ?? start + 1);
-    const transcriptId = `transcript:${segment}`;
+    const transcriptId = `transcript:${evidenceSegment}`;
     evidence.push({
       id: transcriptId, start_ms: start, end_ms: end, modality: "transcript",
       metadata: {text: data.text, language: data.language?.language ?? null, speaker_id: data.speaker_id ?? null},
     });
     words.forEach((word, index) => evidence.push({
-      id: `word:${segment}:${index}`, start_ms: word.range.start_ms, end_ms: word.range.end_ms,
+      id: `word:${evidenceSegment}:${index}`, start_ms: word.range.start_ms, end_ms: word.range.end_ms,
       modality: "word", metadata: {text: word.text},
     }));
   }

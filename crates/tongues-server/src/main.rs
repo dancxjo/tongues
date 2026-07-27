@@ -950,7 +950,22 @@ struct PipelineRunRecord {
     updated_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(default)]
+    artifacts: Vec<PipelineRunArtifact>,
     events: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PipelineRunArtifact {
+    node_id: String,
+    path: String,
+    download_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PipelineRunArtifactStamp {
+    len: u64,
+    modified: Option<SystemTime>,
 }
 
 fn is_pipeline_run_status_active(status: &str) -> bool {
@@ -1180,6 +1195,7 @@ async fn run_pipeline_graph(
         }
     };
     let now = unix_time_ms();
+    let wav_artifact_baseline = pipeline_wav_artifact_stamps(&state.workspace_root, &graph);
     let mut run = PipelineRunRecord {
         schema_version: 1,
         run_id: run_id.clone(),
@@ -1190,6 +1206,7 @@ async fn run_pipeline_graph(
         started_at_ms: now,
         updated_at_ms: now,
         session_id: None,
+        artifacts: Vec::new(),
         events: Vec::new(),
     };
     {
@@ -1469,6 +1486,31 @@ async fn run_pipeline_graph(
             }
         }
         mark_pipeline_run_status(&run_path, &mut run, "monitoring");
+        for artifact in
+            pipeline_wav_artifacts(&state.workspace_root, &graph, &wav_artifact_baseline)
+        {
+            run.artifacts.push(artifact.clone());
+            let event = json!({
+                "run_id": run_id,
+                "plan_id": plan.plan_id,
+                "graph_id": plan.graph_id,
+                "graph_revision": plan.graph_revision,
+                "node_id": artifact.node_id,
+                "status": "monitoring",
+                "kind": "artifact",
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "artifact": artifact,
+            });
+            if emit_pipeline_run_event(&sender, &run_path, &mut run, event)
+                .await
+                .is_err()
+            {
+                mark_pipeline_run_cancelled(&run_path, &mut run);
+                cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id)
+                    .await;
+                return;
+            }
+        }
         mark_pipeline_run_status(&run_path, &mut run, "completed");
         cleanup_active_pipeline_run(active_pipeline_run, pipeline_run_controls, &run_id).await;
     });
@@ -1479,6 +1521,81 @@ async fn run_pipeline_graph(
             tokio_stream::wrappers::ReceiverStream::new(receiver),
         ))
         .unwrap()
+}
+
+fn pipeline_wav_artifacts(
+    workspace_root: &FsPath,
+    graph: &tongues_pipeline::GraphDocument,
+    baseline: &HashMap<String, PipelineRunArtifactStamp>,
+) -> Vec<PipelineRunArtifact> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.is_active()
+                && node.kind == "audio_output"
+                && node
+                    .config
+                    .get("target")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("wav")
+        })
+        .filter_map(|node| {
+            let configured = node
+                .config
+                .get("wav_path")
+                .and_then(serde_json::Value::as_str)?;
+            let relative = safe_relative_path(configured).ok()?;
+            if relative
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_none_or(|extension| !extension.eq_ignore_ascii_case("wav"))
+            {
+                return None;
+            }
+            let resolved = resolve_existing_artifact_path(workspace_root, &relative).ok()?;
+            let metadata = std::fs::metadata(resolved).ok()?;
+            let stamp = PipelineRunArtifactStamp {
+                len: metadata.len(),
+                modified: metadata.modified().ok(),
+            };
+            (metadata.is_file() && baseline.get(&node.id) != Some(&stamp)).then(|| {
+                PipelineRunArtifact {
+                    node_id: node.id.clone(),
+                    path: path_to_web(&relative),
+                    download_url: download_url_for(&relative),
+                }
+            })
+        })
+        .collect()
+}
+
+fn pipeline_wav_artifact_stamps(
+    workspace_root: &FsPath,
+    graph: &tongues_pipeline::GraphDocument,
+) -> HashMap<String, PipelineRunArtifactStamp> {
+    graph
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let configured = node
+                .config
+                .get("wav_path")
+                .and_then(serde_json::Value::as_str)?;
+            let relative = safe_relative_path(configured).ok()?;
+            let resolved = resolve_existing_artifact_path(workspace_root, &relative).ok()?;
+            let metadata = std::fs::metadata(resolved).ok()?;
+            metadata.is_file().then(|| {
+                (
+                    node.id.clone(),
+                    PipelineRunArtifactStamp {
+                        len: metadata.len(),
+                        modified: metadata.modified().ok(),
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 type PipelineOutputStream = Pin<
@@ -10822,6 +10939,7 @@ mod tests {
             started_at_ms: 10,
             updated_at_ms: 20,
             session_id: Some("session:fixture".into()),
+            artifacts: Vec::new(),
             events: vec![json!({"node_id": "asr", "kind": "completed"})],
         };
         let run_path = pipeline_run_file(&root, &run.run_id).expect("safe run ID");
@@ -10858,6 +10976,58 @@ mod tests {
         assert!(timeline_session_file(&root, "session/escape").is_err());
 
         std::fs::remove_dir_all(&root).expect("remove isolated route records");
+    }
+
+    #[test]
+    fn pipeline_runs_publish_only_existing_active_wav_outputs_as_downloads() {
+        let root =
+            std::env::temp_dir().join(format!("tongues-pipeline-wav-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("data")).expect("create artifact directory");
+        std::fs::write(root.join("data/unchanged.wav"), b"old fixture")
+            .expect("write unchanged WAV fixture");
+        let graph: tongues_pipeline::GraphDocument = serde_json::from_value(json!({
+            "schema_version": 3,
+            "graph_id": "pipeline:wav-artifacts",
+            "revision": 1,
+            "nodes": [
+                {
+                    "id": "node:generated",
+                    "kind": "audio_output",
+                    "config": {"target": "wav", "wav_path": "data/generated voice.wav"}
+                },
+                {
+                    "id": "node:missing",
+                    "kind": "audio_output",
+                    "config": {"target": "wav", "wav_path": "data/missing.wav"}
+                },
+                {
+                    "id": "node:unchanged",
+                    "kind": "audio_output",
+                    "config": {"target": "wav", "wav_path": "data/unchanged.wav"}
+                },
+                {
+                    "id": "node:disabled",
+                    "kind": "audio_output",
+                    "disabled": true,
+                    "config": {"target": "wav", "wav_path": "data/generated voice.wav"}
+                }
+            ]
+        }))
+        .expect("valid graph fixture");
+        let baseline = pipeline_wav_artifact_stamps(&root, &graph);
+        std::fs::write(root.join("data/generated voice.wav"), b"fixture")
+            .expect("write generated WAV fixture");
+
+        assert_eq!(
+            pipeline_wav_artifacts(&root, &graph, &baseline),
+            vec![PipelineRunArtifact {
+                node_id: "node:generated".into(),
+                path: "data/generated voice.wav".into(),
+                download_url: "/api/files/download/data/generated%20voice.wav".into(),
+            }]
+        );
+
+        std::fs::remove_dir_all(&root).expect("remove WAV artifact fixture");
     }
 
     #[test]

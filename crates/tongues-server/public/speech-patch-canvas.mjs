@@ -75,12 +75,12 @@ function injectStyles(document) {
   const style = document.createElement("style");
   style.dataset.speechPatchCanvas = "";
   style.textContent = `
-    .patch-cables,.patch-jacks{position:absolute;inset:0;z-index:2;pointer-events:none}
+    .patch-cables,.patch-jacks{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden}
     .patch-organization{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
     .patch-frame{position:absolute;border:2px solid var(--frame-color,#527084);background:color-mix(in srgb,var(--frame-color,#527084) 12%,transparent);border-radius:.65rem;color:#edf5ff;padding:.45rem;font-weight:700}
     .patch-note{position:absolute;max-width:15rem;padding:.45rem .6rem;border:1px solid #8f8050;border-radius:.35rem;background:var(--note-color,#594c2c);color:#fff7d8;white-space:pre-wrap;box-shadow:0 5px 12px #0007}
     .patch-subpatch-summary{position:absolute;transform:translate(-50%,-50%);min-width:15rem;padding:.65rem;border:2px solid #dca3ff;border-radius:.65rem;background:#241d36ee;color:#fff;box-shadow:0 8px 20px #000a}.patch-subpatch-summary small{display:block;color:#cabce0;margin-top:.2rem}
-    .patch-cables{width:100%;height:100%;overflow:visible}
+    .patch-cables{width:100%;height:100%}
     .patch-cable{fill:none;stroke:#8da4ba;stroke-width:4;pointer-events:none}
     .patch-cable-hit{fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke;cursor:pointer}
     .patch-reroute{fill:#101923;stroke:#f7fffd;stroke-width:2;pointer-events:all;cursor:move}
@@ -97,8 +97,8 @@ function injectStyles(document) {
     .patch-cable.selected{stroke:#f7fffd;stroke-width:7;filter:drop-shadow(0 0 5px #76e2ce)}
     .patch-cable.invalid{stroke:#ffc86b}
     .patch-cable-preview{fill:none;stroke:#f7fffd;stroke-width:4;stroke-dasharray:8 5;pointer-events:none}
-    .patch-node-cards{position:absolute;inset:0;z-index:1;pointer-events:none}
-    .patch-node-card{position:absolute;transform:translate(-50%,-50%);width:var(--patch-node-card-width,${NODE_WIDTH}px);box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
+    .patch-node-cards{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+    .patch-node-card{position:absolute;transform:translate(-50%,-50%) scale(var(--patch-node-card-scale,1));transform-origin:center;width:var(--patch-node-card-width,${NODE_WIDTH}px);box-sizing:border-box;background:#162636e8;border:1px solid #4a6380;border-radius:.42rem;padding:.38rem .45rem .42rem;box-shadow:0 8px 20px #000b;backdrop-filter:blur(2px);pointer-events:none;overflow:hidden;color:#edf5ff}
     .patch-node-card[data-state=collapsed]{height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px);max-height:var(--patch-node-card-collapsed-height,${CARD_COLLAPSED_HEIGHT}px)}
     .patch-node-card[data-state=expanded]{max-height:22rem}
     .patch-node-card .patch-node-card-title{display:flex;align-items:start;justify-content:space-between;gap:.35rem}
@@ -132,8 +132,8 @@ function injectStyles(document) {
     .patch-node-card button,.patch-node-card input,.patch-node-card select,.patch-node-card textarea{pointer-events:auto}
     .patch-node-card[data-readonly=true]{opacity:.86}
     .patch-node-card[data-node-bypassed=true],.patch-node-card[data-node-disabled=true]{opacity:.72}
-    .patch-jack-wrap{position:absolute;display:flex;align-items:center;gap:.28rem;pointer-events:none;transform:translateY(-50%)}
-    .patch-jack-wrap.input{flex-direction:row}.patch-jack-wrap.output{flex-direction:row-reverse;transform:translate(-100%,-50%)}
+    .patch-jack-wrap{--patch-jack-size:1.3rem;position:absolute;display:flex;align-items:center;gap:.28rem;pointer-events:none}
+    .patch-jack-wrap.input{flex-direction:row;transform:translate(calc(var(--patch-jack-size) / -2),-50%)}.patch-jack-wrap.output{flex-direction:row-reverse;transform:translate(calc(-100% + var(--patch-jack-size) / 2),-50%)}
     .patch-jack-label{max-width:5.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:.08rem .25rem;border-radius:.25rem;background:#101923dc;color:#edf5ff;font-size:.68rem;line-height:1.25}
     .patch-jack{width:1.3rem;height:1.3rem;min-width:1.3rem;padding:0;border:3px solid #d8e5f2;background:#1a2633;pointer-events:auto;box-shadow:0 1px 5px #000b}
     .patch-jack.input{border-radius:50%}.patch-jack.output{border-radius:.16rem;transform:rotate(45deg)}
@@ -141,8 +141,8 @@ function injectStyles(document) {
     .patch-jack.signal-control{border-color:#ffca70}.patch-jack.signal-error{border-color:#ff8c91}
     .patch-jack.signal-artifact{border-color:#72b7ff}.patch-jack.compatible{outline:4px solid #76e2ce;outline-offset:3px}
     .patch-jack.incompatible{opacity:.48}.patch-jack.drag-origin{outline:4px solid #f7fffd;outline-offset:3px}
-    .patch-jack:focus-visible{outline:4px solid #76e2ce;outline-offset:3px;opacity:1}
-    @media (pointer:coarse),(max-width:620px){.patch-jack{width:2.75rem;height:2.75rem;min-width:2.75rem}.patch-jack-label{font-size:.75rem}}
+    .patch-jack:focus,.patch-jack:focus-visible{outline:4px solid #76e2ce;outline-offset:3px;opacity:1}
+    @media (pointer:coarse),(max-width:620px){.patch-jack-wrap{--patch-jack-size:2.75rem}.patch-jack{width:var(--patch-jack-size);height:var(--patch-jack-size);min-width:var(--patch-jack-size)}.patch-jack-label{font-size:.75rem}}
     .patch-connection-list{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
     #canvas[data-patching=true]{box-shadow:inset 0 0 0 3px #76e2ce}
   `;
@@ -212,6 +212,21 @@ export function createPatchCanvas(options) {
   let destroyed = false;
   let cardRenderAt = 0;
   let cardFrameRequested = false;
+  let cardFrameHandle = null;
+  const pauseCardRendering = () => {
+    if (cardFrameHandle != null) window.cancelAnimationFrame(cardFrameHandle);
+    cardFrameHandle = null;
+    cardFrameRequested = false;
+  };
+  const resumeCardRendering = event => {
+    if (cardLayer.contains(event.relatedTarget)) return;
+    cardFrameHandle = window.requestAnimationFrame(() => {
+      cardFrameHandle = null;
+      renderNodeCards();
+    });
+  };
+  cardLayer.addEventListener("focusin", pauseCardRendering);
+  cardLayer.addEventListener("focusout", resumeCardRendering);
 
   const pipeline = () => getPipeline();
   const discovery = () => getDiscovery();
@@ -246,6 +261,15 @@ export function createPatchCanvas(options) {
     if (collapsed) geometry.height = geometry.collapsed_height;
     return geometry;
   };
+  const renderedGeometryForNode = (nodeId, collapsed) => {
+    const geometry = geometryForNode(nodeId, collapsed);
+    const zoom = Math.max(Number(cy.zoom?.()) || 1, Number.EPSILON);
+    return {
+      width: geometry.width * zoom,
+      height: geometry.height * zoom,
+      collapsed_height: geometry.collapsed_height * zoom,
+    };
+  };
   const geometrySignature = (geometry, collapsed) => {
     const candidate = collapsed
       ? {width:geometry.width,height:geometry.collapsed_height}
@@ -268,18 +292,19 @@ export function createPatchCanvas(options) {
     const nodeId = node.id;
     const rect = card.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    const zoom = Math.max(Number(cy.zoom?.()) || 1, Number.EPSILON);
     const raw = getNodeFaceplateGeometry(nodeId);
     const current = canonicalGeometry(raw);
     const next = collapsed
       ? {
         ...current,
-        width: Math.max(1, Math.round(rect.width)),
-        collapsed_height: Math.max(1, Math.round(rect.height)),
+        width: Math.max(1, Math.round(rect.width / zoom)),
+        collapsed_height: Math.max(1, Math.round(rect.height / zoom)),
       }
       : {
         ...current,
-        width: Math.max(1, Math.round(rect.width)),
-        height: Math.max(1, Math.round(rect.height)),
+        width: Math.max(1, Math.round(rect.width / zoom)),
+        height: Math.max(1, Math.round(rect.height / zoom)),
       };
     if (!geometryMatchesState(nodeId, next, collapsed)) onSetNodeFaceplateGeometry(nodeId, next);
     rememberGeometry(nodeId, next, collapsed);
@@ -397,7 +422,22 @@ export function createPatchCanvas(options) {
       if (Number.isFinite(fieldSpec.minimum)) input.min = String(fieldSpec.minimum);
       if (Number.isFinite(fieldSpec.maximum)) input.max = String(fieldSpec.maximum);
       input.value = value == null ? "" : valueText(value);
-      input.onchange = applyConfig;
+      let commitTimer = null;
+      input.oninput = () => {
+        input.dataset.pendingEdit = "true";
+        window.clearTimeout(commitTimer);
+        commitTimer = window.setTimeout(() => {
+          if (input.isConnected) {
+            delete input.dataset.pendingEdit;
+            applyConfig();
+          }
+        }, 150);
+      };
+      input.onchange = () => {
+        window.clearTimeout(commitTimer);
+        delete input.dataset.pendingEdit;
+        applyConfig();
+      };
     }
     input.dataset.nodeId = node.id;
     input.dataset.configField = field;
@@ -433,6 +473,7 @@ export function createPatchCanvas(options) {
     card.dataset.nodeDisabled = String(Boolean(node.disabled));
     card.style.setProperty("--patch-node-card-width", `${Math.max(1, Math.round(geometry.width))}px`);
     card.style.setProperty("--patch-node-card-collapsed-height", `${Math.max(1, Math.round(geometry.collapsed_height))}px`);
+    card.style.setProperty("--patch-node-card-scale", String(Math.max(Number(cy.zoom?.()) || 1, Number.EPSILON)));
     card.style.left = `${cyNode.renderedPosition().x}px`;
     card.style.top = `${cyNode.renderedPosition().y}px`;
     const position = nodeRole ? nodeRole : "";
@@ -539,11 +580,14 @@ export function createPatchCanvas(options) {
   }
 
   function renderNodeCards() {
+    const hasPendingControlEdit = Boolean(cardLayer.querySelector("[data-pending-edit=true]"));
+    if (hasPendingControlEdit || (cardLayer.contains(document.activeElement) && editableTarget(document.activeElement))) return;
     const now = window.performance.now();
     if (now - cardRenderAt < CARD_RENDER_THROTTLE_MS) {
       if (!cardFrameRequested) {
         cardFrameRequested = true;
-        window.requestAnimationFrame(() => {
+        cardFrameHandle = window.requestAnimationFrame(() => {
+          cardFrameHandle = null;
           cardFrameRequested = false;
           renderNodeCards();
         });
@@ -558,6 +602,24 @@ export function createPatchCanvas(options) {
       if (!card) continue;
       const collapsed = card.dataset.state === "collapsed";
       cardLayer.append(card);
+      const viewport = container.getBoundingClientRect();
+      const bounds = card.getBoundingClientRect();
+      card.inert = (
+        bounds.right <= viewport.left
+        || bounds.left >= viewport.right
+        || bounds.bottom <= viewport.top
+        || bounds.top >= viewport.bottom
+      );
+      for (const control of card.querySelectorAll("button,input,select,textarea")) {
+        const controlBounds = control.getBoundingClientRect();
+        const enclosed = (
+          controlBounds.left >= viewport.left
+          && controlBounds.right <= viewport.right
+          && controlBounds.top >= viewport.top
+          && controlBounds.bottom <= viewport.bottom
+        );
+        control.tabIndex = enclosed ? 0 : -1;
+      }
       persistNodeGeometryFromCard(node, card, collapsed);
     }
   }
@@ -570,7 +632,7 @@ export function createPatchCanvas(options) {
     const index = ports.findIndex(port => port.id === endpoint.port_id);
     if (index < 0) return null;
     const collapsed = Boolean(isNodeCollapsed(endpoint.node_id));
-    return portAnchor(element.renderedPosition(), ports, index, direction, geometryForNode(endpoint.node_id, collapsed), collapsed);
+    return portAnchor(element.renderedPosition(), ports, index, direction, renderedGeometryForNode(endpoint.node_id, collapsed), collapsed);
   }
 
   function edgeDescription(edge) {
@@ -699,7 +761,7 @@ export function createPatchCanvas(options) {
       const ports = nodePorts(node, direction);
       ports.forEach((port, index) => {
         const collapsed = Boolean(isNodeCollapsed(node.id));
-        const position = portAnchor(cyNode.renderedPosition(), ports, index, direction, geometryForNode(node.id, collapsed), collapsed);
+        const position = portAnchor(cyNode.renderedPosition(), ports, index, direction, renderedGeometryForNode(node.id, collapsed), collapsed);
         const connections = portConnections(node.id, port.id, direction);
         const wrap = document.createElement("span");
           wrap.className = `patch-jack-wrap ${direction}`;
@@ -712,6 +774,14 @@ export function createPatchCanvas(options) {
           button.dataset.nodeId = node.id;
           button.dataset.portId = port.id;
           button.dataset.direction = direction;
+          const viewportPadding = window.matchMedia("(pointer: coarse), (max-width: 620px)").matches ? 22 : 11;
+          const insideViewport = (
+            position.x >= viewportPadding
+            && position.x <= container.clientWidth - viewportPadding
+            && position.y >= viewportPadding
+            && position.y <= container.clientHeight - viewportPadding
+          );
+          button.tabIndex = insideViewport ? 0 : -1;
           button.setAttribute("aria-label", jackDescription(node, port, connections));
           button.title = `${port.label ?? port.id} · ${readableType(port.value_type)}`;
           button.addEventListener("pointerdown", event => beginPointerGesture(event, node, port));
@@ -1024,6 +1094,9 @@ export function createPatchCanvas(options) {
       document.removeEventListener("pointerup", pointerUp);
       document.removeEventListener("keydown", keydown);
       cy.off("pan zoom resize position", render);
+      pauseCardRendering();
+      cardLayer.removeEventListener("focusin", pauseCardRendering);
+      cardLayer.removeEventListener("focusout", resumeCardRendering);
       svg.remove();
       jackLayer.remove();
       cardLayer.remove();

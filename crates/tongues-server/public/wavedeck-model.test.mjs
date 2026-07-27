@@ -39,6 +39,34 @@ test("live shared events become the same session schema", () => {
   assert.equal(session.source_events[0].type, "committed_segment");
 });
 
+test("segment IDs reused by separate live turns remain distinct evidence", () => {
+  const committed = (text, received_at_ms) => ({
+    received_at_ms,
+    event: {
+      type: "committed_segment",
+      data: {
+        segment_id: "generation-segment-1",
+        text,
+        words: [{text, range:{start_ms:received_at_ms,end_ms:received_at_ms + 20}}],
+      },
+    },
+  });
+  const session = sessionFromEvents("live:multiple-turns", [
+    committed("hello", 100),
+    committed("again", 200),
+  ]);
+
+  assert.deepEqual(
+    session.evidence.map(span => span.id),
+    [
+      "transcript:generation-segment-1",
+      "word:generation-segment-1:0",
+      "transcript:generation-segment-1:occurrence-2",
+      "word:generation-segment-1:occurrence-2:0",
+    ],
+  );
+});
+
 test("unknown schema produces an actionable migration error", () => {
   assert.throws(() => projectSession({...base(),schema_version:99}), /unsupported; expected 1/);
 });
