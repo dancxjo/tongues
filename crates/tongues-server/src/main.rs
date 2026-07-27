@@ -38,7 +38,7 @@ use std::sync::{
     atomic::{AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, watch, Semaphore};
+use tokio::sync::{broadcast, Semaphore};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tongues_duplex::{
     DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
@@ -956,7 +956,7 @@ async fn control_pipeline_run(
     }
 
     let sender = {
-        let mut controls = state.pipeline_run_controls.lock().await;
+        let controls = state.pipeline_run_controls.lock().await;
         controls.get(&run_id).cloned()
     };
     let Some(sender) = sender else {
@@ -1249,7 +1249,8 @@ async fn run_pipeline_graph(
                 loop {
                     tokio::select! {
                         _ = command_receiver.changed() => {
-                            match *command_receiver.borrow_and_update() {
+                            let command = *command_receiver.borrow_and_update();
+                            match command {
                                 PipelineRunCommand::Stop => {
                                     let event = pipeline_run_event(
                                         &run_id,
