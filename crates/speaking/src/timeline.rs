@@ -758,6 +758,54 @@ mod tests {
     }
 
     #[test]
+    fn phonetic_symbol_and_boundary_corrections_keep_original_and_provenance() {
+        let phone = TimelineSpan {
+            id: "phone:1".into(),
+            start_ms: 100,
+            end_ms: 200,
+            modality: SpanModality::Phone,
+            metadata: BTreeMap::from([
+                ("symbol".into(), Value::String("ʃ".into())),
+                ("boundary_origin".into(), Value::String("inferred".into())),
+            ]),
+        };
+        let mut session = SpeechTimelineSession::new("phonetic:1", vec![phone], Vec::new()).unwrap();
+        session
+            .append_operation(TimelineOperation {
+                operation_id: "op:symbol".into(),
+                provenance: provenance(),
+                operation: TimelineOperationKind::PhoneticSymbolReplace {
+                    span_id: "phone:1".into(),
+                    symbol: "ɕ".into(),
+                },
+            })
+            .unwrap();
+        session
+            .append_operation(TimelineOperation {
+                operation_id: "op:boundary".into(),
+                provenance: provenance(),
+                operation: TimelineOperationKind::AlignmentMoveBoundary {
+                    span_id: "phone:1".into(),
+                    boundary: Boundary::Start,
+                    new_time_ms: 95,
+                },
+            })
+            .unwrap();
+
+        let projection = session.project().unwrap();
+        assert_eq!(session.evidence[0].metadata["symbol"], "ʃ");
+        assert_eq!(session.evidence[0].start_ms, 100);
+        assert_eq!(projection.edited[0].metadata["symbol"], "ɕ");
+        assert_eq!(projection.edited[0].start_ms, 95);
+        assert_eq!(projection.edited[0].metadata["boundary_origin"], "corrected");
+        assert_eq!(projection.edited[0].metadata["correction_actor"], "operator");
+        assert_eq!(
+            projection.edited[0].metadata["correction_operation_id"],
+            "op:boundary"
+        );
+    }
+
+    #[test]
     fn undo_and_redo_are_replayed_control_operations() {
         let mut session =
             SpeechTimelineSession::from_stream_events("saved:undo", vec![event()]).unwrap();

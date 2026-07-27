@@ -68,6 +68,23 @@ and inventory IDs, and alignment-source identity. The artifact records the
 audio digest and geometry, graph/execution context, source artifacts, algorithm
 version, and original expected sequence.
 
+Every accepted candidate also records `boundary_origin`:
+
+- `source_provided` means the source artifact itself supplied the boundary;
+- `inferred` means an aligner/model supplied an estimate;
+- `corrected` is reserved for a replayed correction projection and never
+  rewrites the source artifact.
+
+Expected rows may name existing word, transcript, and diarization span IDs.
+The graph context may name the source-audio span and timeline session. Calling
+`PhoneticSegmentArtifact::attach_to_timeline` transactionally stores the full
+typed artifact as an immutable `phonetic_segmentation` attachment, projects
+only accepted intervals to typed phone/phoneme spans, and adds explicit
+alignments to those parent spans. A bad session identity, missing link target,
+duplicate attachment, or span collision rejects the whole attachment. Unknown,
+weak, missing, and inconsistent rows remain visible in the attachment payload
+without becoming invented timeline intervals.
+
 Readiness is:
 
 - `ready`: every expected segment has accepted evidence and no issues;
@@ -88,3 +105,37 @@ Listenbury-style competing-candidate case. Tongues must select the same
 candidate and match fused confidence within `0.000001`. Other tests cover
 repeated phones, unknown inventory members, missing and low-confidence
 evidence, overlap, clipping, empty audio, and audio checksum mismatch.
+
+## Tracks and WaveDeck acceptance journey
+
+Start the server:
+
+```text
+just serve
+```
+
+In another terminal, install the small durable v1 fixture and print focused
+inspection/correction URLs:
+
+```text
+scripts/phonetic-segmentation-v1-journey.sh
+```
+
+The fixture contains source audio plus a compact waveform summary, transcript,
+two words in different language contexts, an anonymous diarization span,
+source-provided and inferred phone boundaries, broad phonemes, silence, an
+unknown symbol, a low-confidence withheld row, and an explicitly unaligned
+region. It requires no model download.
+
+Open the printed Tracks URL. The focused `/ʃ/` span highlights its word,
+transcript, speaker, and audio parents and shows the graph, recipe, run,
+runtime, algorithm, source adapter, confidence, and boundary origin. Follow the
+WaveDeck link, change the symbol or move a boundary, then refresh the page.
+The focused span and provenance return from the durable URL. The original lane
+still shows `/ʃ/` and the inferred 370 ms boundary; the edited lane shows the
+proposal with `correction_actor`, `correction_at_ms`, and
+`correction_operation_id`. Undo/redo replay the operation log.
+
+The same journey is exercised without a browser by the Rust timeline/audio
+tests and the `run-tracks-model` and `wavedeck-model` Node tests. The latter
+also cover high-density rendering for a synthetic 50,000-phone recording.

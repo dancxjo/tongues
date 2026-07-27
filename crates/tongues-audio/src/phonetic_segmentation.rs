@@ -1076,4 +1076,68 @@ mod tests {
         assert_eq!(artifact.segments[0].kind, SegmentKind::Pause);
         assert_eq!(artifact.segments[1].kind, SegmentKind::WordBoundary);
     }
+
+    #[test]
+    fn typed_artifact_attaches_timed_spans_without_fabricating_unsupported_rows() {
+        let mut timed = expected("t");
+        timed.evidence_links = PhoneticEvidenceLinks {
+            word_span_id: Some("word:1".into()),
+            transcript_span_id: Some("transcript:1".into()),
+            speaker_span_id: Some("speaker:1".into()),
+        };
+        let mut unknown = expected("�");
+        unknown.kind = SegmentKind::Unknown;
+        unknown.inventory_membership = InventoryMembership::Unknown;
+        let mut recipe = recipe(
+            vec![timed, unknown],
+            vec![AlignmentCandidate {
+                boundary_origin: PhoneticBoundaryOrigin::SourceProvided,
+                ..candidate(0, 100, 200, 0.95)
+            }],
+        );
+        recipe.context.session_id = Some("session:phonetic".into());
+        recipe.context.audio_span_id = Some("audio:1".into());
+        let artifact = PhoneticSegmentationEngine::default()
+            .segment_recipe(&audio(500), &recipe)
+            .unwrap();
+        assert_eq!(artifact.readiness, PhoneticSegmentationReadiness::Partial);
+
+        let spans = [
+            ("audio:1", SpanModality::Audio),
+            ("transcript:1", SpanModality::Transcript),
+            ("word:1", SpanModality::Word),
+            ("speaker:1", SpanModality::Speaker),
+        ]
+        .into_iter()
+        .map(|(id, modality)| TimelineSpan {
+            id: id.into(),
+            start_ms: 1,
+            end_ms: 400,
+            modality,
+            metadata: BTreeMap::new(),
+        })
+        .collect();
+        let mut session = SpeechTimelineSession::new("session:phonetic", spans, Vec::new()).unwrap();
+        let artifact_id = artifact.attach_to_timeline(&mut session).unwrap();
+
+        assert_eq!(session.attachments.len(), 1);
+        assert_eq!(session.attachments[0].artifact_id, artifact_id);
+        let phones = session
+            .evidence
+            .iter()
+            .filter(|span| span.modality == SpanModality::Phone)
+            .collect::<Vec<_>>();
+        assert_eq!(phones.len(), 1);
+        assert_eq!(phones[0].metadata["symbol"], "t");
+        assert_eq!(phones[0].metadata["boundary_origin"], "source_provided");
+        assert_eq!(session.alignments.len(), 4);
+        assert!(!session
+            .evidence
+            .iter()
+            .any(|span| span.metadata.get("symbol") == Some(&serde_json::json!("�"))));
+        assert_eq!(
+            session.attachments[0].payload["segments"][1]["status"],
+            "unknown_symbol"
+        );
+    }
 }

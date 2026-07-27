@@ -1,0 +1,410 @@
+{
+  "schema_version": 1,
+  "session": {
+    "schema_version": 1,
+    "session_id": "run:phonetic-v1",
+    "evidence": [
+      {
+        "id": "audio:source",
+        "start_ms": 0,
+        "end_ms": 800,
+        "modality": "audio",
+        "metadata": {
+          "label": "Multilingual inspection fixture",
+          "direction": "input",
+          "artifact_id": "fixture://phonetic-v1.wav",
+          "waveform_peaks": [0.02, 0.08, 0.32, 0.67, 0.91, 0.74, 0.42, 0.18, 0.53, 0.88, 0.69, 0.31, 0.12, 0.04],
+          "provenance": {
+            "kind": "source_provided",
+            "provider": "tongues-v1-fixture"
+          }
+        }
+      },
+      {
+        "id": "speaker:cluster-a",
+        "start_ms": 80,
+        "end_ms": 720,
+        "modality": "speaker",
+        "metadata": {
+          "label": "Speaker A",
+          "speaker_id": "cluster-a",
+          "identity_authority": "diarization_only",
+          "status": "observed"
+        }
+      },
+      {
+        "id": "transcript:utterance-1",
+        "start_ms": 80,
+        "end_ms": 720,
+        "modality": "transcript",
+        "metadata": {
+          "text": "ta ʃa",
+          "language": "mul",
+          "speaker_id": "cluster-a",
+          "status": "committed"
+        }
+      },
+      {
+        "id": "word:utterance-1:0",
+        "start_ms": 100,
+        "end_ms": 350,
+        "modality": "word",
+        "metadata": {
+          "text": "ta",
+          "language": "la",
+          "status": "committed"
+        }
+      },
+      {
+        "id": "word:utterance-1:1",
+        "start_ms": 370,
+        "end_ms": 700,
+        "modality": "word",
+        "metadata": {
+          "text": "ʃa",
+          "language": "sw",
+          "status": "committed"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:0",
+        "start_ms": 0,
+        "end_ms": 100,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "<sil>",
+          "segment_kind": "silence",
+          "status": "aligned",
+          "expected_index": 0,
+          "language_tag": "mul",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "v1-acceptance",
+          "confidence": 1.0,
+          "boundary_origin": "source_provided",
+          "alignment_provider": "fixture-curator",
+          "alignment_model": "manual-boundaries",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:1",
+        "start_ms": 100,
+        "end_ms": 205,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "t",
+          "segment_kind": "phone",
+          "status": "aligned",
+          "expected_index": 1,
+          "language_tag": "la",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "wiktionary:la-Classical",
+          "confidence": 0.97,
+          "boundary_origin": "source_provided",
+          "alignment_provider": "fixture-curator",
+          "alignment_model": "manual-boundaries",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:2",
+        "start_ms": 205,
+        "end_ms": 350,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "a",
+          "segment_kind": "phone",
+          "status": "aligned",
+          "expected_index": 2,
+          "language_tag": "la",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "wiktionary:la-Classical",
+          "confidence": 0.91,
+          "boundary_origin": "inferred",
+          "alignment_provider": "listenbury-reference",
+          "alignment_model": "phonetic-fusion",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:3",
+        "start_ms": 370,
+        "end_ms": 505,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "ʃ",
+          "segment_kind": "phone",
+          "status": "aligned",
+          "expected_index": 3,
+          "language_tag": "sw",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "fixture:sw",
+          "confidence": 0.88,
+          "boundary_origin": "inferred",
+          "alignment_provider": "listenbury-reference",
+          "alignment_model": "phonetic-fusion",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:4",
+        "start_ms": 505,
+        "end_ms": 700,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "a",
+          "segment_kind": "phone",
+          "status": "aligned",
+          "expected_index": 4,
+          "language_tag": "sw",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "fixture:sw",
+          "confidence": 0.95,
+          "boundary_origin": "source_provided",
+          "alignment_provider": "fixture-curator",
+          "alignment_model": "manual-boundaries",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phones-v1:6",
+        "start_ms": 700,
+        "end_ms": 800,
+        "modality": "phone",
+        "metadata": {
+          "symbol": "<sil>",
+          "segment_kind": "silence",
+          "status": "aligned",
+          "expected_index": 6,
+          "language_tag": "mul",
+          "inventory_id": "ipa-v1",
+          "pronunciation_source": "v1-acceptance",
+          "confidence": 1.0,
+          "boundary_origin": "source_provided",
+          "alignment_provider": "fixture-curator",
+          "alignment_model": "manual-boundaries",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phones-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phones",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phonemes-v1:0",
+        "start_ms": 100,
+        "end_ms": 350,
+        "modality": "phoneme",
+        "metadata": {
+          "symbol": "ta",
+          "segment_kind": "phoneme",
+          "status": "aligned",
+          "expected_index": 0,
+          "language_tag": "la",
+          "inventory_id": "fixture-broad-v1",
+          "pronunciation_source": "wiktionary:la-Classical",
+          "confidence": 0.93,
+          "boundary_origin": "inferred",
+          "alignment_provider": "listenbury-reference",
+          "alignment_model": "phoneme-fusion",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phonemes-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phonemes",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      },
+      {
+        "id": "phonetic-segmentation:phonemes-v1:1",
+        "start_ms": 370,
+        "end_ms": 700,
+        "modality": "phoneme",
+        "metadata": {
+          "symbol": "ʃa",
+          "segment_kind": "phoneme",
+          "status": "aligned",
+          "expected_index": 1,
+          "language_tag": "sw",
+          "inventory_id": "fixture-broad-v1",
+          "pronunciation_source": "fixture:sw",
+          "confidence": 0.89,
+          "boundary_origin": "inferred",
+          "alignment_provider": "listenbury-reference",
+          "alignment_model": "phoneme-fusion",
+          "alignment_version": "1",
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "artifact_id": "phonetic-segmentation:phonemes-v1",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "recipe_id": "recipe:phonetic-v1-phonemes",
+          "execution_record_id": "run:phonetic-v1",
+          "graph_id": "starter:phonetic-inspection",
+          "graph_revision": 1,
+          "evidence_authority": "observed_alignment_evidence"
+        }
+      }
+    ],
+    "alignments": [
+      {"source_span_id": "word:utterance-1:0", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 1.0},
+      {"source_span_id": "word:utterance-1:1", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 1.0},
+      {"source_span_id": "phonetic-segmentation:phones-v1:1", "target_span_id": "word:utterance-1:0", "kind": "contains", "confidence": 0.97},
+      {"source_span_id": "phonetic-segmentation:phones-v1:2", "target_span_id": "word:utterance-1:0", "kind": "contains", "confidence": 0.91},
+      {"source_span_id": "phonetic-segmentation:phones-v1:3", "target_span_id": "word:utterance-1:1", "kind": "contains", "confidence": 0.88},
+      {"source_span_id": "phonetic-segmentation:phones-v1:4", "target_span_id": "word:utterance-1:1", "kind": "contains", "confidence": 0.95},
+      {"source_span_id": "phonetic-segmentation:phonemes-v1:0", "target_span_id": "word:utterance-1:0", "kind": "contains", "confidence": 0.93},
+      {"source_span_id": "phonetic-segmentation:phonemes-v1:1", "target_span_id": "word:utterance-1:1", "kind": "contains", "confidence": 0.89},
+      {"source_span_id": "phonetic-segmentation:phones-v1:1", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 0.97},
+      {"source_span_id": "phonetic-segmentation:phones-v1:2", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 0.91},
+      {"source_span_id": "phonetic-segmentation:phones-v1:3", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 0.88},
+      {"source_span_id": "phonetic-segmentation:phones-v1:4", "target_span_id": "transcript:utterance-1", "kind": "contains", "confidence": 0.95},
+      {"source_span_id": "phonetic-segmentation:phones-v1:1", "target_span_id": "speaker:cluster-a", "kind": "aligned_to", "confidence": 0.97},
+      {"source_span_id": "phonetic-segmentation:phones-v1:2", "target_span_id": "speaker:cluster-a", "kind": "aligned_to", "confidence": 0.91},
+      {"source_span_id": "phonetic-segmentation:phones-v1:3", "target_span_id": "speaker:cluster-a", "kind": "aligned_to", "confidence": 0.88},
+      {"source_span_id": "phonetic-segmentation:phones-v1:4", "target_span_id": "speaker:cluster-a", "kind": "aligned_to", "confidence": 0.95},
+      {"source_span_id": "phonetic-segmentation:phones-v1:0", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 1.0},
+      {"source_span_id": "phonetic-segmentation:phones-v1:1", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 0.97},
+      {"source_span_id": "phonetic-segmentation:phones-v1:2", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 0.91},
+      {"source_span_id": "phonetic-segmentation:phones-v1:3", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 0.88},
+      {"source_span_id": "phonetic-segmentation:phones-v1:4", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 0.95},
+      {"source_span_id": "phonetic-segmentation:phones-v1:6", "target_span_id": "audio:source", "kind": "aligned_to", "confidence": 1.0}
+    ],
+    "attachments": [
+      {
+        "artifact_id": "phonetic-segmentation:phones-v1",
+        "kind": "phonetic_segmentation",
+        "schema_version": 1,
+        "payload": {
+          "schema_version": 1,
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "readiness": "partial",
+          "timebase": "half-open original-audio frames [start_frame,end_frame); seconds = frame / sample_rate_hz",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "audio_sha256": "sha256:fixture-phonetic-v1",
+          "recipe_sha256": "sha256:phones-v1",
+          "audio_frames": 12800,
+          "sample_rate_hz": 16000,
+          "channels": 1,
+          "transcript": "ta ʃa",
+          "expected": [],
+          "segments": [
+            {"expected_index": 0, "symbol": "<sil>", "kind": "silence", "status": "aligned", "interval": {"start_frame": 0, "end_frame": 1600, "sample_rate_hz": 16000}, "confidence": 1.0, "boundary_origin": "source_provided", "pronunciation_source": "v1-acceptance", "language_tag": "mul", "inventory_id": "ipa-v1", "evidence_links": {}},
+            {"expected_index": 1, "symbol": "t", "kind": "phone", "status": "aligned", "interval": {"start_frame": 1600, "end_frame": 3280, "sample_rate_hz": 16000}, "confidence": 0.97, "boundary_origin": "source_provided", "pronunciation_source": "wiktionary:la-Classical", "language_tag": "la", "inventory_id": "ipa-v1", "evidence_links": {"word_span_id": "word:utterance-1:0", "transcript_span_id": "transcript:utterance-1", "speaker_span_id": "speaker:cluster-a"}},
+            {"expected_index": 2, "symbol": "a", "kind": "phone", "status": "aligned", "interval": {"start_frame": 3280, "end_frame": 5600, "sample_rate_hz": 16000}, "confidence": 0.91, "boundary_origin": "inferred", "pronunciation_source": "wiktionary:la-Classical", "language_tag": "la", "inventory_id": "ipa-v1", "evidence_links": {"word_span_id": "word:utterance-1:0", "transcript_span_id": "transcript:utterance-1", "speaker_span_id": "speaker:cluster-a"}},
+            {"expected_index": 3, "symbol": "ʃ", "kind": "phone", "status": "aligned", "interval": {"start_frame": 5920, "end_frame": 8080, "sample_rate_hz": 16000}, "confidence": 0.88, "boundary_origin": "inferred", "pronunciation_source": "fixture:sw", "language_tag": "sw", "inventory_id": "ipa-v1", "evidence_links": {"word_span_id": "word:utterance-1:1", "transcript_span_id": "transcript:utterance-1", "speaker_span_id": "speaker:cluster-a"}},
+            {"expected_index": 4, "symbol": "a", "kind": "phone", "status": "aligned", "interval": {"start_frame": 8080, "end_frame": 11200, "sample_rate_hz": 16000}, "confidence": 0.95, "boundary_origin": "source_provided", "pronunciation_source": "fixture:sw", "language_tag": "sw", "inventory_id": "ipa-v1", "evidence_links": {"word_span_id": "word:utterance-1:1", "transcript_span_id": "transcript:utterance-1", "speaker_span_id": "speaker:cluster-a"}},
+            {"expected_index": 5, "symbol": "�", "kind": "unknown", "status": "unknown_symbol", "confidence": null, "boundary_origin": null, "pronunciation_source": "fixture:unsupported-symbol", "language_tag": "mul", "inventory_id": "ipa-v1", "evidence_links": {}},
+            {"expected_index": 6, "symbol": "<sil>", "kind": "silence", "status": "aligned", "interval": {"start_frame": 11200, "end_frame": 12800, "sample_rate_hz": 16000}, "confidence": 1.0, "boundary_origin": "source_provided", "pronunciation_source": "v1-acceptance", "language_tag": "mul", "inventory_id": "ipa-v1", "evidence_links": {}},
+            {"expected_index": 7, "symbol": "ɲ", "kind": "phone", "status": "low_confidence", "confidence": 0.42, "boundary_origin": "inferred", "pronunciation_source": "fixture:uncertain-overlap", "language_tag": "es", "inventory_id": "ipa-v1", "evidence_links": {}}
+          ],
+          "unaligned_regions": [{"interval": {"start_frame": 5600, "end_frame": 5920, "sample_rate_hz": 16000}, "state": "unaligned_not_assumed_silence"}],
+          "issues": [
+            {"code": "expected.unknown_symbol", "detail": "unknown symbols remain untimed", "expected_index": 5},
+            {"code": "alignment.low_confidence", "detail": "candidate timing was withheld because confidence is below threshold", "expected_index": 7}
+          ],
+          "graph": {
+            "graph_id": "starter:phonetic-inspection",
+            "graph_revision": 1,
+            "recipe_id": "recipe:phonetic-v1-phones",
+            "execution_record_id": "run:phonetic-v1",
+            "session_id": "run:phonetic-v1",
+            "audio_span_id": "audio:source",
+            "runtime": "tongues-v1-fixture",
+            "runtime_version": "1"
+          },
+          "source_artifacts": []
+        }
+      },
+      {
+        "artifact_id": "phonetic-segmentation:phonemes-v1",
+        "kind": "phonetic_segmentation",
+        "schema_version": 1,
+        "payload": {
+          "schema_version": 1,
+          "algorithm_version": "tongues.phonetic-segmentation.listenbury-lattice-v1",
+          "readiness": "ready",
+          "timebase": "half-open original-audio frames",
+          "audio_artifact_id": "fixture://phonetic-v1.wav",
+          "audio_sha256": "sha256:fixture-phonetic-v1",
+          "recipe_sha256": "sha256:phonemes-v1",
+          "audio_frames": 12800,
+          "sample_rate_hz": 16000,
+          "channels": 1,
+          "transcript": "ta ʃa",
+          "expected": [],
+          "segments": [
+            {"expected_index": 0, "symbol": "ta", "kind": "phoneme", "status": "aligned", "interval": {"start_frame": 1600, "end_frame": 5600, "sample_rate_hz": 16000}, "confidence": 0.93, "boundary_origin": "inferred", "pronunciation_source": "wiktionary:la-Classical", "language_tag": "la", "inventory_id": "fixture-broad-v1", "evidence_links": {"word_span_id": "word:utterance-1:0", "transcript_span_id": "transcript:utterance-1"}},
+            {"expected_index": 1, "symbol": "ʃa", "kind": "phoneme", "status": "aligned", "interval": {"start_frame": 5920, "end_frame": 11200, "sample_rate_hz": 16000}, "confidence": 0.89, "boundary_origin": "inferred", "pronunciation_source": "fixture:sw", "language_tag": "sw", "inventory_id": "fixture-broad-v1", "evidence_links": {"word_span_id": "word:utterance-1:1", "transcript_span_id": "transcript:utterance-1"}}
+          ],
+          "unaligned_regions": [],
+          "issues": [],
+          "graph": {
+            "graph_id": "starter:phonetic-inspection",
+            "graph_revision": 1,
+            "recipe_id": "recipe:phonetic-v1-phonemes",
+            "execution_record_id": "run:phonetic-v1",
+            "session_id": "run:phonetic-v1",
+            "audio_span_id": "audio:source",
+            "runtime": "tongues-v1-fixture",
+            "runtime_version": "1"
+          },
+          "source_artifacts": []
+        }
+      }
+    ],
+    "source_events": [],
+    "operations": []
+  },
+  "context": {
+    "graph_id": "starter:phonetic-inspection",
+    "run_id": "run:phonetic-v1",
+    "source": "Tongues v1 multilingual phonetic segmentation acceptance fixture"
+  },
+  "updated_at_ms": 0
+}

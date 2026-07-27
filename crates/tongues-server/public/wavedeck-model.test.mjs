@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {appendOperation, projectSession, redo, sessionFromEvents, undo} from "./wavedeck-model.mjs";
+import {readFileSync} from "node:fs";
+import {
+  appendOperation, projectSession, redo, relatedSpanIds, segmentationState, sessionFromEvents,
+  undo, validateSession, waveformPolylinePoints,
+} from "./wavedeck-model.mjs";
+
+const phoneticFixture = JSON.parse(readFileSync(new URL(
+  "../../../fixtures/timeline/phonetic-segmentation-inspection-v1.json",
+  import.meta.url,
+)));
 
 function base() {
   return {
@@ -76,4 +85,49 @@ test("Run Tracks handoff has a stable evidence interval to select", () => {
   const selected = projectSession(session).edited.find(span =>
     span.id.endsWith(":1") || (span.start_ms < 40 && span.end_ms > 10));
   assert.equal(selected.id, "word:1");
+});
+
+test("segmentation correction journey preserves baseline and records who what and when", () => {
+  const session = validateSession(structuredClone(phoneticFixture.session));
+  const phoneId = "phonetic-segmentation:phones-v1:3";
+  const original = session.evidence.find(span => span.id === phoneId);
+  appendOperation(session, "phonetic_symbol_replace", {
+    span_id:phoneId,symbol:"ɕ",reason:"multilingual fixture review",
+  }, "fixture-reviewer");
+  appendOperation(session, "alignment_move_boundary", {
+    span_id:phoneId,boundary:"start",new_time_ms:365,reason:"waveform review",
+  }, "fixture-reviewer");
+
+  const replayed = projectSession(JSON.parse(JSON.stringify(session)));
+  const edited = replayed.edited.find(span => span.id === phoneId);
+  assert.equal(original.metadata.symbol, "ʃ");
+  assert.equal(session.evidence.find(span => span.id === phoneId).start_ms, 370);
+  assert.equal(edited.metadata.symbol, "ɕ");
+  assert.equal(edited.start_ms, 365);
+  assert.equal(edited.metadata.boundary_origin, "corrected");
+  assert.equal(edited.metadata.correction_actor, "fixture-reviewer");
+  assert.ok(Number.isFinite(edited.metadata.correction_at_ms));
+  assert.match(edited.metadata.correction_operation_id, /^edit:/);
+});
+
+test("word and phone selections expose linked evidence in WaveDeck", () => {
+  const session = validateSession(structuredClone(phoneticFixture.session));
+  const phoneId = "phonetic-segmentation:phones-v1:1";
+  assert.ok(relatedSpanIds(session, phoneId).has("word:utterance-1:0"));
+  assert.ok(relatedSpanIds(session, "word:utterance-1:0").has(phoneId));
+});
+
+test("missing and partial segmentation states never imply authoritative timing", () => {
+  assert.equal(segmentationState(base()).readiness, "missing");
+  const state = segmentationState(phoneticFixture.session);
+  assert.equal(state.readiness, "partial");
+  assert.equal(state.artifacts[0].missing_segments.length, 2);
+});
+
+test("waveform summaries remain compact deterministic evidence", () => {
+  const peaks = phoneticFixture.session.evidence[0].metadata.waveform_peaks;
+  const points = waveformPolylinePoints(peaks);
+  assert.equal(points.split(" ").length, peaks.length);
+  assert.match(points, /^0\.00,/);
+  assert.doesNotMatch(points, /NaN|Infinity/);
 });

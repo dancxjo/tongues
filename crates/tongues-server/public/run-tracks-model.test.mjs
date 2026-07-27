@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {boundedVisibleSpans, projectSessionTracks, selectionProvenance, waveDeckHandoff} from "./run-tracks-model.mjs";
+import {readFileSync} from "node:fs";
+import {
+  boundedVisibleSpans, focusQuery, focusedSpan, projectSessionTracks, relatedSelectionIds,
+  selectionProvenance, spanDensity, waveDeckHandoff,
+} from "./run-tracks-model.mjs";
+
+const phoneticFixture = JSON.parse(readFileSync(new URL(
+  "../../../fixtures/timeline/phonetic-segmentation-inspection-v1.json",
+  import.meta.url,
+)));
 
 const envelope = (sequence, offset_ms, event, provenance = {}) => ({
   schema_version: 1, stream_id: "stream:fixture", event_id: `event:${sequence}`, sequence,
@@ -80,4 +89,51 @@ test("bounded rendering samples long visible ranges while retaining the tail", (
   const visible = boundedVisibleSpans(track, {start_ms:0,end_ms:20_000}, 500);
   assert.ok(visible.length <= 501);
   assert.equal(visible.at(-1), track.spans.at(-1));
+});
+
+test("multilingual segmentation projects explicit phone and phoneme tracks with truthful partial state", () => {
+  const view = projectSessionTracks(phoneticFixture);
+  assert.equal(view.segmentation.readiness, "partial");
+  assert.match(view.segmentation.message, /untimed|unsupported/);
+  assert.equal(view.segmentation.artifacts[0].missing_segments.length, 2);
+  assert.deepEqual(
+    view.tracks.find(track => track.id === "phones").spans.map(span => span.label),
+    ["<sil>", "t", "a", "ʃ", "a", "<sil>"],
+  );
+  assert.deepEqual(
+    view.tracks.find(track => track.id === "phonemes").spans.map(span => span.label),
+    ["ta", "ʃa"],
+  );
+});
+
+test("phone, word, transcript, speaker, and source audio remain linked in both directions", () => {
+  const view = projectSessionTracks(phoneticFixture);
+  const phone = view.tracks.find(track => track.id === "phones").spans.find(span => span.label === "t");
+  const related = relatedSelectionIds(view, phone);
+  for (const id of ["word:utterance-1:0", "transcript:utterance-1", "speaker:cluster-a", "audio:source"]) {
+    assert.ok(related.has(id), id);
+  }
+  const word = view.tracks.find(track => track.id === "words").spans[0];
+  assert.ok(relatedSelectionIds(view, word).has(phone.id));
+});
+
+test("phonetic focus and provenance survive a direct URL", () => {
+  const view = projectSessionTracks(phoneticFixture);
+  const phone = view.tracks.find(track => track.id === "phones").spans.find(span => span.label === "ʃ");
+  const query = focusQuery(phone);
+  assert.equal(focusedSpan(view, `?${query}`).id, phone.id);
+  const provenance = selectionProvenance(view, phone);
+  assert.equal(provenance.algorithm_version, "tongues.phonetic-segmentation.listenbury-lattice-v1");
+  assert.equal(provenance.execution_record_id, "run:phonetic-v1");
+  assert.equal(provenance.boundary_origin, "inferred");
+});
+
+test("zoom density keeps labels readable and long phone recordings bounded", () => {
+  const range = {start_ms:0,end_ms:100_000};
+  assert.equal(spanDensity({start_ms:1,end_ms:2}, range), "tick");
+  assert.equal(spanDensity({start_ms:1,end_ms:5_001}, range), "label");
+  const track = {spans:Array.from({length:50_000}, (_, index) => ({
+    id:`phone:${index}`,start_ms:index * 4,end_ms:index * 4 + 3,
+  }))};
+  assert.ok(boundedVisibleSpans(track, {start_ms:0,end_ms:200_000}, 600).length <= 601);
 });
