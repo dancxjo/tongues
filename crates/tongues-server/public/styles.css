@@ -612,10 +612,6 @@ a {
     gap: 0.75rem;
 }
 
-.live-composer textarea {
-    resize: vertical;
-}
-
 .sr-only {
     height: 1px;
     margin: -1px;

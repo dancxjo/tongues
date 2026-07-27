@@ -265,6 +265,21 @@ test('live workflow consumes server-produced audio on one Web Audio clock with u
     assert.doesNotMatch(studioSource, /new Audio\(/);
 });
 
+test('live completion preserves phrase following until every scheduled source ends', () => {
+    const schedulingDone = studioSource.indexOf('await state.liveSynthesisTail;');
+    const playbackDone = studioSource.indexOf('await waitForLivePlayback(generation);');
+    const assistantDone = studioSource.indexOf(
+        "finishLiveAssistant(state.liveConversation, turnId, 'completed');",
+    );
+    assert.ok(schedulingDone >= 0);
+    assert.ok(playbackDone > schedulingDone);
+    assert.ok(assistantDone > playbackDone);
+    assert.match(
+        studioSource,
+        /state\.livePlaybackPending\.set\(source,[\s\S]*source\.onended = \(\) => \{[\s\S]*settleLivePlaybackSource\(source\)/,
+    );
+});
+
 test('live turn records the overlap and exact-transcript acceptance evidence', () => {
     assert.match(studioSource, /first_audio_before_final_token: overlap/);
     assert.match(studioSource, /transcript_exact: state\.liveGenerated === state\.liveCommitted/);

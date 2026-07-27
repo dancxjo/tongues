@@ -42,6 +42,7 @@
         liveAudioContext: null,
         liveNextAudioTime: 0,
         liveSources: new Set(),
+        livePlaybackPending: new Map(),
         liveSegments: new Map(),
         liveAudioBuffers: [],
         liveGenerated: '',
@@ -653,8 +654,8 @@
                     </section>
                     <form id="live-form" class="live-composer">
                         <label class="sr-only" for="live-message">Message</label>
-                        <textarea id="live-message" rows="3" required
-                            placeholder="Ask for a story, explanation, dialogue, or translation."></textarea>
+                        <input id="live-message" type="text" required
+                            placeholder="Ask for a story, explanation, dialogue, or translation.">
                         <div class="action-bar split-actions">
                             <button id="live-send" type="submit">Send</button>
                             <button id="live-stop" type="button" class="danger-button" disabled>Stop</button>
@@ -3252,6 +3253,21 @@
         renderLiveAssistant(state.liveTurn?.id);
     }
 
+    function settleLivePlaybackSource(source) {
+        const pending = state.livePlaybackPending.get(source);
+        if (!pending) return;
+        state.livePlaybackPending.delete(source);
+        pending.resolve();
+    }
+
+    async function waitForLivePlayback(generation) {
+        while (generation === state.liveGeneration && state.livePlaybackPending.size) {
+            await Promise.all(
+                [...state.livePlaybackPending.values()].map((pending) => pending.promise),
+            );
+        }
+    }
+
     async function scheduleLiveAudioSegment(event, generation, signal) {
         if (generation !== state.liveGeneration || signal.aborted) return;
         const binary = window.atob(event.audio_base64);
@@ -3286,9 +3302,18 @@
                 at_ms: Date.now(),
             });
         }, delayMs);
+        let resolvePlayback;
+        const playback = new Promise((resolve) => {
+            resolvePlayback = resolve;
+        });
+        state.livePlaybackPending.set(source, {
+            promise: playback,
+            resolve: resolvePlayback,
+        });
         source.onended = () => {
             window.clearTimeout(startTimer);
             state.liveSources.delete(source);
+            settleLivePlaybackSource(source);
             if (generation !== state.liveGeneration) return;
             state.liveSpoken += event.text;
             if (state.liveTurn) {
@@ -3305,7 +3330,14 @@
             });
         };
         state.liveSources.add(source);
-        source.start(startsAt);
+        try {
+            source.start(startsAt);
+        } catch (error) {
+            window.clearTimeout(startTimer);
+            state.liveSources.delete(source);
+            settleLivePlaybackSource(source);
+            throw error;
+        }
     }
 
     function enqueueLiveSegment(event, generation, signal) {
@@ -3392,6 +3424,9 @@
         turn.controller.abort();
         for (const source of state.liveSources) {
             try { source.stop(); } catch (_) { /* already stopped */ }
+        }
+        for (const source of [...state.livePlaybackPending.keys()]) {
+            settleLivePlaybackSource(source);
         }
         state.liveSources.clear();
         state.liveSynthesisTail = Promise.resolve();
@@ -3489,6 +3524,7 @@
             }
         }
         await state.liveSynthesisTail;
+        await waitForLivePlayback(generation);
         if (generation !== state.liveGeneration) return;
         if (!completedEvent || state.liveGenerated !== state.liveCommitted) {
             throw new Error('Committed speech transcript does not exactly match generated text.');
