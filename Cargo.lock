@@ -6944,6 +6944,7 @@ dependencies = [
  "langtag",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "unicode-normalization",
  "unicode-segmentation",
  "whisper-cpp-plus",

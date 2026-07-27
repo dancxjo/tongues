@@ -5,6 +5,10 @@ language: pronunciation modeling, phonemic and phonetic realization, streaming
 text segmentation, acoustic interpretation, text-to-speech synthesis, and
 runtime playback.
 
+Streaming audio, recognition, generated text, and speech-output lifecycle
+surfaces share one versioned event IR; see
+[the streaming event contract](docs/streaming-event-contract.md).
+
 Reversible mappings between written forms and pronunciation remain one active
 model family:
 

@@ -1,4 +1,5 @@
-use crate::transcript::{TranscriptCandidateEvent, TranscriptChunk};
+use crate::event::StreamEvent;
+use crate::transcript::TranscriptChunk;
 use crate::word_stream::TranscriptWord;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +46,8 @@ pub struct StreamingRecognizerBackend {
 pub struct StreamingRecognition {
     pub text: String,
     pub words: Vec<TranscriptWord>,
-    pub candidate_events: Vec<TranscriptCandidateEvent>,
+    /// The central stream IR emitted directly by this provider.
+    pub events: Vec<StreamEvent>,
     pub backend: StreamingRecognizerBackend,
 }
 

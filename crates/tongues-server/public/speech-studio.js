@@ -2057,13 +2057,12 @@
 
     function formatDuplexTranscriptEvent(event) {
         if (!event) return 'No transcript delta';
-        if (event.type === 'append') return `Append: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
-        if (event.type === 'withdraw') return `Withdraw: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
-        if (event.type === 'commit') return `Commit: ${duplexSurfaceList(event.data?.morphemes).join(' ') || '—'}`;
-        if (event.type === 'replace') {
-            const previous = duplexSurfaceList(event.data?.previous).join(' ');
-            const replacement = duplexSurfaceList(event.data?.replacement).join(' ');
-            return `Replace: ${previous || '—'} → ${replacement || '—'}`;
+        if (event.type === 'partial_hypothesis') return `Provisional: ${event.data?.text || '—'}`;
+        if (event.type === 'hypothesis_cancelled') return `Withdraw: ${event.data?.reason || '—'}`;
+        if (event.type === 'committed_segment') return `Commit: ${event.data?.text || '—'}`;
+        if (event.type === 'revised_hypothesis') {
+            const range = event.data?.replaces;
+            return `Replace ${range?.start ?? '?'}..${range?.end ?? '?'}: ${event.data?.text || '—'}`;
         }
         return event.type;
     }
@@ -2446,12 +2445,12 @@
 
     function appendLiveJournal(event) {
         const journal = byId('live-journal');
-        const printable = event.audio_base64
-            ? {
-                ...event,
-                audio_base64: `[${event.audio_base64.length} base64 characters; included in turn stream]`,
-            }
-            : event;
+        const printable = structuredClone(event);
+        const audio = printable?.event?.data?.audio_base64;
+        if (audio) {
+            printable.event.data.audio_base64 =
+                `[${audio.length} base64 characters; included in turn stream]`;
+        }
         const line = JSON.stringify(printable);
         journal.textContent = journal.textContent === 'No turn events yet.'
             ? line
@@ -2468,6 +2467,7 @@
         state.liveNextAudioTime = 0;
         state.liveFinalTokenAt = 0;
         state.liveFirstAudioAt = 0;
+        state.liveContract = createStreamContractState();
         byId('live-journal').textContent = 'No turn events yet.';
         for (const id of ['live-generated-count', 'live-planned-count', 'live-spoken-count']) {
             byId(id).textContent = '0';
@@ -2538,6 +2538,68 @@
             if (done) break;
         }
         if (buffer.trim()) yield JSON.parse(buffer);
+    }
+
+    function createStreamContractState() {
+        return {
+            streamId: null,
+            nextSequence: null,
+            segments: new Map(),
+            committed: new Set(),
+            terminal: false,
+        };
+    }
+
+    function applyStreamEnvelope(contract, envelope) {
+        if (envelope?.schema_version !== 1) {
+            throw new Error(`Unsupported stream schema ${envelope?.schema_version}.`);
+        }
+        if (contract.terminal) throw new Error('Stream event arrived after a terminal event.');
+        if (contract.streamId == null) {
+            contract.streamId = envelope.stream_id;
+            contract.nextSequence = envelope.sequence;
+        }
+        if (contract.streamId !== envelope.stream_id) {
+            throw new Error('Stream identity changed inside one response.');
+        }
+        if (envelope.sequence !== contract.nextSequence) {
+            throw new Error(
+                `Out-of-order stream event: expected ${contract.nextSequence}, received ${envelope.sequence}.`,
+            );
+        }
+        contract.nextSequence += 1;
+        const payload = {
+            type: envelope.event?.type,
+            ...(envelope.event?.data || {}),
+            event_id: envelope.event_id,
+            sequence: envelope.sequence,
+        };
+        if (payload.type === 'partial_hypothesis') {
+            if (contract.committed.has(payload.segment_id)) {
+                throw new Error(`Committed segment ${payload.segment_id} was revised.`);
+            }
+            contract.segments.set(payload.segment_id, payload.text);
+        } else if (payload.type === 'revised_hypothesis') {
+            if (contract.committed.has(payload.segment_id)) {
+                throw new Error(`Committed segment ${payload.segment_id} was revised.`);
+            }
+            const current = [...(contract.segments.get(payload.segment_id) || '')];
+            const { start, end } = payload.replaces;
+            if (start > end || end > current.length) {
+                throw new Error(`Invalid replacement range ${start}..${end}.`);
+            }
+            current.splice(start, end - start, ...payload.text);
+            contract.segments.set(payload.segment_id, current.join(''));
+        } else if (payload.type === 'committed_segment') {
+            contract.segments.set(payload.segment_id, payload.text);
+            contract.committed.add(payload.segment_id);
+        }
+        if (
+            payload.type === 'completed'
+            || payload.type === 'cancelled'
+            || (payload.type === 'error' && !payload.recoverable)
+        ) contract.terminal = true;
+        return payload;
     }
 
     function liveAudioContext() {
@@ -2740,27 +2802,29 @@
         });
         if (!response.ok) throw new Error(await response.text());
         let completedEvent = null;
-        for await (const event of ndjsonEvents(response)) {
+        for await (const envelope of ndjsonEvents(response)) {
             if (generation !== state.liveGeneration) return;
-            appendLiveJournal(event);
-            if (event.type === 'text_delta') {
-                state.liveGenerated += event.delta;
+            appendLiveJournal(envelope);
+            const event = applyStreamEnvelope(state.liveContract, envelope);
+            if (event.type === 'partial_hypothesis' && event.role === 'generation') {
+                state.liveGenerated = event.text;
                 renderLiveAssistant();
-            } else if (event.type === 'segment_committed') {
+            } else if (event.type === 'committed_segment' && event.role === 'generation') {
                 enqueueLiveSegment(event, generation, controller.signal);
-            } else if (event.type === 'audio_segment_ready') {
+            } else if (event.type === 'audio_chunk' && event.direction === 'output') {
+                event.text = event.metadata?.text || '';
                 enqueueLiveAudio(event, generation, controller.signal);
-            } else if (event.type === 'generation_completed') {
+            } else if (event.type === 'text_completed' && event.role === 'generation') {
                 state.liveFinalTokenAt = performance.now();
-            } else if (event.type === 'turn_completed') {
+            } else if (event.type === 'completed') {
                 completedEvent = event;
-            } else if (event.type === 'turn_failed') {
+            } else if (event.type === 'error' && !event.recoverable) {
                 throw new Error(event.message);
             }
         }
         await state.liveSynthesisTail;
         if (generation !== state.liveGeneration) return;
-        if (completedEvent?.generated_text !== state.liveCommitted) {
+        if (!completedEvent || state.liveGenerated !== state.liveCommitted) {
             throw new Error('Committed speech transcript does not exactly match generated text.');
         }
         state.liveMessages.push({ role: 'assistant', content: state.liveGenerated });
@@ -3509,12 +3573,14 @@
 
     return {
         availablePaths,
+        applyStreamEnvelope,
         availableCompositions,
         buildPayload,
         buildDuplexRequest,
         compatibilityFor,
         compositionGenerator,
         controlsForPath,
+        createStreamContractState,
         deleteUserRecipe,
         cliRepresentation,
         duplexLines,

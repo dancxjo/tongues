@@ -1,0 +1,56 @@
+[
+  {
+    "id": "silence",
+    "events": [
+      {"type":"stream_opened","data":{"source":{"kind":"file","path":"silence.wav"},"format":{"encoding":"pcm_f32_le","sample_rate_hz":16000,"channels":{"kind":"mono"}},"clock":{"kind":"stream_start"}}},
+      {"type":"audio_chunk","data":{"direction":"input","chunk_sequence":0,"frame_count":16000,"metadata":{}}},
+      {"type":"end_of_stream"},
+      {"type":"completed"}
+    ]
+  },
+  {
+    "id": "overlap",
+    "events": [
+      {"type":"speech_started","data":{"segment_id":"speaker-a"}},
+      {"type":"speech_started","data":{"segment_id":"speaker-b"}},
+      {"type":"speaker_assigned","data":{"segment_id":"speaker-a","speaker_id":"a"}},
+      {"type":"speaker_assigned","data":{"segment_id":"speaker-b","speaker_id":"b"}}
+    ]
+  },
+  {
+    "id": "language_change",
+    "events": [
+      {"type":"language_hypothesis","data":{"segment_id":"segment-1","hypothesis":{"language":"en"}}},
+      {"type":"language_hypothesis","data":{"segment_id":"segment-2","hypothesis":{"language":"es"}}}
+    ]
+  },
+  {
+    "id": "speaker_change",
+    "events": [
+      {"type":"speaker_assigned","data":{"segment_id":"segment-1","speaker_id":"speaker-1"}},
+      {"type":"speaker_assigned","data":{"segment_id":"segment-2","speaker_id":"speaker-2"}}
+    ]
+  },
+  {
+    "id": "discontinuity",
+    "events": [
+      {"type":"audio_chunk","data":{"direction":"input","chunk_sequence":4,"frame_count":320,"metadata":{}}},
+      {"type":"discontinuity","data":{"expected_chunk_sequence":5,"received_chunk_sequence":7,"reason":"two chunks lost"}},
+      {"type":"audio_chunk","data":{"direction":"input","chunk_sequence":7,"frame_count":320,"metadata":{}}}
+    ]
+  },
+  {
+    "id": "cancellation",
+    "events": [
+      {"type":"partial_hypothesis","data":{"role":"recognition","segment_id":"segment-1","text":"cancel me"}},
+      {"type":"cancelled","data":{"reason":"operator request"}}
+    ]
+  },
+  {
+    "id": "provider_failure",
+    "events": [
+      {"type":"warning","data":{"code":"provider_slow","message":"deadline approaching","recoverable":true}},
+      {"type":"error","data":{"code":"provider_unavailable","message":"recognizer disconnected","recoverable":false}}
+    ]
+  }
+]

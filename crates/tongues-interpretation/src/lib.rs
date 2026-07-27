@@ -710,23 +710,13 @@ pub struct EvalReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StreamEvent {
-    pub partial_transcript: String,
-    pub seq2seq_transcript: String,
-    pub final_sentences: Vec<SentenceSupervision>,
-    pub repair_events: Vec<RepairSupervision>,
-    pub previous_word: Option<WordPrediction>,
-    pub current_word: Option<WordPrediction>,
-    pub next_word: Option<WordPrediction>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WordPrediction {
     pub word: Option<String>,
     pub phonemes: Option<String>,
 }
 
-/// Convert a [`StreamEvent`] into a [`tongues_duplex::ObservedEvidence`] delta
+/// Convert a central [`speaking::StreamEvent`] into a
+/// [`tongues_duplex::ObservedEvidence`] delta
 /// suitable for feeding directly into a [`tongues_duplex::DuplexSimulator`].
 ///
 /// The partial transcript is used when non-empty; otherwise the seq2seq
@@ -736,12 +726,12 @@ pub struct WordPrediction {
 /// # Arguments
 ///
 /// * `id` – A unique, non-empty evidence identifier (e.g. `"stream:0"`).
-/// * `event` – The `StreamEvent` produced by the ASR model.
+/// * `event` – The central stream event produced by the ASR model.
 /// * `frame_start` / `frame_end` – Inclusive/exclusive mel-frame indices.
 /// * `time_start` / `time_end` – Wall-clock seconds relative to utterance start.
 pub fn stream_event_to_evidence(
     id: impl Into<String>,
-    event: &StreamEvent,
+    event: &speaking::StreamEvent,
     frame_start: u32,
     frame_end: u32,
     time_start: f32,
@@ -749,18 +739,17 @@ pub fn stream_event_to_evidence(
 ) -> tongues_duplex::ObservedEvidence {
     use tongues_duplex::AcousticSpan;
 
-    let transcript = if !event.partial_transcript.is_empty() {
-        event.partial_transcript.clone()
-    } else {
-        event.seq2seq_transcript.clone()
-    };
-
-    // Aggregate a per-frame confidence proxy: average over all repair_event
-    // spans if present, otherwise fall back to 1.0 for a clean transcript.
-    let confidence = if transcript.is_empty() {
-        0.0
-    } else {
-        1.0 - (event.repair_events.len() as f32 * 0.1).min(0.9)
+    let (transcript, confidence) = match event {
+        speaking::StreamEvent::PartialHypothesis {
+            text, confidence, ..
+        }
+        | speaking::StreamEvent::CommittedSegment {
+            text, confidence, ..
+        }
+        | speaking::StreamEvent::RevisedHypothesis {
+            text, confidence, ..
+        } => (text.clone(), confidence.clone()),
+        _ => (String::new(), None),
     };
 
     tongues_duplex::ObservedEvidence::acoustics_with_span(
@@ -5260,7 +5249,7 @@ pub fn stream_from_samples<B: Backend>(
     config: &InterpretationConfig,
     input_feature_bins: usize,
     device: &B::Device,
-) -> Result<StreamEvent> {
+) -> Result<Vec<speaking::StreamEvent>> {
     let mut stream_config = config.clone();
     stream_config.compact_audio_features = input_feature_bins != stream_config.mel_bins;
     let mut features = audio_features(samples, &stream_config);
@@ -5294,15 +5283,40 @@ pub fn stream_from_samples<B: Backend>(
     let detector = SentenceDetectorDialog::new()?;
     let sentences = sentence_supervision(&detector, &partial, features.len(), config)?;
     let repair_events = repair_supervision(&sentences);
-    Ok(StreamEvent {
-        partial_transcript: partial,
-        seq2seq_transcript,
-        final_sentences: sentences,
-        repair_events,
-        previous_word: word_prediction(prev_word_ids.first(), word_vocab, phonemes.clone()),
-        current_word: word_prediction(current_word_ids.first(), word_vocab, phonemes.clone()),
-        next_word: word_prediction(next_word_ids.first(), word_vocab, phonemes),
-    })
+    let segment_id = speaking::SegmentId("interpretation-recognition".into());
+    let mut events = Vec::new();
+    if !partial.is_empty() {
+        events.push(speaking::StreamEvent::PartialHypothesis {
+            role: speaking::TextRole::Recognition,
+            segment_id: segment_id.clone(),
+            text: partial,
+            confidence: None,
+        });
+    }
+    for (index, sentence) in sentences.iter().enumerate() {
+        events.push(speaking::StreamEvent::CommittedSegment {
+            role: speaking::TextRole::Recognition,
+            segment_id: speaking::SegmentId(format!("interpretation-sentence-{index}")),
+            text: sentence.text.clone(),
+            words: Vec::new(),
+            language: None,
+            speaker_id: None,
+            confidence: None,
+        });
+    }
+    events.push(speaking::StreamEvent::DerivedArtifact {
+        stage: "interpretation_model".into(),
+        artifact_id: "interpretation-model-output".into(),
+        value: serde_json::json!({
+            "seq2seq_transcript": seq2seq_transcript,
+            "sentence_supervision": sentences,
+            "repair_events": repair_events,
+            "previous_word": word_prediction(prev_word_ids.first(), word_vocab, phonemes.clone()),
+            "current_word": word_prediction(current_word_ids.first(), word_vocab, phonemes.clone()),
+            "next_word": word_prediction(next_word_ids.first(), word_vocab, phonemes),
+        }),
+    });
+    Ok(events)
 }
 
 fn word_prediction(

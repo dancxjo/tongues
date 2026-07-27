@@ -21,8 +21,8 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use speaking::{
-    CompletionHypothesisId, EvidenceProvenance, EvidenceSource, ProsodyTrack,
-    SentenceSyntaxAnalysis, UtteranceId, VarietyId,
+    CompletionHypothesisId, Confidence, EvidenceProvenance, EvidenceSource, ProsodyTrack,
+    SegmentId, SentenceSyntaxAnalysis, StreamEvent, TextRange, TextRole, UtteranceId, VarietyId,
 };
 use thiserror::Error;
 
@@ -51,8 +51,8 @@ pub struct AcousticSpan {
     pub time_start: f32,
     /// Wall-clock end time in seconds relative to utterance start.
     pub time_end: f32,
-    /// Aggregate acoustic confidence in [0.0, 1.0].
-    pub confidence: f32,
+    /// Provider-scoped confidence. `None` means the source did not report one.
+    pub confidence: Option<Confidence>,
 }
 
 /// Direct input evidence. `supports` names the normalized morpheme keys the
@@ -1415,33 +1415,11 @@ pub fn run_fixture(
 }
 
 // ---------------------------------------------------------------------------
-// Provisional transcript events and speculative consumer
+// Central stream IR and speculative consumer
 // ---------------------------------------------------------------------------
 
-/// High-level transcript events emitted by a [`SpeculativeConsumer`].
-///
-/// These are separate from the simulator's internal [`SimulatorEventKind`]:
-/// provisional events describe the evolving *text* view while the simulator
-/// tracks *hypothesis* identity. Downstream consumers (TTS, display) should
-/// listen to these events and not inspect logits or hypothesis internals.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type", content = "data")]
-pub enum ProvisionalTranscriptEvent {
-    /// New provisional morphemes appended beyond the committed frontier.
-    Append { morphemes: Vec<CompletionMorpheme> },
-    /// Existing provisional morphemes replaced in place (revision or repair).
-    Replace {
-        previous: Vec<CompletionMorpheme>,
-        replacement: Vec<CompletionMorpheme>,
-    },
-    /// Previously provisional morphemes withdrawn (no longer supported).
-    Withdraw { morphemes: Vec<CompletionMorpheme> },
-    /// Morphemes moved from provisional to permanent committed history.
-    Commit { morphemes: Vec<CommittedMorpheme> },
-}
-
 /// Downstream consumer that processes [`SimulatorEvent`]s and derives
-/// [`ProvisionalTranscriptEvent`]s without inspecting model logits.
+/// central [`StreamEvent`] values without inspecting model logits.
 ///
 /// Implementors receive raw simulator events and are responsible for
 /// maintaining any local state they need. The trait is object-safe so that
@@ -1482,7 +1460,7 @@ pub struct DuplexTimelineSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_divergent_morpheme_index: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_event: Option<ProvisionalTranscriptEvent>,
+    pub transcript_event: Option<StreamEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1495,10 +1473,10 @@ pub struct DuplexStudioProjection {
     #[serde(default)]
     pub timeline: Vec<DuplexTimelineSnapshot>,
     #[serde(default)]
-    pub transcript_events: Vec<ProvisionalTranscriptEvent>,
+    pub transcript_events: Vec<StreamEvent>,
 }
 
-/// A [`SpeculativeConsumer`] that records all [`ProvisionalTranscriptEvent`]s
+/// A [`SpeculativeConsumer`] that records central [`StreamEvent`] values
 /// as they are derived from the simulator journal.
 ///
 /// It tracks the best-hypothesis provisional suffix after each
@@ -1511,7 +1489,7 @@ pub struct RecordingSpeculativeConsumer {
     committed_len: usize,
     provisional: Vec<CompletionMorpheme>,
     pub committed: Vec<CommittedMorpheme>,
-    pub transcript_events: Vec<ProvisionalTranscriptEvent>,
+    pub transcript_events: Vec<StreamEvent>,
 }
 
 impl RecordingSpeculativeConsumer {
@@ -1569,16 +1547,29 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
                     .unwrap_or_default();
 
                 if new_provisional != self.provisional {
+                    let previous_text = morpheme_text(&self.provisional);
+                    let next_text = morpheme_text(&new_provisional);
                     let event = match (self.provisional.is_empty(), new_provisional.is_empty()) {
-                        (_, true) => ProvisionalTranscriptEvent::Withdraw {
-                            morphemes: self.provisional.clone(),
+                        (_, true) => StreamEvent::HypothesisCancelled {
+                            role: TextRole::Generation,
+                            segment_id: duplex_provisional_segment_id(),
+                            reason: "duplex provider withdrew the provisional branch".into(),
                         },
-                        (true, false) => ProvisionalTranscriptEvent::Append {
-                            morphemes: new_provisional.clone(),
+                        (true, false) => StreamEvent::PartialHypothesis {
+                            role: TextRole::Generation,
+                            segment_id: duplex_provisional_segment_id(),
+                            text: next_text,
+                            confidence: None,
                         },
-                        (false, false) => ProvisionalTranscriptEvent::Replace {
-                            previous: self.provisional.clone(),
-                            replacement: new_provisional.clone(),
+                        (false, false) => StreamEvent::RevisedHypothesis {
+                            role: TextRole::Generation,
+                            segment_id: duplex_provisional_segment_id(),
+                            replaces: TextRange {
+                                start: 0,
+                                end: previous_text.chars().count() as u32,
+                            },
+                            text: next_text,
+                            confidence: None,
                         },
                     };
                     self.transcript_events.push(event);
@@ -1588,10 +1579,19 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
             SimulatorEventKind::CommitFrontierAdvanced { committed, .. } => {
                 self.committed_len += committed.len();
                 self.committed.extend(committed.iter().cloned());
-                self.transcript_events
-                    .push(ProvisionalTranscriptEvent::Commit {
-                        morphemes: committed.clone(),
-                    });
+                self.transcript_events.push(StreamEvent::CommittedSegment {
+                    role: TextRole::Generation,
+                    segment_id: SegmentId(format!("duplex-commit-{}", self.committed_len)),
+                    text: committed
+                        .iter()
+                        .map(|morpheme| morpheme.surface.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    words: Vec::new(),
+                    language: None,
+                    speaker_id: None,
+                    confidence: None,
+                });
                 // Strip committed morphemes from the head of the provisional suffix.
                 let new_len = self.provisional.len().saturating_sub(committed.len());
                 self.provisional = self.provisional[self.provisional.len() - new_len..].to_vec();
@@ -1602,8 +1602,20 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
     }
 }
 
+fn duplex_provisional_segment_id() -> SegmentId {
+    SegmentId("duplex-provisional".into())
+}
+
+fn morpheme_text(morphemes: &[CompletionMorpheme]) -> String {
+    morphemes
+        .iter()
+        .map(|morpheme| morpheme.surface.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Drive a fixture through the simulator and collect the resulting
-/// [`ProvisionalTranscriptEvent`]s via a [`RecordingSpeculativeConsumer`].
+/// central stream events via a [`RecordingSpeculativeConsumer`].
 pub fn run_fixture_with_consumer(
     fixture: &DuplexFixture,
 ) -> Result<
@@ -1676,7 +1688,7 @@ pub fn studio_projection_from_journal(
 fn project_timeline_snapshot(
     state: &SimulatorState,
     event: &SimulatorEvent,
-    transcript_event: Option<ProvisionalTranscriptEvent>,
+    transcript_event: Option<StreamEvent>,
 ) -> DuplexTimelineSnapshot {
     DuplexTimelineSnapshot {
         sequence: event.sequence,
@@ -2850,12 +2862,25 @@ mod tests {
             frame_end: 40,
             time_start: 0.0,
             time_end: 0.5,
-            confidence: 0.92,
+            confidence: Some(Confidence {
+                value: 0.92,
+                scale: speaking::ConfidenceScale::Probability,
+                calibration: None,
+            }),
         };
         let ev = ObservedEvidence::acoustics_with_span("acoustic:0", "hello world", span.clone());
         assert_eq!(ev.acoustic_span.as_ref().unwrap().frame_start, 0);
         assert_eq!(ev.acoustic_span.as_ref().unwrap().frame_end, 40);
-        assert!((ev.acoustic_span.as_ref().unwrap().confidence - 0.92).abs() < 1e-5);
+        assert_eq!(
+            ev.acoustic_span
+                .as_ref()
+                .unwrap()
+                .confidence
+                .as_ref()
+                .unwrap()
+                .value,
+            0.92
+        );
 
         // Verify the span round-trips through serde unchanged.
         let json = serde_json::to_string(&ev).unwrap();
@@ -2892,8 +2917,7 @@ mod tests {
         assert!(
             consumer.transcript_events.iter().any(|ev| matches!(
                 ev,
-                ProvisionalTranscriptEvent::Replace { .. }
-                    | ProvisionalTranscriptEvent::Withdraw { .. }
+                StreamEvent::RevisedHypothesis { .. } | StreamEvent::HypothesisCancelled { .. }
             )),
             "expected Replace or Withdraw transcript event; got {:?}",
             consumer.transcript_events
@@ -2904,7 +2928,7 @@ mod tests {
             consumer
                 .transcript_events
                 .iter()
-                .any(|ev| matches!(ev, ProvisionalTranscriptEvent::Commit { .. })),
+                .any(|ev| matches!(ev, StreamEvent::CommittedSegment { .. })),
             "expected at least one Commit event"
         );
 
@@ -2938,8 +2962,7 @@ mod tests {
         assert!(
             consumer.transcript_events.iter().any(|ev| matches!(
                 ev,
-                ProvisionalTranscriptEvent::Append { .. }
-                    | ProvisionalTranscriptEvent::Commit { .. }
+                StreamEvent::PartialHypothesis { .. } | StreamEvent::CommittedSegment { .. }
             )),
             "expected Append or Commit events; got {:?}",
             consumer.transcript_events

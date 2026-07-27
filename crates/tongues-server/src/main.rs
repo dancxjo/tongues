@@ -17,6 +17,10 @@ use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn_cuda::{Cuda, CudaDevice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use speaking::{
+    AudioDirection, AudioEncoding, AudioFormat, ChannelLayout, ClockOrigin, EventRef, EventTime,
+    Provenance, SegmentId, StreamEvent, StreamEventSequencer, TextRole, UtteranceEventId,
+};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
@@ -410,6 +414,8 @@ async fn start_live_turn(
         turns.insert(turn_id.clone(), Arc::clone(&cancelled));
     }
 
+    let provider_name = request.turn.provider.clone();
+    let provider_model = request.turn.model.clone();
     let source = live::spawn_turn(request.turn, Arc::clone(&cancelled));
     let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<String>(64);
     let registry = Arc::clone(&state.live_turns);
@@ -418,24 +424,36 @@ async fn start_live_turn(
     tokio::spawn(async move {
         let mut source = source;
         let (synthesis_tx, mut synthesis_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(usize, String)>();
+            tokio::sync::mpsc::unbounded_channel::<(SegmentId, String, EventRef)>();
         let mut synthesis_tx = Some(synthesis_tx);
-        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<live::TurnEvent>(16);
+        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<(StreamEvent, Provenance)>(16);
         let synthesis_state = coordinator_state.clone();
         let synthesis_cancelled = Arc::clone(&cancelled);
-        let synthesis_turn_id = coordinator_turn_id.clone();
         let synthesis_worker = tokio::spawn(async move {
-            while let Some((segment_id, text)) = synthesis_rx.recv().await {
+            while let Some((segment_id, text, source_event)) = synthesis_rx.recv().await {
                 if synthesis_cancelled.load(Ordering::Acquire) {
                     break;
                 }
                 if audio_tx
-                    .send(live::TurnEvent::SynthesisStarted {
-                        turn_id: synthesis_turn_id.clone(),
-                        segment_id,
-                        text: text.clone(),
-                        started_at_ms: live_event_time_ms(),
-                    })
+                    .send((
+                        StreamEvent::OutputRequested {
+                            utterance_id: UtteranceEventId(segment_id.0.clone()),
+                            caused_by: vec![source_event.clone()],
+                        },
+                        Provenance::derived_from(vec![source_event.clone()]),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                if audio_tx
+                    .send((
+                        StreamEvent::OutputStarted {
+                            utterance_id: UtteranceEventId(segment_id.0.clone()),
+                        },
+                        Provenance::derived_from(vec![source_event.clone()]),
+                    ))
                     .await
                     .is_err()
                 {
@@ -446,6 +464,8 @@ async fn start_live_turn(
                 match synthesize_live_speech(&synthesis_state, segment_request).await {
                     Ok(output) if !synthesis_cancelled.load(Ordering::Acquire) => {
                         let metadata = json!({
+                            "text": text,
+                            "content_type": "audio/wav",
                             "engine": output.engine_key,
                             "device": output.device.kind(),
                             "device_index": output.device.index(),
@@ -460,31 +480,65 @@ async fn start_live_turn(
                             "resident_model_reused": !output.loaded_now,
                             "pronunciation_warnings": output.pronunciation_warnings,
                         });
-                        let event = live::TurnEvent::AudioSegmentReady {
-                            turn_id: synthesis_turn_id.clone(),
-                            segment_id,
-                            text,
-                            audio_base64: base64::engine::general_purpose::STANDARD
-                                .encode(output.wav),
-                            content_type: "audio/wav",
-                            sample_rate_hz: output.sample_rate_hz,
-                            duration_seconds: output.audio_seconds,
-                            synthesis_ms: output.synthesis_ms,
-                            speech_metadata: metadata,
-                            ready_at_ms: live_event_time_ms(),
+                        let event = StreamEvent::AudioChunk {
+                            direction: AudioDirection::Output,
+                            chunk_sequence: 0,
+                            frame_count: u32::try_from(output.sample_count).unwrap_or(u32::MAX),
+                            segment_id: Some(segment_id.clone()),
+                            format: Some(AudioFormat {
+                                encoding: AudioEncoding::Wav,
+                                sample_rate_hz: output.sample_rate_hz,
+                                channels: if output.channels == 1 {
+                                    ChannelLayout::Mono
+                                } else {
+                                    ChannelLayout::Interleaved {
+                                        labels: (0..output.channels)
+                                            .map(|channel| format!("channel_{channel}"))
+                                            .collect(),
+                                    }
+                                },
+                            }),
+                            audio_base64: Some(
+                                base64::engine::general_purpose::STANDARD.encode(output.wav),
+                            ),
+                            metadata: metadata
+                                .as_object()
+                                .cloned()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .collect(),
                         };
-                        if audio_tx.send(event).await.is_err() {
+                        if audio_tx
+                            .send((event, Provenance::derived_from(vec![source_event.clone()])))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        if audio_tx
+                            .send((
+                                StreamEvent::OutputFinished {
+                                    utterance_id: UtteranceEventId(segment_id.0),
+                                },
+                                Provenance::derived_from(vec![source_event]),
+                            ))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
                     Ok(_) => break,
                     Err(message) => {
                         let _ = audio_tx
-                            .send(live::TurnEvent::TurnFailed {
-                                turn_id: synthesis_turn_id.clone(),
-                                message,
-                                failed_at_ms: live_event_time_ms(),
-                            })
+                            .send((
+                                StreamEvent::Error {
+                                    code: "synthesis_failure".into(),
+                                    message,
+                                    recoverable: false,
+                                },
+                                Provenance::derived_from(vec![source_event]),
+                            ))
                             .await;
                         synthesis_cancelled.store(true, Ordering::Release);
                         break;
@@ -492,45 +546,89 @@ async fn start_live_turn(
                 }
             }
         });
-        let mut generation_done: Option<(String, String)> = None;
+        let mut generation_done = false;
+        let mut latest_generation_ref: Option<EventRef> = None;
+        let mut sequencer = StreamEventSequencer::new(format!("live:{coordinator_turn_id}"));
+        let mut provider_provenance = Provenance::direct();
+        provider_provenance.provider = Some(provider_name);
+        provider_provenance.model = Some(provider_model);
         let mut source_open = true;
         let mut audio_open = true;
         let mut audio_segments = 0;
         while source_open || audio_open {
             tokio::select! {
                 event = source.recv(), if source_open => match event {
-                    Some(ref event @ live::TurnEvent::SegmentCommitted {
-                        segment_id,
+                    Some(ref event @ StreamEvent::CommittedSegment {
+                        role: TextRole::Generation,
+                        ref segment_id,
                         ref text,
                         ..
                     }) => {
-                        if send_live_event(&stream_tx, &event).await.is_err() {
-                            cancelled.store(true, Ordering::Release);
-                            break;
-                        }
+                        let provenance = latest_generation_ref
+                            .clone()
+                            .map(|source| Provenance::derived_from(vec![source]))
+                            .unwrap_or_else(|| provider_provenance.clone());
+                        let event_ref = match send_live_event(
+                            &stream_tx,
+                            &mut sequencer,
+                            event.clone(),
+                            provenance,
+                        ).await {
+                            Ok(event_ref) => event_ref,
+                            Err(_) => {
+                                cancelled.store(true, Ordering::Release);
+                                break;
+                            }
+                        };
                         if synthesis_tx
                             .as_ref()
                             .expect("synthesis queue is open while generation is open")
-                            .send((segment_id, text.clone()))
+                            .send((segment_id.clone(), text.clone(), event_ref))
                             .is_err()
                         {
                             break;
                         }
                     }
-                    Some(ref event @ live::TurnEvent::GenerationCompleted {
-                        ref generated_text,
-                        ref committed_text,
+                    Some(event @ StreamEvent::TextCompleted {
+                        role: TextRole::Generation,
                         ..
                     }) => {
-                        generation_done = Some((generated_text.clone(), committed_text.clone()));
-                        let _ = send_live_event(&stream_tx, &event).await;
+                        generation_done = true;
+                        let provenance = latest_generation_ref
+                            .clone()
+                            .map(|source| Provenance::derived_from(vec![source]))
+                            .unwrap_or_else(|| provider_provenance.clone());
+                        let _ = send_live_event(
+                            &stream_tx,
+                            &mut sequencer,
+                            event,
+                            provenance,
+                        ).await;
                         source_open = false;
                         synthesis_tx.take();
                     }
                     Some(event) => {
-                        if send_live_event(&stream_tx, &event).await.is_err() {
-                            cancelled.store(true, Ordering::Release);
-                            break;
+                        let is_generation = matches!(
+                            event,
+                            StreamEvent::PartialHypothesis {
+                                role: TextRole::Generation,
+                                ..
+                            }
+                        );
+                        match send_live_event(
+                            &stream_tx,
+                            &mut sequencer,
+                            event,
+                            provider_provenance.clone(),
+                        ).await {
+                            Ok(event_ref) if is_generation => {
+                                latest_generation_ref = Some(event_ref);
+                            }
+                            Ok(_) => {}
+                            Err(_) => {
+                                cancelled.store(true, Ordering::Release);
+                                break;
+                            }
                         }
                     }
                     None => {
@@ -539,11 +637,11 @@ async fn start_live_turn(
                     }
                 },
                 event = audio_rx.recv(), if audio_open => match event {
-                    Some(event) => {
-                        if matches!(event, live::TurnEvent::AudioSegmentReady { .. }) {
+                    Some((event, provenance)) => {
+                        if matches!(event, StreamEvent::AudioChunk { direction: AudioDirection::Output, .. }) {
                             audio_segments += 1;
                         }
-                        if send_live_event(&stream_tx, &event).await.is_err() {
+                        if send_live_event(&stream_tx, &mut sequencer, event, provenance).await.is_err() {
                             cancelled.store(true, Ordering::Release);
                             break;
                         }
@@ -557,24 +655,29 @@ async fn start_live_turn(
         }
         synthesis_tx.take();
         let _ = synthesis_worker.await;
-        while let Ok(event) = audio_rx.try_recv() {
-            if matches!(event, live::TurnEvent::AudioSegmentReady { .. }) {
+        while let Ok((event, provenance)) = audio_rx.try_recv() {
+            if matches!(
+                event,
+                StreamEvent::AudioChunk {
+                    direction: AudioDirection::Output,
+                    ..
+                }
+            ) {
                 audio_segments += 1;
             }
-            let _ = send_live_event(&stream_tx, &event).await;
+            let _ = send_live_event(&stream_tx, &mut sequencer, event, provenance).await;
         }
-        if !cancelled.load(Ordering::Acquire)
-            && let Some((generated_text, committed_text)) = generation_done
-        {
+        if !cancelled.load(Ordering::Acquire) && generation_done {
+            let mut provenance = Provenance::direct();
+            provenance.attributes.insert(
+                "audio_segments".into(),
+                serde_json::Value::from(audio_segments),
+            );
             let _ = send_live_event(
                 &stream_tx,
-                &live::TurnEvent::TurnCompleted {
-                    turn_id: coordinator_turn_id,
-                    generated_text,
-                    committed_text,
-                    audio_segments,
-                    completed_at_ms: live_event_time_ms(),
-                },
+                &mut sequencer,
+                StreamEvent::Completed,
+                provenance,
             )
             .await;
         }
@@ -597,23 +700,43 @@ async fn start_live_turn(
 
 async fn send_live_event(
     sink: &tokio::sync::mpsc::Sender<String>,
-    event: &live::TurnEvent,
-) -> Result<(), tokio::sync::mpsc::error::SendError<String>> {
-    let line = serde_json::to_string(event).unwrap_or_else(|error| {
-        serde_json::to_string(&json!({
-            "type": "turn_failed",
-            "message": format!("serializing live event failed: {error}"),
-        }))
-        .unwrap()
-    });
-    sink.send(format!("{line}\n")).await
+    sequencer: &mut StreamEventSequencer,
+    event: StreamEvent,
+    provenance: Provenance,
+) -> Result<EventRef, tokio::sync::mpsc::error::SendError<String>> {
+    let mut envelope = sequencer.push(
+        event,
+        EventTime {
+            origin: ClockOrigin::UnixEpoch,
+            offset_ms: live_event_time_ms(),
+        },
+        provenance,
+    );
+    let event_ref = envelope.event_ref();
+    let line = match serde_json::to_string(&envelope) {
+        Ok(line) => line,
+        Err(error) => {
+            envelope.provenance = Provenance::direct();
+            envelope.event = StreamEvent::Error {
+                code: "event_serialization_failed".into(),
+                message: format!("serializing live event failed: {error}"),
+                recoverable: false,
+            };
+            serde_json::to_string(&envelope)
+                .expect("the central stream error envelope contains only finite data")
+        }
+    };
+    sink.send(format!("{line}\n")).await?;
+    Ok(event_ref)
 }
 
-fn live_event_time_ms() -> u64 {
+fn live_event_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis()
+        .try_into()
+        .unwrap_or(i64::MAX)
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {

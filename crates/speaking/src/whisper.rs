@@ -9,9 +9,8 @@ mod imp {
         AudioFrame, SpeechRecognizer, StreamingPartialKind, StreamingRecognition,
         StreamingRecognizerBackend, StreamingSpeechRecognizer,
     };
-    use crate::transcript::{
-        TranscriptCandidateEvent, TranscriptCandidateTracker, TranscriptChunk,
-    };
+    use crate::event::StreamEvent;
+    use crate::transcript::{TranscriptCandidateTracker, TranscriptChunk};
     use crate::word_stream::TranscriptWord;
 
     #[derive(Debug, Clone, PartialEq)]
@@ -115,15 +114,15 @@ mod imp {
             }))
         }
 
-        pub fn poll_candidate_events(&mut self) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
-            self.poll_candidate_events_with_finality(true)
+        pub fn poll_events(&mut self) -> anyhow::Result<Vec<StreamEvent>> {
+            self.poll_events_with_finality(true)
         }
 
-        pub fn poll_candidate_events_with_finality(
+        pub fn poll_events_with_finality(
             &mut self,
             is_final: bool,
-        ) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
-            Ok(self.poll_streaming(is_final)?.candidate_events)
+        ) -> anyhow::Result<Vec<StreamEvent>> {
+            Ok(self.poll_streaming(is_final)?.events)
         }
 
         pub fn poll_timed_transcript_with_finality(
@@ -238,7 +237,7 @@ mod imp {
                 .as_ref()
                 .map(|transcript| (transcript.text.clone(), transcript.words.clone()))
                 .unwrap_or_default();
-            let candidate_events = if transcript.is_some() {
+            let events = if transcript.is_some() {
                 self.candidate_tracker
                     .ingest_candidate(text.clone(), None, is_final)
             } else if is_final {
@@ -249,7 +248,7 @@ mod imp {
             Ok(StreamingRecognition {
                 text,
                 words,
-                candidate_events,
+                events,
                 backend: self.backend(),
             })
         }

@@ -1,5 +1,6 @@
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
+use speaking::{SegmentId, StreamEvent, TextRole};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
@@ -48,85 +49,11 @@ pub struct LiveProvider {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TurnEvent {
-    TurnStarted {
-        turn_id: String,
-        provider: String,
-        model: String,
-        started_at_ms: u64,
-    },
-    TextDelta {
-        turn_id: String,
-        delta: String,
-        generated_chars: usize,
-        received_at_ms: u64,
-    },
-    SegmentCommitted {
-        turn_id: String,
-        segment_id: usize,
-        text: String,
-        start_char: usize,
-        end_char: usize,
-        left_context: String,
-        continuation: bool,
-        committed_at_ms: u64,
-    },
-    GenerationCompleted {
-        turn_id: String,
-        generated_text: String,
-        committed_text: String,
-        completed_at_ms: u64,
-    },
-    SynthesisStarted {
-        turn_id: String,
-        segment_id: usize,
-        text: String,
-        started_at_ms: u64,
-    },
-    AudioSegmentReady {
-        turn_id: String,
-        segment_id: usize,
-        text: String,
-        audio_base64: String,
-        content_type: &'static str,
-        sample_rate_hz: u32,
-        duration_seconds: f64,
-        synthesis_ms: f64,
-        speech_metadata: serde_json::Value,
-        ready_at_ms: u64,
-    },
-    TurnCompleted {
-        turn_id: String,
-        generated_text: String,
-        committed_text: String,
-        audio_segments: usize,
-        completed_at_ms: u64,
-    },
-    TurnCancelled {
-        turn_id: String,
-        generated_text: String,
-        committed_text: String,
-        cancelled_at_ms: u64,
-    },
-    TurnFailed {
-        turn_id: String,
-        message: String,
-        failed_at_ms: u64,
-    },
-}
-
-#[derive(Debug)]
-pub enum ProviderEvent {
-    Delta(String),
-}
-
 pub trait StreamingTextProvider: Send + Sync {
     fn stream_turn<'a>(
         &'a self,
         request: &'a ChatTurnRequest,
-        events: mpsc::Sender<ProviderEvent>,
+        events: mpsc::Sender<StreamEvent>,
         cancelled: Arc<AtomicBool>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 }
@@ -194,7 +121,7 @@ impl StreamingTextProvider for OllamaProvider {
     fn stream_turn<'a>(
         &'a self,
         request: &'a ChatTurnRequest,
-        events: mpsc::Sender<ProviderEvent>,
+        events: mpsc::Sender<StreamEvent>,
         cancelled: Arc<AtomicBool>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -231,6 +158,7 @@ impl StreamingTextProvider for OllamaProvider {
                 .error_for_status()
                 .context("Ollama rejected the chat request")?;
             let mut buffered = Vec::new();
+            let mut generated = String::new();
             while let Some(chunk) = response.chunk().await? {
                 if cancelled.load(Ordering::Acquire) {
                     return Ok(());
@@ -248,13 +176,23 @@ impl StreamingTextProvider for OllamaProvider {
                         anyhow::bail!("Ollama stream failed: {error}");
                     }
                     if let Some(message) = chunk.message {
-                        if !message.content.is_empty()
-                            && events
-                                .send(ProviderEvent::Delta(message.content))
+                        if !message.content.is_empty() {
+                            generated.push_str(&message.content);
+                            if events
+                                .send(StreamEvent::PartialHypothesis {
+                                    role: TextRole::Generation,
+                                    segment_id: SegmentId(format!(
+                                        "generation-{}",
+                                        request.turn_id
+                                    )),
+                                    text: generated.clone(),
+                                    confidence: None,
+                                })
                                 .await
                                 .is_err()
-                        {
-                            return Ok(());
+                            {
+                                return Ok(());
+                            }
                         }
                     }
                     if chunk.done {
@@ -273,7 +211,7 @@ impl StreamingTextProvider for DeterministicProvider {
     fn stream_turn<'a>(
         &'a self,
         request: &'a ChatTurnRequest,
-        events: mpsc::Sender<ProviderEvent>,
+        events: mpsc::Sender<StreamEvent>,
         cancelled: Arc<AtomicBool>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -289,12 +227,19 @@ impl StreamingTextProvider for DeterministicProvider {
                 "Speech starts now. I am answering about {topic}. \
                  More words are still arriving. Generation and playback continue together."
             );
+            let mut generated = String::new();
             for token in response.split_inclusive(' ') {
                 if cancelled.load(Ordering::Acquire) {
                     break;
                 }
+                generated.push_str(token);
                 if events
-                    .send(ProviderEvent::Delta(token.into()))
+                    .send(StreamEvent::PartialHypothesis {
+                        role: TextRole::Generation,
+                        segment_id: SegmentId(format!("generation-{}", request.turn_id)),
+                        text: generated.clone(),
+                        confidence: None,
+                    })
                     .await
                     .is_err()
                 {
@@ -352,16 +297,12 @@ pub async fn provider_discovery() -> Vec<LiveProvider> {
 pub fn spawn_turn(
     request: ChatTurnRequest,
     cancelled: Arc<AtomicBool>,
-) -> mpsc::Receiver<TurnEvent> {
+) -> mpsc::Receiver<StreamEvent> {
     let (turn_tx, turn_rx) = mpsc::channel(64);
     tokio::spawn(async move {
-        let started = now_ms();
         let _ = turn_tx
-            .send(TurnEvent::TurnStarted {
-                turn_id: request.turn_id.clone(),
-                provider: request.provider.clone(),
-                model: request.model.clone(),
-                started_at_ms: started,
+            .send(StreamEvent::SessionStarted {
+                purpose: "generated_speech_turn".into(),
             })
             .await;
         let (provider_tx, mut provider_rx) = mpsc::channel(32);
@@ -395,39 +336,47 @@ pub fn spawn_turn(
         let mut committed = String::new();
         let mut segmenter = StreamingSegmenter::default();
         let mut segment_id = 0;
-        while let Some(ProviderEvent::Delta(delta)) = provider_rx.recv().await {
+        while let Some(event) = provider_rx.recv().await {
             if cancelled.load(Ordering::Acquire) {
                 break;
             }
-            generated.push_str(&delta);
-            if turn_tx
-                .send(TurnEvent::TextDelta {
-                    turn_id: request.turn_id.clone(),
-                    delta: delta.clone(),
-                    generated_chars: generated.chars().count(),
-                    received_at_ms: now_ms(),
-                })
-                .await
-                .is_err()
-            {
+            let StreamEvent::PartialHypothesis {
+                role: TextRole::Generation,
+                ref text,
+                ..
+            } = event
+            else {
+                if turn_tx.send(event).await.is_err() {
+                    cancelled.store(true, Ordering::Release);
+                    return;
+                }
+                continue;
+            };
+            let Some(delta) = text.strip_prefix(&generated).map(str::to_owned) else {
+                let _ = send_failure(
+                    &turn_tx,
+                    &request.turn_id,
+                    "text provider revised already streamed generation".into(),
+                )
+                .await;
+                return;
+            };
+            generated = text.clone();
+            if turn_tx.send(event).await.is_err() {
                 cancelled.store(true, Ordering::Release);
                 return;
             }
             for segment in segmenter.push(&delta) {
                 segment_id += 1;
-                let start_char = committed.chars().count();
                 committed.push_str(&segment);
-                let end_char = committed.chars().count();
-                let left_context = left_context(&committed, segment.chars().count());
-                let event = TurnEvent::SegmentCommitted {
-                    turn_id: request.turn_id.clone(),
-                    segment_id,
+                let event = StreamEvent::CommittedSegment {
+                    role: TextRole::Generation,
+                    segment_id: SegmentId(format!("generation-segment-{segment_id}")),
                     text: segment,
-                    start_char,
-                    end_char,
-                    left_context,
-                    continuation: segment_id > 1,
-                    committed_at_ms: now_ms(),
+                    words: Vec::new(),
+                    language: None,
+                    speaker_id: None,
+                    confidence: None,
                 };
                 if turn_tx.send(event).await.is_err() {
                     cancelled.store(true, Ordering::Release);
@@ -441,11 +390,13 @@ pub fn spawn_turn(
                 committed.push_str(&segment);
             }
             let _ = turn_tx
-                .send(TurnEvent::TurnCancelled {
-                    turn_id: request.turn_id,
-                    generated_text: generated,
-                    committed_text: committed,
-                    cancelled_at_ms: now_ms(),
+                .send(StreamEvent::Cancelled {
+                    reason: format!(
+                        "turn {} cancelled after {} generated and {} committed characters",
+                        request.turn_id,
+                        generated.chars().count(),
+                        committed.chars().count()
+                    ),
                 })
                 .await;
             return;
@@ -454,20 +405,16 @@ pub fn spawn_turn(
             Ok(Ok(())) => {
                 for segment in segmenter.finish() {
                     segment_id += 1;
-                    let start_char = committed.chars().count();
                     committed.push_str(&segment);
-                    let end_char = committed.chars().count();
-                    let left_context = left_context(&committed, segment.chars().count());
                     if turn_tx
-                        .send(TurnEvent::SegmentCommitted {
-                            turn_id: request.turn_id.clone(),
-                            segment_id,
+                        .send(StreamEvent::CommittedSegment {
+                            role: TextRole::Generation,
+                            segment_id: SegmentId(format!("generation-segment-{segment_id}")),
                             text: segment,
-                            start_char,
-                            end_char,
-                            left_context,
-                            continuation: segment_id > 1,
-                            committed_at_ms: now_ms(),
+                            words: Vec::new(),
+                            language: None,
+                            speaker_id: None,
+                            confidence: None,
                         })
                         .await
                         .is_err()
@@ -476,11 +423,9 @@ pub fn spawn_turn(
                     }
                 }
                 let _ = turn_tx
-                    .send(TurnEvent::GenerationCompleted {
-                        turn_id: request.turn_id,
-                        generated_text: generated,
-                        committed_text: committed,
-                        completed_at_ms: now_ms(),
+                    .send(StreamEvent::TextCompleted {
+                        role: TextRole::Generation,
+                        text: generated,
                     })
                     .await;
             }
@@ -501,14 +446,14 @@ pub fn spawn_turn(
 }
 
 async fn send_failure(
-    sink: &mpsc::Sender<TurnEvent>,
-    turn_id: &str,
+    sink: &mpsc::Sender<StreamEvent>,
+    _turn_id: &str,
     message: String,
-) -> Result<(), mpsc::error::SendError<TurnEvent>> {
-    sink.send(TurnEvent::TurnFailed {
-        turn_id: turn_id.into(),
+) -> Result<(), mpsc::error::SendError<StreamEvent>> {
+    sink.send(StreamEvent::Error {
+        code: "provider_failure".into(),
         message,
-        failed_at_ms: now_ms(),
+        recoverable: false,
     })
     .await
 }
@@ -548,25 +493,6 @@ fn nonempty(value: &Option<String>) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn left_context(committed: &str, current_chars: usize) -> String {
-    committed
-        .chars()
-        .rev()
-        .skip(current_chars)
-        .take(80)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
 }
 
 #[derive(Default)]
@@ -749,49 +675,59 @@ mod tests {
         let mut saw_segment_before_done = false;
         while let Some(event) = events.recv().await {
             match event {
-                TurnEvent::TextDelta { delta, .. } => {
+                StreamEvent::PartialHypothesis {
+                    role: TextRole::Generation,
+                    text,
+                    ..
+                } => {
                     saw_delta = true;
-                    generated.push_str(&delta);
+                    generated = text;
                 }
-                TurnEvent::SegmentCommitted { text, .. } => {
+                StreamEvent::CommittedSegment {
+                    role: TextRole::Generation,
+                    text,
+                    ..
+                } => {
                     assert!(saw_delta);
                     saw_segment_before_done = true;
                     committed.push_str(&text);
                 }
-                TurnEvent::GenerationCompleted {
-                    generated_text,
-                    committed_text,
-                    ..
+                StreamEvent::TextCompleted {
+                    role: TextRole::Generation,
+                    text,
                 } => {
                     assert!(saw_segment_before_done);
-                    assert_eq!(generated_text, generated);
-                    assert_eq!(committed_text, generated);
+                    assert_eq!(text, generated);
                     assert_eq!(committed, generated);
                     return;
                 }
                 _ => {}
             }
         }
-        panic!("deterministic turn ended without generation_completed");
+        panic!("deterministic turn ended without text_completed");
     }
 
     #[test]
     fn audio_event_serializes_as_a_typed_stream_record() {
-        let event = TurnEvent::AudioSegmentReady {
-            turn_id: "turn-audio".into(),
-            segment_id: 2,
-            text: "Hello.".into(),
-            audio_base64: "UklGRg==".into(),
-            content_type: "audio/wav",
-            sample_rate_hz: 24_000,
-            duration_seconds: 0.5,
-            synthesis_ms: 20.0,
-            speech_metadata: serde_json::json!({ "resident_model_reused": true }),
-            ready_at_ms: 42,
+        let event = StreamEvent::AudioChunk {
+            direction: speaking::AudioDirection::Output,
+            chunk_sequence: 0,
+            frame_count: 12_000,
+            segment_id: Some(SegmentId("generation-segment-2".into())),
+            format: Some(speaking::AudioFormat {
+                encoding: speaking::AudioEncoding::Wav,
+                sample_rate_hz: 24_000,
+                channels: speaking::ChannelLayout::Mono,
+            }),
+            audio_base64: Some("UklGRg==".into()),
+            metadata: std::collections::BTreeMap::from([(
+                "resident_model_reused".into(),
+                serde_json::Value::Bool(true),
+            )]),
         };
         let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["type"], "audio_segment_ready");
-        assert_eq!(value["segment_id"], 2);
-        assert_eq!(value["content_type"], "audio/wav");
+        assert_eq!(value["type"], "audio_chunk");
+        assert_eq!(value["data"]["direction"], "output");
+        assert_eq!(value["data"]["format"]["encoding"], "wav");
     }
 }

@@ -40,8 +40,10 @@ use burn_cuda::{Cuda, CudaDevice};
 
 use speaking::data::notation::openepd::normalize_openepd_ipa;
 use speaking::{
-    AudioFrame, EvidenceProvenance, EvidenceSource, PhoneToken, Spec, SpeechRecognizer,
-    UtteranceId, UtterancePlan, VarietyId, WhisperSpeechRecognizer,
+    write_jsonl, AudioDirection, AudioEncoding, AudioFormat, AudioFrame, ChannelLayout,
+    ClockOrigin, EventTime, EvidenceProvenance, EvidenceSource, PhoneToken, Provenance, Spec,
+    SpeechRecognizer, StreamEvent, StreamEventSequencer, StreamSource, UtteranceId, UtterancePlan,
+    VarietyId, WhisperSpeechRecognizer,
 };
 use styletts2::{
     prepare_styletts2_plan, styletts2_en_us_symbol_set, styletts2_text_for_symbols,
@@ -9121,7 +9123,7 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 model_dir,
                 &device,
             )?;
-            let event = tongues_interpretation::stream_from_samples(
+            let events = tongues_interpretation::stream_from_samples(
                 &model,
                 &samples,
                 &vocab,
@@ -9131,7 +9133,7 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 model_config.mel_bins,
                 &device,
             )?;
-            println!("{}", serde_json::to_string_pretty(&event)?);
+            write_interpretation_stream(&mut std::io::stdout(), wav, samples.len(), events)?;
         }
         DeviceArg::Cuda { index } => {
             let device = CudaDevice::new(index);
@@ -9140,7 +9142,7 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 model_dir,
                 &device,
             )?;
-            let event = tongues_interpretation::stream_from_samples(
+            let events = tongues_interpretation::stream_from_samples(
                 &model,
                 &samples,
                 &vocab,
@@ -9150,10 +9152,85 @@ fn cmd_interpretation_stream(model_dir: &Path, wav: &Path, device_arg: DeviceArg
                 model_config.mel_bins,
                 &device,
             )?;
-            println!("{}", serde_json::to_string_pretty(&event)?);
+            write_interpretation_stream(&mut std::io::stdout(), wav, samples.len(), events)?;
         }
     }
     Ok(())
+}
+
+fn write_interpretation_stream(
+    writer: &mut impl Write,
+    wav: &Path,
+    sample_count: usize,
+    model_events: Vec<StreamEvent>,
+) -> Result<()> {
+    let stream_name = wav
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let mut sequence = StreamEventSequencer::new(format!("interpretation:{stream_name}"));
+    let at = |offset_ms| EventTime {
+        origin: ClockOrigin::StreamStart,
+        offset_ms,
+    };
+    let mut events = Vec::new();
+    events.push(sequence.push(
+        StreamEvent::SessionStarted {
+            purpose: "file_recognition".into(),
+        },
+        at(0),
+        Provenance::direct(),
+    ));
+    events.push(sequence.push(
+        StreamEvent::StreamOpened {
+            source: StreamSource::File {
+                path: wav.display().to_string(),
+            },
+            format: AudioFormat {
+                encoding: AudioEncoding::PcmF32Le,
+                sample_rate_hz: 16_000,
+                channels: ChannelLayout::Mono,
+            },
+            clock: ClockOrigin::StreamStart,
+        },
+        at(0),
+        Provenance::direct(),
+    ));
+    let audio = sequence.push(
+        StreamEvent::AudioChunk {
+            direction: AudioDirection::Input,
+            chunk_sequence: 0,
+            frame_count: u32::try_from(sample_count).unwrap_or(u32::MAX),
+            segment_id: None,
+            format: None,
+            audio_base64: None,
+            metadata: Default::default(),
+        },
+        at(0),
+        Provenance::direct(),
+    );
+    let audio_ref = audio.event_ref();
+    events.push(audio);
+    let duration_ms =
+        i64::try_from(sample_count.saturating_mul(1_000) / 16_000).unwrap_or(i64::MAX);
+    events.push(sequence.push(
+        StreamEvent::EndOfStream,
+        at(duration_ms),
+        Provenance::direct(),
+    ));
+    for event in model_events {
+        events.push(sequence.push(
+            event,
+            at(duration_ms),
+            Provenance::derived_from(vec![audio_ref.clone()]),
+        ));
+    }
+    events.push(sequence.push(
+        StreamEvent::Completed,
+        at(duration_ms),
+        Provenance::derived_from(vec![audio_ref]),
+    ));
+    write_jsonl(writer, events)
 }
 
 fn read_wav_mono_16k(path: &Path) -> Result<Vec<f32>> {
@@ -13609,5 +13686,39 @@ mod tests {
             .expect("legacy infer alias should parse");
 
         assert!(matches!(cli.command, Some(Commands::Predict { .. })));
+    }
+
+    #[test]
+    fn interpretation_cli_writes_the_central_contract_as_jsonl() {
+        let mut output = Vec::new();
+        write_interpretation_stream(
+            &mut output,
+            Path::new("fixture.wav"),
+            16_000,
+            vec![StreamEvent::PartialHypothesis {
+                role: speaking::TextRole::Recognition,
+                segment_id: speaking::SegmentId("segment-1".into()),
+                text: "hello".into(),
+                confidence: None,
+            }],
+        )
+        .unwrap();
+        let envelopes = speaking::read_jsonl(std::io::Cursor::new(output)).unwrap();
+        assert!(matches!(
+            envelopes.first().map(|envelope| &envelope.event),
+            Some(StreamEvent::SessionStarted { .. })
+        ));
+        assert!(matches!(
+            envelopes.last().map(|envelope| &envelope.event),
+            Some(StreamEvent::Completed)
+        ));
+        let mut validator = speaking::StreamValidator::default();
+        for envelope in &envelopes {
+            validator.validate(envelope).unwrap();
+        }
+        assert!(envelopes.iter().any(|envelope| {
+            envelope.provenance.kind == speaking::ProvenanceKind::Derived
+                && !envelope.provenance.sources.is_empty()
+        }));
     }
 }

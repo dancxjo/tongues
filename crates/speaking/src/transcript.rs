@@ -1,4 +1,5 @@
 use crate::text_stability::stable_prefix_len;
+use crate::{Confidence, ConfidenceScale, SegmentId, StreamEvent, TextRange, TextRole};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranscriptChunk {
@@ -6,40 +7,7 @@ pub struct TranscriptChunk {
     pub is_final: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TranscriptCandidateId(pub u64);
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TranscriptReplacementReason {
-    HeadChanged { stable_prefix_len: usize },
-    Restarted,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TranscriptCandidateEvent {
-    CandidateStarted {
-        id: TranscriptCandidateId,
-    },
-    CandidateUpdated {
-        id: TranscriptCandidateId,
-        text: String,
-        stable_prefix_len: usize,
-        confidence: Option<f32>,
-    },
-    CandidateReplaced {
-        old: TranscriptCandidateId,
-        new: TranscriptCandidateId,
-        reason: TranscriptReplacementReason,
-    },
-    CandidateFinalized {
-        id: TranscriptCandidateId,
-        text: String,
-        confidence: Option<f32>,
-    },
-    CandidateCancelled {
-        id: TranscriptCandidateId,
-    },
-}
+pub type TranscriptCandidateId = SegmentId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranscriptStabilityState {
@@ -70,7 +38,7 @@ impl TranscriptCandidateTracker {
         Self::default()
     }
 
-    pub fn ingest_chunk(&mut self, chunk: TranscriptChunk) -> Vec<TranscriptCandidateEvent> {
+    pub fn ingest_chunk(&mut self, chunk: TranscriptChunk) -> Vec<StreamEvent> {
         self.ingest_candidate(chunk.text, None, chunk.is_final)
     }
 
@@ -79,7 +47,7 @@ impl TranscriptCandidateTracker {
         text: impl Into<String>,
         confidence: Option<f32>,
         is_final: bool,
-    ) -> Vec<TranscriptCandidateEvent> {
+    ) -> Vec<StreamEvent> {
         let text = text.into();
         if text.is_empty() {
             return if is_final {
@@ -89,65 +57,55 @@ impl TranscriptCandidateTracker {
             };
         }
 
+        let confidence = confidence.map(probability_confidence);
         let mut events = Vec::new();
         if let Some(active) = self.active.take() {
             if active.text == text {
                 if is_final {
-                    events.push(TranscriptCandidateEvent::CandidateFinalized {
-                        id: active.id,
+                    events.push(StreamEvent::CommittedSegment {
+                        role: TextRole::Recognition,
+                        segment_id: active.id,
                         text,
+                        words: Vec::new(),
+                        language: None,
+                        speaker_id: None,
                         confidence,
                     });
                 } else {
-                    let stable_prefix_len = text.len();
                     self.active = Some(ActiveCandidate {
-                        id: active.id,
+                        id: active.id.clone(),
                         text: text.clone(),
                     });
-                    events.push(TranscriptCandidateEvent::CandidateUpdated {
-                        id: active.id,
+                    events.push(StreamEvent::PartialHypothesis {
+                        role: TextRole::Recognition,
+                        segment_id: active.id,
                         text,
-                        stable_prefix_len,
                         confidence,
                     });
                 }
                 return events;
             }
 
-            let stable_prefix_len = stable_prefix_len(&active.text, &text);
-            if stable_prefix_len < active.text.len() {
-                let new_id = self.next_id();
-                events.push(TranscriptCandidateEvent::CandidateReplaced {
-                    old: active.id,
-                    new: new_id,
-                    reason: TranscriptReplacementReason::HeadChanged { stable_prefix_len },
-                });
-                events.push(TranscriptCandidateEvent::CandidateStarted { id: new_id });
-                if is_final {
-                    events.push(TranscriptCandidateEvent::CandidateFinalized {
-                        id: new_id,
-                        text,
-                        confidence,
-                    });
-                } else {
-                    self.active = Some(ActiveCandidate {
-                        id: new_id,
-                        text: text.clone(),
-                    });
-                    events.push(TranscriptCandidateEvent::CandidateUpdated {
-                        id: new_id,
-                        text,
-                        stable_prefix_len,
-                        confidence,
-                    });
-                }
-                return events;
-            }
-
+            let stable_prefix_bytes = stable_prefix_len(&active.text, &text);
+            let stable_prefix_chars = active.text[..stable_prefix_bytes].chars().count();
+            events.push(StreamEvent::RevisedHypothesis {
+                role: TextRole::Recognition,
+                segment_id: active.id.clone(),
+                replaces: TextRange {
+                    start: stable_prefix_chars as u32,
+                    end: active.text.chars().count() as u32,
+                },
+                text: text.chars().skip(stable_prefix_chars).collect(),
+                confidence: confidence.clone(),
+            });
             if is_final {
-                events.push(TranscriptCandidateEvent::CandidateFinalized {
-                    id: active.id,
+                events.push(StreamEvent::CommittedSegment {
+                    role: TextRole::Recognition,
+                    segment_id: active.id,
                     text,
+                    words: Vec::new(),
+                    language: None,
+                    speaker_id: None,
                     confidence,
                 });
             } else {
@@ -155,53 +113,61 @@ impl TranscriptCandidateTracker {
                     id: active.id,
                     text: text.clone(),
                 });
-                events.push(TranscriptCandidateEvent::CandidateUpdated {
-                    id: active.id,
-                    text,
-                    stable_prefix_len,
-                    confidence,
-                });
             }
             return events;
         }
 
         let id = self.next_id();
-        events.push(TranscriptCandidateEvent::CandidateStarted { id });
         if is_final {
-            events.push(TranscriptCandidateEvent::CandidateFinalized {
-                id,
+            events.push(StreamEvent::CommittedSegment {
+                role: TextRole::Recognition,
+                segment_id: id,
                 text,
+                words: Vec::new(),
+                language: None,
+                speaker_id: None,
                 confidence,
             });
         } else {
-            let stable_prefix_len = text.len();
             self.active = Some(ActiveCandidate {
-                id,
+                id: id.clone(),
                 text: text.clone(),
             });
-            events.push(TranscriptCandidateEvent::CandidateUpdated {
-                id,
+            events.push(StreamEvent::PartialHypothesis {
+                role: TextRole::Recognition,
+                segment_id: id,
                 text,
-                stable_prefix_len,
                 confidence,
             });
         }
         events
     }
 
-    pub fn cancel_active(&mut self) -> Vec<TranscriptCandidateEvent> {
+    pub fn cancel_active(&mut self) -> Vec<StreamEvent> {
         let Some(active) = self.active.take() else {
             return Vec::new();
         };
-        vec![TranscriptCandidateEvent::CandidateCancelled { id: active.id }]
+        vec![StreamEvent::HypothesisCancelled {
+            role: TextRole::Recognition,
+            segment_id: active.id,
+            reason: "recognizer produced no final hypothesis".into(),
+        }]
     }
 
-    fn next_id(&mut self) -> TranscriptCandidateId {
+    fn next_id(&mut self) -> SegmentId {
         self.next_id = self
             .next_id
             .checked_add(1)
             .expect("transcript candidate id space exhausted");
-        TranscriptCandidateId(self.next_id)
+        SegmentId(format!("recognition-{}", self.next_id))
+    }
+}
+
+fn probability_confidence(value: f32) -> Confidence {
+    Confidence {
+        value: f64::from(value),
+        scale: ConfidenceScale::Probability,
+        calibration: None,
     }
 }
 
@@ -260,16 +226,40 @@ mod tests {
         let mut tracker = TranscriptCandidateTracker::new();
         assert_eq!(
             tracker.ingest_candidate("hello", Some(0.9), true),
-            vec![
-                TranscriptCandidateEvent::CandidateStarted {
-                    id: TranscriptCandidateId(1)
-                },
-                TranscriptCandidateEvent::CandidateFinalized {
-                    id: TranscriptCandidateId(1),
-                    text: "hello".into(),
-                    confidence: Some(0.9),
-                }
-            ]
+            vec![StreamEvent::CommittedSegment {
+                role: TextRole::Recognition,
+                segment_id: SegmentId("recognition-1".into()),
+                text: "hello".into(),
+                words: Vec::new(),
+                language: None,
+                speaker_id: None,
+                confidence: Some(Confidence {
+                    value: f64::from(0.9_f32),
+                    scale: ConfidenceScale::Probability,
+                    calibration: None,
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn revision_has_an_exact_unicode_scalar_range_and_stable_segment_id() {
+        let mut tracker = TranscriptCandidateTracker::new();
+        let first = tracker.ingest_candidate("héllo world", None, false);
+        let revised = tracker.ingest_candidate("héllo there", None, false);
+        let segment_id = match &first[0] {
+            StreamEvent::PartialHypothesis { segment_id, .. } => segment_id.clone(),
+            event => panic!("unexpected first event: {event:?}"),
+        };
+        assert_eq!(
+            revised,
+            vec![StreamEvent::RevisedHypothesis {
+                role: TextRole::Recognition,
+                segment_id,
+                replaces: TextRange { start: 6, end: 11 },
+                text: "there".into(),
+                confidence: None,
+            }]
         );
     }
 }

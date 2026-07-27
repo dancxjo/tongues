@@ -255,7 +255,8 @@ test('live workflow consumes server-produced audio on one Web Audio clock with u
     assert.match(studioSource, /fetch\('\/api\/live\/turn'/);
     assert.match(studioSource, /response\.body\.getReader\(\)/);
     assert.match(studioSource, /window\.atob\(event\.audio_base64\)/);
-    assert.match(studioSource, /event\.type === 'audio_segment_ready'/);
+    assert.match(studioSource, /event\.type === 'audio_chunk'/);
+    assert.match(studioSource, /applyStreamEnvelope\(state\.liveContract, envelope\)/);
     assert.match(studioSource, /synthesis,\s*\}\),/);
     assert.match(studioSource, /context\.createBufferSource\(\)/);
     assert.match(studioSource, /Math\.max\(context\.currentTime \+ 0\.035, state\.liveNextAudioTime\)/);
@@ -269,7 +270,34 @@ test('live turn records the overlap and exact-transcript acceptance evidence', (
     assert.match(studioSource, /transcript_exact: state\.liveGenerated === state\.liveCommitted/);
     assert.match(
         studioSource,
-        /completedEvent\?\.generated_text !== state\.liveCommitted/,
+        /state\.liveGenerated !== state\.liveCommitted/,
+    );
+});
+
+test('central stream contract applies exact revisions and rejects out-of-order events', () => {
+    const contract = studio.createStreamContractState();
+    const envelope = (sequence, type, data) => ({
+        schema_version: 1,
+        stream_id: 'stream-1',
+        event_id: `event-${sequence}`,
+        sequence,
+        event: { type, data },
+    });
+    studio.applyStreamEnvelope(contract, envelope(0, 'partial_hypothesis', {
+        role: 'recognition',
+        segment_id: 'segment-1',
+        text: 'héllo world',
+    }));
+    studio.applyStreamEnvelope(contract, envelope(1, 'revised_hypothesis', {
+        role: 'recognition',
+        segment_id: 'segment-1',
+        replaces: { start: 6, end: 11 },
+        text: 'there',
+    }));
+    assert.equal(contract.segments.get('segment-1'), 'héllo there');
+    assert.throws(
+        () => studio.applyStreamEnvelope(contract, envelope(3, 'completed', {})),
+        /expected 2, received 3/,
     );
 });
 
