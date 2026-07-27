@@ -5,6 +5,7 @@ license.workspace = true
 edition = "2021"
 
 [dependencies]
+cpal = { workspace = true }
 hound = { workspace = true }
 rustfft = { workspace = true }
 serde = { workspace = true }

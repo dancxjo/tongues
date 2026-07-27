@@ -4,7 +4,9 @@
 //! chunks. Sequence gaps are events, never silently compressed away.
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::io::{Cursor, Read};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -349,6 +351,102 @@ impl<R: Read> PcmReaderSource<R> {
     }
 }
 
+impl PcmReaderSource<File> {
+    pub fn open_raw_file(
+        path: impl AsRef<Path>,
+        encoding: PcmEncoding,
+        sample_rate_hz: u32,
+        channels: u16,
+        read_bytes: usize,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        Self::new(
+            path.display().to_string(),
+            AudioSourceKind::File,
+            StreamSource::File {
+                path: path.display().to_string(),
+            },
+            File::open(path)?,
+            encoding,
+            sample_rate_hz,
+            channels,
+            read_bytes,
+        )
+    }
+}
+
+impl PcmReaderSource<std::io::Stdin> {
+    pub fn stdin(
+        encoding: PcmEncoding,
+        sample_rate_hz: u32,
+        channels: u16,
+        read_bytes: usize,
+    ) -> Result<Self> {
+        Self::new(
+            "stdin",
+            AudioSourceKind::Stdin,
+            StreamSource::Live {
+                device: Some("stdin".into()),
+            },
+            std::io::stdin(),
+            encoding,
+            sample_rate_hz,
+            channels,
+            read_bytes,
+        )
+    }
+}
+
+impl PcmReaderSource<TcpStream> {
+    pub fn connect_tcp(
+        address: impl ToSocketAddrs,
+        display_address: impl Into<String>,
+        encoding: PcmEncoding,
+        sample_rate_hz: u32,
+        channels: u16,
+        read_bytes: usize,
+    ) -> Result<Self> {
+        let display_address = display_address.into();
+        Self::new(
+            format!("tcp:{display_address}"),
+            AudioSourceKind::Tcp,
+            StreamSource::Live {
+                device: Some(format!("tcp:{display_address}")),
+            },
+            TcpStream::connect(address)?,
+            encoding,
+            sample_rate_hz,
+            channels,
+            read_bytes,
+        )
+    }
+}
+
+#[cfg(unix)]
+impl PcmReaderSource<std::os::unix::net::UnixStream> {
+    pub fn connect_unix(
+        path: impl AsRef<Path>,
+        encoding: PcmEncoding,
+        sample_rate_hz: u32,
+        channels: u16,
+        read_bytes: usize,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        Self::new(
+            format!("unix:{}", path.display()),
+            AudioSourceKind::Unix,
+            StreamSource::Live {
+                device: Some(format!("unix:{}", path.display())),
+            },
+            std::os::unix::net::UnixStream::connect(path)?,
+            encoding,
+            sample_rate_hz,
+            channels,
+            read_bytes,
+        )
+    }
+}
+
 impl<R: Read> AudioSource for PcmReaderSource<R> {
     fn descriptor(&self) -> &AudioSourceDescriptor {
         &self.descriptor
@@ -413,6 +511,7 @@ pub struct PushedAudioChunk {
 
 enum PushedMessage {
     Chunk(PushedAudioChunk),
+    Reconnected { next_sequence: u64, reason: String },
     End,
 }
 
@@ -442,6 +541,24 @@ impl BoundedAudioInputSender {
     pub fn end(&self) -> Result<()> {
         self.sender
             .try_send(PushedMessage::End)
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => AudioError::Backpressure {
+                    capacity: self.capacity,
+                },
+                mpsc::TrySendError::Disconnected(_) => AudioError::Cancelled,
+            })
+    }
+
+    /// Mark a transport reconnect before sending chunks from the new session.
+    ///
+    /// The receiver emits a discontinuity even when the sequence restarts at
+    /// the numerically expected value, so reconnects never look continuous.
+    pub fn reconnect(&self, next_sequence: u64, reason: impl Into<String>) -> Result<()> {
+        self.sender
+            .try_send(PushedMessage::Reconnected {
+                next_sequence,
+                reason: reason.into(),
+            })
             .map_err(|error| match error {
                 mpsc::TrySendError::Full(_) => AudioError::Backpressure {
                     capacity: self.capacity,
@@ -527,6 +644,18 @@ impl AudioSource for BoundedAudioInput {
                     start_frame: chunk.start_frame,
                     audio: chunk.audio,
                 }))
+            }
+            Ok(PushedMessage::Reconnected {
+                next_sequence,
+                reason,
+            }) => {
+                let discontinuity = AudioDiscontinuity {
+                    expected_chunk_sequence: self.expected_sequence,
+                    received_chunk_sequence: next_sequence,
+                    reason,
+                };
+                self.expected_sequence = next_sequence;
+                Ok(AudioSourceEvent::Discontinuity(discontinuity))
             }
             Ok(PushedMessage::End) | Err(_) => {
                 self.ended = true;
@@ -706,6 +835,25 @@ mod tests {
             sender.try_send(mono_chunk(0)),
             Err(AudioError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn reconnect_is_explicit_even_when_sequence_numbers_are_contiguous() {
+        let (sender, mut source) = bounded_audio_input(descriptor(), 2).unwrap();
+        sender.try_send(mono_chunk(0)).unwrap();
+        sender.reconnect(1, "browser websocket resumed").unwrap();
+        assert!(matches!(
+            source.next_event().unwrap(),
+            AudioSourceEvent::Audio(SourceAudioChunk { sequence: 0, .. })
+        ));
+        assert_eq!(
+            source.next_event().unwrap(),
+            AudioSourceEvent::Discontinuity(AudioDiscontinuity {
+                expected_chunk_sequence: 1,
+                received_chunk_sequence: 1,
+                reason: "browser websocket resumed".into(),
+            })
+        );
     }
 
     #[test]

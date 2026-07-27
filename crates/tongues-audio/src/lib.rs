@@ -14,12 +14,19 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod source;
+mod system_input;
+mod transform;
 
 pub use source::{
     bounded_audio_input, AudioDiscontinuity, AudioSource, AudioSourceDescriptor, AudioSourceEvent,
     AudioSourceKind, BoundedAudioInput, BoundedAudioInputSender, PcmEncoding, PcmReaderSource,
     PushedAudioChunk, SourceAudioChunk, WavAudioSource,
 };
+pub use system_input::{
+    input_capabilities, input_device_inventory, AudioInputCapabilities, CpalAudioSource,
+    InputDeviceInfo,
+};
+pub use transform::NormalizedAudioSource;
 
 pub const DEFAULT_SPECTRAL_FLOOR: f32 = 1.0e-8;
 
