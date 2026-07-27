@@ -195,7 +195,12 @@ test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persi
   await jack("node:sink-1","input").press("Enter");
   await expect(page.locator(".patch-cable")).toHaveCount(2);
   await save();
-  await jack("node:asr","output").dragTo(jack("node:sink-2","input"));
+  await page.locator("#graph-outline button").first().dispatchEvent("click");
+  await expect(page.locator(".patch-cable.selected")).toHaveCount(0);
+  await jack("node:asr","output").focus();
+  await jack("node:asr","output").press("Enter");
+  await jack("node:sink-2","input").focus();
+  await jack("node:sink-2","input").press("Enter");
   await expect(page.locator(".patch-cable")).toHaveCount(3);
   await expect(page.locator(".patch-connection-list").getByRole("button",{name:/connected to Transcript in/})).toHaveCount(2);
 
@@ -215,10 +220,21 @@ test("visible jacks patch, reject, reconnect, fan out, cancel, delete, and persi
   expect(reconnected.capacity).toBe(audioEdge.capacity);
   expect(reconnected.from).toEqual({node_id:"node:mic-2",port_id:"out"});
 
+  await page.getByRole("button",{name:"Undo"}).click();
+  await save();
+  expect(savedGraph.edges.find(edge=>edge.id===audioEdge.id).from).toEqual({node_id:"node:mic-1",port_id:"out"});
+  await page.getByRole("button",{name:"Redo"}).click();
+  await save();
+  expect(savedGraph.edges.find(edge=>edge.id===audioEdge.id).from).toEqual({node_id:"node:mic-2",port_id:"out"});
+
   const audioConnection=page.locator(`.patch-connection-list button[data-edge-id="${audioEdge.id}"]`);
   await audioConnection.focus();
   await expect(audioConnection).toBeFocused();
   await page.keyboard.press("Delete");
+  await expect(page.locator(".patch-cable")).toHaveCount(2);
+  await page.getByRole("button",{name:"Undo"}).click();
+  await expect(page.locator(".patch-cable")).toHaveCount(3);
+  await page.getByRole("button",{name:"Redo"}).click();
   await expect(page.locator(".patch-cable")).toHaveCount(2);
   await save();
   expect(savedGraph.edges.some(edge=>edge.id===audioEdge.id)).toBe(false);

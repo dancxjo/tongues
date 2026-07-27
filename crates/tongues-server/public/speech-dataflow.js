@@ -1,7 +1,7 @@
 import {
-  addNode,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,clearRedo,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,createEditHistory,createPipeline,
+  addNode,applyNodeConfig,attachReplacementValidation,bypassNode,buildCatalog,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,createEditHistory,createPipeline,
   catalogEntryForNode,diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,nodeLabel,nodePosition,
-  planNodeReplacement,portsFor,redoEdit,removeEdge,removeNode,replacementCandidates,setNodePosition,touch,undoEdit,
+  planNodeReplacement,portsFor,recordEdit,redoEdit,removeEdge,removeNode,replacementCandidates,setNodePosition,touch,undoEdit,
 } from "./speech-dataflow-model.mjs";
 import {createPatchCanvas} from "./speech-patch-canvas.mjs";
 
@@ -28,7 +28,40 @@ const FALLBACK_NODE_THEME={accent:"#8ba5bf",surface:"#202c3b"};
 
 function announce(text,error=false){byId("status").textContent=text;byId("status").classList.toggle("error",error);}
 function updateEditControls(){byId("undo").disabled=!editHistory.undo.length;byId("redo").disabled=!editHistory.redo.length;}
-function markExternalEdit(){clearRedo(editHistory);updateEditControls();}
+function selectionState(){return{node_id:selectedNode,edge_id:selectedEdge};}
+function applySelectionState(selection){
+  if(typeof selection==="string"){selectedNode=selection;selectedEdge=null;return;}
+  selectedNode=selection?.node_id??null;selectedEdge=selection?.edge_id??null;
+  if(selectedNode&&!pipeline.nodes.some(node=>node.id===selectedNode))selectedNode=null;
+  if(selectedEdge&&!pipeline.edges.some(edge=>edge.id===selectedEdge))selectedEdge=null;
+}
+function focusState(){
+  const element=document.activeElement;
+  return element?.id?{id:element.id}:null;
+}
+function restoreFocus(focus){
+  if(!focus?.id)return;
+  requestAnimationFrame(()=>byId(focus.id)?.focus());
+}
+function performGraphEdit(label,mutate,after=()=>{}){
+  const before=structuredClone(pipeline),selectionBefore=selectionState(),focusBefore=focusState();
+  const result=mutate();after(result);
+  recordEdit(editHistory,before,pipeline,{
+    label,selectionBefore,selectionAfter:selectionState(),focusBefore,focusAfter:focusState(),
+  });
+  updateEditControls();return result;
+}
+function recordCompletedGraphEdit(edit){
+  const selectionBefore=selectionState(),focusBefore=focusState();
+  if(edit.kind==="edge.delete"&&selectedEdge===edit.edge_id)selectedEdge=null;
+  else if(["edge.connect","edge.reconnect"].includes(edit.kind)){selectedNode=null;selectedEdge=edit.edge_id;}
+  const labels={"edge.connect":"Connect cable","edge.reconnect":"Reconnect cable","edge.delete":"Delete cable"};
+  recordEdit(editHistory,edit.before,pipeline,{
+    label:labels[edit.kind]??"Edit cable",selectionBefore,selectionAfter:selectionState(),
+    focusBefore,focusAfter:focusState(),
+  });
+  updateEditControls();renderGraph();scheduleValidation();
+}
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function readableType(value){
   const labels={
@@ -130,7 +163,10 @@ function initCanvas(){
   cy.on("tap","node",event=>selectNode(event.target.id()));
   cy.on("tap","edge",event=>selectEdge(event.target.id()));
   cy.on("tap",event=>{if(event.target===cy)clearSelection();});
-  cy.on("dragfree","node",event=>{setNodePosition(pipeline,event.target.id(),event.target.position());touch(pipeline);markExternalEdit();scheduleValidation();renderOutline();});
+  cy.on("dragfree","node",event=>{
+    performGraphEdit("Move node",()=>{setNodePosition(pipeline,event.target.id(),event.target.position());touch(pipeline);});
+    scheduleValidation();renderOutline();
+  });
 }
 
 function renderPalette(){
@@ -151,19 +187,26 @@ function renderPalette(){
 function renderTemplates(){
   byId("subgraphs").replaceChildren(...starters.map(graph=>{
     const button=document.createElement("button");button.textContent=`Insert ${graph.metadata.name}`;
-    button.onclick=()=>{const ids=insertSubgraph(pipeline,graph,{x:cy.extent().x1+80,y:cy.extent().y1+80});markExternalEdit();renderGraph();selectNode(ids[0]);announce(`Inserted ${graph.metadata.name} as a reusable subgraph.`);};return button;
+    button.onclick=()=>{
+      const ids=performGraphEdit(`Insert ${graph.metadata.name}`,()=>insertSubgraph(pipeline,graph,{x:cy.extent().x1+80,y:cy.extent().y1+80}),result=>{selectedNode=result[0]??null;selectedEdge=null;});
+      renderGraph();if(ids[0])selectNode(ids[0]);announce(`Inserted ${graph.metadata.name} as a reusable subgraph.`);
+    };return button;
   }));
 }
 
 function addCatalogNode(item){
-  const center=cy.extent(),node=addNode(pipeline,item,selectedNode,{x:(center.x1+center.x2)/2,y:(center.y1+center.y2)/2});
-  markExternalEdit();renderGraph();selectNode(node.id);announce(`Added ${item.label}.`);
+  const center=cy.extent(),afterId=selectedNode;
+  const node=performGraphEdit(`Add ${item.label}`,()=>addNode(pipeline,item,afterId,{x:(center.x1+center.x2)/2,y:(center.y1+center.y2)/2}),result=>{selectedNode=result.id;selectedEdge=null;});
+  renderGraph();selectNode(node.id);announce(`Added ${item.label}.`);
 }
 
 function loadGraph(graph,{preserveHistory=false}={}){
+  const previousSelection=selectionState();
   pipeline=structuredClone(graph);pipeline.metadata.labels??={};ensureLayout(pipeline);
   if(!preserveHistory)editHistory=createEditHistory();
-  selectedNode=pipeline.nodes[0]?.id??null;selectedEdge=null;connecting=null;
+  if(preserveHistory)applySelectionState(previousSelection);
+  else{selectedNode=pipeline.nodes[0]?.id??null;selectedEdge=null;}
+  connecting=null;
   byId("pipeline-name").value=pipeline.metadata.name;
   byId("graph-identity").textContent=pipeline.graph_id.startsWith("starter:")
     ?"Editing a configuration draft seeded from a backend template"
@@ -180,7 +223,7 @@ function ensurePatchCanvas(){
     nodeLabel,getSelectedEdgeId:()=>selectedEdge,
     diagnosticsByEdge:()=>diagnosticsByTarget(validation).edges,
     onSelectNode:selectNode,onSelectEdge:selectEdge,
-    onGraphEdit:()=>{markExternalEdit();renderGraph();scheduleValidation();},
+    onGraphEdit:recordCompletedGraphEdit,
     onAnnounce:announce,
   });
 }
@@ -218,15 +261,15 @@ function renderOutline(){
     const position=nodePosition(pipeline,node.id)??{x:0,y:0};button.textContent=nodeLabel(node,catalog);
     button.onclick=()=>selectNode(node.id);button.onkeydown=event=>{
       const deltas={ArrowLeft:[-20,0],ArrowRight:[20,0],ArrowUp:[0,-20],ArrowDown:[0,20]};
-      if(deltas[event.key]){event.preventDefault();const [x,y]=deltas[event.key];setNodePosition(pipeline,node.id,{x:position.x+x,y:position.y+y});touch(pipeline);markExternalEdit();renderGraph();cy.getElementById(node.id).select();}
+      if(deltas[event.key]){event.preventDefault();const [x,y]=deltas[event.key];performGraphEdit("Nudge node",()=>{setNodePosition(pipeline,node.id,{x:position.x+x,y:position.y+y});touch(pipeline);});renderGraph();cy.getElementById(node.id).select();}
       if(event.key==="Delete"){event.preventDefault();deleteSelectedNode();}
     };item.append(button);return item;
   }));
 }
 
-function selectNode(id){selectedNode=id;selectedEdge=null;cy.elements().unselect();cy.getElementById(id).select();renderInspector();announce(`Selected ${nodeLabel(pipeline.nodes.find(node=>node.id===id),catalog)}.`);}
-function selectEdge(id){selectedEdge=id;selectedNode=null;cy.elements().unselect();cy.getElementById(id).select();renderInspector();const edge=pipeline.edges.find(item=>item.id===id);announce(`Selected connection from ${edge?.from.node_id}.${edge?.from.port_id} to ${edge?.to.node_id}.${edge?.to.port_id}.`);}
-function clearSelection(){selectedNode=null;selectedEdge=null;connecting=null;cy.elements().unselect();renderInspector();}
+function selectNode(id){selectedNode=id;selectedEdge=null;cy.elements().unselect();cy.getElementById(id).select();renderInspector();patchCanvas?.render();announce(`Selected ${nodeLabel(pipeline.nodes.find(node=>node.id===id),catalog)}.`);}
+function selectEdge(id){selectedEdge=id;selectedNode=null;cy.elements().unselect();cy.getElementById(id).select();renderInspector();patchCanvas?.render();const edge=pipeline.edges.find(item=>item.id===id);announce(`Selected connection from ${edge?.from.node_id}.${edge?.from.port_id} to ${edge?.to.node_id}.${edge?.to.port_id}.`);}
+function clearSelection(){selectedNode=null;selectedEdge=null;connecting=null;cy.elements().unselect();renderInspector();patchCanvas?.render();}
 
 function renderInspector(){
   const node=pipeline.nodes.find(item=>item.id===selectedNode),edge=pipeline.edges.find(item=>item.id===selectedEdge);
@@ -262,7 +305,10 @@ function portButton(node,port,grouped){
   button.setAttribute("aria-label",`${port.direction} ${port.label}, type ${port.value_type}, ${connected?"connected":missing?"required and missing":"not connected"}${diagnostics.length?`. ${diagnostics.flatMap(item=>[item.message,...(item.suggestions??[])]).join(". ")}`:""}`);
   button.onclick=()=>{
     if(port.direction==="output"){connecting={node_id:node.id,port_id:port.id,value_type:port.value_type};highlightCompatible();renderInspector();announce(`Choose an input compatible with ${port.value_type}.`);}
-    else if(connecting){try{connectPorts(pipeline,connecting.node_id,connecting.port_id,node.id,port.id,discovery);markExternalEdit();connecting=null;renderGraph();scheduleValidation();announce("Typed connection added.");}catch(error){announce(error.message,true);}}
+    else if(connecting){try{
+      performGraphEdit("Connect cable",()=>connectPorts(pipeline,connecting.node_id,connecting.port_id,node.id,port.id,discovery));
+      connecting=null;renderGraph();scheduleValidation();announce("Typed connection added.");
+    }catch(error){announce(error.message,true);}}
   };
   return button;
 }
@@ -301,7 +347,8 @@ function applyConfig(){
     const invalid=fields.find(input=>!input.checkValidity());
     if(invalid){invalid.reportValidity();return announce(`Enter a valid value for ${invalid.dataset.config}.`,true);}
     const values=Object.fromEntries(fields.map(input=>{let value=input.type==="checkbox"?input.checked:input.value;if(input.type==="number")value=Number(value);return[input.dataset.config,value];}));
-    applyNodeConfig(pipeline,node.id,values);markExternalEdit();renderGraph();scheduleValidation();announce("Configuration applied.");
+    performGraphEdit("Edit node configuration",()=>applyNodeConfig(pipeline,node.id,values));
+    renderGraph();scheduleValidation();announce("Configuration applied.");
   }catch(error){announce(error.message,true);}
 }
 
@@ -461,7 +508,7 @@ function showReplacementReview(){
 
 function applyReplacement(){
   try{
-    pipeline=commitReplacement(pipeline,replacementPlan,discovery.revision,editHistory,selectedNode);
+    pipeline=commitReplacement(pipeline,replacementPlan,discovery.revision,editHistory,selectionState());
     const label=replacementSelected.label;selectedNode=replacementPlan.node_id;selectedEdge=null;
     replacementPreviewGeneration++;byId("replacement-dialog").close();renderGraph();updateEditControls();scheduleValidation();
     announce(`Replaced with ${label}. Undo is available.`);
@@ -470,11 +517,11 @@ function applyReplacement(){
 
 function undoGraphEdit(){
   const result=undoEdit(editHistory);if(!result)return;
-  pipeline=result.pipeline;selectedNode=result.selection;selectedEdge=null;renderGraph();updateEditControls();scheduleValidation();announce("Replacement undone.");
+  pipeline=result.pipeline;applySelectionState(result.selection);renderGraph();restoreFocus(result.focus);updateEditControls();scheduleValidation();announce(`${result.label} undone.`);
 }
 function redoGraphEdit(){
   const result=redoEdit(editHistory);if(!result)return;
-  pipeline=result.pipeline;selectedNode=result.selection;selectedEdge=null;renderGraph();updateEditControls();scheduleValidation();announce("Replacement redone.");
+  pipeline=result.pipeline;applySelectionState(result.selection);renderGraph();restoreFocus(result.focus);updateEditControls();scheduleValidation();announce(`${result.label} redone.`);
 }
 
 function scheduleValidation(delay=180){
@@ -488,7 +535,10 @@ async function validateRemote(){
   }catch(error){if(generation===validationGeneration){byId("validation").textContent=error.message;byId("validation").dataset.state="invalid";}}
 }
 
-function syncName(){const name=byId("pipeline-name").value.trim()||"Untitled pipeline";if(name!==pipeline.metadata.name){pipeline.metadata.name=name;touch(pipeline);markExternalEdit();}}
+function syncName(){
+  const name=byId("pipeline-name").value.trim()||"Untitled pipeline";
+  if(name!==pipeline.metadata.name)performGraphEdit("Rename graph",()=>{pipeline.metadata.name=name;touch(pipeline);});
+}
 async function saveGraph(){
   syncName();
   if(pipeline.graph_id.startsWith("starter:")){
@@ -525,8 +575,25 @@ async function runGraph(){
 }
 function renderRunEvent(event){const item=document.createElement("li");item.className=event.kind;const output=event.output?` · ${event.output.port_id}=${JSON.stringify(event.output.value)}`:"";item.textContent=`${event.node_id} · ${event.kind}${event.elapsed_ms==null?"":` · ${event.elapsed_ms} ms`}${output}${event.detail?` · ${event.detail}`:""}`;byId("run-events").append(item);item.scrollIntoView({block:"nearest"});if(event.node_id&&pipeline.nodes.some(node=>node.id===event.node_id)){cy.nodes().removeClass("compatible");cy.getElementById(event.node_id).addClass("compatible");}}
 
-function deleteSelectedNode(){if(!selectedNode)return;removeNode(pipeline,selectedNode);markExternalEdit();selectedNode=null;renderGraph();scheduleValidation();announce("Node deleted.");}
-function disableSelectedNode(){const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;if(node.disabled){node.disabled=false;announce("Node enabled; reconnect any relationships it needs.");}else{pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==selectedNode&&edge.to.node_id!==selectedNode);pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==selectedNode);node.disabled=true;announce("Node disabled and removed from execution; its connections were removed explicitly.");}touch(pipeline);markExternalEdit();renderGraph();scheduleValidation();}
+function deleteSelectedNode(){
+  if(!selectedNode)return;
+  performGraphEdit("Delete node",()=>removeNode(pipeline,selectedNode),()=>{selectedNode=null;selectedEdge=null;});
+  renderGraph();scheduleValidation();announce("Node deleted.");
+}
+function disableSelectedNode(){
+  const node=pipeline.nodes.find(item=>item.id===selectedNode);if(!node)return;
+  const disabling=!node.disabled;
+  performGraphEdit(disabling?"Disable node":"Enable node",()=>{
+    if(node.disabled)node.disabled=false;
+    else{
+      pipeline.edges=pipeline.edges.filter(edge=>edge.from.node_id!==selectedNode&&edge.to.node_id!==selectedNode);
+      pipeline.selected_sinks=pipeline.selected_sinks.filter(sink=>sink.node_id!==selectedNode);node.disabled=true;
+    }
+    touch(pipeline);
+  });
+  announce(disabling?"Node disabled and removed from execution; its connections were removed explicitly.":"Node enabled; reconnect any relationships it needs.");
+  renderGraph();scheduleValidation();
+}
 
 byId("palette-search").oninput=renderPalette;
 byId("template").onchange=event=>{const starter=starters.find(graph=>graph.graph_id===event.target.value);if(starter)loadGraph(starter);};
@@ -536,13 +603,24 @@ byId("share").onclick=()=>shareGraph().catch(error=>announce(error.message,true)
 byId("fit").onclick=()=>cy.fit(undefined,40);byId("run").onclick=runGraph;byId("cancel").onclick=()=>runController?.abort();
 byId("undo").onclick=undoGraphEdit;byId("redo").onclick=redoGraphEdit;
 byId("pipeline-name").onchange=()=>{syncName();scheduleValidation();};
-byId("duplicate").onclick=()=>{const copy=duplicateNode(pipeline,selectedNode);markExternalEdit();renderGraph();if(copy)selectNode(copy.id);scheduleValidation();};
+byId("duplicate").onclick=()=>{
+  const sourceId=selectedNode,copy=performGraphEdit("Duplicate node",()=>duplicateNode(pipeline,sourceId),result=>{if(result){selectedNode=result.id;selectedEdge=null;}});
+  renderGraph();if(copy)selectNode(copy.id);scheduleValidation();
+};
 byId("delete").onclick=deleteSelectedNode;byId("disable").onclick=disableSelectedNode;
-byId("bypass").onclick=()=>{try{bypassNode(pipeline,selectedNode,discovery);markExternalEdit();renderGraph();scheduleValidation();announce("Node bypassed by explicit compatible rewiring.");}catch(error){announce(error.message,true);}};
+byId("bypass").onclick=()=>{try{performGraphEdit("Bypass node",()=>bypassNode(pipeline,selectedNode,discovery));renderGraph();scheduleValidation();announce("Node bypassed by explicit compatible rewiring.");}catch(error){announce(error.message,true);}};
 byId("replace").onclick=openReplacementPicker;
 byId("apply-config").onclick=applyConfig;byId("cancel-connect").onclick=()=>{connecting=null;cy.nodes().removeClass("compatible");renderInspector();announce("Connection cancelled.");};
-byId("apply-edge").onclick=()=>{const edge=pipeline.edges.find(item=>item.id===selectedEdge);edge.capacity=Math.max(1,Number(byId("edge-capacity").value)||1);touch(pipeline);markExternalEdit();renderGraph();scheduleValidation();};
-byId("delete-edge").onclick=()=>{removeEdge(pipeline,selectedEdge);markExternalEdit();selectedEdge=null;renderGraph();scheduleValidation();announce("Edge deleted.");};
+byId("apply-edge").onclick=()=>{
+  const edge=pipeline.edges.find(item=>item.id===selectedEdge);if(!edge)return;
+  performGraphEdit("Edit cable capacity",()=>{edge.capacity=Math.max(1,Number(byId("edge-capacity").value)||1);touch(pipeline);});
+  renderGraph();scheduleValidation();
+};
+byId("delete-edge").onclick=()=>{
+  const edgeId=selectedEdge;if(!edgeId)return;
+  performGraphEdit("Delete cable",()=>removeEdge(pipeline,edgeId),()=>{selectedEdge=null;});
+  renderGraph();scheduleValidation();announce("Edge deleted.");
+};
 byId("toggle-palette").onclick=()=>byId("palette-panel").classList.toggle("open");byId("toggle-inspector").onclick=()=>byId("inspector-panel").classList.toggle("open");
 byId("replacement-search").oninput=()=>{replacementRenderLimit=100;renderReplacementCandidates();};
 byId("replacement-provider").onchange=()=>{replacementRenderLimit=100;renderReplacementCandidates();};

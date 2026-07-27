@@ -4,7 +4,7 @@ import fs from "node:fs";
 import {
   adapterPaths,addNode,applyNodeConfig,attachReplacementValidation,buildCatalog,bypassNode,classifyReplacement,commitReplacement,compatibleTargets,connectPorts,consumeNdjson,createEditHistory,createPipeline,
   catalogEntryForNode,connectionCompatibility,diagnosticsByTarget,duplicateNode,ensureLayout,insertSubgraph,migrateReplacementConfig,nodeLabel,
-  planNodeReplacement,reconnectEdge,redoEdit,replacementCandidates,requiredPortState,undoEdit,validateSchemaValue,
+  planNodeReplacement,reconnectEdge,recordEdit,redoEdit,replacementCandidates,requiredPortState,undoEdit,validateSchemaValue,
 } from "./speech-dataflow-model.mjs";
 
 const replacement=(family,extra={})=>({family,configuration_schema_id:`fixture.${family}.config`,configuration_schema_version:1,port_aliases:{},configuration_aliases:{},disconnect_ports:[],...extra});
@@ -260,6 +260,34 @@ test("declared cross-kind plans name port/config remaps and reject stale or fail
   const applied=commitReplacement(graph,plan,"fixture-revision",createEditHistory(),asr.id);
   assert.equal(applied.nodes.find(node=>node.id===asr.id).kind,"asr_equivalent");
   assert.deepEqual(applied.selected_sinks,[{node_id:asr.id,port_id:"text"}]);
+});
+
+test("general edit history restores graph, selection, focus, and only clears the invalid redo branch",()=>{
+  const catalog=buildCatalog(discovery),graph=createPipeline(),history=createEditHistory();
+  const before=structuredClone(graph),mic=addNode(graph,catalog.find(node=>node.kind==="microphone"));
+  assert.equal(recordEdit(history,before,graph,{
+    label:"Add node",selectionBefore:{node_id:null,edge_id:null},selectionAfter:{node_id:mic.id,edge_id:null},
+    focusBefore:{id:"canvas"},focusAfter:{id:"delete"},
+  }),true);
+  const afterAdd=structuredClone(graph),asr=addNode(graph,catalog.find(node=>node.kind==="asr"));
+  recordEdit(history,afterAdd,graph,{label:"Add ASR",selectionAfter:{node_id:asr.id,edge_id:null}});
+  const undone=undoEdit(history);
+  assert.deepEqual(undone.pipeline,afterAdd);assert.equal(undone.label,"Add ASR");
+  assert.deepEqual(undone.selection,null);assert.equal(history.redo.length,1);
+  const branchBefore=structuredClone(undone.pipeline);
+  const branch=addNode(undone.pipeline,catalog.find(node=>node.kind==="transcript_sink"));
+  recordEdit(history,branchBefore,undone.pipeline,{label:"Branch edit",selectionAfter:{node_id:branch.id,edge_id:null}});
+  assert.equal(history.redo.length,0);
+  assert.deepEqual(undoEdit(history).pipeline,branchBefore);
+  const firstUndo=undoEdit(history);
+  assert.deepEqual(firstUndo.pipeline,before);assert.deepEqual(firstUndo.selection,{node_id:null,edge_id:null});
+  assert.deepEqual(firstUndo.focus,{id:"canvas"});
+});
+
+test("recording a byte-identical graph is ignored",()=>{
+  const graph=createPipeline(),history=createEditHistory();
+  assert.equal(recordEdit(history,graph,structuredClone(graph),{label:"No-op"}),false);
+  assert.deepEqual(history,{undo:[],redo:[]});
 });
 
 test("large replacement catalogs classify within a generous interaction budget",()=>{

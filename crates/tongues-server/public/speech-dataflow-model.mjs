@@ -342,19 +342,41 @@ export function applyReplacementPlan(pipeline,plan,catalogRevision) {
 
 export function createEditHistory(){return{undo:[],redo:[]};}
 export function clearRedo(history){history.redo.length=0;}
+export function recordEdit(history,before,after,{
+  label="Graph edit",selectionBefore=null,selectionAfter=null,focusBefore=null,focusAfter=null,
+}={}) {
+  if(pipelineFingerprint(before)===pipelineFingerprint(after))return false;
+  history.undo.push({
+    label,before:structuredClone(before),after:structuredClone(after),
+    selection_before:structuredClone(selectionBefore),selection_after:structuredClone(selectionAfter),
+    focus_before:structuredClone(focusBefore),focus_after:structuredClone(focusAfter),
+  });
+  history.redo.length=0;
+  return true;
+}
 export function commitReplacement(pipeline,plan,catalogRevision,history,selection) {
   const next=applyReplacementPlan(pipeline,plan,catalogRevision);
-  history.undo.push({before:structuredClone(pipeline),after:structuredClone(next),selection_before:selection,selection_after:plan.node_id});
-  history.redo.length=0;
+  const afterSelection=selection&&typeof selection==="object"
+    ?{...structuredClone(selection),node_id:plan.node_id,edge_id:null}
+    :plan.node_id;
+  recordEdit(history,pipeline,next,{
+    label:"Replace node",selectionBefore:selection,selectionAfter:afterSelection,
+  });
   return next;
 }
 export function undoEdit(history){
   const entry=history.undo.pop();if(!entry)return null;history.redo.push(entry);
-  return{pipeline:structuredClone(entry.before),selection:entry.selection_before};
+  return{
+    pipeline:structuredClone(entry.before),selection:structuredClone(entry.selection_before),
+    focus:structuredClone(entry.focus_before),label:entry.label??"Graph edit",
+  };
 }
 export function redoEdit(history){
   const entry=history.redo.pop();if(!entry)return null;history.undo.push(entry);
-  return{pipeline:structuredClone(entry.after),selection:entry.selection_after};
+  return{
+    pipeline:structuredClone(entry.after),selection:structuredClone(entry.selection_after),
+    focus:structuredClone(entry.focus_after),label:entry.label??"Graph edit",
+  };
 }
 
 export function insertSubgraph(pipeline,template,origin={x:80,y:80}) {

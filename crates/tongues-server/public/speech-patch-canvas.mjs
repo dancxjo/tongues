@@ -175,8 +175,9 @@ export function createPatchCanvas(options) {
       button.onkeydown = event => {
         if (!["Delete", "Backspace"].includes(event.key)) return;
         event.preventDefault();
+        const before = structuredClone(pipeline());
         removeEdge(pipeline(), edge.id);
-        onGraphEdit({kind: "edge.delete", edge_id: edge.id});
+        onGraphEdit({kind: "edge.delete", edge_id: edge.id, before});
         onAnnounce("Connection deleted.");
         render();
       };
@@ -367,9 +368,10 @@ export function createPatchCanvas(options) {
       return false;
     }
     const current = gesture;
+    const before = structuredClone(pipeline());
     if (current.edge_id) {
       reconnectEdge(pipeline(), current.edge_id, current.moving, node.id, port.id, discovery());
-      onGraphEdit({kind: "edge.reconnect", edge_id: current.edge_id, endpoint: current.moving});
+      onGraphEdit({kind: "edge.reconnect", edge_id: current.edge_id, endpoint: current.moving, before});
       onSelectEdge(current.edge_id);
       onAnnounce("Cable plug reconnected; edge identity and capacity were preserved.");
     } else {
@@ -382,7 +384,7 @@ export function createPatchCanvas(options) {
         endpoints.to.port_id,
         discovery(),
       );
-      onGraphEdit({kind: "edge.connect", edge_id: edge.id});
+      onGraphEdit({kind: "edge.connect", edge_id: edge.id, before});
       onSelectEdge(edge.id);
       onAnnounce("Typed cable connected.");
     }
@@ -457,8 +459,9 @@ export function createPatchCanvas(options) {
     const edgeId = getSelectedEdgeId();
     if (!edgeId || !pipeline().edges.some(edge => edge.id === edgeId)) return;
     event.preventDefault();
+    const before = structuredClone(pipeline());
     removeEdge(pipeline(), edgeId);
-    onGraphEdit({kind: "edge.delete", edge_id: edgeId});
+    onGraphEdit({kind: "edge.delete", edge_id: edgeId, before});
     onAnnounce("Selected cable deleted.");
     render();
   }
