@@ -4,6 +4,10 @@
 //! orchestration: providers propose morpheme continuations, the simulator
 //! normalizes them, and only a directly supported common prefix may commit.
 
+mod learned;
+
+pub use learned::*;
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

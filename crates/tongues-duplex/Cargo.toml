@@ -10,8 +10,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
+sha2 = { workspace = true }
 speaking = { path = "../speaking" }
+tongues-data = { path = "../tongues-data" }
 
 [dev-dependencies]
 tempfile = "3"
-

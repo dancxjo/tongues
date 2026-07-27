@@ -6,14 +6,18 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use speaking::{UtteranceId, VarietyId};
 use tongues_duplex::{
-    prepare_dataset_with_progress, replay_journal, DuplexFixtureSuite, DuplexPrepareProgress,
-    DuplexSimulator, EvidenceModality, FixtureCompletionProvider, NormalizedCompletionHypothesis,
-    ObservedEvidence, OracleCompletionProvider, SimulatorConfig, SimulatorEventKind,
-    SimulatorJournal, SimulatorState,
+    discover_duplex_models, evaluate_duplex_model, export_duplex_model,
+    prepare_dataset_with_progress, replay_journal, train_duplex_model, DuplexFixtureSuite,
+    DuplexPrepareProgress, DuplexSimulator, EvidenceModality, FixtureCompletionProvider,
+    LearnedCompletionProvider, LearnedDuplexConfig, LearnedDuplexModel,
+    NormalizedCompletionHypothesis, ObservedEvidence, OracleCompletionProvider, SimulatorConfig,
+    SimulatorEventKind, SimulatorJournal, SimulatorState,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
 const DEFAULT_DUPLEX_DATA_DIR: &str = "datasets/duplex/v0";
+const DEFAULT_DUPLEX_RUN_DIR: &str = "models/duplex/prefix-transducer";
+const DEFAULT_DUPLEX_MODEL_ROOT: &str = "models/duplex";
 
 #[derive(Subcommand, Debug)]
 pub enum DuplexCommands {
@@ -21,6 +25,16 @@ pub enum DuplexCommands {
     Demo(DuplexDemoCommand),
     /// Prepare a prefix/completion/rollback/repair training dataset from fixtures
     Prepare(DuplexPrepareCommand),
+    /// Train or resume the learned text-prefix transducer
+    Train(DuplexTrainCommand),
+    /// Evaluate continuation, calibration, behavior, latency, and safety metrics
+    Evaluate(DuplexEvaluateCommand),
+    /// Run learned cached or uncached prefix inference
+    Infer(DuplexInferCommand),
+    /// Export a runtime-consumable artifact and model card
+    Export(DuplexExportCommand),
+    /// Discover exported duplex models below a model root
+    Discover(DuplexDiscoverCommand),
 }
 
 #[derive(Args, Debug)]
@@ -60,6 +74,10 @@ pub struct DuplexDemoCommand {
     /// Human timeline or complete JSON result
     #[arg(long, value_enum, default_value = "text")]
     format: DuplexOutputFormat,
+
+    /// Learned checkpoint/artifact to use for direct chunks instead of the oracle
+    #[arg(long)]
+    model: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -80,11 +98,133 @@ pub struct DuplexPrepareCommand {
     out: PathBuf,
 }
 
+#[derive(Args, Debug)]
+pub struct DuplexTrainCommand {
+    /// Prepared dataset directory containing train/valid/test JSONL
+    #[arg(long, default_value = DEFAULT_DUPLEX_DATA_DIR)]
+    data: PathBuf,
+    /// Training run directory
+    #[arg(long, default_value = DEFAULT_DUPLEX_RUN_DIR)]
+    out: PathBuf,
+    /// Resume the checkpoint in --out, restoring all training state
+    #[arg(long)]
+    resume: bool,
+    /// Additional epochs to run
+    #[arg(long, default_value_t = 1)]
+    epochs: u64,
+}
+
+#[derive(Args, Debug)]
+pub struct DuplexEvaluateCommand {
+    /// Checkpoint file or training run directory
+    #[arg(long, default_value = DEFAULT_DUPLEX_RUN_DIR)]
+    model: PathBuf,
+    /// Held-out JSONL split
+    #[arg(long, default_value = "datasets/duplex/v0/test.jsonl")]
+    split: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct DuplexInferCommand {
+    /// Checkpoint file, training run directory, or exported model file
+    #[arg(long, default_value = DEFAULT_DUPLEX_RUN_DIR)]
+    model: PathBuf,
+    /// Committed text prefix
+    #[arg(long, default_value = "")]
+    committed: String,
+    /// Current unstable suffix state
+    #[arg(long, default_value = "")]
+    unstable: String,
+    /// Bypass the streaming cache
+    #[arg(long)]
+    uncached: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DuplexExportCommand {
+    /// Checkpoint file or training run directory
+    #[arg(long, default_value = DEFAULT_DUPLEX_RUN_DIR)]
+    model: PathBuf,
+    /// Exported artifact directory
+    #[arg(long, default_value = "models/duplex/exported-prefix-transducer")]
+    out: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct DuplexDiscoverCommand {
+    /// Root searched recursively for duplex manifests
+    #[arg(long, default_value = DEFAULT_DUPLEX_MODEL_ROOT)]
+    root: PathBuf,
+}
+
 pub fn run(command: DuplexCommands) -> Result<()> {
     match command {
         DuplexCommands::Demo(command) => run_demo(command),
         DuplexCommands::Prepare(command) => run_prepare(command),
+        DuplexCommands::Train(command) => run_train(command),
+        DuplexCommands::Evaluate(command) => run_evaluate(command),
+        DuplexCommands::Infer(command) => run_infer(command),
+        DuplexCommands::Export(command) => run_export(command),
+        DuplexCommands::Discover(command) => run_discover(command),
     }
+}
+
+fn run_train(command: DuplexTrainCommand) -> Result<()> {
+    let report = train_duplex_model(
+        &command.data,
+        &command.out,
+        LearnedDuplexConfig {
+            epochs: command.epochs,
+            ..LearnedDuplexConfig::default()
+        },
+        command.resume,
+        |message| eprintln!("{message}"),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn run_evaluate(command: DuplexEvaluateCommand) -> Result<()> {
+    let report = evaluate_duplex_model(&command.model, &command.split)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn run_infer(command: DuplexInferCommand) -> Result<()> {
+    let mut model = LearnedDuplexModel::load(&command.model)?;
+    let committed = command
+        .committed
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let unstable = command
+        .unstable
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let inference = if command.uncached {
+        model.infer_uncached(&committed, &unstable)
+    } else {
+        // A second call demonstrates that this path is the streaming cache.
+        let _ = model.infer_cached(&committed, &unstable);
+        model.infer_cached(&committed, &unstable)
+    };
+    println!("{}", serde_json::to_string_pretty(&inference)?);
+    Ok(())
+}
+
+fn run_export(command: DuplexExportCommand) -> Result<()> {
+    let manifest = export_duplex_model(&command.model, &command.out)?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+fn run_discover(command: DuplexDiscoverCommand) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&discover_duplex_models(&command.root)?)?
+    );
+    Ok(())
 }
 
 fn run_prepare(command: DuplexPrepareCommand) -> Result<()> {
@@ -142,7 +282,11 @@ fn run_demo(command: DuplexDemoCommand) -> Result<()> {
 
     let custom_evidence = !command.chunks.is_empty() || !command.mock_acoustics.is_empty();
     let (run_id, journal, state) = if custom_evidence {
-        run_oracle_chunks(&command)?
+        if let Some(model) = &command.model {
+            run_learned_chunks(&command, model)?
+        } else {
+            run_oracle_chunks(&command)?
+        }
     } else {
         let fixture = suite.fixture(&command.fixture).ok_or_else(|| {
             anyhow!(
@@ -193,6 +337,43 @@ fn run_demo(command: DuplexDemoCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_learned_chunks(
+    command: &DuplexDemoCommand,
+    model: &Path,
+) -> Result<(String, SimulatorJournal, SimulatorState)> {
+    let mut config = SimulatorConfig::default();
+    if let Some(posterior_mass) = command.posterior_mass {
+        config.posterior_mass = posterior_mass;
+    }
+    let run_id = "learned-chunks".to_string();
+    let provider = if model.join("manifest.json").is_file()
+        || model
+            .file_name()
+            .is_some_and(|name| name == "manifest.json")
+    {
+        LearnedCompletionProvider::from_artifact(model)?
+    } else {
+        LearnedCompletionProvider::from_checkpoint(model)?
+    };
+    let mut simulator = DuplexSimulator::new(
+        UtteranceId(run_id.clone()),
+        VarietyId(command.variety.clone()),
+        config,
+        provider,
+    )?;
+    for (index, chunk) in command.chunks.iter().enumerate() {
+        simulator.observe(ObservedEvidence::text(format!("text:{index}"), chunk))?;
+    }
+    for (index, transcript) in command.mock_acoustics.iter().enumerate() {
+        simulator.observe(ObservedEvidence::acoustics(
+            format!("acoustics:{index}"),
+            transcript,
+        ))?;
+    }
+    let (journal, state) = simulator.into_parts();
+    Ok((run_id, journal, state))
 }
 
 fn run_oracle_chunks(

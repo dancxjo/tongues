@@ -956,25 +956,21 @@ pub fn split_by_base_word<R: Rng>(
     (train, valid, test)
 }
 
-/// Verify that no base-word group appears in more than one split.
-pub fn check_split_leakage(train: &[Lexeme], valid: &[Lexeme], test: &[Lexeme]) -> Vec<String> {
+/// Verify that no group identity appears in more than one named split.
+///
+/// Dataset families should pass their stable pre-expansion group identity
+/// (source recording, lexical entry, fixture, session, and so on), rather than
+/// a derived row identifier.
+pub fn check_group_split_leakage(splits: &[(&str, Vec<String>)]) -> Vec<String> {
     use std::collections::{BTreeMap, BTreeSet};
 
-    let mut seen: BTreeMap<String, BTreeSet<&'static str>> = BTreeMap::new();
-    for lexeme in train {
-        seen.entry(lexeme.base_word.clone())
-            .or_default()
-            .insert("train");
-    }
-    for lexeme in valid {
-        seen.entry(lexeme.base_word.clone())
-            .or_default()
-            .insert("valid");
-    }
-    for lexeme in test {
-        seen.entry(lexeme.base_word.clone())
-            .or_default()
-            .insert("test");
+    let mut seen: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (split, groups) in splits {
+        for group in groups {
+            seen.entry(group.clone())
+                .or_default()
+                .insert((*split).to_string());
+        }
     }
 
     seen.into_iter()
@@ -985,6 +981,24 @@ pub fn check_split_leakage(train: &[Lexeme], valid: &[Lexeme], test: &[Lexeme]) 
             })
         })
         .collect()
+}
+
+/// Verify that no base-word group appears in more than one split.
+pub fn check_split_leakage(train: &[Lexeme], valid: &[Lexeme], test: &[Lexeme]) -> Vec<String> {
+    check_group_split_leakage(&[
+        (
+            "train",
+            train.iter().map(|lexeme| lexeme.base_word.clone()).collect(),
+        ),
+        (
+            "valid",
+            valid.iter().map(|lexeme| lexeme.base_word.clone()).collect(),
+        ),
+        (
+            "test",
+            test.iter().map(|lexeme| lexeme.base_word.clone()).collect(),
+        ),
+    ])
 }
 
 // ── Seq2Seq Task Representation & Collation ────────────────────────────────
