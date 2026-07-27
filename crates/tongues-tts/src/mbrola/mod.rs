@@ -16,6 +16,7 @@ pub use pho::{
 };
 pub use projector::{
     MbrolaLoweringError, MbrolaLoweringReport, MbrolaProjector, MbrolaSymbolMap,
-    MbrolaTimingProfile, MbrolaVoiceMetadata, MBROLA_SILENCE,
+    MbrolaTimingProfile, MbrolaVoiceConfig, MbrolaVoiceMetadata, MBROLA_SILENCE,
+    MBROLA_VOICE_CONFIGS,
 };
 pub use render::NativeMbrolaRenderer;

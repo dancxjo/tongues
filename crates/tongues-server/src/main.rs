@@ -4051,19 +4051,25 @@ fn load_mbrola_provider(
     );
     ensure_mbrola_native_use_authorized()?;
     let voice_path = mbrola_voice_path_at(home, payload.model.as_deref())?;
-    let voice_id = voice_path
-        .file_name()
-        .and_then(|name| name.to_str())
+    let voice_config = server_mbrola_voice_config(payload, &voice_path);
+    let voice_id = voice_config
+        .map(|config| config.id)
+        .or_else(|| voice_path.file_name().and_then(|name| name.to_str()))
         .unwrap_or("user-voice")
         .to_string();
-    let symbol_map = mbrola_symbol_map(&voice_id)?;
+    let symbol_map = mbrola_symbol_map(&voice_id, voice_config)?;
     let database = tongues_tts::MbrolaDatabase::load(&voice_path)?;
     let projector = tongues_tts::MbrolaProjector {
         voice: tongues_tts::MbrolaVoiceMetadata {
             id: voice_id,
-            variety: payload.variety.clone().unwrap_or_else(|| "en-US".into()),
-            baseline_hz: mbrola_env_f32("TONGUES_MBROLA_BASELINE_HZ")?,
-            pitch_range_hz: mbrola_env_f32("TONGUES_MBROLA_PITCH_RANGE_HZ")?,
+            variety: voice_config
+                .map(|config| config.variety.to_string())
+                .or_else(|| payload.variety.clone())
+                .unwrap_or_else(|| "en-US".into()),
+            baseline_hz: mbrola_env_f32("TONGUES_MBROLA_BASELINE_HZ")?
+                .or_else(|| voice_config.and_then(|config| config.baseline_hz)),
+            pitch_range_hz: mbrola_env_f32("TONGUES_MBROLA_PITCH_RANGE_HZ")?
+                .or_else(|| voice_config.and_then(|config| config.pitch_range_hz)),
         },
         symbol_map,
         inventory: database.phonemes().map(str::to_string).collect(),
@@ -4080,18 +4086,21 @@ fn load_mbrola_provider(
 }
 
 fn mbrola_voice_path_at(home: &FsPath, model: Option<&str>) -> anyhow::Result<PathBuf> {
+    let requested = model
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or("mbrola-us3");
+    let database_id = tongues_tts::MbrolaVoiceConfig::for_id(requested)
+        .map(|config| config.database_id)
+        .unwrap_or(requested);
     let path = if let Some(path) = std::env::var_os("TONGUES_MBROLA_VOICE").map(PathBuf::from) {
         path
     } else {
-        let requested = model
-            .filter(|model| !model.trim().is_empty())
-            .unwrap_or("mbrola-us3");
         let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
             &tongues_tts::private_catalog_paths_from_environment(),
         )?;
         let entry = catalog
-            .find(requested)
-            .with_context(|| format!("unknown MBROLA catalog model `{requested}`"))?;
+            .find(database_id)
+            .with_context(|| format!("unknown MBROLA catalog database `{database_id}`"))?;
         anyhow::ensure!(
             entry.backend.as_deref() == Some("mbrola")
                 && entry.component_id.as_deref() == Some("mbrola-native-td-psola"),
@@ -4103,7 +4112,7 @@ fn mbrola_voice_path_at(home: &FsPath, model: Option<&str>) -> anyhow::Result<Pa
         path.is_file(),
         "MBROLA voice database is not installed at {}; run `cargo run --bin tongues -- models fetch {}`",
         path.display(),
-        model.unwrap_or("mbrola-us3")
+        database_id
     );
     Ok(path)
 }
@@ -4119,13 +4128,38 @@ fn ensure_mbrola_native_use_authorized() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn mbrola_symbol_map(voice_id: &str) -> anyhow::Result<tongues_tts::MbrolaSymbolMap> {
+fn server_mbrola_voice_config(
+    payload: &SpeakRequest,
+    voice_path: &FsPath,
+) -> Option<&'static tongues_tts::MbrolaVoiceConfig> {
+    payload
+        .model
+        .as_deref()
+        .and_then(tongues_tts::MbrolaVoiceConfig::for_id)
+        .or_else(|| {
+            let database_voice_id = voice_path.file_name()?.to_str()?;
+            tongues_tts::MbrolaVoiceConfig::for_database_and_variety(
+                database_voice_id,
+                payload.variety.as_deref().unwrap_or(""),
+            )
+        })
+        .or_else(|| {
+            let database_voice_id = voice_path.file_name()?.to_str()?;
+            tongues_tts::MbrolaVoiceConfig::for_id(&format!("mbrola-{database_voice_id}"))
+        })
+}
+
+fn mbrola_symbol_map(
+    voice_id: &str,
+    voice_config: Option<&tongues_tts::MbrolaVoiceConfig>,
+) -> anyhow::Result<tongues_tts::MbrolaSymbolMap> {
     let Some(path) = std::env::var_os("TONGUES_MBROLA_SYMBOL_MAP").map(PathBuf::from) else {
-        return Ok(
-            tongues_tts::MbrolaSymbolMap::for_voice_id(voice_id).unwrap_or_else(|| {
+        return Ok(voice_config
+            .map(tongues_tts::MbrolaVoiceConfig::symbol_map)
+            .or_else(|| tongues_tts::MbrolaSymbolMap::for_voice_id(voice_id))
+            .unwrap_or_else(|| {
                 tongues_tts::MbrolaSymbolMap::identity(format!("{voice_id}-identity"))
-            }),
-        );
+            }));
     };
     let source = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read MBROLA symbol map {}", path.display()))?;
@@ -4139,6 +4173,7 @@ fn mbrola_symbol_map(voice_id: &str) -> anyhow::Result<tongues_tts::MbrolaSymbol
     Ok(tongues_tts::MbrolaSymbolMap {
         id: path.display().to_string(),
         mappings,
+        expansions: Default::default(),
     })
 }
 
@@ -4419,6 +4454,14 @@ fn normalize_speak_request(mut payload: SpeakRequest) -> Result<SpeakRequest, St
     payload.backend = Some(composition.backend);
     payload.model = Some(composition.model);
     payload.pipeline = Some(composition.pipeline);
+    if payload.backend.as_deref() == Some("mbrola")
+        && let Some(config) = payload
+            .model
+            .as_deref()
+            .and_then(tongues_tts::MbrolaVoiceConfig::for_id)
+    {
+        payload.variety = Some(config.variety.to_string());
+    }
     Ok(payload)
 }
 
@@ -4452,6 +4495,9 @@ fn speech_model_id(
 
     if backend == "mbrola" {
         let requested = requested_model.unwrap_or("mbrola-us3");
+        if let Some(config) = tongues_tts::MbrolaVoiceConfig::for_id(requested) {
+            return Ok(config.id.to_string());
+        }
         let catalog = tongues_tts::ModelCatalog::with_private_catalogs(
             &tongues_tts::private_catalog_paths_from_environment(),
         )?;
@@ -4833,15 +4879,32 @@ fn speech_backend_capabilities(
         }
         "mbrola" => {
             let model = speech_model_id(home, backend, model)?;
+            let voice_config = tongues_tts::MbrolaVoiceConfig::for_id(&model);
             let database = mbrola_voice_path_at(home, Some(&model))
                 .ok()
                 .and_then(|path| tongues_tts::MbrolaDatabase::load(path).ok());
+            let varieties = voice_config.map_or(tongues_tts::CapabilityValue::Any, |config| {
+                speech_variety_capabilities(&[config.variety])
+            });
+            let languages = voice_config.map_or_else(
+                tongues_tts::LanguageCapabilities::unsupported,
+                |config| tongues_tts::LanguageCapabilities {
+                    values: tongues_tts::CapabilityValue::Listed(vec![
+                        tongues_tts::NamedCapability::new(
+                            config.variety.split('-').next().unwrap_or(config.variety),
+                            config.variety.split('-').next().unwrap_or(config.variety),
+                        ),
+                    ]),
+                    required: false,
+                    numeric_ids: false,
+                },
+            );
             tongues_tts::BackendCapabilities {
                 backend: "mbrola".into(),
                 model,
                 family: tongues_tts::SpeechModelFamily::EndToEndSpeech,
-                varieties: tongues_tts::CapabilityValue::Any,
-                languages: tongues_tts::LanguageCapabilities::unsupported(),
+                varieties,
+                languages,
                 speakers: unsupported_speakers(),
                 styles: unsupported_styles(),
                 reference_audio: Default::default(),
@@ -6866,7 +6929,15 @@ fn speech_path_catalog_ids(
         "yourtts" => vec!["yourtts-multilingual".into()],
         "freevc" => vec!["freevc24-vctk".into()],
         "styletts2" => vec![speech_model_id(home, backend, model)?],
-        "mbrola" => vec![speech_model_id(home, backend, model)?],
+        "mbrola" => {
+            let voice_id = speech_model_id(home, backend, model)?;
+            vec![
+                tongues_tts::MbrolaVoiceConfig::for_id(&voice_id)
+                    .map(|config| config.database_id)
+                    .unwrap_or(voice_id.as_str())
+                    .to_string(),
+            ]
+        }
         "onnx" => vec![
             model
                 .filter(|model| !model.trim().is_empty())
@@ -9359,7 +9430,7 @@ mod tests {
         let path = discovery
             .paths
             .iter()
-            .find(|path| path.capabilities.backend == "mbrola")
+            .find(|path| path.id == "mbrola-us3")
             .expect("Speech Studio MBROLA path");
         assert_eq!(path.id, "mbrola-us3");
         assert!(
@@ -9370,16 +9441,16 @@ mod tests {
         let composition = discovery
             .compositions
             .iter()
-            .find(|composition| composition.backend == "mbrola")
+            .find(|composition| composition.model == "mbrola-us3")
             .expect("Speech Studio MBROLA composition");
         assert_eq!(
             composition.pipeline.projector,
-            "projector/mbrola-phone-timing"
+            "projector/mbrola-phone-timing/mbrola-us3"
         );
         let projector = discovery
             .components
             .iter()
-            .find(|component| component.id == "projector/mbrola-phone-timing")
+            .find(|component| component.id == "projector/mbrola-phone-timing/mbrola-us3")
             .expect("Speech Studio MBROLA projector stage");
         assert!(
             projector
@@ -9392,6 +9463,27 @@ mod tests {
                 .components
                 .iter()
                 .any(|component| component.id == "mbrola-native-td-psola")
+        );
+        let esperanto = discovery
+            .paths
+            .iter()
+            .find(|path| path.id == "mbrola-eo-nl2")
+            .expect("Speech Studio Esperanto via nl2 path");
+        assert_eq!(
+            listed_capability_ids(&esperanto.capabilities.varieties),
+            vec!["eo"]
+        );
+        assert!(
+            esperanto
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("models fetch mbrola-nl2"))
+        );
+        assert!(
+            discovery
+                .catalog
+                .iter()
+                .any(|entry| entry.id == "mbrola-nl2")
         );
     }
 

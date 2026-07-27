@@ -231,8 +231,8 @@ pub use languages::LanguageCatalog;
 pub use mbrola::{
     parse_pho, serialize_pho, MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone,
     MbrolaLoweringError, MbrolaLoweringReport, MbrolaPhoError, MbrolaPhone, MbrolaPitchTarget,
-    MbrolaProjector, MbrolaSymbolMap, MbrolaTimingProfile, MbrolaVoiceMetadata,
-    NativeMbrolaRenderer, PhoneTimedPlan, MBROLA_SILENCE,
+    MbrolaProjector, MbrolaSymbolMap, MbrolaTimingProfile, MbrolaVoiceConfig, MbrolaVoiceMetadata,
+    NativeMbrolaRenderer, PhoneTimedPlan, MBROLA_SILENCE, MBROLA_VOICE_CONFIGS,
 };
 pub use mock_renderer::{MockTtsRenderer, MockTtsRendererConfig};
 pub use model_catalog::{

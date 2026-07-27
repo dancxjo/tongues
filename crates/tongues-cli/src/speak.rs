@@ -708,7 +708,19 @@ impl BackendInstance {
                     speech::SpeechModelFamily::EndToEndSpeech,
                     24_000,
                 );
-                capabilities.varieties = speech::CapabilityValue::Any;
+                let variety = engine.projector().voice.variety.as_str();
+                capabilities.varieties =
+                    speech::CapabilityValue::Listed(vec![speech::NamedCapability::new(
+                        variety, variety,
+                    )]);
+                let language = variety.split('-').next().unwrap_or(variety);
+                capabilities.languages = speech::LanguageCapabilities {
+                    values: speech::CapabilityValue::Listed(vec![speech::NamedCapability::new(
+                        language, language,
+                    )]),
+                    required: false,
+                    numeric_ids: false,
+                };
                 capabilities.speed = false;
                 capabilities.seed = false;
                 capabilities
@@ -1741,6 +1753,7 @@ fn load_backend(
                 "--backend mbrola currently supports --device cpu"
             );
             let voice_path = resolve_cli_mbrola_voice(command)?;
+            let voice_config = cli_mbrola_voice_config(command, &voice_path);
             anyhow::ensure!(
                 voice_path.is_file(),
                 "MBROLA voice database not found at {}",
@@ -1753,18 +1766,21 @@ fn load_backend(
                 license.trim() == "1",
                 "TONGUES_MBROLA_NATIVE_USE_AUTHORIZED must equal 1"
             );
-            let symbol_map = load_cli_mbrola_symbol_map(command, &voice_path)?;
-            let voice_id = voice_path
-                .file_name()
-                .and_then(|name| name.to_str())
+            let symbol_map = load_cli_mbrola_symbol_map(command, &voice_path, voice_config)?;
+            let voice_id = voice_config
+                .map(|config| config.id)
+                .or_else(|| voice_path.file_name().and_then(|name| name.to_str()))
                 .unwrap_or("user-voice")
                 .to_string();
             let projector = speech::MbrolaProjector {
                 voice: speech::MbrolaVoiceMetadata {
                     id: voice_id,
-                    variety: command.variety.clone(),
-                    baseline_hz: None,
-                    pitch_range_hz: None,
+                    variety: voice_config
+                        .map(|config| config.variety)
+                        .unwrap_or(command.variety.as_str())
+                        .to_string(),
+                    baseline_hz: voice_config.and_then(|config| config.baseline_hz),
+                    pitch_range_hz: voice_config.and_then(|config| config.pitch_range_hz),
                 },
                 symbol_map,
                 inventory: Default::default(),
@@ -1859,6 +1875,7 @@ fn default_fairseq_mms_model(variety: &str) -> &'static str {
 fn load_cli_mbrola_symbol_map(
     command: &SpeakCommand,
     voice_path: &Path,
+    voice_config: Option<&speech::MbrolaVoiceConfig>,
 ) -> Result<speech::MbrolaSymbolMap> {
     let voice_id = voice_path
         .file_name()
@@ -1869,7 +1886,9 @@ fn load_cli_mbrola_symbol_map(
         .clone()
         .or_else(|| std::env::var_os("TONGUES_MBROLA_SYMBOL_MAP").map(PathBuf::from));
     let Some(path) = path else {
-        return Ok(speech::MbrolaSymbolMap::for_voice_id(voice_id)
+        return Ok(voice_config
+            .map(speech::MbrolaVoiceConfig::symbol_map)
+            .or_else(|| speech::MbrolaSymbolMap::for_voice_id(voice_id))
             .unwrap_or_else(|| speech::MbrolaSymbolMap::identity(format!("{voice_id}-identity"))));
     };
     let source = std::fs::read_to_string(&path)
@@ -1884,7 +1903,26 @@ fn load_cli_mbrola_symbol_map(
     Ok(speech::MbrolaSymbolMap {
         id: path.display().to_string(),
         mappings,
+        expansions: Default::default(),
     })
+}
+
+fn cli_mbrola_voice_config(
+    command: &SpeakCommand,
+    voice_path: &Path,
+) -> Option<&'static speech::MbrolaVoiceConfig> {
+    command
+        .model
+        .as_deref()
+        .and_then(speech::MbrolaVoiceConfig::for_id)
+        .or_else(|| {
+            let database_voice_id = voice_path.file_name()?.to_str()?;
+            speech::MbrolaVoiceConfig::for_database_and_variety(database_voice_id, &command.variety)
+        })
+        .or_else(|| {
+            let database_voice_id = voice_path.file_name()?.to_str()?;
+            speech::MbrolaVoiceConfig::for_id(&format!("mbrola-{database_voice_id}"))
+        })
 }
 
 fn resolve_cli_mbrola_voice(command: &SpeakCommand) -> Result<PathBuf> {
@@ -1898,8 +1936,11 @@ fn resolve_cli_mbrola_voice(command: &SpeakCommand) -> Result<PathBuf> {
         if direct.is_file() {
             return Ok(direct);
         }
+        let catalog_id = speech::MbrolaVoiceConfig::for_id(requested)
+            .map(|config| config.database_id)
+            .unwrap_or(requested);
         let catalog = speech::ModelCatalog::embedded()?;
-        if let Some(entry) = catalog.find(requested).filter(|entry| {
+        if let Some(entry) = catalog.find(catalog_id).filter(|entry| {
             entry.backend.as_deref() == Some("mbrola")
                 && entry.component_id.as_deref() == Some("mbrola-native-td-psola")
         }) {
@@ -1914,7 +1955,7 @@ fn resolve_cli_mbrola_voice(command: &SpeakCommand) -> Result<PathBuf> {
             return Ok(path);
         }
         anyhow::bail!(
-            "unknown MBROLA database `{requested}`; use a database path or mbrola-us1, mbrola-us3, or mbrola-en1"
+            "unknown MBROLA voice `{requested}`; use a configured voice id, catalog database id, or database path"
         );
     }
     std::env::var_os("TONGUES_MBROLA_VOICE")
@@ -1924,7 +1965,16 @@ fn resolve_cli_mbrola_voice(command: &SpeakCommand) -> Result<PathBuf> {
         )
 }
 
-pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
+pub fn run_speak(mut command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {
+    if matches!(command.backend, SpeakBackend::Mbrola) {
+        if let Some(config) = command
+            .model
+            .as_deref()
+            .and_then(speech::MbrolaVoiceConfig::for_id)
+        {
+            command.variety = config.variety.to_string();
+        }
+    }
     anyhow::ensure!(
         (1..=32).contains(&command.benchmark_runs),
         "--benchmark-runs must be between 1 and 32"

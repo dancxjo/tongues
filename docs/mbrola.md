@@ -19,13 +19,14 @@ project. Tongues has no runtime or build dependency on that repository.
 
 ## Voice artifacts and licensing
 
-The shared artifact getter includes the upstream `us1`, `us3`, and `en1`
+The shared artifact getter includes the upstream `us1`, `us3`, `en1`, and `nl2`
 diphone databases and installs each database together with its license notice:
 
 ```sh
 cargo run --bin tongues -- models fetch mbrola-us1
 cargo run --bin tongues -- models fetch mbrola-us3
 cargo run --bin tongues -- models fetch mbrola-en1
+cargo run --bin tongues -- models fetch mbrola-nl2
 ```
 
 The published voice terms permit no-charge distribution with the notice, but
@@ -41,8 +42,13 @@ Set that variable only when your authorization covers native use. This gate
 never triggers an executable fallback: Tongues does not probe for, install, or
 invoke the MBROLA binary.
 
-The three catalog voices have built-in source-to-inventory phone maps adapted
-from Listenbury. A user-supplied voice may use
+Each catalog database has an explicit `MbrolaVoiceConfig` recording the logical
+voice, database artifact, database voice ID, variety, symbol map, and optional
+pitch metadata. Multiple logical voices may share one database without
+pretending they are the same language.
+
+The catalog voices have built-in source-to-inventory phone maps adapted from
+Listenbury. A user-supplied voice may use
 `TONGUES_MBROLA_SYMBOL_MAP=/path/to/map.json`; the file is a JSON object:
 
 ```json
@@ -60,7 +66,7 @@ diphones fail with errors that name the phone, variety, voice/map, or exact
 diphone. Tongues never substitutes an unrelated sound.
 
 The server and Speech Studio expose `mbrola-us3` as the default native path and
-the catalog exposes all three downloadable databases. Once an artifact is
+the catalog exposes all four downloadable databases. Once an artifact is
 installed and native use is authorized, the shared discovery/runtime path
 provides its phone timing/F0/rate capabilities, the
 `projector/mbrola-phone-timing` stage, and the native TD-PSOLA renderer.
@@ -77,6 +83,35 @@ cargo run --bin tongues -- speak 'Hello.' \
 ```
 
 `--model` also accepts a direct path for a separately supplied database.
+
+## Esperanto through Dutch nl2
+
+`mbrola-eo-nl2` is a logical Esperanto voice backed by the full Dutch `nl2`
+diphone database. It selects Tongues' `eo` phonemicizer and a dedicated map for
+all 28 Esperanto phonemes. The three affricates expand deliberately:
+
+```text
+t͡s -> t s
+t͡ʃ -> t S
+d͡ʒ -> d Z
+```
+
+The database contains the required adjacent diphones; durations and F0 targets
+are partitioned across expanded phones rather than duplicating the requested
+duration.
+
+```sh
+cargo run --bin tongues -- models fetch mbrola-nl2
+TONGUES_MBROLA_NATIVE_USE_AUTHORIZED=1 \
+cargo run --bin tongues -- speak 'Saluton, mondo!' \
+  --backend mbrola \
+  --model mbrola-eo-nl2 \
+  --output /tmp/saluton.wav
+```
+
+Speech Studio exposes `mbrola-eo-nl2` as an Esperanto path while installation,
+verification, and license provenance continue to point to the single
+`mbrola-nl2` database artifact.
 
 The library also exposes `parse_pho`, `serialize_pho`, and
 `NativeMbrolaRenderer::render_pho`, so parsed `.pho` and typed plans enter the

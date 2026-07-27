@@ -19,6 +19,94 @@ pub struct MbrolaVoiceMetadata {
     pub pitch_range_hz: Option<f32>,
 }
 
+/// Runtime configuration for a logical voice backed by an MBROLA diphone
+/// database. More than one logical voice may deliberately share a database
+/// while selecting a different variety and symbol projection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MbrolaVoiceConfig {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub database_id: &'static str,
+    pub database_voice_id: &'static str,
+    pub variety: &'static str,
+    pub symbol_map_id: &'static str,
+    pub baseline_hz: Option<f32>,
+    pub pitch_range_hz: Option<f32>,
+}
+
+pub const MBROLA_VOICE_CONFIGS: &[MbrolaVoiceConfig] = &[
+    MbrolaVoiceConfig {
+        id: "mbrola-us1",
+        display_name: "MBROLA US English us1",
+        database_id: "mbrola-us1",
+        database_voice_id: "us1",
+        variety: "en-US",
+        symbol_map_id: "us1",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-us3",
+        display_name: "MBROLA US English us3",
+        database_id: "mbrola-us3",
+        database_voice_id: "us3",
+        variety: "en-US",
+        symbol_map_id: "us3",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-en1",
+        display_name: "MBROLA British English en1",
+        database_id: "mbrola-en1",
+        database_voice_id: "en1",
+        variety: "en-GB",
+        symbol_map_id: "en1",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-nl2",
+        display_name: "MBROLA Dutch nl2",
+        database_id: "mbrola-nl2",
+        database_voice_id: "nl2",
+        variety: "nl-NL",
+        symbol_map_id: "nl2",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+    MbrolaVoiceConfig {
+        id: "mbrola-eo-nl2",
+        display_name: "Esperanto via MBROLA Dutch nl2",
+        database_id: "mbrola-nl2",
+        database_voice_id: "nl2",
+        variety: "eo",
+        symbol_map_id: "eo-nl2",
+        baseline_hz: None,
+        pitch_range_hz: None,
+    },
+];
+
+impl MbrolaVoiceConfig {
+    pub fn for_id(id: &str) -> Option<&'static Self> {
+        MBROLA_VOICE_CONFIGS.iter().find(|config| config.id == id)
+    }
+
+    pub fn for_database_and_variety(
+        database_voice_id: &str,
+        variety: &str,
+    ) -> Option<&'static Self> {
+        MBROLA_VOICE_CONFIGS.iter().find(|config| {
+            config.database_voice_id == database_voice_id && config.variety == variety
+        })
+    }
+
+    pub fn symbol_map(&self) -> MbrolaSymbolMap {
+        MbrolaSymbolMap::for_voice_id(self.symbol_map_id)
+            .expect("registered MBROLA voice configuration must have a symbol map")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MbrolaTimingProfile {
     pub consonant_ms: u32,
@@ -60,6 +148,8 @@ impl Default for MbrolaTimingProfile {
 pub struct MbrolaSymbolMap {
     pub id: String,
     pub mappings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub expansions: BTreeMap<String, Vec<String>>,
 }
 
 impl MbrolaSymbolMap {
@@ -73,7 +163,19 @@ impl MbrolaSymbolMap {
                 .into_iter()
                 .map(|(from, to)| (from.into(), to.into()))
                 .collect(),
+            expansions: BTreeMap::new(),
         }
+    }
+
+    pub fn with_expansions(
+        mut self,
+        expansions: impl IntoIterator<Item = (impl Into<String>, Vec<impl Into<String>>)>,
+    ) -> Self {
+        self.expansions = expansions
+            .into_iter()
+            .map(|(from, to)| (from.into(), to.into_iter().map(Into::into).collect()))
+            .collect();
+        self
     }
 
     pub fn identity(id: impl Into<String>) -> Self {
@@ -281,6 +383,81 @@ impl MbrolaSymbolMap {
                     ]),
                 ));
             }
+            "nl2" | "mbrola-nl2" => {
+                return Some(Self::new(
+                    "mbrola-nl2-built-in",
+                    [
+                        ("_", "_"),
+                        ("a", "a"),
+                        ("b", "b"),
+                        ("d", "d"),
+                        ("e", "e"),
+                        ("f", "f"),
+                        ("g", "g"),
+                        ("ɡ", "g"),
+                        ("h", "h"),
+                        ("i", "i"),
+                        ("j", "j"),
+                        ("k", "k"),
+                        ("l", "l"),
+                        ("m", "m"),
+                        ("n", "n"),
+                        ("o", "o"),
+                        ("p", "p"),
+                        ("r", "r"),
+                        ("s", "s"),
+                        ("t", "t"),
+                        ("u", "u"),
+                        ("v", "v"),
+                        ("w", "w"),
+                        ("x", "x"),
+                        ("z", "z"),
+                        ("ʃ", "S"),
+                        ("ʒ", "Z"),
+                    ],
+                ));
+            }
+            "eo-nl2" | "mbrola-eo-nl2" => {
+                return Some(
+                    Self::new(
+                        "mbrola-eo-nl2-built-in",
+                        [
+                            ("_", "_"),
+                            ("a", "a"),
+                            ("b", "b"),
+                            ("d", "d"),
+                            ("e", "e"),
+                            ("f", "f"),
+                            ("g", "g"),
+                            ("ɡ", "g"),
+                            ("h", "h"),
+                            ("i", "i"),
+                            ("j", "j"),
+                            ("k", "k"),
+                            ("l", "l"),
+                            ("m", "m"),
+                            ("n", "n"),
+                            ("o", "o"),
+                            ("p", "p"),
+                            ("r", "r"),
+                            ("s", "s"),
+                            ("t", "t"),
+                            ("u", "u"),
+                            ("v", "v"),
+                            ("w", "w"),
+                            ("x", "x"),
+                            ("z", "z"),
+                            ("ʃ", "S"),
+                            ("ʒ", "Z"),
+                        ],
+                    )
+                    .with_expansions([
+                        ("t͡s", vec!["t", "s"]),
+                        ("t͡ʃ", vec!["t", "S"]),
+                        ("d͡ʒ", vec!["d", "Z"]),
+                    ]),
+                );
+            }
             _ => return None,
         };
         Some(Self::new(
@@ -297,8 +474,26 @@ impl MbrolaSymbolMap {
         phone: &str,
         voice: &MbrolaVoiceMetadata,
         inventory: &BTreeSet<String>,
-    ) -> Result<String, MbrolaLoweringError> {
+    ) -> Result<Vec<String>, MbrolaLoweringError> {
         let stressless = phone.trim_end_matches(|ch: char| ch.is_ascii_digit());
+        if let Some(expansion) = self
+            .expansions
+            .get(phone)
+            .or_else(|| self.expansions.get(stressless))
+        {
+            for mapped in expansion {
+                if !inventory.contains(mapped) {
+                    return Err(MbrolaLoweringError::UnsupportedVoiceSymbol {
+                        phone: phone.to_string(),
+                        mapped: mapped.clone(),
+                        variety: voice.variety.clone(),
+                        voice: voice.id.clone(),
+                        symbol_map: self.id.clone(),
+                    });
+                }
+            }
+            return Ok(expansion.clone());
+        }
         let mapped = self
             .mappings
             .get(phone)
@@ -320,7 +515,7 @@ impl MbrolaSymbolMap {
                 symbol_map: self.id.clone(),
             });
         }
-        Ok(mapped)
+        Ok(vec![mapped])
     }
 }
 
@@ -396,7 +591,7 @@ impl MbrolaProjector {
                 speech_boundary_index += 1;
             }
             let source = phone_display_symbol(spec_phone(token)?);
-            let symbol = self
+            let symbols = self
                 .symbol_map
                 .resolve(source, &self.voice, &self.inventory)?;
             let syllable = syllable_metadata(plan, index);
@@ -466,7 +661,17 @@ impl MbrolaProjector {
             } else {
                 Vec::new()
             };
-            phones.push(MbrolaPhone::new(symbol, duration_ms).with_pitch_targets(pitch_targets));
+            let split_durations = split_duration(duration_ms, symbols.len())?;
+            let symbol_count = split_durations.len();
+            for (symbol_index, (symbol, symbol_duration)) in
+                symbols.into_iter().zip(split_durations).enumerate()
+            {
+                phones.push(
+                    MbrolaPhone::new(symbol, symbol_duration).with_pitch_targets(
+                        split_pitch_targets(&pitch_targets, symbol_index, symbol_count),
+                    ),
+                );
+            }
             inferred_cursor_s = span.end_s;
         }
 
@@ -493,6 +698,42 @@ impl MbrolaProjector {
         }
         Ok((PhoneTimedPlan::new(phones), report))
     }
+}
+
+fn split_duration(duration_ms: u32, parts: usize) -> Result<Vec<u32>, MbrolaLoweringError> {
+    if parts == 0 || duration_ms < parts as u32 {
+        return Err(MbrolaLoweringError::InvalidExpansionDuration { duration_ms, parts });
+    }
+    let base = duration_ms / parts as u32;
+    let remainder = duration_ms % parts as u32;
+    Ok((0..parts)
+        .map(|index| base + u32::from(index < remainder as usize))
+        .collect())
+}
+
+fn split_pitch_targets(
+    targets: &[MbrolaPitchTarget],
+    part: usize,
+    parts: usize,
+) -> Vec<MbrolaPitchTarget> {
+    if parts <= 1 {
+        return targets.to_vec();
+    }
+    let lower = part as f32 / parts as f32;
+    let upper = (part + 1) as f32 / parts as f32;
+    targets
+        .iter()
+        .filter_map(|target| {
+            let global = target.percent as f32 / 100.0;
+            let is_last_endpoint = part + 1 == parts && target.percent == 100;
+            ((global >= lower && global < upper) || is_last_endpoint).then(|| MbrolaPitchTarget {
+                percent: (((global - lower) / (upper - lower)) * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u8,
+                hz: target.hz,
+            })
+        })
+        .collect()
 }
 
 fn speech_boundary_insertions(
@@ -835,6 +1076,8 @@ pub enum MbrolaLoweringError {
     },
     #[error("invalid duration {0} seconds")]
     InvalidDuration(f64),
+    #[error("cannot split {duration_ms} ms across {parts} MBROLA symbols")]
+    InvalidExpansionDuration { duration_ms: u32, parts: usize },
     #[error("invalid prosodic break duration {0} seconds")]
     InvalidBreakDuration(f32),
     #[error("pitch point at {time_s} seconds must be finite and positive, got {hz}")]
@@ -1007,5 +1250,45 @@ mod tests {
         assert!(first.phones[0].pitch_targets.is_empty());
         assert!(first.phones[1].duration_ms > first.phones[0].duration_ms);
         assert!(first.phones[1].pitch_targets.last().unwrap().hz > 100.0);
+    }
+
+    #[test]
+    fn esperanto_nl2_configuration_covers_the_complete_inventory() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-eo-nl2").expect("Esperanto voice config");
+        assert_eq!(config.database_id, "mbrola-nl2");
+        assert_eq!(config.variety, "eo");
+        let map = config.symbol_map();
+        let inventory = [
+            "_", "a", "b", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "r",
+            "s", "t", "u", "v", "w", "x", "z", "S", "Z",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let voice = MbrolaVoiceMetadata {
+            id: config.id.into(),
+            variety: config.variety.into(),
+            baseline_hz: None,
+            pitch_range_hz: None,
+        };
+        for phone in [
+            "a", "b", "t͡s", "t͡ʃ", "d", "e", "f", "ɡ", "d͡ʒ", "h", "x", "i", "j", "ʒ", "k", "l", "m",
+            "n", "o", "p", "r", "s", "ʃ", "t", "u", "w", "v", "z",
+        ] {
+            map.resolve(phone, &voice, &inventory)
+                .unwrap_or_else(|error| panic!("Esperanto phone {phone} is not covered: {error}"));
+        }
+        assert_eq!(
+            map.resolve("t͡s", &voice, &inventory).unwrap(),
+            vec!["t", "s"]
+        );
+        assert_eq!(
+            map.resolve("t͡ʃ", &voice, &inventory).unwrap(),
+            vec!["t", "S"]
+        );
+        assert_eq!(
+            map.resolve("d͡ʒ", &voice, &inventory).unwrap(),
+            vec!["d", "Z"]
+        );
     }
 }

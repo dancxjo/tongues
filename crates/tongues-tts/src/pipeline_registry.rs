@@ -219,7 +219,7 @@ impl RegisteredSpeechComposition {
 }
 
 pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
-    vec![
+    let mut compositions = vec![
         // --- Tier A: low-latency conversational ---
         // SpeedySpeech + HiFi-GAN: lean native path
         RegisteredSpeechComposition::new(
@@ -322,20 +322,21 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
             ),
             false,
         ),
-        // User-supplied voice database. Runtime availability is resolved by the
-        // host from TONGUES_MBROLA_VOICE rather than a redistributed artifact.
+    ];
+    compositions.extend(crate::MBROLA_VOICE_CONFIGS.iter().map(|config| {
         RegisteredSpeechComposition::new(
-            "Native MBROLA TD-PSOLA",
+            config.display_name,
             "mbrola",
-            "mbrola-us3",
+            config.id,
             SpeechPipelineSelection::end_to_end(
-                "projector/mbrola-phone-timing",
+                format!("projector/mbrola-phone-timing/{}", config.id),
                 "mbrola-native-td-psola",
                 Vec::new(),
             ),
-            false,
-        ),
-    ]
+            config.id == "mbrola-eo-nl2",
+        )
+    }));
+    compositions
 }
 
 fn port(kind: &str, key: impl Into<String>, summary: impl Into<String>) -> SpeechPortContract {
@@ -636,7 +637,7 @@ pub fn registered_speech_pipeline_components() -> Vec<SpeechPipelineComponent> {
                         _ => Vec::new(),
                     },
                     explanation: if composition.backend == "mbrola" {
-                        "Native user-supplied MBROLA database rendering with typed phone timing, F0 targets, `.pho` inspection, and mono f32 waveform output.".into()
+                        "Native configured MBROLA database rendering with typed phone timing, F0 targets, `.pho` inspection, and mono f32 waveform output.".into()
                     } else {
                         "End-to-end model spanning acoustic generation and waveform decoding."
                             .into()
@@ -786,12 +787,12 @@ mod tests {
     fn mbrola_is_shared_discovery_with_pho_stage_contract() {
         let composition = registered_speech_compositions()
             .into_iter()
-            .find(|composition| composition.backend == "mbrola")
+            .find(|composition| composition.model == "mbrola-us3")
             .expect("MBROLA composition");
         assert_eq!(composition.model, "mbrola-us3");
         assert_eq!(
             composition.pipeline.projector,
-            "projector/mbrola-phone-timing"
+            "projector/mbrola-phone-timing/mbrola-us3"
         );
         assert_eq!(
             composition.pipeline.end_to_end.as_deref(),
@@ -800,7 +801,7 @@ mod tests {
         let components = registered_speech_pipeline_components();
         let projector = components
             .iter()
-            .find(|component| component.id == "projector/mbrola-phone-timing")
+            .find(|component| component.id == "projector/mbrola-phone-timing/mbrola-us3")
             .expect("MBROLA projector");
         assert_eq!(projector.produces[0].kind, "phone_timed_plan");
         assert!(projector.produces[0].summary.contains("`.pho`"));
@@ -809,6 +810,13 @@ mod tests {
             .find(|component| component.id == "mbrola-native-td-psola")
             .expect("MBROLA renderer");
         assert!(renderer.controls.iter().any(|control| control == "pho"));
+        let esperanto = registered_speech_compositions()
+            .into_iter()
+            .find(|composition| composition.model == "mbrola-eo-nl2")
+            .expect("Esperanto nl2 composition");
+        assert_eq!(esperanto.backend, "mbrola");
+        assert!(esperanto.recommended);
+        assert!(esperanto.pipeline.projector.ends_with("mbrola-eo-nl2"));
     }
 
     #[test]

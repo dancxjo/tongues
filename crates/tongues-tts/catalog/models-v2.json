@@ -3,6 +3,54 @@
   "id": "tongues-official",
   "entries": [
     {
+      "id": "mbrola-nl2",
+      "display_name": "MBROLA Dutch Voice nl2",
+      "aliases": ["nl2", "mbrola-voice-nl2"],
+      "architecture": "mbrola-diphone",
+      "component_id": "mbrola-native-td-psola",
+      "kind": "end_to_end_speech",
+      "backend": "mbrola",
+      "runtime_path": "models/speech/mbrola/nl2/nl2",
+      "compatible_with": ["mbrola-database-v2", "native-mbrola-td-psola-with-separate-permission", "mbrola-eo-nl2"],
+      "package_version": 1,
+      "languages": ["nl", "eo"],
+      "varieties": ["nl-NL", "eo"],
+      "speakers": {"count": 1, "names": ["nl2"], "names_file": null},
+      "sample_rate_hz": 16000,
+      "capabilities": ["end-to-end-speech", "phonemes", "speed", "pitch-scale", "pitch-shift", "explicit-pitch", "explicit-durations"],
+      "license": {
+        "expression": "LicenseRef-MBROLA-Voice-Restricted",
+        "evidence": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/nl2/license.txt"
+      },
+      "provenance": {
+        "format": "mbrola-diphone-database",
+        "source": "https://github.com/numediart/MBROLA-voices/tree/master/data/nl2"
+      },
+      "artifacts": [
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/nl2/nl2",
+          "sha256": "f307f28b504d22f151131eb2299f40bb9872586a77d58d7828514da465d68155",
+          "size_bytes": 15192776,
+          "install_path": "models/speech/mbrola/nl2/nl2",
+          "members": []
+        },
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/nl2/license.txt",
+          "sha256": "cb281fc6c902f011b2ab111c26215dfaad7f0cb2e47598beaa02485abacbb8be",
+          "size_bytes": 1726,
+          "install_path": "models/speech/mbrola/nl2/license.txt",
+          "members": []
+        },
+        {
+          "url": "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data/nl2/README.txt",
+          "sha256": "4efae6fbd9c9dd53667011ad6da8e79b4ca3c55c2e48498551e922003b9732de",
+          "size_bytes": 10987,
+          "install_path": "models/speech/mbrola/nl2/README.txt",
+          "members": []
+        }
+      ]
+    },
+    {
       "id": "mbrola-us1",
       "display_name": "MBROLA US English Voice us1",
       "aliases": ["us1", "mbrola-voice-us1"],

@@ -707,13 +707,12 @@ mod tests {
 
     #[test]
     fn artifact_getter_includes_all_mbrola_databases_and_notices() {
-        for id in ["mbrola-us1", "mbrola-us3", "mbrola-en1"] {
+        for id in ["mbrola-us1", "mbrola-us3", "mbrola-en1", "mbrola-nl2"] {
             let bundle = find_bundle(id).unwrap_or_else(|| panic!("{id} should be registered"));
             assert_eq!(bundle.kind, ModelKind::EndToEndSpeech);
-            assert_eq!(
-                bundle.required_asset_ids.len(),
-                2,
-                "{id} must install both its diphone database and license notice"
+            assert!(
+                bundle.required_asset_ids.len() >= 2,
+                "{id} must install at least its diphone database and license notice"
             );
             let paths = bundle
                 .required_asset_ids
