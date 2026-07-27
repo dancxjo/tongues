@@ -46,7 +46,12 @@ const discovery={
       {id:"text",label:"text",direction:"input",value_type:"text",cardinality:"one",streaming:true},
       {id:"audio",label:"audio",direction:"output",value_type:"audio_stream",cardinality:"many",streaming:true},
     ],replacement:replacement("tts")},
-    audio_output:{kind:"audio_output",label:"Audio output",requires_component:false,default_config:{},configuration_schema:{type:"object"},ports:[
+    audio_output:{kind:"audio_output",label:"Audio output",requires_component:false,default_config:{target:"browser",browser_device_id:"default",system_device_id:"default",wav_path:"data/speech-output.wav"},configuration_schema:{type:"object",required:["target"],properties:{
+      target:{type:"string",title:"Destination",enum:["browser","system","wav"],"x-enum-labels":["This browser","Server audio device (CPAL)","WAV file"],"x-ui-priority":0},
+      browser_device_id:{type:"string",title:"Browser playback device",default:"default",enum:["default"],"x-enum-labels":["Browser default"],"x-ui-visible-when":{target:"browser"},"x-ui-priority":10},
+      system_device_id:{type:"string",title:"Server playback device",default:"default",enum:["default","Fixture speakers"],"x-enum-labels":["System default","Fixture speakers"],"x-ui-visible-when":{target:"system"},"x-ui-priority":10},
+      wav_path:{type:"string",title:"WAV output path",default:"data/speech-output.wav",format:"path","x-ui-visible-when":{target:"wav"},"x-ui-priority":10},
+    }},ports:[
       {id:"in",label:"audio",direction:"input",value_type:"audio_stream",cardinality:"one",streaming:true},
     ],replacement:replacement("audio_output")},
     transcript_merge:{kind:"transcript_merge",label:"Transcript merge",requires_component:false,merge:{strategy:"source_order"},default_config:{},configuration_schema:{type:"object"},ports:[
@@ -223,7 +228,13 @@ test.beforeEach(async({page})=>{
     if(pathname==="/api/pipeline/run"||pathname.startsWith("/api/pipeline/runs/"))return route.continue();
     if(pathname==="/api/pipeline/catalog")return route.fulfill({json:discovery});
     if(pathname==="/api/pipeline/starters")return route.fulfill({json:{graphs:[graph]}});
-    if(pathname==="/api/pipeline/validate")return route.fulfill({json:{valid:true,diagnostics:[]}});
+    if(pathname==="/api/pipeline/validate"){
+      const document=request.postDataJSON();
+      const diagnostics=document.metadata?.name==="Incomplete replacement draft"
+        ?[{code:"port.required_input_missing",severity:"error",message:"A required input is not connected.",target:{node_id:"node:mic-1",port_id:"out"}}]
+        :[];
+      return route.fulfill({json:{valid:diagnostics.length===0,diagnostics}});
+    }
     if(request.method()==="PUT"&&pathname.startsWith("/api/pipeline/graphs/")){
       savedGraph=request.postDataJSON();return route.fulfill({json:{document:savedGraph}});
     }
@@ -274,6 +285,22 @@ test("actual replacement dialog supports large catalogs, keyboard review, cancel
   await page.getByRole("button",{name:"Save"}).click();
   await expect.poll(()=>savedGraph?.nodes[0]?.component_id).toBe("alternate");
   expect(savedGraph.selected_sinks).toEqual([{node_id:"node:asr",port_id:"committed"}]);
+});
+
+test("replacement remains applyable when an incomplete draft has only pre-existing diagnostics",async({page})=>{
+  await page.locator("#pipeline-name").fill("Incomplete replacement draft");
+  await page.locator("#pipeline-name").dispatchEvent("change");
+  await expect(page.locator("#validation")).toContainText("graph diagnostic");
+
+  await page.getByRole("button",{name:"Replace",exact:true}).click();
+  await page.locator("#replacement-search").fill("Ready Model");
+  await page.getByRole("option",{name:/Ready Model/}).click();
+  await page.locator("#replacement-continue").click();
+
+  await expect(page.locator("#replacement-diagnostics")).toContainText("existing diagnostic");
+  await expect(page.locator("#replacement-apply")).toBeEnabled();
+  await page.locator("#replacement-apply").click();
+  await expect(page.locator("#node-title")).toContainText("Ready Model");
 });
 
 test("dialog is keyboard-contained and becomes a full-width touch sheet on a narrow screen",async({page})=>{
@@ -559,6 +586,12 @@ test("complete ASR and TTS patches can be built, run, and persisted with pointer
   await jack(page,synthesizer,"output").focus();await jack(page,synthesizer,"output").press("Enter");
   await jack(page,speaker,"input").focus();await jack(page,speaker,"input").press("Enter");
 
+  const destination=page.locator(`[data-node-card="${speaker}"] select[data-config-field="target"]`);
+  await destination.selectOption("wav");
+  const wavPath=page.locator(`[data-node-card="${speaker}"] input[data-config-field="wav_path"]`);
+  await expect(wavPath).toBeVisible();
+  await wavPath.fill("data/rendered-voice.wav");await wavPath.press("Enter");
+
   const voice=page.locator(`[data-node-card="${synthesizer}"] select[data-config-field="voice"]`);
   await voice.focus();await voice.selectOption("tenor");
   await expect(voice).toHaveValue("tenor");
@@ -573,6 +606,7 @@ test("complete ASR and TTS patches can be built, run, and persisted with pointer
   stored=await persistGraph(page);
   expect(stored.nodes.map(node=>node.kind)).toEqual(["text_source","tts","audio_output"]);
   expect(stored.nodes.find(node=>node.id===synthesizer).config.voice).toBe("tenor");
+  expect(stored.nodes.find(node=>node.id===speaker).config).toMatchObject({target:"wav",wav_path:"data/rendered-voice.wav"});
   expect(stored.edges).toHaveLength(2);
 });
 

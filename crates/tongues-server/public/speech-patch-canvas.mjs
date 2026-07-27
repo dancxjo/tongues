@@ -308,7 +308,8 @@ export function createPatchCanvas(options) {
 
   function controlOptions(fieldSpec) {
     if (!Array.isArray(fieldSpec?.enum) || !fieldSpec.enum.length) return [];
-    return fieldSpec.enum.map(value => ({value, label: String(value)}));
+    const labels = fieldSpec?.["x-enum-labels"] ?? [];
+    return fieldSpec.enum.map((value, index) => ({value, label: String(labels[index] ?? value)}));
   }
 
   function formatNodeRole(node, item) {
@@ -505,7 +506,13 @@ export function createPatchCanvas(options) {
         spec,
         priority: controlPriority(spec),
         kind: controlUiHint(spec),
-      })).filter(item => item.spec && ["toggle", "menu", "slider", "number", "short_text"].includes(item.kind))
+      })).filter(item => {
+        if (!item.spec || !["toggle", "menu", "slider", "number", "short_text"].includes(item.kind)) return false;
+        const condition = item.spec["x-ui-visible-when"];
+        return !condition || Object.entries(condition).every(([field, value]) =>
+          (node.config?.[field] ?? schemaProperties[field]?.default) === value
+        );
+      })
         .sort((left, right) => left.priority - right.priority || left.field.localeCompare(right.field))
         .slice(0, 3);
       fields.forEach(item => renderControl(node, item.field, item.spec, controlsPanel));

@@ -180,6 +180,22 @@ completed, cancelled, and failed events with elapsed timing and derivation
 data. Cancellation closes all remaining owners/channels and is covered by a
 mid-run fixture.
 
+Audio output nodes save an explicit destination:
+
+- `browser` delegates playback to the connected browser and saves the
+  browser-provided output-device key. Browser permission and device
+  availability are checked by that client at run time.
+- `system` selects the server default or an exact opaque output-device key
+  from the current CPAL inventory.
+- `wav` writes a workspace-relative WAV artifact path. Absolute paths and
+  parent-directory traversal are rejected during graph validation.
+
+The audio library owns CPAL device discovery/playback and normalized PCM WAV
+writing. Submitting PCM to either sink is output evidence, not evidence that
+sound reached the room. The current Graph Studio execution adapter still needs
+PCM channel routing before these configured sinks can consume TTS output; a
+lifecycle-only run must not report playback or a WAV artifact as completed.
+
 Route-level graph identity, durable execution records, tracks handoffs, and
 the distinction between configuration drafts and execution evidence are
 documented in [speech-workspace-navigation.md](speech-workspace-navigation.md).

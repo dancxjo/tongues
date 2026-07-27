@@ -37,6 +37,7 @@ let editHistory=createEditHistory(),replacementOptions=[],replacementSelected=nu
 let replacementPreviewGeneration=0,replacementRenderLimit=100,replacementReturnFocus=null,replacementOverrides={};
 let quickAddContext=null,quickAddOptions=[],quickAddReturnFocus=null;
 let activeSubpatchId=null,organizationMode=null,organizationBoundary=[];
+let browserAudioOutputs=[{deviceId:"default",label:"Browser default"}];
 
 const NODE_THEMES={
   "Sources":{accent:"#75bfff",surface:"#192f44"},
@@ -397,7 +398,16 @@ function computeRuntimePreview(value, kind) {
 }
 
 async function discover(){
-  [discovery,{graphs:starters}]=await Promise.all([request("/api/pipeline/catalog"),request("/api/pipeline/starters")]);
+  [discovery,{graphs:starters},browserAudioOutputs]=await Promise.all([
+    request("/api/pipeline/catalog"),
+    request("/api/pipeline/starters"),
+    discoverBrowserAudioOutputs(),
+  ]);
+  const browserOutputSchema=discovery.node_kinds?.audio_output?.configuration_schema?.properties?.browser_device_id;
+  if(browserOutputSchema){
+    browserOutputSchema.enum=browserAudioOutputs.map(device=>device.deviceId);
+    browserOutputSchema["x-enum-labels"]=browserAudioOutputs.map(device=>device.label);
+  }
   catalog=buildCatalog(discovery);renderPalette();renderTemplates();
   byId("template").replaceChildren(...starters.map(graph=>new Option(graph.metadata.name,graph.graph_id)));
   const params=new URLSearchParams(location.search),routeGraphId=graphIdFromRoute();
@@ -416,6 +426,22 @@ async function discover(){
   if(requestedNode&&pipeline.nodes.some(node=>node.id===requestedNode))selectNode(requestedNode);
   else if(requestedNode)showRouteRecovery(`Node ${requestedNode} is not present in graph ${pipeline.graph_id}.`);
   announce(`Loaded ${pipeline.metadata.name} as an editable graph configuration.`);
+}
+
+async function discoverBrowserAudioOutputs(){
+  if(!navigator.mediaDevices?.enumerateDevices)return[{deviceId:"default",label:"Browser default"}];
+  try{
+    const outputs=(await navigator.mediaDevices.enumerateDevices()).filter(device=>device.kind==="audiooutput");
+    const seen=new Set(),result=[{deviceId:"default",label:"Browser default"}];
+    outputs.forEach((device,index)=>{
+      if(!device.deviceId||device.deviceId==="default"||seen.has(device.deviceId))return;
+      seen.add(device.deviceId);
+      result.push({deviceId:device.deviceId,label:device.label||`Browser audio output ${index+1}`});
+    });
+    return result;
+  }catch{
+    return[{deviceId:"default",label:"Browser default (device discovery unavailable)"}];
+  }
 }
 
 function initCanvas(){
@@ -823,11 +849,23 @@ function highlightCompatible(){
 
 function renderConfig(node,schema){
   const properties=schema.properties??{},required=new Set(schema.required??[]);
-  const entries=Object.entries(properties);
+  const entries=Object.entries(properties).filter(([,spec])=>{
+    const condition=spec["x-ui-visible-when"];
+    return !condition||Object.entries(condition).every(([field,value])=>(node.config?.[field]??properties[field]?.default)===value);
+  });
   if(!entries.length){byId("config-fields").innerHTML='<span class="muted">This node has no configurable fields.</span>';return;}
   byId("config-fields").replaceChildren(...entries.map(([name,spec])=>{
     const label=document.createElement("label");label.textContent=`${spec.title??name}${required.has(name)?" *":""}`;
-    let input;if(spec.enum){input=document.createElement("select");input.replaceChildren(...spec.enum.map(value=>new Option(String(value),String(value))));}
+    let input;
+    if(spec["x-ui-source"]==="browser_audio_outputs"){
+      input=document.createElement("select");
+      input.replaceChildren(...browserAudioOutputs.map(device=>new Option(device.label,device.deviceId)));
+    }
+    else if(spec.enum){
+      input=document.createElement("select");
+      const labels=spec["x-enum-labels"]??[];
+      input.replaceChildren(...spec.enum.map((value,index)=>new Option(String(labels[index]??value),String(value))));
+    }
     else{
       input=document.createElement(spec.type==="string"&&spec.format==="multiline"?"textarea":"input");
       if(input.tagName==="INPUT")input.type=spec.type==="number"||spec.type==="integer"?"number":spec.type==="boolean"?"checkbox":spec.format==="uri"?"url":"text";
@@ -849,7 +887,7 @@ function applyConfig(){
     if(invalid){invalid.reportValidity();return announce(`Enter a valid value for ${invalid.dataset.config}.`,true);}
     const values=Object.fromEntries(fields.map(input=>{let value=input.type==="checkbox"?input.checked:input.value;if(input.type==="number")value=Number(value);return[input.dataset.config,value];}));
     performGraphEdit("Edit node configuration",()=>applyNodeConfig(pipeline,node.id,values));
-    renderGraph();scheduleValidation();announce("Configuration applied.");
+    renderGraph();renderInspector();scheduleValidation();announce("Configuration applied.");
   }catch(error){announce(error.message,true);}
 }
 
@@ -982,7 +1020,13 @@ function renderReplacementImpact(){
   }
   byId("replacement-required-config").hidden=!needs.length;
   byId("replacement-lossy-row").hidden=!plan.lossy;byId("replacement-lossy-ack").checked=plan.lossless||byId("replacement-lossy-ack").checked;
-  const diagnostics=plan.validation?.diagnostics??[];renderDiagnostics(byId("replacement-diagnostics"),diagnostics);
+  const diagnostics=plan.introduced_diagnostics??plan.validation?.diagnostics??[];
+  renderDiagnostics(byId("replacement-diagnostics"),diagnostics);
+  if(!diagnostics.length&&!plan.validation?.valid&&(plan.validation?.diagnostics?.length??0)>0){
+    const note=document.createElement("p");note.className="muted";
+    note.textContent=`The draft still has ${plan.validation.diagnostics.length} existing diagnostic${plan.validation.diagnostics.length===1?"":"s"}; this replacement adds none.`;
+    byId("replacement-diagnostics").append(note);
+  }
   const error=plan.blocking.map(item=>item.message).filter(Boolean).join(" ");
   byId("replacement-error").hidden=!error;byId("replacement-error").textContent=error;
   updateReplacementApply();
@@ -1003,9 +1047,12 @@ async function refreshReplacementPlan(){
   if(replacementPlan.blocking.some(item=>item.code==="replacement.incompatible"||item.code==="replacement.edge_unmapped"||item.code==="replacement.sink_unmapped"))return;
   byId("replacement-error").hidden=false;byId("replacement-error").textContent="Validating the replacement preview with the backend…";
   try{
-    const report=await request("/api/pipeline/validate",jsonOptions("POST",replacementPlan.preview_graph));
+    const [baseline,report]=await Promise.all([
+      request("/api/pipeline/validate",jsonOptions("POST",pipeline)),
+      request("/api/pipeline/validate",jsonOptions("POST",replacementPlan.preview_graph)),
+    ]);
     if(generation!==replacementPreviewGeneration)return;
-    replacementPlan=attachReplacementValidation(replacementPlan,report);renderReplacementImpact();
+    replacementPlan=attachReplacementValidation(replacementPlan,report,baseline);renderReplacementImpact();
   }catch(error){
     if(generation!==replacementPreviewGeneration)return;
     replacementPlan=attachReplacementValidation(replacementPlan,{valid:false,diagnostics:[{message:`Preview validation could not complete: ${error.message}`} ]});renderReplacementImpact();
