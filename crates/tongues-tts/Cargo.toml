@@ -10,16 +10,16 @@ burn = { workspace = true }
 burn-store = { version = "0.21", default-features = false, features = ["std", "pytorch", "safetensors"] }
 dirs = { workspace = true }
 hound = { workspace = true }
-json5 = "0.4"
+json5 = "1.3"
 rand = { workspace = true }
 ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-rustls", "api-23"] }
-safetensors = "0.7"
+safetensors = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 speaking = { path = "../speaking" }
 thiserror = { workspace = true }
-tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 tongues-core = { path = "../tongues-core" }
 tongues-audio = { path = "../tongues-audio" }
 tongues-data = { path = "../tongues-data" }
