@@ -4,12 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Speech Studio Patch Canvas · Tongues</title>
+  <link rel="stylesheet" href="/design-system.css">
   <style>
-    :root{color-scheme:dark;--bg:#0c1118;--panel:#161f2b;--panel2:#202c3b;--line:#40536a;--ink:#edf5ff;--muted:#a6b7ca;--accent:#76e2ce;--warn:#ffc86b;--bad:#ff8c91;--source:#72b7ff;--audio:#70d6a4;--text:#dca3ff;--control:#ffca70}
-    *{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}button,input,select,textarea{font:inherit}
-    button,input,select,textarea{color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.5rem}
-    button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{cursor:not-allowed;opacity:.5}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-    a{color:var(--accent)}header{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid var(--line)}header h1{font-size:1.2rem;margin:0}header p{margin:0;color:var(--muted)}
+    :root{--bg:var(--ui-app);--panel:var(--ui-surface);--panel2:var(--ui-surface-raised);--line:var(--ui-border);--ink:var(--ui-text);--muted:var(--ui-text-muted);--accent:var(--ui-primary);--warn:var(--ui-warning);--bad:var(--ui-error);--source:#72b7ff;--audio:#70d6a4;--text:#dca3ff;--control:#ffca70}
+    body{height:100vh;overflow:hidden;display:flex;flex-direction:column}
     .toolbar{display:flex;align-items:end;gap:.5rem;flex-wrap:wrap;padding:.65rem 1rem;border-bottom:1px solid var(--line)}label{display:grid;gap:.2rem;color:var(--muted);font-size:.85rem}.grow{flex:1;min-width:14rem}
     .workspace{display:grid;grid-template-columns:17rem minmax(26rem,1fr) 20rem;flex:1;min-height:0}.sidebar{overflow:auto;background:var(--panel);padding:.8rem;border-right:1px solid var(--line)}.sidebar.right{border-right:0;border-left:1px solid var(--line)}
     h2{font-size:1rem;margin:.25rem 0 .65rem}h3{font-size:.9rem;margin:1rem 0 .4rem}.palette-search{width:100%}.palette-group{margin:.8rem 0}.palette-group summary{color:var(--muted);cursor:pointer}.palette-list{display:grid;gap:.35rem;margin-top:.4rem}
@@ -46,13 +44,25 @@
     @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}#replacement-dialog{inset:0;width:100%;height:100%;max-height:none;border-radius:0}.replacement-filters{grid-template-columns:1fr}.impact-grid{grid-template-columns:1fr}}
   </style>
 </head>
-<body>
-  <header>
-    <a href="/speech/compose">← Speech Studio</a>
-    <h1 id="page-title" tabindex="-1">Graph Studio</h1>
-    <p><strong id="graph-identity">Editing a configuration draft</strong> · backend-typed graphs with explicit branches, adapters, and merges</p>
-    <a href="/runs">Execution tracks</a>
-    <a href="/sessions/new/correct">WaveDeck</a>
+<body class="tongues-product graph-page">
+  <header class="tongues-topbar">
+    <a class="tongues-brand" href="/">
+      <span class="tongues-brand-mark" aria-hidden="true">T</span>
+      <span class="tongues-brand-copy"><strong>Tongues</strong><small>Speech workbench</small></span>
+    </a>
+    <div class="tongues-location">
+      <p class="tongues-eyebrow">Speech system workspace</p>
+      <h1 id="page-title" tabindex="-1">Graph Studio</h1>
+      <p><strong id="graph-identity">Editing a configuration draft</strong></p>
+    </div>
+    <nav class="tongues-nav" aria-label="Tongues workspaces">
+      <a href="/speech/compose">Speech Studio</a>
+      <a href="/studio/graphs/new" aria-current="page">Graph Studio</a>
+      <a href="/runs">Execution Tracks</a>
+      <a href="/sessions/new/correct">WaveDeck</a>
+      <a href="/commands">Workbench</a>
+      <a href="/jobs">Jobs</a>
+    </nav>
   </header>
   <div class="toolbar">
     <button class="mobile-palette" hidden id="toggle-palette">Nodes</button>
@@ -61,11 +71,11 @@
     <button id="new">New</button><button id="save">Save</button><button id="open">Open</button><button id="duplicate-graph">Duplicate</button><button id="share">Share</button>
     <button id="undo" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button><button id="redo" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
     <button id="copy-selection" aria-keyshortcuts="Control+C Meta+C">Copy</button><button id="cut-selection" aria-keyshortcuts="Control+X Meta+X">Cut</button><button id="paste-selection" aria-keyshortcuts="Control+V Meta+V">Paste</button><button id="duplicate-selection" aria-keyshortcuts="Control+D Meta+D">Duplicate</button>
-    <button id="delete-selection" aria-keyshortcuts="Delete Backspace">Delete selection</button>
+    <button id="delete-selection" class="ui-danger" aria-keyshortcuts="Delete Backspace">Delete selection</button>
     <button id="align-horizontal" title="Align selected modules along their top edge">Align top</button><button id="distribute-horizontal" title="Distribute selected modules from left to right">Distribute</button><button id="tidy-selection">Tidy</button>
     <button id="frame-selection">Frame</button><button id="note">Note</button><button id="create-subpatch">Subpatch</button>
     <label>Cable opacity<input id="cable-opacity" type="range" min="0.1" max="1" step="0.1" value="1"></label><button id="focus-path" aria-pressed="false">Focus selected path</button>
-    <button id="snap-grid" aria-pressed="false">Snap off</button><button id="fit-selection">Fit selection</button><button id="fit">Fit graph</button><button id="run">Run</button><button id="stop" disabled>Stop</button><button id="panic" disabled>Panic</button>
+    <button id="snap-grid" aria-pressed="false">Snap off</button><button id="fit-selection">Fit selection</button><button id="fit">Fit graph</button><button id="run" class="ui-primary">Run</button><button id="stop" disabled>Stop</button><button id="panic" class="ui-danger" disabled>Panic</button>
     <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
   </div>
   <p id="validation" role="status">Loading backend discovery…</p>

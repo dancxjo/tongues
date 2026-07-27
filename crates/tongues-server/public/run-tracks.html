@@ -4,35 +4,36 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Execution tracks · Tongues</title>
-  <style>
-    :root{color-scheme:dark;--bg:#0b1017;--panel:#151f2b;--panel2:#0f1822;--line:#33475c;--ink:#eef6ff;--muted:#a8b7c8;--accent:#72e0c7;--warn:#ffd27b;--error:#ff929a;--lane-label:10.5rem}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px system-ui,sans-serif}a{color:var(--accent)}button,input,select{font:inherit}
-    header,main{max-width:1280px;margin:auto;padding:1rem}header{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}header h1{margin:.15rem 0}.identity{border:1px solid var(--line);border-radius:999px;padding:.3rem .65rem;color:var(--accent)}
-    .panel{background:var(--panel);border:1px solid var(--line);border-radius:.75rem;padding:1rem}.toolbar,.actions,.privacy{display:flex;gap:.65rem;align-items:center;flex-wrap:wrap}.toolbar{position:sticky;top:0;z-index:4;margin-bottom:1rem}
-    button,.button{border:1px solid var(--line);border-radius:.4rem;padding:.45rem .65rem;background:#1b2a38;color:var(--ink);text-decoration:none;cursor:pointer}.danger{border-color:#82444c}.file input{max-width:14rem}
-    button:focus,a:focus,input:focus,select:focus{outline:3px solid var(--accent);outline-offset:2px}.muted{color:var(--muted)}#error{color:var(--error)}#status-badge[data-state=running]{color:var(--warn)}#status-badge[data-state=completed]{color:var(--accent)}#status-badge[data-state=cancelled],#status-badge[data-state=failed]{color:var(--error)}
-    .run-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(18rem,1fr));gap:.6rem}.run-list a{display:grid;gap:.2rem;padding:.7rem;border:1px solid var(--line);border-radius:.5rem;background:var(--panel2);text-decoration:none;color:var(--ink)}
-    .workspace{display:grid;grid-template-columns:minmax(0,1fr) 20rem;gap:1rem}.timeline-shell{min-width:0;overflow:hidden}.ruler{height:2rem;margin-left:var(--lane-label);position:relative;border-bottom:1px solid var(--line);color:var(--muted);font-size:.75rem}.tick{position:absolute;bottom:.2rem;transform:translateX(-50%)}
-    .tracks{display:grid;gap:.3rem}.track{display:grid;grid-template-columns:var(--lane-label) minmax(24rem,1fr);min-height:3.2rem}.track-label{padding:.55rem .6rem;background:var(--panel2);border:1px solid var(--line);border-radius:.35rem 0 0 .35rem}.lane{position:relative;overflow:hidden;border:1px solid var(--line);border-left:0;border-radius:0 .35rem .35rem 0;background:repeating-linear-gradient(90deg,#101923 0,#101923 calc(10% - 1px),#26384a 10%)}
-    .span{position:absolute;top:.35rem;height:2.35rem;min-width:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid #5994b4;border-radius:.28rem;padding:.28rem .38rem;background:#1a4963;color:#fff;text-align:left;font-size:.78rem}.span[data-status=provisional]{border-style:dashed;opacity:.8}.span[data-status=revised]{background:#5b457e}.span[data-status=cancelled],.span[data-status=error]{background:#7e303b}.span[data-overlap=true]{box-shadow:inset 0 -4px var(--warn)}.span[aria-current=true]{outline:3px solid var(--accent);z-index:2}
-    .selection dl{display:grid;grid-template-columns:max-content 1fr;gap:.35rem .6rem}.selection dt{color:var(--muted)}.selection dd{margin:0;overflow-wrap:anywhere}.privacy{padding:.65rem;border:1px solid var(--line);border-radius:.5rem;margin-bottom:1rem}.privacy strong{color:var(--accent)}
-    fieldset{border:1px solid var(--line);border-radius:.5rem;margin:.8rem 0}.track-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.25rem}.empty{padding:1.5rem;color:var(--muted)}
-    @media(max-width:850px){.workspace{grid-template-columns:1fr}.selection{order:-1}:root{--lane-label:7.5rem}.track{font-size:.85rem}}
-  </style>
+  <link rel="stylesheet" href="/design-system.css">
+  <link rel="stylesheet" href="/run-tracks.css">
 </head>
-<body>
-  <header>
-    <a href="/speech/operate">← Speech Studio</a>
-    <div><p class="identity">Observing evidence, not editing it</p><h1 id="page-title" tabindex="-1">Execution tracks</h1></div>
-    <a href="/studio/graphs/new">Graph Studio</a><a href="/sessions/new/correct">WaveDeck</a>
+<body class="tongues-product tracks-page">
+  <header class="tongues-topbar">
+    <a class="tongues-brand" href="/">
+      <span class="tongues-brand-mark" aria-hidden="true">T</span>
+      <span class="tongues-brand-copy"><strong>Tongues</strong><small>Speech workbench</small></span>
+    </a>
+    <div class="tongues-location">
+      <p class="tongues-eyebrow">Observed runtime evidence</p>
+      <h1 id="page-title" tabindex="-1">Execution Tracks</h1>
+      <p>Observing evidence, not editing it</p>
+    </div>
+    <nav class="tongues-nav" aria-label="Tongues workspaces">
+      <a href="/speech/operate">Speech Studio</a>
+      <a href="/studio/graphs/new">Graph Studio</a>
+      <a href="/runs" aria-current="page">Execution Tracks</a>
+      <a href="/sessions/new/correct">WaveDeck</a>
+      <a href="/commands">Workbench</a>
+      <a href="/jobs">Jobs</a>
+    </nav>
   </header>
   <main>
     <p id="status" role="status" aria-live="polite">Loading durable run context…</p>
     <p id="error" role="alert"></p>
     <section id="run-index" hidden aria-labelledby="recent-heading">
       <div class="panel toolbar">
-        <button id="start-microphone">Observe microphone</button>
-        <label class="button file">Observe audio file <input id="audio-file" type="file" accept="audio/*"></label>
+        <button id="start-microphone" class="ui-primary">Observe microphone</button>
+        <label class="ui-button file">Observe audio file <input id="audio-file" type="file" accept="audio/*"></label>
         <span class="muted">Audio is processed in memory and is not retained by this view.</span>
       </div>
       <h2 id="recent-heading">Recent execution runs</h2>
@@ -47,8 +48,8 @@
         <label>Zoom <input id="zoom" type="range" min="1" max="40" value="1" step="1"></label>
         <button id="zoom-in" aria-label="Zoom in">+</button>
         <label>Pan <input id="pan" type="range" min="0" max="0" value="0" step="10"></label>
-        <button id="cancel-live" class="danger" hidden>Cancel capture</button>
-        <a class="button" href="/runs">Recent runs</a>
+        <button id="cancel-live" class="ui-danger" hidden>Cancel capture</button>
+        <a class="ui-button" href="/runs">Recent runs</a>
       </div>
       <div id="privacy" class="privacy" aria-label="Privacy and retention state"></div>
       <details class="panel">
@@ -60,7 +61,7 @@
           <label><input id="show-normalized" type="checkbox" checked> Normalized transcript</label>
         </div>
       </details>
-      <div class="workspace">
+      <div class="tracks-workspace">
         <section class="panel timeline-shell" aria-label="Aligned execution timeline">
           <div id="ruler" class="ruler" aria-hidden="true"></div>
           <div id="tracks" class="tracks"></div>
@@ -72,8 +73,8 @@
           <div class="actions">
             <button id="play-selection" disabled>Play interval</button>
             <label><input id="loop-selection" type="checkbox"> Loop</label>
-            <a id="graph-link" class="button" href="/studio/graphs/new">Graph node/config</a>
-            <a id="session-link" class="button" hidden href="/sessions/new/correct">Open in WaveDeck</a>
+            <a id="graph-link" class="ui-button" href="/studio/graphs/new">Graph node/config</a>
+            <a id="session-link" class="ui-button" hidden href="/sessions/new/correct">Open in WaveDeck</a>
           </div>
         </aside>
       </div>

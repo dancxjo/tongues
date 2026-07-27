@@ -1,9 +1,22 @@
 <!doctype html>
+<html lang="en" data-ui-scope="example">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tongues ASR WebSocket example</title>
-<button id="start">Start microphone</button>
-<button id="stop" disabled>Stop</button>
-<pre id="events"></pre>
+<link rel="stylesheet" href="/design-system.css">
+</head>
+<body class="tongues-product">
+<main style="max-width:48rem;margin:auto;padding:2rem 1rem">
+  <p class="tongues-eyebrow">Developer example</p>
+  <h1>Tongues ASR WebSocket client</h1>
+  <p class="ui-muted">A minimal protocol example, not a product workspace.</p>
+  <div class="ui-toolbar">
+    <button id="start" class="ui-primary">Start microphone</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+  <pre id="events" class="ui-panel" style="margin-top:1rem;min-height:12rem;overflow:auto;padding:1rem"></pre>
+</main>
 <script>
 let socket, context, source, processor, stream;
 const events = document.querySelector("#events");
@@ -38,3 +51,5 @@ document.querySelector("#stop").onclick = async () => {
   document.querySelector("#stop").disabled = true;
 };
 </script>
+</body>
+</html>

@@ -2,7 +2,8 @@
   "name": "tongues-browser-tests",
   "private": true,
   "scripts": {
-    "test:graph-studio": "playwright test crates/tongues-server/public/speech-dataflow.browser.test.mjs"
+    "test:graph-studio": "playwright test crates/tongues-server/public/speech-dataflow.browser.test.mjs",
+    "test:visual-system": "playwright test crates/tongues-server/public/visual-system.browser.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.62.0"

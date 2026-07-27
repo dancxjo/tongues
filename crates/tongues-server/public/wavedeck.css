@@ -1,0 +1,17 @@
+.wavedeck-page main { margin: auto; max-width: 1200px; padding: 1rem; }
+.wavedeck-page .session-heading { align-items: start; display: flex; gap: 1rem; justify-content: space-between; }
+.wavedeck-page .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+.wavedeck-page .file input { max-width: 14rem; }
+.compare { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }
+.wavedeck-page .lane { background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow); padding: 1rem; }
+.spans { display: grid; gap: .45rem; }
+.wavedeck-page .span { display: grid; gap: .2rem; text-align: left; width: 100%; }
+.wavedeck-page .span small { color: var(--ui-text-muted); }
+.wavedeck-page .span.selected { border-color: var(--ui-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-focus) 45%, transparent); }
+.span-word { margin-left: 1.5rem; width: calc(100% - 1.5rem); }
+#status { color: var(--ui-success); min-height: 1.5rem; }
+
+@media (max-width: 700px) {
+  .compare { grid-template-columns: 1fr; }
+  .wavedeck-page .session-heading { display: block; }
+}

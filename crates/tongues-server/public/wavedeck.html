@@ -4,25 +4,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>WaveDeck · Tongues</title>
-  <style>
-    :root{color-scheme:dark;--bg:#11151b;--panel:#1b222c;--line:#364354;--ink:#edf4ff;--muted:#9aacbf;--accent:#7bd9c8}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px system-ui,sans-serif}
-    header,main{max-width:1200px;margin:auto;padding:1rem}header{display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
-    a{color:var(--accent)}button,.file{border:1px solid var(--line);border-radius:.5rem;background:var(--panel);color:var(--ink);padding:.55rem .75rem}
-    button:focus,.file:focus-within{outline:3px solid var(--accent);outline-offset:2px}button:disabled{opacity:.4}
-    .toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}.file input{max-width:14rem}
-    .compare{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.lane{background:var(--panel);border:1px solid var(--line);border-radius:.8rem;padding:1rem}
-    .spans{display:grid;gap:.45rem}.span{text-align:left;display:grid;gap:.2rem;width:100%}.span small{color:var(--muted)}
-    .span.selected{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}.span-word{margin-left:1.5rem;width:calc(100% - 1.5rem)}
-    #status{min-height:1.5rem;color:var(--accent)}@media(max-width:700px){.compare{grid-template-columns:1fr}}
-  </style>
+  <link rel="stylesheet" href="/design-system.css">
+  <link rel="stylesheet" href="/wavedeck.css">
 </head>
-<body>
-  <header>
-    <a href="/speech/compose">← Speech Studio</a>
-    <div><p><strong>Correcting an editable projection</strong></p><h1 id="page-title" tabindex="-1">WaveDeck</h1><p>Inspect → correct → align → annotate → edit → replay → export</p></div>
-    <a href="/runs">Execution tracks</a>
-    <a href="/studio/graphs/new">Graph Studio</a>
+<body class="tongues-product wavedeck-page">
+  <header class="tongues-topbar">
+    <a class="tongues-brand" href="/">
+      <span class="tongues-brand-mark" aria-hidden="true">T</span>
+      <span class="tongues-brand-copy"><strong>Tongues</strong><small>Speech workbench</small></span>
+    </a>
+    <div class="tongues-location">
+      <p class="tongues-eyebrow">Editable interpretation</p>
+      <h1 id="page-title" tabindex="-1">WaveDeck</h1>
+      <p>Inspect, correct, align, replay, export</p>
+    </div>
+    <nav class="tongues-nav" aria-label="Tongues workspaces">
+      <a href="/speech/compose">Speech Studio</a>
+      <a href="/studio/graphs/new">Graph Studio</a>
+      <a href="/runs">Execution Tracks</a>
+      <a href="/sessions/new/correct" aria-current="page">WaveDeck</a>
+      <a href="/commands">Workbench</a>
+      <a href="/jobs">Jobs</a>
+    </nav>
   </header>
   <main>
     <section aria-labelledby="session-heading">
@@ -35,8 +38,8 @@
         <a id="context-graph" hidden href="/studio/graphs/new">Open source graph</a>
       </nav>
       <div class="toolbar">
-        <label class="file">Open session JSON <input id="open-file" type="file" accept="application/json"></label>
-        <button id="start-live">Start live microphone</button><button id="stop-live" disabled>Stop live</button>
+        <label class="ui-button file">Open session JSON <input id="open-file" type="file" accept="application/json"></label>
+        <button id="start-live" class="ui-primary">Start live microphone</button><button id="stop-live" disabled>Stop live</button>
       </div>
       <div class="toolbar" aria-label="Timeline editing">
         <button id="replace" data-needs-session>Edit text (E)</button><button id="annotate" data-needs-session>Annotate</button>
