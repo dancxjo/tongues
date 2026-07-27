@@ -1386,9 +1386,26 @@
                         <label>Maximum segment (ms)<input id="browser-mic-maximum-segment" type="number" min="100" step="100" value="30000"></label>
                     </div>
                 </details>
+                <details>
+                    <summary>Server audio cleanup</summary>
+                    <div class="browser-mic-controls">
+                        <label><input id="browser-cleanup-dc" type="checkbox" checked> DC removal</label>
+                        <label><input id="browser-cleanup-gate" type="checkbox" checked> Noise gate</label>
+                        <label><input id="browser-cleanup-gain" type="checkbox" checked> Gain control</label>
+                        <label><input id="browser-cleanup-low-pass" type="checkbox"> Low-pass filter</label>
+                        <label><input id="browser-cleanup-echo" type="checkbox"> Echo cancellation</label>
+                        <label><input id="browser-cleanup-separation" type="checkbox"> Source separation baseline</label>
+                    </div>
+                    <p>Browser-native echo cancellation, noise suppression, and gain control remain disabled for this test; selected stages run on the Tongues server.</p>
+                </details>
                 <button id="browser-mic-start" type="button">Test this browser’s microphone</button>
                 <button id="browser-mic-stop" type="button" class="secondary-button" disabled>Stop test</button>
                 <meter id="browser-mic-level" min="0" max="1" value="0" aria-label="Browser microphone level"></meter>
+                <div class="browser-cleanup-comparison">
+                    <label>Raw <meter id="browser-mic-raw-level" min="0" max="1" value="0"></meter></label>
+                    <label>Server processed <meter id="browser-mic-processed-level" min="0" max="1" value="0"></meter></label>
+                </div>
+                <p id="browser-cleanup-status">Raw and processed levels will use the same server cleanup pipeline as recognition.</p>
                 <p id="browser-mic-status" aria-live="polite">Uses this browser device, not the server host microphone.</p>
                 <ol id="browser-mic-events" class="browser-mic-events" aria-label="Utterance lifecycle events"></ol>
             </div>
@@ -1464,6 +1481,13 @@
             maximum_segment_ms: Number(byId('browser-mic-maximum-segment')?.value || 30000),
         };
         const vadBackend = byId('browser-mic-vad')?.value || 'web_rtc';
+        const cleanup = [];
+        if (byId('browser-cleanup-dc')?.checked) cleanup.push({ kind: 'dc_removal', pole: 0.995 });
+        if (byId('browser-cleanup-gate')?.checked) cleanup.push({ kind: 'noise_gate', threshold_rms: 0.012, attenuation: 0.15 });
+        if (byId('browser-cleanup-gain')?.checked) cleanup.push({ kind: 'gain_control', target_rms: 0.08, maximum_gain: 4, adaptation: 0.05 });
+        if (byId('browser-cleanup-low-pass')?.checked) cleanup.push({ kind: 'low_pass', cutoff_hz: 7000 });
+        if (byId('browser-cleanup-echo')?.checked) cleanup.push({ kind: 'echo_cancellation', delay_ms: 100, strength: 0.5 });
+        if (byId('browser-cleanup-separation')?.checked) cleanup.push({ kind: 'source_separation', floor_rms: 0.01 });
         const events = byId('browser-mic-events');
         if (events) events.replaceChildren();
         if (start) start.disabled = true;
@@ -1504,6 +1528,7 @@
                         channels: 1,
                         vad_backend: vadBackend,
                         segmentation,
+                        cleanup,
                     }));
                 }, { once: true });
                 socket.addEventListener('message', (event) => {
@@ -1522,6 +1547,15 @@
                         setBrowserMicStatus(
                             `Browser audio reached Tongues: RMS ${Number(message.rms || 0).toFixed(3)}, peak ${Number(message.peak || 0).toFixed(3)}, VAD ${Number(message.speech_probability || 0).toFixed(2)} (${message.is_speech ? 'speech' : 'silence'}), frame ${message.chunk_sequence}.`,
                         );
+                    } else if (message.type === 'cleanup_compared') {
+                        const rawMeter = byId('browser-mic-raw-level');
+                        const processedMeter = byId('browser-mic-processed-level');
+                        if (rawMeter) rawMeter.value = Math.min(1, Number(message.raw_rms || 0) * 4);
+                        if (processedMeter) processedMeter.value = Math.min(1, Number(message.processed_rms || 0) * 4);
+                        const cleanupStatus = byId('browser-cleanup-status');
+                        if (cleanupStatus) {
+                            cleanupStatus.textContent = `Raw RMS ${Number(message.raw_rms || 0).toFixed(3)} / processed RMS ${Number(message.processed_rms || 0).toFixed(3)}; ${message.stages?.length || 0} server stages; ${message.algorithmic_latency_frames || 0} frames declared latency.`;
+                        }
                     } else if (message.type === 'segment_opened') {
                         appendBrowserMicEvent(
                             `Segment ${message.segment_id} opened with ${message.pre_roll_frames} pre-roll frames.`,
