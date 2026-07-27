@@ -14,6 +14,7 @@ hound = { workspace = true }
 rustfft = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 speaking = { path = "../speaking" }
 thiserror = { workspace = true }
 webrtc-vad = { version = "0.4", optional = true }

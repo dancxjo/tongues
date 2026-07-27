@@ -489,6 +489,30 @@ async fn pipeline_graph_catalog(
         replacement: tongues_pipeline::ReplacementSpec::for_node_kind("diarization"),
     });
     catalog.register_component(ComponentSpec {
+        id: "phonetic-segmentation:explicit-hints-v1".into(),
+        node_kind: "phonetic_segmentation".into(),
+        provider: "tongues-audio".into(),
+        model: tongues_audio::PHONETIC_SEGMENTATION_ALGORITHM_VERSION.into(),
+        readiness: Readiness::Unavailable,
+        capabilities: std::collections::BTreeSet::from(["phonetic_segmentation".into()]),
+        configuration_schema: json!({
+            "type": "object",
+            "properties": {
+                "recipe_path": {
+                    "type": "string",
+                    "format": "path",
+                    "description": "Versioned alignment recipe with explicit boundary evidence."
+                }
+            },
+            "required": ["recipe_path"]
+        }),
+        default_config: json!({}),
+        detail: "Deterministic segmentation is available through `tongues phonetic-segment`; no model/runtime alignment adapter is registered for graph execution, so graph readiness fails closed.".into(),
+        replacement: tongues_pipeline::ReplacementSpec::for_node_kind(
+            "phonetic_segmentation",
+        ),
+    });
+    catalog.register_component(ComponentSpec {
         id: "interpretation:native".into(),
         node_kind: "interpretation".into(),
         provider: "tongues-cli".into(),

@@ -109,6 +109,29 @@ fn text_sources_declare_stream_delivery_and_source_specific_configuration() {
 }
 
 #[test]
+fn phonetic_segmentation_is_typed_and_requires_an_alignment_component() {
+    let catalog = GraphCatalog::builtin();
+    let node = catalog.node_kinds.get("phonetic_segmentation").unwrap();
+    assert!(node.requires_component);
+    assert!(node.required_capabilities.contains("phonetic_segmentation"));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "audio"
+            && port.direction == PortDirection::Input
+            && port.value_type == ValueType::AudioBuffer
+    }));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "segments"
+            && port.direction == PortDirection::Output
+            && port.value_type == ValueType::PhoneticSegments
+    }));
+    assert!(node.ports.iter().any(|port| {
+        port.id == "alignment_hints"
+            && port.direction == PortDirection::Input
+            && port.cardinality == Cardinality::Optional
+    }));
+}
+
+#[test]
 fn file_and_url_text_sources_compile_as_text_stream_producers() {
     let catalog = fixture_catalog();
     for (kind, field, value) in [

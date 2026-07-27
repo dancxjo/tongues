@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod cleanup;
+mod phonetic_segmentation;
 mod segmentation;
 mod source;
 mod speech_pipeline;
@@ -25,6 +26,14 @@ mod vad;
 pub use cleanup::{
     CleanupAudioSource, CleanupCapability, CleanupPipeline, CleanupStage, CleanupStageConfig,
     CleanupStageTrace, ProcessedAudio,
+};
+pub use phonetic_segmentation::{
+    audio_sha256, AlignmentCandidate, AlignmentEvidence, AlignmentRecipe, AlignmentSourceIdentity,
+    ExpectedSegment, FrameInterval, HintAlignmentSource, InventoryMembership,
+    PhoneticAlignmentSource, PhoneticSegment, PhoneticSegmentArtifact, PhoneticSegmentStatus,
+    PhoneticSegmentationContext, PhoneticSegmentationEngine, PhoneticSegmentationIssue,
+    PhoneticSegmentationReadiness, SegmentKind, UnalignedRegion, ALIGNMENT_RECIPE_SCHEMA_VERSION,
+    PHONETIC_SEGMENTATION_ALGORITHM_VERSION, PHONETIC_SEGMENTATION_ARTIFACT_SCHEMA_VERSION,
 };
 pub use segmentation::{
     AudioSegment, AuthoritativeBoundary, BoundaryEvidenceKind, SegmentCloseReason,

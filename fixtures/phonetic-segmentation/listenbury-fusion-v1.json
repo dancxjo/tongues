@@ -1,0 +1,41 @@
+{
+  "reference": {
+    "project": "listenbury",
+    "files": [
+      "src/audio/lattice/sources.rs",
+      "src/audio/lattice/engine.rs"
+    ],
+    "behavior": "candidate confidence blended with weighted external evidence at 3:1"
+  },
+  "confidence_tolerance": 0.000001,
+  "expected_fused_confidence": 0.9125,
+  "candidates": [
+    {
+      "expected_index": 0,
+      "start_frame": 100,
+      "end_frame": 190,
+      "confidence": 0.91,
+      "source": {
+        "provider": "listenbury-reference",
+        "model": "acoustic-only",
+        "version": "1"
+      },
+      "evidence": {}
+    },
+    {
+      "expected_index": 0,
+      "start_frame": 120,
+      "end_frame": 200,
+      "confidence": 0.8,
+      "source": {
+        "provider": "listenbury-reference",
+        "model": "phonetic-fusion",
+        "version": "1"
+      },
+      "evidence": {
+        "phone_segmentation_agreement": 0.96,
+        "pronunciation_fit": 0.94
+      }
+    }
+  ]
+}

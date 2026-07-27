@@ -13,6 +13,7 @@ pub enum ValueType {
     TranscriptCommitted,
     Language,
     SpeakerAssignment,
+    PhoneticSegments,
     UtterancePlan,
     Control,
     Cancellation,
@@ -364,6 +365,20 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
                 port("error", Output, Error, Many, false),
             ],
             "diarization",
+        ),
+        component_node(
+            "phonetic_segmentation",
+            "Phonetic segmentation",
+            vec![
+                port("audio", Input, AudioBuffer, One, false),
+                port("transcript", Input, TranscriptCommitted, Optional, false),
+                port("pronunciation", Input, UtterancePlan, Optional, false),
+                port("alignment_hints", Input, Artifact, Optional, false),
+                port("segments", Output, PhoneticSegments, Many, true),
+                port("artifact", Output, Artifact, Many, false),
+                port("error", Output, Error, Many, false),
+            ],
+            "phonetic_segmentation",
         ),
         node(
             "diarized_transcript",

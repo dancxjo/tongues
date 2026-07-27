@@ -11,6 +11,7 @@ mod duplex_cmd;
 mod fetch_corpora;
 pub mod language_routing_cmd;
 pub mod models;
+mod phonetic_segment_cmd;
 mod recognition_cmd;
 mod speak;
 mod speech_corpus;
@@ -183,6 +184,10 @@ enum Commands {
 
     /// Detect speech and segment utterances in a WAV file or CPAL microphone
     Vad(vad_cmd::VadCommand),
+
+    /// Align an explicit multilingual phone/phoneme recipe to a WAV file
+    #[command(name = "phonetic-segment")]
+    PhoneticSegment(phonetic_segment_cmd::PhoneticSegmentCommand),
 
     /// Simulate deterministic duplex completion beams and commit frontiers
     Duplex {
@@ -2007,6 +2012,7 @@ fn main() -> Result<()> {
         }
         Commands::LanguageRouting(command) => language_routing_cmd::run(command),
         Commands::Vad(command) => vad_cmd::run(command),
+        Commands::PhoneticSegment(command) => phonetic_segment_cmd::run(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
@@ -13317,6 +13323,22 @@ mod tests {
             speaking.command,
             Some(Commands::Speaking { json: true, .. })
         ));
+    }
+
+    #[test]
+    fn phonetic_segmentation_command_is_discoverable() {
+        let cli = Cli::try_parse_from([
+            "tongues",
+            "phonetic-segment",
+            "--wav",
+            "fixture.wav",
+            "--recipe",
+            "fixture.json",
+            "--out",
+            "segments.json",
+        ])
+        .expect("phonetic segmentation command should parse");
+        assert!(matches!(cli.command, Some(Commands::PhoneticSegment(_))));
     }
 
     #[test]
