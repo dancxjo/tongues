@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const SPEECH_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -1389,9 +1389,11 @@ mod tests {
         let first_batches = plan_speech_batches(&records, &batch_config).unwrap();
         let second_batches = plan_speech_batches(&records, &batch_config).unwrap();
         assert_eq!(first_batches, second_batches);
-        assert!(first_batches
-            .iter()
-            .all(|batch| batch.record_ids.len() <= 4));
+        assert!(
+            first_batches
+                .iter()
+                .all(|batch| batch.record_ids.len() <= 4)
+        );
     }
 
     #[test]
@@ -1485,9 +1487,11 @@ mod tests {
             assert!(output.join(name).exists(), "{name}");
             assert!(!part_path(&output.join(name)).exists(), "{name}.part");
         }
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, PrepareSpeechProgress::Complete { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, PrepareSpeechProgress::Complete { .. }))
+        );
         fs::remove_dir_all(input).unwrap();
         fs::remove_dir_all(output).unwrap();
     }
