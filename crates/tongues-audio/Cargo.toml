@@ -8,7 +8,6 @@ edition = "2021"
 hound = { workspace = true }
 rustfft = { workspace = true }
 serde = { workspace = true }
-thiserror = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+speaking = { path = "../speaking" }
+thiserror = { workspace = true }

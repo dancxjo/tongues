@@ -7700,6 +7700,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "speaking",
  "thiserror 1.0.69",
 ]
 

@@ -13,6 +13,14 @@ use rustfft::FftPlanner;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod source;
+
+pub use source::{
+    bounded_audio_input, AudioDiscontinuity, AudioSource, AudioSourceDescriptor, AudioSourceEvent,
+    AudioSourceKind, BoundedAudioInput, BoundedAudioInputSender, PcmEncoding, PcmReaderSource,
+    PushedAudioChunk, SourceAudioChunk, WavAudioSource,
+};
+
 pub const DEFAULT_SPECTRAL_FLOOR: f32 = 1.0e-8;
 
 #[derive(Debug, Error)]
@@ -21,6 +29,12 @@ pub enum AudioError {
     Wav(#[from] hound::Error),
     #[error("invalid audio: {0}")]
     Invalid(String),
+    #[error("failed to read audio input: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("audio input was cancelled")]
+    Cancelled,
+    #[error("audio input backpressure limit of {capacity} chunks was reached")]
+    Backpressure { capacity: usize },
 }
 
 pub type Result<T> = std::result::Result<T, AudioError>;
