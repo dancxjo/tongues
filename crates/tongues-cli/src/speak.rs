@@ -1740,25 +1740,18 @@ fn load_backend(
                 matches!(device_arg, DeviceArg::Cpu),
                 "--backend mbrola currently supports --device cpu"
             );
-            let voice_path = command
-                .model
-                .as_deref()
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("TONGUES_MBROLA_VOICE").map(PathBuf::from))
-                .context(
-                    "--backend mbrola requires --model /path/to/voice or TONGUES_MBROLA_VOICE",
-                )?;
+            let voice_path = resolve_cli_mbrola_voice(command)?;
             anyhow::ensure!(
                 voice_path.is_file(),
                 "MBROLA voice database not found at {}",
                 voice_path.display()
             );
-            let license = std::env::var("TONGUES_MBROLA_LICENSE").context(
-                "TONGUES_MBROLA_LICENSE must affirm the user-supplied voice database terms",
+            let license = std::env::var("TONGUES_MBROLA_NATIVE_USE_AUTHORIZED").context(
+                "native use of an MBROLA database requires separate authorization; set TONGUES_MBROLA_NATIVE_USE_AUTHORIZED=1 only when you have it",
             )?;
             anyhow::ensure!(
-                !license.trim().is_empty(),
-                "TONGUES_MBROLA_LICENSE is empty"
+                license.trim() == "1",
+                "TONGUES_MBROLA_NATIVE_USE_AUTHORIZED must equal 1"
             );
             let symbol_map = load_cli_mbrola_symbol_map(command, &voice_path)?;
             let voice_id = voice_path
@@ -1876,9 +1869,8 @@ fn load_cli_mbrola_symbol_map(
         .clone()
         .or_else(|| std::env::var_os("TONGUES_MBROLA_SYMBOL_MAP").map(PathBuf::from));
     let Some(path) = path else {
-        return Ok(speech::MbrolaSymbolMap::identity(format!(
-            "{voice_id}-identity"
-        )));
+        return Ok(speech::MbrolaSymbolMap::for_voice_id(voice_id)
+            .unwrap_or_else(|| speech::MbrolaSymbolMap::identity(format!("{voice_id}-identity"))));
     };
     let source = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read MBROLA symbol map {}", path.display()))?;
@@ -1893,6 +1885,43 @@ fn load_cli_mbrola_symbol_map(
         id: path.display().to_string(),
         mappings,
     })
+}
+
+fn resolve_cli_mbrola_voice(command: &SpeakCommand) -> Result<PathBuf> {
+    let requested = command
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    if let Some(requested) = requested {
+        let direct = PathBuf::from(requested);
+        if direct.is_file() {
+            return Ok(direct);
+        }
+        let catalog = speech::ModelCatalog::embedded()?;
+        if let Some(entry) = catalog.find(requested).filter(|entry| {
+            entry.backend.as_deref() == Some("mbrola")
+                && entry.component_id.as_deref() == Some("mbrola-native-td-psola")
+        }) {
+            let path = crate::models::resolve_mortar_home()?.join(&entry.runtime_path);
+            anyhow::ensure!(
+                path.is_file(),
+                "MBROLA database `{}` is not installed at {}; run `cargo run --bin tongues -- models fetch {}`",
+                entry.id,
+                path.display(),
+                entry.id
+            );
+            return Ok(path);
+        }
+        anyhow::bail!(
+            "unknown MBROLA database `{requested}`; use a database path or mbrola-us1, mbrola-us3, or mbrola-en1"
+        );
+    }
+    std::env::var_os("TONGUES_MBROLA_VOICE")
+        .map(PathBuf::from)
+        .context(
+            "--backend mbrola requires --model mbrola-us3 (or another catalog id/path) or TONGUES_MBROLA_VOICE",
+        )
 }
 
 pub fn run_speak(command: SpeakCommand, device_arg: DeviceArg) -> Result<()> {

@@ -22,3 +22,4 @@ pub use selection::{
     asr_whisper_model_path, selected_bundle, selected_bundle_for_kind, selected_llm_model_label,
     selected_llm_model_path, selected_voice_model_bundle,
 };
+pub(crate) use selection::resolve_mortar_home;
