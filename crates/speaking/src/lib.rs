@@ -72,7 +72,15 @@ pub use utterance::*;
 pub use variety::*;
 #[cfg(feature = "asr-whisper")]
 pub use whisper::*;
-pub use word_stream::*;
+pub use word_stream::{
+    AudioRef, BoundarySource, DEFAULT_WORD_STREAM_VARIETY, HeuristicAcousticWordBoundaryRefiner,
+    NoopWordBoundaryRefiner, PronunciationLookupStatus, TimedWordStream, TranscriptWord,
+    WordBoundaryRefiner, WordCommitment, WordId, WordNode,
+    WordPronunciation as StreamWordPronunciation, WordStreamId, WordStreamSource, WordTextSpan,
+    WordTiming, attach_default_pronunciations, attach_pronunciations_for_variety,
+    transcript_to_energy_snapped_word_stream, transcript_to_energy_snapped_word_stream_for_variety,
+    transcript_to_word_stream, transcript_to_word_stream_for_variety,
+};
 
 #[cfg(test)]
 mod tests {

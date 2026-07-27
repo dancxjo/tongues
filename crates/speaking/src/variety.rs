@@ -24,6 +24,9 @@ pub struct Language {
     pub iso_639: Option<String>,
 }
 
+// Equality is used for these data descriptors, including their static callback
+// identity. Preserve that public behavior while keeping the allowance local.
+#[allow(unpredictable_function_pointer_comparisons)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LinguisticVariety {
     pub id: VarietyId,
@@ -72,6 +75,9 @@ pub struct LinguisticVariety {
     pub implementation_status: VarietyImplementationStatus,
 }
 
+// This callback-bearing descriptor intentionally retains its public equality
+// implementation; the callback is always selected from static variety data.
+#[allow(unpredictable_function_pointer_comparisons)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrthographyPronunciationRules {
     pub synthesize_ipa: Option<OrthographyIpaSynthesizer>,

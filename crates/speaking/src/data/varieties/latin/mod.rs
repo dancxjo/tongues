@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::feature::{FeatureBundle, FeatureSystem, FeatureValue};
 use crate::ids::{LanguageId, PhoneId, PhonemeId, VarietyId};
 use crate::orthography::Orthography;

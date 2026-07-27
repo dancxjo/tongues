@@ -3,11 +3,12 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::VarietyId;
 use crate::{
     EvidenceProvenance, EvidenceSource, PhonemicizeError, PhonemicizeOutput, PhonemicizeRequest,
-    Spec, UtterancePlan, VarietyId, display_plan_connected_speech, display_plan_phonemes,
-    display_plan_phones, phone_display_symbol, phoneme_default_phone_display_symbol,
-    phonemicizer_for_variety,
+    Spec, UtterancePlan, display_plan_connected_speech, display_plan_phonemes, display_plan_phones,
+    phone_display_symbol, phoneme_default_phone_display_symbol, phonemicizer_for_variety,
 };
 
 pub const PRONUNCIATION_ANALYSIS_SCHEMA_VERSION: u32 = 2;
@@ -91,7 +92,6 @@ impl PronunciationAnalysis {
         let plan = UtterancePlan::from(&output);
         let broad_phonemes = display_plan_phonemes(&plan);
         let broad_phoneme_ids = format_phoneme_ids(&plan);
-        let realized_phones = display_plan_phones(&plan);
         let lexical_candidates = output
             .lexical_candidates
             .iter()

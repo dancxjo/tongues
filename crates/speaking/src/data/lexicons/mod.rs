@@ -22,6 +22,9 @@ pub enum PronunciationStatus {
     Missing,
 }
 
+// Equality is part of this public descriptor's existing API. Its callback is
+// static registry data, so preserving the derived comparison is intentional.
+#[allow(unpredictable_function_pointer_comparisons)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LexiconAdapter {
     pub id: &'static str,

@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "Backend-free linguistic and acoustic speaking ontology"
 
-[lints.rust]
-warnings = "allow"
-
 [dependencies]
 anyhow = { workspace = true }
 arpabet_cmudict = "=2.0.0"

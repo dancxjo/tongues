@@ -857,7 +857,7 @@ fn parse_rule_grammar(
     let tokens = normalized
         .iter()
         .enumerate()
-        .map(|(word_index, word)| {
+        .map(|(word_index, _word)| {
             let mut syntactic_links = parse
                 .links
                 .iter()
@@ -1330,7 +1330,7 @@ fn push_multilingual_modifier_phrase_links(
                 .enumerate()
                 .skip(modifier_index + 1)
                 .take(4)
-                .find_map(|(index, word)| {
+                .find_map(|(index, _word)| {
                     let previous = index
                         .checked_sub(1)
                         .and_then(|previous| words.get(previous))
@@ -1404,7 +1404,7 @@ fn push_multilingual_adposition_links(
                 .enumerate()
                 .skip(adposition_index + 1)
                 .take(4)
-                .find_map(|(index, word)| {
+                .find_map(|(index, _word)| {
                     multilingual_is_nominal_head_at(profile, words, index).then_some(index)
                 })
             {
@@ -2167,10 +2167,6 @@ fn multilingual_is_complementizer_at(
         return false;
     }
     true
-}
-
-fn multilingual_is_relative_marker(profile: GrammarRuleSet, word: &str) -> bool {
-    multilingual_is_complementizer(profile, word)
 }
 
 fn multilingual_is_relative_marker_at(

@@ -530,11 +530,6 @@ fn phoneme_display_symbol(id: &PhonemeId) -> &str {
     id.0.rsplit('.').next().unwrap_or(&id.0)
 }
 
-fn phoneme_base_symbol(id: &PhonemeId) -> &str {
-    let symbol = phoneme_display_symbol(id);
-    symbol.strip_suffix(['0', '1', '2']).unwrap_or(symbol)
-}
-
 fn token_category_feature<'a>(features: &'a FeatureBundle, name: &str) -> Option<&'a str> {
     let value = features
         .values

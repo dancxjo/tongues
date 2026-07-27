@@ -212,7 +212,7 @@ pub fn lexique_phon_to_ipa(input: &str) -> Option<String> {
             '@' => out.push('ə'),
             '2' => out.push('ø'),
             '9' => out.push('œ'),
-            '5' | 'ɛ' if matches!(chars.get(index + 1), Some('~') | Some('\u{0303}')) => {
+            '5' if matches!(chars.get(index + 1), Some('~') | Some('\u{0303}')) => {
                 out.push_str("ɛ̃");
                 index += 1;
             }

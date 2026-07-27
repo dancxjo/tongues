@@ -3,8 +3,7 @@ use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::lexicons::cmudict::CmuStress;
-use crate::data::lexicons::{self, CMUDICT_ID, LEXIQUE383_ID, PronunciationStatus};
+use crate::data::lexicons::{self, PronunciationStatus};
 use crate::data::notation::{self, PronunciationNotation};
 use crate::data::varieties::PRONUNCIATION_PIPELINE_VARIETY_DATA;
 use crate::data::{canonical_variety_id, variety_by_code};
@@ -188,7 +187,7 @@ pub trait PronunciationPipeline {
 
     fn phoneme_planner(
         &self,
-        variety_id: &VarietyId,
+        _variety_id: &VarietyId,
         word_index: usize,
         pronunciation: &WordPronunciation,
     ) -> Vec<PhonemeToken> {
@@ -1137,8 +1136,6 @@ fn punctuation_boundary_after_word(
 }
 
 fn classify_surface_word(surface: &str) -> OrthographicTokenKind {
-    let has_alpha = surface.chars().any(char::is_alphabetic);
-    let has_digit = surface.chars().any(|character| character.is_ascii_digit());
     if surface.contains('-') {
         return OrthographicTokenKind::Hyphenated(
             split_hyphenated_surface(surface)
@@ -2558,6 +2555,7 @@ fn replace_number_abbreviation_from_variety_data(
     replace_conditional_number_abbreviation(text, &rewrite.from, &rewrite.to)
 }
 
+#[cfg(test)]
 fn normalize_small_numbers_for_variety(text: &str, variety: &VarietyId) -> String {
     let Some(variety) = variety_by_code(&variety.0) else {
         return text.to_string();
