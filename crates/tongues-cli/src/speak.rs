@@ -50,7 +50,7 @@ pub struct SpeakCommand {
     pub model: Option<String>,
     #[arg(
         long,
-        help = "JSON source-to-voice phone map for --backend mbrola; defaults to inspected identity mapping"
+        help = "JSON source-to-voice phone map for --backend mbrola; catalog voices have built-in maps"
     )]
     pub mbrola_symbol_map: Option<PathBuf>,
     #[arg(
@@ -716,7 +716,7 @@ impl BackendInstance {
             Self::Mbrola(engine) => {
                 let mut capabilities = base(
                     "mbrola",
-                    "mbrola-user-voice",
+                    &engine.projector().voice.id,
                     speech::SpeechModelFamily::EndToEndSpeech,
                     engine.sample_rate_hz(),
                 );

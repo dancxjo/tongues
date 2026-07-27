@@ -17,19 +17,33 @@ The database reader, half-diphone assembly, join smoothing, pitch-mark handling,
 and TD-PSOLA implementation were adapted from Tongues' sibling Listenbury
 project. Tongues has no runtime or build dependency on that repository.
 
-## Voice setup and licensing
+## Voice artifacts and licensing
 
-Tongues does not redistribute MBROLA voice databases. Supply a database whose
-terms allow your intended use and affirm those terms explicitly:
+The shared artifact getter includes the upstream `us1`, `us3`, and `en1`
+diphone databases and installs each database together with its license notice:
 
 ```sh
-export TONGUES_MBROLA_VOICE=/path/to/us3
-export TONGUES_MBROLA_LICENSE='user-supplied; reviewed for this use'
-export TONGUES_MBROLA_SYMBOL_MAP=/path/to/us3-symbol-map.json
+cargo run --bin tongues -- models fetch mbrola-us1
+cargo run --bin tongues -- models fetch mbrola-us3
+cargo run --bin tongues -- models fetch mbrola-en1
 ```
 
-The symbol map is a JSON object from Tongues phone display symbols to the
-selected database inventory:
+The published voice terms permit no-charge distribution with the notice, but
+restrict use of the stock databases to the official MBROLA program. Fetching a
+database therefore does not authorize Tongues' native renderer. Native use
+fails closed unless you have separate permission and attest to it:
+
+```sh
+export TONGUES_MBROLA_NATIVE_USE_AUTHORIZED=1
+```
+
+Set that variable only when your authorization covers native use. This gate
+never triggers an executable fallback: Tongues does not probe for, install, or
+invoke the MBROLA binary.
+
+The three catalog voices have built-in source-to-inventory phone maps adapted
+from Listenbury. A user-supplied voice may use
+`TONGUES_MBROLA_SYMBOL_MAP=/path/to/map.json`; the file is a JSON object:
 
 ```json
 {
@@ -40,27 +54,29 @@ selected database inventory:
 }
 ```
 
-An omitted map selects an inspectable identity mapping. Unknown mappings,
-symbols absent from the selected voice, and missing diphones fail with errors
-that name the phone, variety, voice/map, or exact diphone. Tongues never
-substitutes an unrelated sound.
+An unknown user voice without an explicit map selects an inspectable identity
+mapping. Unknown mappings, symbols absent from the selected voice, and missing
+diphones fail with errors that name the phone, variety, voice/map, or exact
+diphone. Tongues never substitutes an unrelated sound.
 
-The server and Speech Studio read the environment variables above. Once the
-voice and licensing assertion are present, the shared discovery endpoint
-exposes `mbrola-user-voice`, its phone timing/F0/rate capabilities, the
+The server and Speech Studio expose `mbrola-us3` as the default native path and
+the catalog exposes all three downloadable databases. Once an artifact is
+installed and native use is authorized, the shared discovery/runtime path
+provides its phone timing/F0/rate capabilities, the
 `projector/mbrola-phone-timing` stage, and the native TD-PSOLA renderer.
 
 ## CLI
 
 ```sh
-TONGUES_MBROLA_LICENSE='user-supplied; reviewed' \
+TONGUES_MBROLA_NATIVE_USE_AUTHORIZED=1 \
 cargo run --bin tongues -- speak 'Hello.' \
   --backend mbrola \
-  --model /path/to/us3 \
-  --mbrola-symbol-map /path/to/us3-symbol-map.json \
+  --model mbrola-us3 \
   --pho-output /tmp/hello.pho \
   --output /tmp/hello.wav
 ```
+
+`--model` also accepts a direct path for a separately supplied database.
 
 The library also exposes `parse_pho`, `serialize_pho`, and
 `NativeMbrolaRenderer::render_pho`, so parsed `.pho` and typed plans enter the

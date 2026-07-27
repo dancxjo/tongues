@@ -725,13 +725,15 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert!(
-                paths.iter().any(|path| path.ends_with(id.trim_start_matches("mbrola-"))),
+                paths
+                    .iter()
+                    .any(|path| path.ends_with(id.trim_start_matches("mbrola-"))),
                 "{id} is missing its database artifact: {paths:?}"
             );
             assert!(
-                paths.iter().any(|path| {
-                    path.ends_with("license.txt") || path.ends_with("LICENSE.md")
-                }),
+                paths
+                    .iter()
+                    .any(|path| { path.ends_with("license.txt") || path.ends_with("LICENSE.md") }),
                 "{id} is missing its license notice: {paths:?}"
             );
         }

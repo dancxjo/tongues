@@ -18,8 +18,8 @@ pub use manifest::{
     DEFAULT_VOICE_MODEL_ID, FASTPITCH_ACOUSTIC_MODEL_ID, GLOW_TTS_ACOUSTIC_MODEL_ID, MODEL_ASSETS,
     MODEL_BUNDLES, MULTIBAND_MELGAN_VOCODER_ID, YOURTTS_MODEL_ID,
 };
+pub(crate) use selection::resolve_mortar_home;
 pub use selection::{
     asr_whisper_model_path, selected_bundle, selected_bundle_for_kind, selected_llm_model_label,
     selected_llm_model_path, selected_voice_model_bundle,
 };
-pub(crate) use selection::resolve_mortar_home;

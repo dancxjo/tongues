@@ -285,7 +285,10 @@ impl MbrolaSymbolMap {
         };
         Some(Self::new(
             format!("mbrola-{voice_id}-built-in"),
-            common.into_iter().chain(american).chain(variants.iter().copied()),
+            common
+                .into_iter()
+                .chain(american)
+                .chain(variants.iter().copied()),
         ))
     }
 

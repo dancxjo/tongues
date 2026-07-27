@@ -327,7 +327,7 @@ pub fn registered_speech_compositions() -> Vec<RegisteredSpeechComposition> {
         RegisteredSpeechComposition::new(
             "Native MBROLA TD-PSOLA",
             "mbrola",
-            "mbrola-user-voice",
+            "mbrola-us3",
             SpeechPipelineSelection::end_to_end(
                 "projector/mbrola-phone-timing",
                 "mbrola-native-td-psola",
@@ -788,7 +788,7 @@ mod tests {
             .into_iter()
             .find(|composition| composition.backend == "mbrola")
             .expect("MBROLA composition");
-        assert_eq!(composition.model, "mbrola-user-voice");
+        assert_eq!(composition.model, "mbrola-us3");
         assert_eq!(
             composition.pipeline.projector,
             "projector/mbrola-phone-timing"
