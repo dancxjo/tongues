@@ -957,7 +957,11 @@ fn inferred_duration_s(
         .map(phone_display_symbol)
         .unwrap_or_default();
     let base_ms = if is_vowel_symbol(source) {
-        profile.vowel_ms
+        if is_long_vowel_symbol(source) {
+            scaled_duration(profile.vowel_ms, 2.0)
+        } else {
+            profile.vowel_ms
+        }
     } else {
         profile.consonant_ms
     };
@@ -1136,6 +1140,16 @@ fn is_vowel_symbol(symbol: &str) -> bool {
             | "i"
             | "o"
             | "u"
+            | "aː"
+            | "eː"
+            | "iː"
+            | "oː"
+            | "uː"
+            | "r̩"
+            | "ae̯"
+            | "ai̯"
+            | "au̯"
+            | "oe̯"
             | "ə"
             | "ɚ"
             | "ɝ"
@@ -1162,6 +1176,11 @@ fn is_vowel_symbol(symbol: &str) -> bool {
             | "UH"
             | "UW"
     )
+}
+
+fn is_long_vowel_symbol(symbol: &str) -> bool {
+    let symbol = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
+    symbol.contains('ː') || matches!(symbol, "ae̯" | "ai̯" | "au̯" | "oe̯")
 }
 
 fn seconds_to_ms(seconds: f64) -> Result<u32, MbrolaLoweringError> {
@@ -1490,5 +1509,20 @@ mod tests {
                 vec!["r", "ii"]
             );
         }
+    }
+
+    #[test]
+    fn ipa_long_vowels_and_diphthongs_receive_vowel_fallback_timing() {
+        let plan = plan();
+        let profile = MbrolaTimingProfile::default();
+        let short = inferred_duration_s(&token("i", None), None, 0.0, &plan, &profile);
+        let long = inferred_duration_s(&token("iː", None), None, 0.0, &plan, &profile);
+        let diphthong = inferred_duration_s(&token("ai̯", None), None, 0.0, &plan, &profile);
+        let syllabic_r = inferred_duration_s(&token("r̩", None), None, 0.0, &plan, &profile);
+
+        assert_eq!(short, 0.110);
+        assert_eq!(long, 0.220);
+        assert_eq!(diphthong, 0.220);
+        assert_eq!(syllabic_r, 0.110);
     }
 }

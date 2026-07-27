@@ -128,6 +128,9 @@ variety. The database has no syllabic-r unit, so Sanskrit `r̩` is explicitly
 projected to `r ii`; velar and palatal nasals use the database's dental nasal,
 and both Sanskrit postalveolar sibilants use `sh`. These are documented
 database limitations, not claims of exact phonetic identity.
+The Hindi databases share `ii` and `uu` units across the corresponding short
+and long Sanskrit vowels; Tongues retains the length contrast in the requested
+phone duration, including a two-mora fallback when the plan has no spans.
 
 The library also exposes `parse_pho`, `serialize_pho`, and
 `NativeMbrolaRenderer::render_pho`, so parsed `.pho` and typed plans enter the
