@@ -1,5 +1,5 @@
 export const TRACK_ORDER = [
-  "audio_input", "vad", "speakers", "transcript_raw", "transcript_normalized",
+  "audio_input", "vad", "speakers", "transcript_raw", "words", "phones", "phonemes", "transcript_normalized",
   "language", "generation", "tts", "pipeline", "latency", "errors",
 ];
 
@@ -8,6 +8,9 @@ const TRACK_LABELS = {
   vad: "Speech / VAD",
   speakers: "Speakers",
   transcript_raw: "Transcript · raw",
+  words: "Words",
+  phones: "Phones",
+  phonemes: "Phonemes",
   transcript_normalized: "Transcript · normalized",
   language: "Language",
   generation: "Generated text",
@@ -23,6 +26,7 @@ export function projectSessionTracks(source) {
   const context = record.context ?? {};
   const events = eventEntries([...(record.events ?? []), ...(session?.source_events ?? [])]);
   const evidence = Array.isArray(session?.evidence) ? session.evidence : [];
+  const attachments = Array.isArray(session?.attachments) ? session.attachments : [];
   const tracks = new Map(TRACK_ORDER.map(id => [id, {id, label: TRACK_LABELS[id], spans: []}]));
   const segmentState = new Map();
   const speakerHistory = new Map();
@@ -181,6 +185,8 @@ export function projectSessionTracks(source) {
   }
   const duration_ms = Math.max(1, ...[...tracks.values()].flatMap(track => track.spans.map(span => span.end_ms)));
   const status = record.status ?? statusFromEvents(events) ?? (session ? "completed" : "unknown");
+  const relatedSpanIds = alignmentRelations(session?.alignments ?? []);
+  const segmentation = segmentationState(attachments);
   return {
     schema_version: 1,
     run_id: record.run_id ?? context.run_id ?? null,
@@ -188,8 +194,9 @@ export function projectSessionTracks(source) {
     graph_id: record.graph_id ?? context.graph_id ?? null,
     status, duration_ms,
     privacy: privacyState(record, session),
+    segmentation,
     tracks: TRACK_ORDER.map(id => tracks.get(id)),
-    eventIndex, sourceConsumers,
+    eventIndex, sourceConsumers, relatedSpanIds,
   };
 }
 
@@ -201,12 +208,29 @@ export function selectionProvenance(projected, span) {
     segment_id: span?.segment_id ?? null,
     graph_id: projected.graph_id,
     graph_node_id: span?.metadata?.node_id ?? provenance.attributes?.graph_node_id ?? null,
-    provider: provenance.provider ?? null,
-    model: provenance.model ?? null,
+    provider: provenance.provider ?? span?.metadata?.alignment_provider ?? null,
+    model: provenance.model ?? span?.metadata?.alignment_model ?? null,
+    version: span?.metadata?.alignment_version ?? null,
+    artifact_id: span?.metadata?.artifact_id ?? null,
+    algorithm_version: span?.metadata?.algorithm_version ?? null,
+    recipe_id: span?.metadata?.recipe_id ?? null,
+    execution_record_id: span?.metadata?.execution_record_id ?? null,
+    audio_artifact_id: span?.metadata?.audio_artifact_id ?? null,
+    boundary_origin: span?.metadata?.boundary_origin ?? null,
+    confidence: span?.metadata?.confidence ?? null,
     sources: provenance.sources ?? [],
     downstream_event_ids: span?.event_id ? projected.sourceConsumers.get(span.event_id) ?? [] : [],
-    authority: span?.track === "speakers" ? "diarization label, not verified identity" : provenance.kind ?? "observed",
+    authority: span?.track === "speakers"
+      ? "diarization label, not verified identity"
+      : ["phones","phonemes"].includes(span?.track)
+        ? `${span.metadata?.boundary_origin ?? "unknown"} boundary · ${span.status ?? "unknown"}`
+        : provenance.kind ?? span?.metadata?.evidence_authority ?? "observed",
   };
+}
+
+export function relatedSelectionIds(projected, span) {
+  if (!span) return new Set();
+  return new Set([span.id, ...(projected.relatedSpanIds.get(span.id) ?? [])]);
 }
 
 export function boundedVisibleSpans(track, range, limit = 600) {
@@ -214,6 +238,14 @@ export function boundedVisibleSpans(track, range, limit = 600) {
   if (visible.length <= limit) return visible;
   const stride = Math.ceil(visible.length / limit);
   return visible.filter((_, index) => index % stride === 0 || index === visible.length - 1);
+}
+
+export function spanDensity(span, range, viewportPx = 1_000) {
+  const duration = Math.max(1, range.end_ms - range.start_ms);
+  const pixels = Math.max(0, span.end_ms - span.start_ms) / duration * viewportPx;
+  if (pixels < 8) return "tick";
+  if (pixels < 28) return "symbol";
+  return "label";
 }
 
 export function waveDeckHandoff(sessionId, span) {
@@ -276,10 +308,60 @@ function wordBounds(words, fallbackStart, fallbackEnd) {
 
 function evidenceTrack(span) {
   if (span.modality === "audio") return span.metadata?.direction === "output" ? "tts" : "audio_input";
-  if (["transcript", "word"].includes(span.modality)) return span.metadata?.role === "normalized" ? "transcript_normalized" : "transcript_raw";
+  if (span.modality === "transcript") return span.metadata?.role === "normalized" ? "transcript_normalized" : "transcript_raw";
+  if (span.modality === "word") return "words";
+  if (span.modality === "phone") return "phones";
+  if (span.modality === "phoneme") return "phonemes";
+  if (span.modality === "speaker") return "speakers";
   if (span.modality === "playback") return "tts";
   if (span.modality === "interruption" || span.modality === "breath_group") return "vad";
   return null;
+}
+
+function alignmentRelations(alignments) {
+  const relations = new Map();
+  const link = (left, right) => {
+    if (!left || !right) return;
+    const values = relations.get(left) ?? new Set();
+    values.add(right);
+    relations.set(left, values);
+  };
+  for (const alignment of alignments) {
+    link(alignment.source_span_id, alignment.target_span_id);
+    link(alignment.target_span_id, alignment.source_span_id);
+  }
+  return new Map([...relations].map(([id, values]) => [id, [...values]]));
+}
+
+function segmentationState(attachments) {
+  const segmentations = attachments.filter(attachment => attachment?.kind === "phonetic_segmentation");
+  if (!segmentations.length) {
+    return {
+      available: false,
+      readiness: "missing",
+      message: "No phone/phoneme segmentation artifact is attached; no alignment is implied.",
+      artifacts: [],
+    };
+  }
+  const artifacts = segmentations.map(attachment => ({
+    artifact_id: attachment.artifact_id,
+    readiness: attachment.payload?.readiness ?? "unsupported",
+    algorithm_version: attachment.payload?.algorithm_version ?? "unknown",
+    recipe_id: attachment.payload?.graph?.recipe_id ?? null,
+    issues: attachment.payload?.issues ?? [],
+    missing_segments: (attachment.payload?.segments ?? []).filter(segment => !segment.interval),
+  }));
+  const readiness = artifacts.some(artifact => artifact.readiness === "partial")
+    ? "partial"
+    : artifacts.every(artifact => artifact.readiness === "ready") ? "ready" : "unsupported";
+  return {
+    available: true,
+    readiness,
+    message: readiness === "ready"
+      ? "Phone/phoneme timing is backed by attached alignment evidence."
+      : `${readiness} segmentation: untimed or unsupported rows remain explicit and are not drawn as authoritative spans.`,
+    artifacts,
+  };
 }
 
 function consentedSpeakerLabel(rawId, provenance, labels) {

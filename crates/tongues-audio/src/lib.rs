@@ -30,9 +30,10 @@ pub use cleanup::{
 pub use phonetic_segmentation::{
     audio_sha256, AlignmentCandidate, AlignmentEvidence, AlignmentRecipe, AlignmentSourceIdentity,
     ExpectedSegment, FrameInterval, HintAlignmentSource, InventoryMembership,
-    PhoneticAlignmentSource, PhoneticSegment, PhoneticSegmentArtifact, PhoneticSegmentStatus,
-    PhoneticSegmentationContext, PhoneticSegmentationEngine, PhoneticSegmentationIssue,
-    PhoneticSegmentationReadiness, SegmentKind, UnalignedRegion, ALIGNMENT_RECIPE_SCHEMA_VERSION,
+    PhoneticAlignmentSource, PhoneticBoundaryOrigin, PhoneticEvidenceLinks, PhoneticSegment,
+    PhoneticSegmentArtifact, PhoneticSegmentStatus, PhoneticSegmentationContext,
+    PhoneticSegmentationEngine, PhoneticSegmentationIssue, PhoneticSegmentationReadiness,
+    SegmentKind, UnalignedRegion, ALIGNMENT_RECIPE_SCHEMA_VERSION,
     PHONETIC_SEGMENTATION_ALGORITHM_VERSION, PHONETIC_SEGMENTATION_ARTIFACT_SCHEMA_VERSION,
 };
 pub use segmentation::{

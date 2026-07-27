@@ -15,7 +15,9 @@ pub enum SpanModality {
     Audio,
     Transcript,
     Word,
+    Phone,
     Phoneme,
+    Speaker,
     Morpheme,
     Playback,
     BreathGroup,
@@ -64,6 +66,41 @@ pub struct TimelineAlignment {
     pub confidence: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineAttachmentKind {
+    PhoneticSegmentation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimelineAttachment {
+    pub artifact_id: String,
+    pub kind: TimelineAttachmentKind,
+    pub schema_version: u32,
+    /// The original, immutable typed artifact serialized at the session boundary.
+    pub payload: Value,
+}
+
+impl TimelineAttachment {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.artifact_id.is_empty(),
+            "timeline attachment ID is empty"
+        );
+        anyhow::ensure!(
+            self.schema_version > 0,
+            "timeline attachment `{}` has no schema version",
+            self.artifact_id
+        );
+        anyhow::ensure!(
+            self.payload.is_object(),
+            "timeline attachment `{}` payload is not an object",
+            self.artifact_id
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpeechTimelineSession {
     pub schema_version: u16,
@@ -72,6 +109,9 @@ pub struct SpeechTimelineSession {
     pub evidence: Vec<TimelineSpan>,
     #[serde(default)]
     pub alignments: Vec<TimelineAlignment>,
+    /// Immutable source artifacts from which evidence spans were projected.
+    #[serde(default)]
+    pub attachments: Vec<TimelineAttachment>,
     #[serde(default)]
     pub source_events: Vec<StreamEvent>,
     #[serde(default)]
@@ -89,6 +129,7 @@ impl SpeechTimelineSession {
             session_id: session_id.into(),
             evidence,
             alignments,
+            attachments: Vec::new(),
             source_events: Vec::new(),
             operations: Vec::new(),
         };
@@ -118,6 +159,15 @@ impl SpeechTimelineSession {
                 ids.contains(alignment.source_span_id.as_str())
                     && ids.contains(alignment.target_span_id.as_str()),
                 "timeline alignment references unknown evidence"
+            );
+        }
+        let mut attachment_ids = BTreeSet::new();
+        for attachment in &self.attachments {
+            attachment.validate()?;
+            anyhow::ensure!(
+                attachment_ids.insert(attachment.artifact_id.as_str()),
+                "duplicate timeline attachment `{}`",
+                attachment.artifact_id
             );
         }
         let mut operation_ids = BTreeSet::new();
@@ -265,6 +315,10 @@ pub enum TimelineOperationKind {
         span_id: String,
         text: String,
     },
+    PhoneticSymbolReplace {
+        span_id: String,
+        symbol: String,
+    },
     AlignmentMoveBoundary {
         span_id: String,
         boundary: Boundary,
@@ -317,6 +371,7 @@ impl TimelineOperation {
         );
         match &self.operation {
             TimelineOperationKind::TranscriptReplace { span_id, .. }
+            | TimelineOperationKind::PhoneticSymbolReplace { span_id, .. }
             | TimelineOperationKind::Annotate { span_id, .. }
             | TimelineOperationKind::AlignmentMoveBoundary { span_id, .. }
             | TimelineOperationKind::SegmentSplit { span_id, .. }
@@ -424,6 +479,21 @@ fn apply_projection_operation(
             );
             span.metadata
                 .insert("text".into(), Value::String(text.clone()));
+            mark_corrected(span, operation, "transcript");
+        }
+        TimelineOperationKind::PhoneticSymbolReplace { span_id, symbol } => {
+            anyhow::ensure!(
+                !symbol.trim().is_empty(),
+                "phonetic replacement symbol is empty"
+            );
+            let span = target_mut(spans, span_id)?;
+            anyhow::ensure!(
+                matches!(span.modality, SpanModality::Phone | SpanModality::Phoneme),
+                "phonetic replacement target `{span_id}` is not a phone or phoneme"
+            );
+            span.metadata
+                .insert("symbol".into(), Value::String(symbol.clone()));
+            mark_corrected(span, operation, "symbol");
         }
         TimelineOperationKind::AlignmentMoveBoundary {
             span_id,
@@ -441,6 +511,7 @@ fn apply_projection_operation(
                     span.end_ms = *new_time_ms;
                 }
             }
+            mark_corrected(span, operation, "boundary");
         }
         TimelineOperationKind::Annotate {
             span_id,
@@ -505,6 +576,29 @@ fn apply_projection_operation(
         TimelineOperationKind::Undo { .. } | TimelineOperationKind::Redo { .. } => {}
     }
     Ok(())
+}
+
+fn mark_corrected(span: &mut TimelineSpan, operation: &TimelineOperation, correction: &str) {
+    span.metadata.insert(
+        "boundary_origin".into(),
+        Value::String("corrected".into()),
+    );
+    span.metadata.insert(
+        "correction_kind".into(),
+        Value::String(correction.into()),
+    );
+    span.metadata.insert(
+        "correction_operation_id".into(),
+        Value::String(operation.operation_id.clone()),
+    );
+    span.metadata.insert(
+        "correction_actor".into(),
+        Value::String(operation.provenance.actor.clone()),
+    );
+    span.metadata.insert(
+        "correction_at_ms".into(),
+        Value::from(operation.provenance.at_ms),
+    );
 }
 
 fn target_mut<'a>(

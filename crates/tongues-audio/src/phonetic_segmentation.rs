@@ -7,9 +7,14 @@
 //! evenly across an expected pronunciation.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use speaking::timeline::{
+    AlignmentKind, SpanModality, SpeechTimelineSession, TimelineAlignment, TimelineAttachment,
+    TimelineAttachmentKind, TimelineSpan,
+};
 
 use crate::{invalid, AudioBuffer, Result};
 
@@ -36,6 +41,16 @@ pub enum InventoryMembership {
     Unknown,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticEvidenceLinks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_span_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_span_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_span_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExpectedSegment {
     pub symbol: String,
@@ -44,6 +59,8 @@ pub struct ExpectedSegment {
     pub language_tag: String,
     pub inventory_id: String,
     pub pronunciation_source: String,
+    #[serde(default)]
+    pub evidence_links: PhoneticEvidenceLinks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +128,8 @@ pub struct AlignmentCandidate {
     pub start_frame: u64,
     pub end_frame: u64,
     pub confidence: f32,
+    #[serde(default)]
+    pub boundary_origin: PhoneticBoundaryOrigin,
     pub source: AlignmentSourceIdentity,
     #[serde(default)]
     pub evidence: AlignmentEvidence,
@@ -127,12 +146,25 @@ impl AlignmentCandidate {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneticBoundaryOrigin {
+    SourceProvided,
+    #[default]
+    Inferred,
+    Corrected,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhoneticSegmentationContext {
     pub graph_id: String,
     pub graph_revision: u64,
     pub recipe_id: String,
     pub execution_record_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_span_id: Option<String>,
     pub runtime: String,
     pub runtime_version: String,
 }
@@ -193,9 +225,13 @@ pub struct PhoneticSegment {
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alignment_source: Option<AlignmentSourceIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_origin: Option<PhoneticBoundaryOrigin>,
     pub pronunciation_source: String,
     pub language_tag: String,
     pub inventory_id: String,
+    #[serde(default)]
+    pub evidence_links: PhoneticEvidenceLinks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,6 +277,191 @@ pub struct PhoneticSegmentArtifact {
     pub issues: Vec<PhoneticSegmentationIssue>,
     pub graph: PhoneticSegmentationContext,
     pub source_artifacts: Vec<AlignmentSourceIdentity>,
+}
+
+impl PhoneticSegmentArtifact {
+    /// Attach this immutable artifact and its timed spans to a timeline session.
+    ///
+    /// Untimed/unsupported rows remain inspectable in the attachment payload but
+    /// do not become fabricated timeline intervals.
+    pub fn attach_to_timeline(&self, session: &mut SpeechTimelineSession) -> Result<String> {
+        if let Some(expected_session_id) = self.graph.session_id.as_deref() {
+            if expected_session_id != session.session_id {
+                return Err(invalid(format!(
+                    "segmentation expects timeline session `{expected_session_id}`, got `{}`",
+                    session.session_id
+                )));
+            }
+        }
+        let artifact_id = format!(
+            "phonetic-segmentation:{}",
+            self.recipe_sha256
+                .strip_prefix("sha256:")
+                .unwrap_or(&self.recipe_sha256)
+        );
+        if session
+            .attachments
+            .iter()
+            .any(|attachment| attachment.artifact_id == artifact_id)
+        {
+            return Err(invalid(format!(
+                "timeline already contains segmentation attachment `{artifact_id}`"
+            )));
+        }
+
+        let mut next = session.clone();
+        let payload = serde_json::to_value(self)
+            .map_err(|error| invalid(format!("serializing segmentation attachment: {error}")))?;
+        next.attachments.push(TimelineAttachment {
+            artifact_id: artifact_id.clone(),
+            kind: TimelineAttachmentKind::PhoneticSegmentation,
+            schema_version: self.schema_version,
+            payload,
+        });
+
+        let known_ids = next
+            .evidence
+            .iter()
+            .map(|span| span.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for segment in &self.segments {
+            let Some(interval) = &segment.interval else {
+                continue;
+            };
+            let span_id = format!("{artifact_id}:{}", segment.expected_index);
+            if known_ids.contains(&span_id) {
+                return Err(invalid(format!(
+                    "segmentation span `{span_id}` collides with existing evidence"
+                )));
+            }
+            let start_ms = frames_to_ms(interval.start_frame, interval.sample_rate_hz);
+            let mut end_ms = frames_to_ms(interval.end_frame, interval.sample_rate_hz);
+            if end_ms <= start_ms {
+                end_ms = start_ms.saturating_add(1);
+            }
+            let mut metadata = BTreeMap::from([
+                ("symbol".into(), serde_json::json!(segment.symbol)),
+                (
+                    "segment_kind".into(),
+                    serde_json::to_value(segment.kind).unwrap_or_default(),
+                ),
+                (
+                    "status".into(),
+                    serde_json::to_value(segment.status).unwrap_or_default(),
+                ),
+                ("expected_index".into(), serde_json::json!(segment.expected_index)),
+                ("language_tag".into(), serde_json::json!(segment.language_tag)),
+                ("inventory_id".into(), serde_json::json!(segment.inventory_id)),
+                (
+                    "pronunciation_source".into(),
+                    serde_json::json!(segment.pronunciation_source),
+                ),
+                (
+                    "algorithm_version".into(),
+                    serde_json::json!(self.algorithm_version),
+                ),
+                ("artifact_id".into(), serde_json::json!(artifact_id)),
+                (
+                    "audio_artifact_id".into(),
+                    serde_json::json!(self.audio_artifact_id),
+                ),
+                ("audio_sha256".into(), serde_json::json!(self.audio_sha256)),
+                ("recipe_sha256".into(), serde_json::json!(self.recipe_sha256)),
+                ("graph_id".into(), serde_json::json!(self.graph.graph_id)),
+                ("graph_revision".into(), serde_json::json!(self.graph.graph_revision)),
+                ("recipe_id".into(), serde_json::json!(self.graph.recipe_id)),
+                (
+                    "execution_record_id".into(),
+                    serde_json::json!(self.graph.execution_record_id),
+                ),
+                ("runtime".into(), serde_json::json!(self.graph.runtime)),
+                (
+                    "runtime_version".into(),
+                    serde_json::json!(self.graph.runtime_version),
+                ),
+                (
+                    "evidence_authority".into(),
+                    serde_json::json!("observed_alignment_evidence"),
+                ),
+            ]);
+            if let Some(confidence) = segment.confidence {
+                metadata.insert("confidence".into(), serde_json::json!(confidence));
+            }
+            if let Some(origin) = segment.boundary_origin {
+                metadata.insert(
+                    "boundary_origin".into(),
+                    serde_json::to_value(origin).unwrap_or_default(),
+                );
+            }
+            if let Some(source) = &segment.alignment_source {
+                metadata.insert("alignment_provider".into(), serde_json::json!(source.provider));
+                metadata.insert("alignment_model".into(), serde_json::json!(source.model));
+                metadata.insert("alignment_version".into(), serde_json::json!(source.version));
+                if let Some(source_artifact_id) = &source.artifact_id {
+                    metadata.insert(
+                        "alignment_artifact_id".into(),
+                        serde_json::json!(source_artifact_id),
+                    );
+                }
+            }
+            next.evidence.push(TimelineSpan {
+                id: span_id.clone(),
+                start_ms,
+                end_ms,
+                modality: match segment.kind {
+                    SegmentKind::Phone | SegmentKind::Silence | SegmentKind::Pause => {
+                        SpanModality::Phone
+                    }
+                    SegmentKind::Phoneme
+                    | SegmentKind::WordBoundary
+                    | SegmentKind::Unknown => SpanModality::Phoneme,
+                },
+                metadata,
+            });
+
+            for (target, kind) in [
+                (
+                    segment.evidence_links.word_span_id.as_deref(),
+                    AlignmentKind::Contains,
+                ),
+                (
+                    segment.evidence_links.transcript_span_id.as_deref(),
+                    AlignmentKind::Contains,
+                ),
+                (
+                    segment.evidence_links.speaker_span_id.as_deref(),
+                    AlignmentKind::AlignedTo,
+                ),
+                (
+                    self.graph.audio_span_id.as_deref(),
+                    AlignmentKind::AlignedTo,
+                ),
+            ] {
+                let Some(target) = target else {
+                    continue;
+                };
+                if !known_ids.contains(target) {
+                    return Err(invalid(format!(
+                        "segmentation link target `{target}` is absent from timeline evidence"
+                    )));
+                }
+                next.alignments.push(TimelineAlignment {
+                    source_span_id: span_id.clone(),
+                    target_span_id: target.into(),
+                    kind,
+                    confidence: segment.confidence,
+                });
+            }
+        }
+        next.validate()
+            .map_err(|error| invalid(format!("attached segmentation is invalid: {error}")))?;
+        *session = next;
+        Ok(artifact_id)
+    }
+}
+
+fn frames_to_ms(frame: u64, sample_rate_hz: u32) -> u64 {
+    frame.saturating_mul(1_000) / u64::from(sample_rate_hz)
 }
 
 /// Model/runtime-specific aligners implement this boundary. Their candidates
@@ -435,9 +656,11 @@ impl PhoneticSegmentationEngine {
                 interval: None,
                 confidence: None,
                 alignment_source: None,
+                boundary_origin: None,
                 pronunciation_source: expected.pronunciation_source.clone(),
                 language_tag: expected.language_tag.clone(),
                 inventory_id: expected.inventory_id.clone(),
+                evidence_links: expected.evidence_links.clone(),
             };
 
             if expected.symbol.trim().is_empty()
@@ -454,6 +677,7 @@ impl PhoneticSegmentationEngine {
                 let confidence = candidate.fused_confidence();
                 segment.confidence = Some(confidence);
                 segment.alignment_source = Some(candidate.source.clone());
+                segment.boundary_origin = Some(candidate.boundary_origin);
                 if confidence < self.minimum_confidence {
                     segment.status = PhoneticSegmentStatus::LowConfidence;
                     issues.push(issue(
@@ -657,6 +881,7 @@ mod tests {
             language_tag: "mul".into(),
             inventory_id: "fixture-ipa".into(),
             pronunciation_source: "fixture-pronunciation-v1".into(),
+            evidence_links: PhoneticEvidenceLinks::default(),
         }
     }
 
@@ -675,6 +900,7 @@ mod tests {
             start_frame: start,
             end_frame: end,
             confidence,
+            boundary_origin: PhoneticBoundaryOrigin::Inferred,
             source: source("fixture"),
             evidence: AlignmentEvidence::default(),
         }
@@ -696,6 +922,8 @@ mod tests {
                 graph_revision: 7,
                 recipe_id: "fixture-recipe".into(),
                 execution_record_id: "fixture-run".into(),
+                session_id: None,
+                audio_span_id: None,
                 runtime: "tongues-test".into(),
                 runtime_version: env!("CARGO_PKG_VERSION").into(),
             },
