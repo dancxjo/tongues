@@ -11,13 +11,14 @@ use crate::segment::TerminalPunctuation;
 pub type WordIndex = usize;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct SentenceSyntaxAnalysis {
+pub struct GrammarAnalysis {
     pub tokens: Vec<SyntaxToken>,
-    pub link_parses: Vec<SyntacticLinkParse>,
-    /// Raw parser-native dependency/link output. The field name is kept for
-    /// wire compatibility with earlier link-grammar-shaped artifacts.
+    #[serde(alias = "link_parses")]
+    pub ranked_parses: Vec<RankedGrammarParse>,
+    /// Parser-native dependency/link output retained for diagnostics.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub raw_link_grammar_parses: Vec<RawLinkGrammarParse>,
+    #[serde(alias = "raw_link_grammar_parses")]
+    pub backend_parses: Vec<BackendParse>,
     pub terminal: Option<TerminalPunctuation>,
 }
 
@@ -31,28 +32,28 @@ pub struct SyntaxToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SyntacticLinkParse {
+pub struct RankedGrammarParse {
     pub links: Vec<SyntacticLink>,
     pub rank: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RawLinkGrammarParse {
-    pub links: Vec<RawLinkGrammarLink>,
-    pub cost: Option<RawLinkGrammarCost>,
+pub struct BackendParse {
+    pub links: Vec<BackendLink>,
+    pub cost: Option<BackendCost>,
     pub accepted: bool,
-    pub backend: RawLinkGrammarBackend,
+    pub backend: GrammarBackend,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RawLinkGrammarLink {
+pub struct BackendLink {
     pub left: WordIndex,
     pub right: WordIndex,
     pub label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct RawLinkGrammarCost {
+pub struct BackendCost {
     pub unused: Option<f32>,
     pub disjunct: Option<f32>,
     pub length: Option<f32>,
@@ -60,9 +61,9 @@ pub struct RawLinkGrammarCost {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RawLinkGrammarBackend {
-    #[serde(alias = "tongues_link_grammar")]
-    TonguesRuleGrammar,
+pub enum GrammarBackend {
+    #[serde(alias = "tongues_rule_grammar", alias = "tongues_link_grammar")]
+    TonguesRules,
     UdPipe,
 }
 
@@ -154,29 +155,13 @@ pub struct WordSyntacticLinks {
     pub links: Vec<SyntacticLinkKind>,
 }
 
-pub type GrammarAnalysis = SentenceSyntaxAnalysis;
-pub type GrammarToken = SyntaxToken;
-pub type GrammarLinkParse = SyntacticLinkParse;
-pub type RawGrammarParse = RawLinkGrammarParse;
-pub type RawGrammarLink = RawLinkGrammarLink;
-pub type RawGrammarCost = RawLinkGrammarCost;
-pub type RawGrammarBackend = RawLinkGrammarBackend;
-pub type GrammarLink = SyntacticLink;
-pub type GrammarLinkKind = SyntacticLinkKind;
-pub type GrammarLinkSource = SyntacticLinkSource;
-pub type GrammarRuleContext = SyntaxRuleContext;
-
 pub trait GrammarParser {
     fn parse(
         &self,
         words: &[String],
         terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis;
+    ) -> GrammarAnalysis;
 }
-
-pub trait LinkGrammarParser: GrammarParser {}
-
-impl<T: GrammarParser + ?Sized> LinkGrammarParser for T {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrammarParserBackend {
@@ -190,8 +175,6 @@ pub struct VarietyGrammarParser {
     variety: VarietyId,
     backend: GrammarParserBackend,
 }
-
-pub type VarietyLinkGrammarParser = VarietyGrammarParser;
 
 impl Default for VarietyGrammarParser {
     fn default() -> Self {
@@ -225,7 +208,7 @@ impl GrammarParser for VarietyGrammarParser {
         &self,
         words: &[String],
         terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
+    ) -> GrammarAnalysis {
         match self.backend {
             GrammarParserBackend::Auto => {
                 if let Some(analysis) = parse_udpipe_for_variety(&self.variety, words, terminal) {
@@ -238,7 +221,7 @@ impl GrammarParser for VarietyGrammarParser {
             }
             GrammarParserBackend::UdPipe => {
                 parse_udpipe_for_variety(&self.variety, words, terminal).unwrap_or_else(|| {
-                    SentenceSyntaxAnalysis {
+                    GrammarAnalysis {
                         terminal,
                         ..Default::default()
                     }
@@ -252,9 +235,9 @@ fn parse_with_variety_rules(
     variety_id: &VarietyId,
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-) -> SentenceSyntaxAnalysis {
+) -> GrammarAnalysis {
     let Some(variety) = variety_by_code(&variety_id.0) else {
-        return SentenceSyntaxAnalysis {
+        return GrammarAnalysis {
             terminal,
             ..Default::default()
         };
@@ -265,7 +248,7 @@ fn parse_with_variety_rules(
     if let Some(profile) = variety.syntax_rules {
         return parse_grammar_with_rules(words, terminal, profile);
     }
-    SentenceSyntaxAnalysis {
+    GrammarAnalysis {
         terminal,
         ..Default::default()
     }
@@ -296,7 +279,7 @@ impl UdPipeGrammarParser {
         &self,
         words: &[String],
         terminal: Option<TerminalPunctuation>,
-    ) -> Option<SentenceSyntaxAnalysis> {
+    ) -> Option<GrammarAnalysis> {
         let input = udpipe_horizontal_input(words, terminal);
         let mut child = Command::new(&self.command)
             .arg("--input=horizontal")
@@ -323,9 +306,9 @@ impl GrammarParser for UdPipeGrammarParser {
         &self,
         words: &[String],
         terminal: Option<TerminalPunctuation>,
-    ) -> SentenceSyntaxAnalysis {
+    ) -> GrammarAnalysis {
         self.parse_with_status(words, terminal)
-            .unwrap_or_else(|| SentenceSyntaxAnalysis {
+            .unwrap_or_else(|| GrammarAnalysis {
                 terminal,
                 ..Default::default()
             })
@@ -336,7 +319,7 @@ fn parse_udpipe_for_variety(
     variety_id: &VarietyId,
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-) -> Option<SentenceSyntaxAnalysis> {
+) -> Option<GrammarAnalysis> {
     let model_path = udpipe_model_path_for_variety(variety_id)?;
     UdPipeGrammarParser::new(model_path).parse_with_status(words, terminal)
 }
@@ -391,7 +374,7 @@ fn analysis_from_udpipe_conllu(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
     conllu: &str,
-) -> Option<SentenceSyntaxAnalysis> {
+) -> Option<GrammarAnalysis> {
     let udpipe_tokens = parse_udpipe_tokens(conllu);
     if udpipe_tokens.is_empty() {
         return None;
@@ -424,7 +407,7 @@ fn analysis_from_udpipe_conllu(
                 source: SyntacticLinkSource::UdPipeProjection,
             },
         );
-        raw_links.push(RawLinkGrammarLink {
+        raw_links.push(BackendLink {
             left,
             right,
             label: token.deprel.clone(),
@@ -439,7 +422,7 @@ fn analysis_from_udpipe_conllu(
     raw_links.dedup_by(|left, right| {
         left.left == right.left && left.right == right.right && left.label == right.label
     });
-    let parse = SyntacticLinkParse { links, rank: 1.0 };
+    let parse = RankedGrammarParse { links, rank: 1.0 };
     let tokens = udpipe_tokens
         .iter()
         .take(projected_len)
@@ -470,18 +453,18 @@ fn analysis_from_udpipe_conllu(
         .iter()
         .map(|link| link.right.abs_diff(link.left) as f32)
         .sum();
-    Some(SentenceSyntaxAnalysis {
+    Some(GrammarAnalysis {
         tokens,
-        link_parses: vec![parse],
-        raw_link_grammar_parses: vec![RawLinkGrammarParse {
+        ranked_parses: vec![parse],
+        backend_parses: vec![BackendParse {
             links: raw_links,
-            cost: Some(RawLinkGrammarCost {
+            cost: Some(BackendCost {
                 unused: Some(unlinked),
                 disjunct: None,
                 length: Some(length),
             }),
             accepted: true,
-            backend: RawLinkGrammarBackend::UdPipe,
+            backend: GrammarBackend::UdPipe,
         }],
         terminal,
     })
@@ -649,10 +632,6 @@ pub enum GrammarConnector {
     Adjective,
     Adverb,
 }
-
-pub type LinkGrammarRuleSet = GrammarRuleSet;
-pub type LinkGrammarRule = GrammarRule;
-pub type LinkGrammarConnector = GrammarConnector;
 
 pub const DEFAULT_GRAMMAR_RULES: &[GrammarRule] = &[
     rule(
@@ -839,7 +818,7 @@ fn parse_rule_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
     profile: GrammarRuleSet,
-) -> SentenceSyntaxAnalysis {
+) -> GrammarAnalysis {
     let pairs = words
         .iter()
         .filter_map(|word| {
@@ -853,7 +832,7 @@ fn parse_rule_grammar(
         .collect::<Vec<_>>();
     let (links, raw_links) = build_rule_links(&normalized, profile);
     let rank = parse_rank(&links, normalized.len());
-    let parse = SyntacticLinkParse { links, rank };
+    let parse = RankedGrammarParse { links, rank };
     let tokens = normalized
         .iter()
         .enumerate()
@@ -885,18 +864,18 @@ fn parse_rule_grammar(
         .sum();
     let accepted = !parse.links.is_empty() || normalized.is_empty();
 
-    SentenceSyntaxAnalysis {
+    GrammarAnalysis {
         tokens,
-        link_parses: vec![parse],
-        raw_link_grammar_parses: vec![RawLinkGrammarParse {
+        ranked_parses: vec![parse],
+        backend_parses: vec![BackendParse {
             links: raw_links,
-            cost: Some(RawLinkGrammarCost {
+            cost: Some(BackendCost {
                 unused: Some(unlinked),
                 disjunct: Some(0.0),
                 length: Some(length),
             }),
             accepted,
-            backend: RawLinkGrammarBackend::TonguesRuleGrammar,
+            backend: GrammarBackend::TonguesRules,
         }],
         terminal,
     }
@@ -906,24 +885,14 @@ pub fn parse_grammar_with_rules(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
     profile: GrammarRuleSet,
-) -> SentenceSyntaxAnalysis {
+) -> GrammarAnalysis {
     parse_rule_grammar(words, terminal, profile)
-}
-
-pub const DEFAULT_LINK_GRAMMAR_RULES: &[GrammarRule] = DEFAULT_GRAMMAR_RULES;
-
-pub fn parse_link_grammar_with_rules(
-    words: &[String],
-    terminal: Option<TerminalPunctuation>,
-    profile: GrammarRuleSet,
-) -> SentenceSyntaxAnalysis {
-    parse_grammar_with_rules(words, terminal, profile)
 }
 
 fn build_rule_links(
     words: &[String],
     profile: GrammarRuleSet,
-) -> (Vec<SyntacticLink>, Vec<RawLinkGrammarLink>) {
+) -> (Vec<SyntacticLink>, Vec<BackendLink>) {
     let mut links = Vec::new();
     let mut raw_links = Vec::new();
     apply_connector_rules(words, profile, &mut links, &mut raw_links);
@@ -1112,7 +1081,7 @@ fn apply_connector_rules(
     words: &[String],
     profile: GrammarRuleSet,
     links: &mut Vec<SyntacticLink>,
-    raw_links: &mut Vec<RawLinkGrammarLink>,
+    raw_links: &mut Vec<BackendLink>,
 ) {
     for rule in profile.rules {
         for left in 0..words.len() {
@@ -1135,7 +1104,7 @@ fn apply_connector_rules(
                         source: SyntacticLinkSource::GrammarRule,
                     },
                 );
-                raw_links.push(RawLinkGrammarLink {
+                raw_links.push(BackendLink {
                     left,
                     right,
                     label: rule.label.to_string(),
@@ -1184,8 +1153,8 @@ fn connector_matches(
     }
 }
 
-fn raw_link_from_typed_link(link: &SyntacticLink) -> RawLinkGrammarLink {
-    RawLinkGrammarLink {
+fn raw_link_from_typed_link(link: &SyntacticLink) -> BackendLink {
+    BackendLink {
         left: link.left,
         right: link.right,
         label: grammar_link_label(link.kind).to_string(),
@@ -1994,23 +1963,15 @@ fn multilingual_prosodic_role(pos: PartOfSpeech, links: &[SyntacticLinkKind]) ->
     }
 }
 
-impl SentenceSyntaxAnalysis {
-    pub fn primary_parse(&self) -> Option<&SyntacticLinkParse> {
-        self.link_parses.first()
-    }
-
-    pub fn raw_grammar_parses(&self) -> &[RawGrammarParse] {
-        &self.raw_link_grammar_parses
-    }
-
-    pub fn raw_grammar_parses_mut(&mut self) -> &mut Vec<RawGrammarParse> {
-        &mut self.raw_link_grammar_parses
+impl GrammarAnalysis {
+    pub fn primary_parse(&self) -> Option<&RankedGrammarParse> {
+        self.ranked_parses.first()
     }
 
     pub fn environment_patterns(&self) -> Vec<EnvironmentPattern> {
-        self.link_parses
+        self.ranked_parses
             .iter()
-            .map(SyntacticLinkParse::as_environment_pattern)
+            .map(RankedGrammarParse::as_environment_pattern)
             .collect()
     }
 
@@ -2043,7 +2004,7 @@ impl SentenceSyntaxAnalysis {
     }
 }
 
-impl SyntacticLinkParse {
+impl RankedGrammarParse {
     pub fn as_environment_pattern(&self) -> EnvironmentPattern {
         let mut seen = std::collections::HashSet::new();
         let predicates = self
@@ -2347,11 +2308,11 @@ mod tests {
             .collect()
     }
 
-    fn parse_variety(code: &str, sentence: &str) -> SentenceSyntaxAnalysis {
+    fn parse_variety(code: &str, sentence: &str) -> GrammarAnalysis {
         VarietyGrammarParser::new(VarietyId(code.into())).parse(&words(sentence), None)
     }
 
-    fn assert_link(analysis: &SentenceSyntaxAnalysis, kind: SyntacticLinkKind) {
+    fn assert_link(analysis: &GrammarAnalysis, kind: SyntacticLinkKind) {
         assert!(
             analysis
                 .primary_parse()
@@ -2361,7 +2322,7 @@ mod tests {
     }
 
     fn assert_link_between(
-        analysis: &SentenceSyntaxAnalysis,
+        analysis: &GrammarAnalysis,
         left: usize,
         right: usize,
         kind: SyntacticLinkKind,
@@ -2376,7 +2337,7 @@ mod tests {
     }
 
     fn assert_no_link_between(
-        analysis: &SentenceSyntaxAnalysis,
+        analysis: &GrammarAnalysis,
         left: usize,
         right: usize,
         kind: SyntacticLinkKind,
@@ -2409,10 +2370,10 @@ mod tests {
         assert_eq!(analysis.tokens[1].pos, PartOfSpeech::Verb);
         assert_eq!(
             analysis
-                .raw_link_grammar_parses
+                .backend_parses
                 .first()
                 .map(|parse| parse.backend),
-            Some(RawLinkGrammarBackend::UdPipe)
+            Some(GrammarBackend::UdPipe)
         );
         assert_link_between(&analysis, 0, 1, SyntacticLinkKind::Subject);
         assert_link_between(&analysis, 2, 3, SyntacticLinkKind::Preposition);
@@ -2463,10 +2424,10 @@ mod tests {
             let analysis = parse_variety(code, sentence);
             assert_eq!(
                 analysis
-                    .raw_link_grammar_parses
+                    .backend_parses
                     .first()
                     .map(|parse| parse.backend),
-                Some(RawLinkGrammarBackend::TonguesRuleGrammar),
+                Some(GrammarBackend::TonguesRules),
                 "{code} should report the shared in-tree backend"
             );
             assert!(

@@ -390,7 +390,7 @@ fn build_app(state: AppState) -> Router {
         .route("/pronunciation-demo", get(serve_app_index))
         .route("/pronunciation-demo/", get(serve_app_index))
         .route("/g2p2g/{*path}", get(serve_app_index))
-        .route("/sentence-parser/{*path}", get(serve_app_index))
+        .route("/sentence-boundary/{*path}", get(serve_app_index))
         .route("/head2phones/{*path}", get(serve_app_index))
         .route("/interpretation/{*path}", get(serve_app_index))
         .route("/emotions/{*path}", get(serve_app_index))
@@ -442,6 +442,10 @@ async fn pipeline_graph_catalog(
     }
     if let Ok(providers) = state.asr.provider_capabilities() {
         for provider in providers {
+            let linguistic_coverage = tongues_pipeline::LinguisticCoverage {
+                languages: provider.languages.clone(),
+                varieties: Vec::new(),
+            };
             catalog.register_component(ComponentSpec {
                 id: format!("asr:{}", provider.provider_id),
                 node_kind: "asr".into(),
@@ -452,6 +456,7 @@ async fn pipeline_graph_catalog(
                 } else {
                     Readiness::Unavailable
                 },
+                linguistic_coverage,
                 capabilities: std::collections::BTreeSet::from(["asr".into()]),
                 configuration_schema: json!({
                     "type": "object",
@@ -475,6 +480,7 @@ async fn pipeline_graph_catalog(
         provider: "speaking".into(),
         model: "anonymous-speaker-clusterer-v1".into(),
         readiness: Readiness::Ready,
+        linguistic_coverage: Default::default(),
         capabilities: std::collections::BTreeSet::from(["diarization".into()]),
         configuration_schema: json!({
             "type": "object",
@@ -494,6 +500,7 @@ async fn pipeline_graph_catalog(
         provider: "tongues-audio".into(),
         model: tongues_audio::PHONETIC_SEGMENTATION_ALGORITHM_VERSION.into(),
         readiness: Readiness::Unavailable,
+        linguistic_coverage: Default::default(),
         capabilities: std::collections::BTreeSet::from(["phonetic_segmentation".into()]),
         configuration_schema: json!({
             "type": "object",
@@ -518,6 +525,7 @@ async fn pipeline_graph_catalog(
         provider: "tongues-cli".into(),
         model: "interpretation-runtime-v1".into(),
         readiness: Readiness::Ready,
+        linguistic_coverage: Default::default(),
         capabilities: std::collections::BTreeSet::from(["interpretation".into()]),
         configuration_schema: json!({
             "type": "object",
@@ -542,6 +550,7 @@ async fn pipeline_graph_catalog(
                 } else {
                     Readiness::Unavailable
                 },
+                linguistic_coverage: Default::default(),
                 capabilities: std::collections::BTreeSet::from(["text_generation".into()]),
                 configuration_schema: json!({"type":"object"}),
                 default_config: json!({}),
@@ -608,6 +617,7 @@ async fn pipeline_graph_catalog(
             } else {
                 Readiness::Unavailable
             },
+            linguistic_coverage: speech_linguistic_coverage(&composition.capabilities),
             capabilities: std::collections::BTreeSet::from(["tts".into()]),
             configuration_schema: speech_controls_schema(&composition.controls),
             default_config: speech_controls_defaults(&composition.controls),
@@ -619,6 +629,29 @@ async fn pipeline_graph_catalog(
     }
     catalog.revision = pipeline_catalog_revision(&catalog);
     catalog
+}
+
+fn speech_linguistic_coverage(
+    capabilities: &tongues_tts::BackendCapabilities,
+) -> tongues_pipeline::LinguisticCoverage {
+    let languages = match &capabilities.languages.values {
+        tongues_tts::CapabilityValue::Listed(values) => values
+            .iter()
+            .map(|value| speaking::LanguageId(value.id.clone()))
+            .collect(),
+        tongues_tts::CapabilityValue::Unsupported | tongues_tts::CapabilityValue::Any => Vec::new(),
+    };
+    let varieties = match &capabilities.varieties {
+        tongues_tts::CapabilityValue::Listed(values) => values
+            .iter()
+            .map(|value| speaking::VarietyId(value.id.clone()))
+            .collect(),
+        tongues_tts::CapabilityValue::Unsupported | tongues_tts::CapabilityValue::Any => Vec::new(),
+    };
+    tongues_pipeline::LinguisticCoverage {
+        languages,
+        varieties,
+    }
 }
 
 fn pipeline_catalog_revision(catalog: &tongues_pipeline::GraphCatalog) -> String {
@@ -3266,13 +3299,13 @@ const WEB_EXPOSED_COMMAND_IDS: &[&str] = &[
     "prepare",
     "refine",
     "repl",
-    "sentence-parser/clean",
-    "sentence-parser/eval",
-    "sentence-parser/infer",
-    "sentence-parser/parse",
-    "sentence-parser/prepare",
-    "sentence-parser/stream",
-    "sentence-parser/train",
+    "sentence-boundary/clean",
+    "sentence-boundary/eval",
+    "sentence-boundary/infer",
+    "sentence-boundary/parse",
+    "sentence-boundary/prepare",
+    "sentence-boundary/stream",
+    "sentence-boundary/train",
     "speak",
     "speaking",
     "styletts2/discover",
@@ -10821,6 +10854,21 @@ mod tests {
         assert_ne!(first, pipeline_catalog_revision(&catalog));
     }
 
+    #[test]
+    fn mms_pipeline_coverage_declares_language_without_inventing_a_variety() {
+        let catalog = tongues_tts::ModelCatalog::embedded().expect("embedded model catalog");
+        let entry = catalog
+            .find("fairseq-mms-vits-ckt")
+            .expect("Chukchi MMS catalog entry");
+        let capabilities =
+            fairseq_backend_capabilities(entry, tongues_tts::ResolvedSpeechDevice::Cpu);
+
+        let coverage = speech_linguistic_coverage(&capabilities);
+
+        assert_eq!(coverage.languages, [speaking::LanguageId("ckt".into())]);
+        assert!(coverage.varieties.is_empty());
+    }
+
     #[tokio::test]
     async fn text_file_source_streams_utf8_chunks_and_preserves_line_endings() {
         let root =
@@ -11106,7 +11154,7 @@ mod tests {
             );
         }
         assert_eq!(routes.len(), WEB_EXPOSED_COMMAND_IDS.len());
-        assert!(routes.contains("/sentence-parser/train"));
+        assert!(routes.contains("/sentence-boundary/train"));
         assert!(routes.contains("/cli/speak"));
         assert!(routes.contains("/cli/predict"));
         let speak = find_web_cli_command(&schema.commands, "speak").expect("speak schema");

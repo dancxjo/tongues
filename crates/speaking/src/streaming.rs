@@ -2,20 +2,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
-use crate::syntax::{GrammarParser, SentenceSyntaxAnalysis, VarietyGrammarParser};
+use crate::syntax::{GrammarParser, GrammarAnalysis, VarietyGrammarParser};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StableTextChunk {
     pub text: String,
     pub terminal: Option<TerminalPunctuation>,
-    pub syntax: SentenceSyntaxAnalysis,
+    pub syntax: GrammarAnalysis,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnfinishedPrefixAnalysis {
     pub text_with_continuation: String,
     pub word_count: usize,
-    pub syntax: SentenceSyntaxAnalysis,
+    pub syntax: GrammarAnalysis,
 }
 
 #[derive(Debug, Clone)]

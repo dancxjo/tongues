@@ -114,7 +114,7 @@ For detailed training, data preparation, and model-family documentation, see:
 
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
-- [Sentence parser](docs/sentence-parser.md)
+- [Sentence parser](docs/sentence-boundary.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Head2Phones v0 model card](docs/models/head2phones-v0.md)
 - [Interpretation](docs/interpretation.md)
@@ -142,7 +142,7 @@ crates/tongues-data              lexicon parsing, IPA normalization, splits, col
 crates/tongues-neural            shared neural artifact metadata
 crates/tongues-g2p2g             Burn seq2seq G2P/P2G model, training, evaluation, prediction
 crates/tongues-wiktionary        Wiktionary pronunciation data, training, and inference
-crates/tongues-sentence-parser   cursor-time sentence boundary, continuation, and repair
+crates/tongues-sentence-boundary   cursor-time sentence boundary, continuation, and repair
 crates/tongues-head2phones       streaming head-chunk-to-phone model family
 crates/tongues-common-phone      compact acoustic frame -> phone/feature CTC model
 crates/tongues-interpretation    utterance-level Mel ASR with sentence/phoneme supervision
@@ -178,9 +178,9 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just run ...` | Forward directly to `cargo run --bin tongues -- ...`. |
 | `just train` | Train the default `g2p2g` model. |
 | `just infer "farkle"` | Run one G2P2G prediction. |
-| `just sentence-parser train --training-set all` | Forward a model-family command to `tongues`. |
+| `just sentence-boundary train --training-set all` | Forward a model-family command to `tongues`. |
 | `just emotions prepare --source-manifest datasets/emotions/labels.jsonl` | Prepare emotion classifier cuts from the shared emotion corpora. |
-| `just sentence-parser clean --all` | Archive default sentence-parser data/model artifacts and recreate empty run directories. |
+| `just sentence-boundary clean --all` | Archive default sentence-boundary data/model artifacts and recreate empty run directories. |
 | `just g2p2g repl` | Start the G2P2G REPL. |
 | `just g2p2g eval --model models/g2p2g/openepd-v0 --data datasets/g2p2g/openepd-v0` | Evaluate a trained model. |
 | `just refine` | Fine-tune from validation/test discrepancies. |
@@ -215,7 +215,7 @@ Each model-family namespace also has a `clean` subcommand:
 ```sh
 just g2p2g clean --data
 just wiktionary clean --model
-just sentence-parser clean --all
+just sentence-boundary clean --all
 just emotions clean --all
 ```
 
@@ -230,7 +230,7 @@ just emotions clean --all
 | `tts` | native Burn acoustic/vocoder and end-to-end synthesis plus ONNX compatibility | active inference |
 | `speaking` | linguistic IR, lexicons, phonemicization, realization, and ASR runtime | active |
 | `common-phone` | compact acoustic frames -> phones/features | experimental |
-| `sentence-parser` | cursor-time sentence boundary, continuation, and repair | experimental |
+| `sentence-boundary` | cursor-time sentence boundary, continuation, and repair | experimental |
 | `head2phones` | streaming head chunk -> phones front end | experimental |
 | `interpretation` | utterance-level ASR and multi-head acoustic interpretation | experimental |
 | `emotions` | pooled-log-mel audio emotion classification | experimental |

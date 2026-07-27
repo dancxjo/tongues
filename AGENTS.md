@@ -33,5 +33,5 @@ Training expectations:
 Recent examples to follow:
 
 - `crates/tongues-wiktionary/src/lib.rs`: `PrepareProgress::Expand` and `expanded.jsonl.part`.
-- `crates/tongues-sentence-parser/src/lib.rs`: `prepare_dataset_with_progress`, `sentences.jsonl.part`, `examples.jsonl.part`, and atomic final JSONL writes.
+- `crates/tongues-sentence-boundary/src/lib.rs`: `prepare_dataset_with_progress`, `sentences.jsonl.part`, `examples.jsonl.part`, and atomic final JSONL writes.
 - `crates/tongues-cli/src/main.rs`: progress formatter functions that convert library progress events into spinner messages.

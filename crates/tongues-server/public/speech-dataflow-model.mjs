@@ -115,6 +115,7 @@ function catalogEntry(kind, component=null) {
     ports:structuredClone(kind.ports??[]),
     readiness:component?.readiness??"ready",
     detail:component?.detail??"",
+    linguistic_coverage:structuredClone(component?.linguistic_coverage??{}),
     capabilities:[...(component?.capabilities??kind.required_capabilities??[])],
     required_capabilities:[...(kind.required_capabilities??[])],
     replacement:structuredClone(replacement??{}),

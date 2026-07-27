@@ -5,6 +5,7 @@ pub mod morphology;
 pub mod normalization;
 mod rp;
 pub mod syntax;
+pub mod syntax_compatibility;
 
 use crate::acoustics::{
     AcousticCueDef, AcousticLandmark, AcousticLandmarkKind, AcousticMeasurement, AcousticProfile,

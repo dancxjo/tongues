@@ -276,13 +276,13 @@ mod tests {
         write_manifest(
             &dir,
             &ModelArtifactManifest::new(
-                "sentence-parser",
+                "sentence-boundary",
                 "seq2seq-transformer",
-                "sentence-parser-v0",
+                "sentence-boundary-v0",
             ),
         )
         .unwrap();
-        fs::write(dir.join("model.bin"), b"sentence-parser-scaffold\n").unwrap();
+        fs::write(dir.join("model.bin"), b"sentence-boundary-scaffold\n").unwrap();
 
         let error = read_manifest(&dir.join(ARTIFACT_MANIFEST_FILE)).unwrap_err();
         assert!(error

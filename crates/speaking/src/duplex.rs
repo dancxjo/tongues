@@ -9,7 +9,7 @@ use crate::ids::{
 use crate::morphology::MorphemeToken;
 use crate::phonology::{PhoneToken, PhonemeToken};
 use crate::prosody::ProsodyTrack;
-use crate::syntax::SentenceSyntaxAnalysis;
+use crate::syntax::GrammarAnalysis;
 use crate::time::{TextSpan, TimeSpan};
 
 pub const DUPLEX_JOURNAL_VERSION: u32 = 1;
@@ -47,7 +47,7 @@ pub struct EvidencePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_span: Option<TimeSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub syntax: Option<SentenceSyntaxAnalysis>,
+    pub syntax: Option<GrammarAnalysis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub morphology: Vec<MorphemeToken>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

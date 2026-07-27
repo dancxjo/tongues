@@ -123,7 +123,7 @@ loss is skipped for that sentence.
 Syntax analysis uses the uniform grammar parser API. Each linguistic variety
 owns its fallback rule profile, while the shared engine can also project UDPipe
 CoNLL-U output into the same typed links and raw parser metadata under
-`raw_link_grammar_parses`.
+`backend_parses`.
 
 Vocabulary files are built from the recovered split rows. `vocab.json` is the
 character/CTC vocabulary. `phoneme_vocab.json` is built from phonemicizer token
@@ -221,6 +221,6 @@ The v1 stream command accepts a WAV file for repeatable smoke testing and emits
 JSON containing both `partial_transcript` from the streaming CTC-style transcript
 head and `seq2seq_transcript` from the after-utterance head. It also emits final
 sentence events with attached phonemic supervision, repair events using the same
-`<boundary:repair>` semantics as `sentence-parser`, and previous/current/next
+`<boundary:repair>` semantics as `sentence-boundary`, and previous/current/next
 word predictions with phoneme-side predictions. Live microphone chunking can
 reuse the same `stream_from_samples` library path.

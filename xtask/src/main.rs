@@ -89,9 +89,9 @@ const ESTABLISHED_MODEL_FAMILIES: &[EstablishedFamily] = &[
         crate_lib: "crates/tongues-wiktionary/src/lib.rs",
     },
     EstablishedFamily {
-        id: "sentence-parser",
+        id: "sentence-boundary",
         readiness: "experimental",
-        crate_lib: "crates/tongues-sentence-parser/src/lib.rs",
+        crate_lib: "crates/tongues-sentence-boundary/src/lib.rs",
     },
     EstablishedFamily {
         id: "head2phones",
@@ -153,7 +153,7 @@ fn audit_family_maturity() -> Result<(), String> {
         "docs/architecture.md",
         "docs/common-phone.md",
         "docs/interpretation.md",
-        "docs/sentence-parser.md",
+        "docs/sentence-boundary.md",
         "docs/wiktionary.md",
         "README.md",
     ] {

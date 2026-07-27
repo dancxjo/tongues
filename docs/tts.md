@@ -371,6 +371,11 @@ require the same preprocessing at inference time. Point
 absent or fails, synthesis stops with an explicit preprocessing error instead
 of silently feeding the wrong alphabet.
 
+Graph Studio projects that same evidence into each MMS component's general
+`linguistic_coverage` contract. The checkpoint language appears under
+`languages`; `varieties` remains undeclared unless the catalog has separate
+pronunciation-variety evidence.
+
 Fairseq MMS VITS remains a whole-utterance renderer. Capability metadata and
 runtime behavior do not claim revision-safe suffix replacement inside the
 model itself; when an unplayed phrase must be replaced around committed audio,

@@ -22,7 +22,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use speaking::{
     CompletionHypothesisId, Confidence, EvidenceProvenance, EvidenceSource, ProsodyTrack,
-    SegmentId, SentenceSyntaxAnalysis, StreamEvent, TextRange, TextRole, UtteranceId, VarietyId,
+    SegmentId, GrammarAnalysis, StreamEvent, TextRange, TextRole, UtteranceId, VarietyId,
 };
 use thiserror::Error;
 
@@ -164,7 +164,7 @@ pub struct CompletionProposal {
     #[serde(default)]
     pub morphemes: Vec<CompletionMorpheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub syntax: Option<SentenceSyntaxAnalysis>,
+    pub syntax: Option<GrammarAnalysis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prosody: Option<ProsodyTrack>,
     #[serde(default)]
@@ -179,7 +179,7 @@ pub struct NormalizedCompletionHypothesis {
     #[serde(default)]
     pub morphemes: Vec<CompletionMorpheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub syntax: Option<SentenceSyntaxAnalysis>,
+    pub syntax: Option<GrammarAnalysis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prosody: Option<ProsodyTrack>,
     #[serde(default)]
@@ -1270,7 +1270,7 @@ impl CompletionProvider for OracleCompletionProvider {
                 id: CompletionHypothesisId("oracle:statement".into()),
                 weight: 0.55,
                 morphemes: statement,
-                syntax: Some(SentenceSyntaxAnalysis::default()),
+                syntax: Some(GrammarAnalysis::default()),
                 prosody: Some(ProsodyTrack::default()),
                 evidence: request
                     .evidence
@@ -1283,7 +1283,7 @@ impl CompletionProvider for OracleCompletionProvider {
                 id: CompletionHypothesisId("oracle:question".into()),
                 weight: 0.45,
                 morphemes: question,
-                syntax: Some(SentenceSyntaxAnalysis::default()),
+                syntax: Some(GrammarAnalysis::default()),
                 prosody: Some(ProsodyTrack::default()),
                 evidence: request
                     .evidence
@@ -2673,7 +2673,7 @@ mod tests {
             id: CompletionHypothesisId(id.into()),
             weight,
             morphemes,
-            syntax: Some(SentenceSyntaxAnalysis::default()),
+            syntax: Some(GrammarAnalysis::default()),
             prosody: Some(ProsodyTrack::default()),
             evidence: Vec::new(),
             provenance: provenance(),

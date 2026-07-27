@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use speaking::{LanguageId, VarietyId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -148,6 +149,13 @@ pub struct ComponentSpec {
     pub provider: String,
     pub model: String,
     pub readiness: Readiness,
+    /// Evidence-backed linguistic scope for this concrete component.
+    ///
+    /// Language identities and pronunciation varieties are deliberately
+    /// separate. An empty collection means the component has not declared
+    /// that dimension; it does not mean the component supports every value.
+    #[serde(default, skip_serializing_if = "LinguisticCoverage::is_empty")]
+    pub linguistic_coverage: LinguisticCoverage,
     #[serde(default)]
     pub capabilities: BTreeSet<String>,
     #[serde(default)]
@@ -158,6 +166,20 @@ pub struct ComponentSpec {
     pub detail: String,
     #[serde(default)]
     pub replacement: ReplacementSpec,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinguisticCoverage {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<LanguageId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub varieties: Vec<VarietyId>,
+}
+
+impl LinguisticCoverage {
+    pub fn is_empty(&self) -> bool {
+        self.languages.is_empty() && self.varieties.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -584,4 +606,25 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
     });
     kinds.push(transcript_splitter);
     kinds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linguistic_coverage_serializes_typed_ids_without_conflating_varieties() {
+        let coverage = LinguisticCoverage {
+            languages: vec![LanguageId("eng".into())],
+            varieties: vec![VarietyId("en-GB-RP".into())],
+        };
+
+        assert_eq!(
+            serde_json::to_value(coverage).expect("serialize coverage"),
+            serde_json::json!({
+                "languages": ["eng"],
+                "varieties": ["en-GB-RP"]
+            })
+        );
+    }
 }

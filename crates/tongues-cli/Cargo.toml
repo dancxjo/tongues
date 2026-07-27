@@ -19,7 +19,7 @@ tongues-head2phones = { path = "../tongues-head2phones" }
 tongues-duplex = { path = "../tongues-duplex" }
 tongues-interpretation = { path = "../tongues-interpretation" }
 tongues-neural = { path = "../tongues-neural" }
-tongues-sentence-parser = { path = "../tongues-sentence-parser" }
+tongues-sentence-boundary = { path = "../tongues-sentence-boundary" }
 tongues-tts = { path = "../tongues-tts", default-features = false }
 tongues-wiktionary = { path = "../tongues-wiktionary" }
 burn = { workspace = true }

@@ -58,7 +58,7 @@ speech-runtime components rather than one monolithic model:
 
 - `g2p2g`: spelling <-> broad IPA;
 - `wiktionary`: multilingual orthography/phonology tasks;
-- `sentence-parser`: cursor-time sentence boundaries, continuations, and repair;
+- `sentence-boundary`: cursor-time sentence boundaries, continuations, and repair;
 - `head2phones`: rolling text heads to speakable phone sequences;
 - `interpretation`: experimental LibriSpeech acoustic interpretation with compact
   audio features, streaming CTC-style heads, frame-level auxiliary heads, and a
@@ -302,13 +302,13 @@ context. Both share the same cheap acoustic frontend and model artifact layout.
 ## Sentence Parser
 
 ```sh
-cargo run --release -- sentence-parser prepare
-cargo run --release -- sentence-parser train
-cargo run --release -- sentence-parser eval --model models/sentence-parser/v0 --data datasets/sentence-parser/v0 --split test
-cargo run --release -- sentence-parser parse --model models/sentence-parser/v0 "The quick brown fox jumps."
+cargo run --release -- sentence-boundary prepare
+cargo run --release -- sentence-boundary train
+cargo run --release -- sentence-boundary eval --model models/sentence-boundary/v0 --data datasets/sentence-boundary/v0 --split test
+cargo run --release -- sentence-boundary parse --model models/sentence-boundary/v0 "The quick brown fox jumps."
 ```
 
-The sentence parser family trains a cursor-boundary seq2seq model. `eval` runs model inference on a prepared split and reports action accuracy, boundary precision/recall/F1, and repair edit distance. The `parse` command runs the separate rule-based `SentenceSyntaxAnalysis` utility. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
+The sentence parser family trains a cursor-boundary seq2seq model. `eval` runs model inference on a prepared split and reports action accuracy, boundary precision/recall/F1, and repair edit distance. The `parse` command runs the separate rule-based `GrammarAnalysis` utility. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
 
 ## Rule-Based Speech Helpers
 

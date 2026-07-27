@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use speaking::{
-    CompletionHypothesisId, EvidenceProvenance, EvidenceSource, SentenceSyntaxAnalysis,
+    CompletionHypothesisId, EvidenceProvenance, EvidenceSource, GrammarAnalysis,
 };
 use tongues_data::check_group_split_leakage;
 
@@ -483,7 +483,7 @@ impl CompletionProvider for LearnedCompletionProvider {
                     id: CompletionHypothesisId(format!("learned:{index}")),
                     weight: candidate.probability.max(f64::EPSILON),
                     morphemes,
-                    syntax: Some(SentenceSyntaxAnalysis::default()),
+                    syntax: Some(GrammarAnalysis::default()),
                     prosody: None,
                     evidence: evidence.clone(),
                     provenance: provenance.clone(),

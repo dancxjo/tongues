@@ -34,7 +34,7 @@ const discovery={node_kinds:{
   transcript_sink:{kind:"transcript_sink",label:"Transcript",requires_component:false,ports:[
     {id:"in",direction:"input",value_type:"transcript_committed",cardinality:"one"}],replacement:replacement("transcript_sink")},
 },components:{
-  fixture:{id:"fixture",node_kind:"asr",provider:"fixture",model:"contract-v1",readiness:"ready",capabilities:["asr"],configuration_schema:asrSchema,default_config:{language:"en",timestamps:true,beam:4,tags:["speech"],options:{punctuate:true}},replacement:replacement("asr")},
+  fixture:{id:"fixture",node_kind:"asr",provider:"fixture",model:"contract-v1",readiness:"ready",linguistic_coverage:{languages:["en","fr"]},capabilities:["asr"],configuration_schema:asrSchema,default_config:{language:"en",timestamps:true,beam:4,tags:["speech"],options:{punctuate:true}},replacement:replacement("asr")},
   fixture_alt:{id:"fixture-alt",node_kind:"asr",provider:"fixture-two",model:"contract-v2",readiness:"ready",capabilities:["asr"],configuration_schema:asrSchema,default_config:{language:"fr",timestamps:false,beam:2,tags:[],options:{punctuate:false}},detail:"Ready alternate ASR provider",replacement:replacement("asr")},
   fixture_unavailable:{id:"fixture-unavailable",node_kind:"asr",provider:"fixture-two",model:"missing",readiness:"unavailable",capabilities:["asr"],configuration_schema:asrSchema,default_config:{language:"en"},detail:"Model files are absent",replacement:replacement("asr")},
   fixture_lookalike:{id:"fixture-lookalike",node_kind:"asr",provider:"lookalike",model:"not-semantic",readiness:"ready",capabilities:["asr"],configuration_schema:asrSchema,default_config:{language:"en"},replacement:replacement("not_asr")},
@@ -47,6 +47,7 @@ const browserHtml=fs.readFileSync(new URL("./speech-dataflow.html",import.meta.u
 test("catalog groups inventory and ports derived from backend discovery",()=>{
   const catalog=buildCatalog(discovery);
   assert.equal(catalog.find(node=>node.id==="component:fixture").group,"Recognition");
+  assert.deepEqual(catalog.find(node=>node.id==="component:fixture").linguistic_coverage,{languages:["en","fr"]});
   assert.equal(catalog.find(node=>node.id==="kind:microphone").ports[0].value_type,"audio_stream");
   assert.ok(!catalog.some(node=>node.label.includes("Whisper")));
 });

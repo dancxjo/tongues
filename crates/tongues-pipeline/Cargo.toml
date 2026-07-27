@@ -8,3 +8,4 @@ edition = "2024"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+speaking = { path = "../speaking" }

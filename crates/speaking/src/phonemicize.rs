@@ -20,7 +20,7 @@ use crate::realize::{
 use crate::segment::{BoundaryKind, PauseKind, SpeechBoundaryToken, TerminalPunctuation};
 use crate::spec::Spec;
 use crate::syllabify::syllabify_phones;
-use crate::syntax::{GrammarParser, PartOfSpeech, SentenceSyntaxAnalysis, VarietyGrammarParser};
+use crate::syntax::{GrammarParser, PartOfSpeech, GrammarAnalysis, VarietyGrammarParser};
 use crate::time::{TextSpan, TimeSpan};
 use crate::variety::{
     ConnectedSpeechRule, LinguisticVariety, NumberNormalizationProfile, OrthographicUnitKind,
@@ -155,7 +155,7 @@ pub trait PronunciationPipeline {
         words: &[String],
         terminal: Option<TerminalPunctuation>,
         variety: &LinguisticVariety,
-    ) -> Option<SentenceSyntaxAnalysis> {
+    ) -> Option<GrammarAnalysis> {
         Some(VarietyGrammarParser::new(variety.id.clone()).parse(words, terminal))
     }
 
@@ -163,7 +163,7 @@ pub trait PronunciationPipeline {
         &self,
         boundaries: &mut Vec<SpeechBoundaryToken>,
         words: &[WordToken],
-        syntax: &SentenceSyntaxAnalysis,
+        syntax: &GrammarAnalysis,
         variety: &LinguisticVariety,
     ) {
         annotate_alternative_question_boundaries(boundaries, words, syntax, variety);
@@ -227,7 +227,7 @@ pub trait PronunciationPipeline {
         variety: &LinguisticVariety,
         phonemes: &[PhonemeToken],
         careful_style: bool,
-        syntax: &SentenceSyntaxAnalysis,
+        syntax: &GrammarAnalysis,
     ) -> Vec<PhoneToken> {
         realize_phonemes(
             variety,
@@ -269,7 +269,7 @@ pub trait PronunciationPipeline {
         let terminal = final_terminal(&boundaries);
         let syntax = self
             .syntax_analysis(&normalized_words, terminal, &variety)
-            .unwrap_or_else(|| SentenceSyntaxAnalysis {
+            .unwrap_or_else(|| GrammarAnalysis {
                 tokens: normalized_words
                     .iter()
                     .enumerate()
@@ -281,8 +281,8 @@ pub trait PronunciationPipeline {
                         syntactic_links: Vec::new(),
                     })
                     .collect(),
-                link_parses: Vec::new(),
-                raw_link_grammar_parses: Vec::new(),
+                ranked_parses: Vec::new(),
+                backend_parses: Vec::new(),
                 terminal,
             });
         self.annotate_boundaries(&mut boundaries, &words, &syntax, &variety);
@@ -460,7 +460,7 @@ pub struct PhonemicizeOutput {
     #[serde(default)]
     pub prosody: ProsodyTrack,
     #[serde(default)]
-    pub syntax: SentenceSyntaxAnalysis,
+    pub syntax: GrammarAnalysis,
     #[serde(default)]
     pub warnings: Vec<PronunciationWarning>,
     pub provenance: EvidenceProvenance,
@@ -902,7 +902,7 @@ fn generic_prosodic_label_for_boundary(
 fn annotate_alternative_question_boundaries(
     boundaries: &mut Vec<SpeechBoundaryToken>,
     words: &[WordToken],
-    syntax: &SentenceSyntaxAnalysis,
+    syntax: &GrammarAnalysis,
     variety: &LinguisticVariety,
 ) {
     if final_terminal(boundaries) != Some(TerminalPunctuation::Question) {
@@ -949,7 +949,7 @@ fn annotate_alternative_question_boundaries(
 
 fn alternative_question_first_option_index(
     words: &[&str],
-    syntax: &SentenceSyntaxAnalysis,
+    syntax: &GrammarAnalysis,
     profile: &crate::variety::QuestionContourProfile,
 ) -> Option<usize> {
     let parse = syntax.primary_parse()?;
@@ -3478,7 +3478,7 @@ fn is_number_or_scale_word(variety: &LinguisticVariety, word: &str) -> bool {
 
 fn is_linked_as_modifier(
     word_idx: usize,
-    syntax: &crate::syntax::SentenceSyntaxAnalysis,
+    syntax: &crate::syntax::GrammarAnalysis,
     words: &[WordToken],
     variety: &LinguisticVariety,
 ) -> bool {
@@ -5910,7 +5910,7 @@ mod tests {
             .expect("Spanish should phonemicize from variety aliases");
         assert_eq!(spanish.variety.0, "es-ES-Castilian");
         assert_eq!(phoneme_symbols(&spanish), vec!["p", "a", "t", "o"]);
-        assert_eq!(spanish.syntax.link_parses.len(), 1);
+        assert_eq!(spanish.syntax.ranked_parses.len(), 1);
 
         let castilian = phonemicizer_for_variety(&VarietyId("es-ES-Castilian".into()))
             .expect("Castilian Spanish phonemicizer")
@@ -5937,7 +5937,7 @@ mod tests {
             .phonemicize(&request("bonjour", "fra"))
             .expect("French should phonemicize from spelling rules");
         assert_eq!(phoneme_symbols(&french), vec!["b", "ɔ̃", "ʒ", "u", "ʁ"]);
-        assert_eq!(french.syntax.link_parses.len(), 1);
+        assert_eq!(french.syntax.ranked_parses.len(), 1);
 
         let german = phonemicizer_for_variety(&VarietyId("deu".into()))
             .expect("German phonemicizer")

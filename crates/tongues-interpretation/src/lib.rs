@@ -32,7 +32,7 @@ use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{
-    GrammarParser, PartOfSpeech, SentenceSyntaxAnalysis, SyntacticLinkKind, VarietyGrammarParser,
+    GrammarParser, PartOfSpeech, GrammarAnalysis, SyntacticLinkKind, VarietyGrammarParser,
 };
 use speaking::{
     phonemicizer_for_variety, syllables_to_ipa, PhonemicizeRequest, ProsodyTrack,
@@ -628,7 +628,7 @@ pub struct SyntaxSupervision {
     pub parse_rank: f32,
     pub parse_cost: f32,
     pub supervision_weight: f32,
-    pub analysis: SentenceSyntaxAnalysis,
+    pub analysis: GrammarAnalysis,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

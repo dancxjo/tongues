@@ -8,7 +8,7 @@ members = [
     "crates/tongues-emotions",
     "crates/tongues-common-phone",
     "crates/tongues-interpretation",
-    "crates/tongues-sentence-parser",
+    "crates/tongues-sentence-boundary",
     "crates/tongues-wiktionary",
     "crates/tongues-tts",
     "crates/tongues-head2phones",

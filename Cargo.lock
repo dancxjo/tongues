@@ -7791,7 +7791,7 @@ dependencies = [
  "tongues-head2phones",
  "tongues-interpretation",
  "tongues-neural",
- "tongues-sentence-parser",
+ "tongues-sentence-boundary",
  "tongues-tts",
  "tongues-wiktionary",
  "ureq 3.3.0",
@@ -7949,11 +7949,12 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "speaking",
  "thiserror 2.0.19",
 ]
 
 [[package]]
-name = "tongues-sentence-parser"
+name = "tongues-sentence-boundary"
 version = "0.1.0"
 dependencies = [
  "anyhow",

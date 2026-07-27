@@ -21,11 +21,11 @@ use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
-use speaking::syntax::{GrammarParser, SentenceSyntaxAnalysis, VarietyGrammarParser};
+use speaking::syntax::{GrammarParser, GrammarAnalysis, VarietyGrammarParser};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::Seq2SeqExample;
 
-pub const FAMILY: &str = "sentence-parser";
+pub const FAMILY: &str = "sentence-boundary";
 pub const ARCHITECTURE: &str = "seq2seq-transformer";
 pub const TASK_TOKEN: &str = "<task:sentence_boundary>";
 pub const PREVIOUS_TOKEN: &str = "<ctx:previous>";
@@ -34,7 +34,7 @@ pub const EMIT_TOKEN: &str = "<boundary:emit>";
 pub const CONTINUE_TOKEN: &str = "<boundary:continue>";
 pub const MISSING_HEAD_TOKEN: &str = "<boundary:missing_head>";
 pub const REPAIR_TOKEN: &str = "<boundary:repair>";
-const USER_AGENT: &str = "tongues-sentence-parser/0.1";
+const USER_AGENT: &str = "tongues-sentence-boundary/0.1";
 const DEFAULT_PREPARE_MAX_THREADS: usize = 8;
 const DEFAULT_GUTENBERG_URLS: &[&str] = &[
     "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
@@ -47,7 +47,7 @@ const DEFAULT_GUTENBERG_URLS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SentenceParserConfig {
+pub struct SentenceBoundaryConfig {
     pub dataset_id: String,
     pub lowercase: bool,
     #[serde(default)]
@@ -78,7 +78,7 @@ pub struct SentenceParserConfig {
     pub max_naive_discrepancies_per_file: usize,
 }
 
-impl Default for SentenceParserConfig {
+impl Default for SentenceBoundaryConfig {
     fn default() -> Self {
         Self {
             dataset_id: "v0".to_string(),
@@ -288,7 +288,7 @@ struct LoadedPrepareShard {
     discrepancies: Vec<BoundaryTrainingExample>,
 }
 
-pub fn prepare_dataset(out: &Path, config: &SentenceParserConfig) -> Result<PrepareReport> {
+pub fn prepare_dataset(out: &Path, config: &SentenceBoundaryConfig) -> Result<PrepareReport> {
     prepare_dataset_with_progress(out, config, |_| {})
 }
 
@@ -328,12 +328,12 @@ pub enum PrepareProgress {
 
 pub fn prepare_dataset_with_progress(
     out: &Path,
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
     mut progress: impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
     progress(PrepareProgress::Stage {
         message: format!(
-            "Creating sentence-parser output directory {}",
+            "Creating sentence-boundary output directory {}",
             out.display()
         ),
     });
@@ -342,7 +342,7 @@ pub fn prepare_dataset_with_progress(
     progress(PrepareProgress::Discover { files: files.len() });
     anyhow::ensure!(
         !files.is_empty(),
-        "no sentence-parser source files found. Pass one or more `--input` files/directories to `sentence-parser prepare` or `sentence-parser train --prepare`, or set source_paths in the config"
+        "no sentence-boundary source files found. Pass one or more `--input` files/directories to `sentence-boundary prepare` or `sentence-boundary train --prepare`, or set source_paths in the config"
     );
     let checkpoint_dir = out.join("prepare-checkpoints");
     fs::create_dir_all(&checkpoint_dir)
@@ -358,7 +358,7 @@ pub fn prepare_dataset_with_progress(
     let prepare_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(prepare_threads)
         .build()
-        .context("building sentence-parser prepare thread pool")?;
+        .context("building sentence-boundary prepare thread pool")?;
     let config_fingerprint = config_fingerprint(config)?;
     let mut shard_manifests = Vec::new();
 
@@ -509,7 +509,7 @@ pub fn prepare_dataset_with_progress(
     let naive_discrepancy_examples = correction_examples.len();
     anyhow::ensure!(
         !sentences.is_empty(),
-        "no sentence-parser sentences remained after filtering {} source files with min_sentence_chars={} and max_sentence_chars={}",
+        "no sentence-boundary sentences remained after filtering {} source files with min_sentence_chars={} and max_sentence_chars={}",
         files.len(),
         config.min_sentence_chars,
         config.max_sentence_chars
@@ -526,7 +526,7 @@ pub fn prepare_dataset_with_progress(
     });
     anyhow::ensure!(
         !examples.is_empty(),
-        "no sentence-parser training examples were built from {} detected sentences",
+        "no sentence-boundary training examples were built from {} detected sentences",
         sentences.len()
     );
     write_jsonl_with_progress(&out.join("sentences.jsonl"), &sentences, &mut progress)?;
@@ -544,7 +544,7 @@ pub fn prepare_dataset_with_progress(
         &mut progress,
     )?;
     progress(PrepareProgress::Stage {
-        message: "Building sentence-parser vocabulary".to_string(),
+        message: "Building sentence-boundary vocabulary".to_string(),
     });
     let vocab = build_vocab([&train[..], &valid[..], &test[..]].concat().as_slice());
     fs::write(
@@ -591,7 +591,7 @@ pub fn prepare_dataset_with_progress(
 fn detect_sentences_for_text(
     text: &str,
     source: &str,
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
 ) -> Result<Vec<SentenceRecord>> {
     let detector = SentenceDetectorDialog::new().context("initializing seams detector")?;
     let mut sentences = Vec::new();
@@ -694,7 +694,7 @@ fn ensure_checkpoint_file(path: &Path) -> Result<()> {
 fn write_prepare_state(
     out: &Path,
     status: &str,
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
     config_fingerprint: &str,
     shards: &[PrepareShardManifest],
     report: Option<&PrepareReport>,
@@ -749,7 +749,7 @@ fn split_examples_by_group(
     (train, valid, test)
 }
 
-fn config_fingerprint(config: &SentenceParserConfig) -> Result<String> {
+fn config_fingerprint(config: &SentenceBoundaryConfig) -> Result<String> {
     let json = serde_json::to_string(config)?;
     Ok(format!("{:016x}", stable_hash(json.as_bytes())))
 }
@@ -970,7 +970,7 @@ impl ClassMetrics {
     }
 }
 
-/// Aggregate metrics for a sentence-parser behavioural evaluation run.
+/// Aggregate metrics for a sentence-boundary behavioural evaluation run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalMetrics {
     /// Total examples evaluated.
@@ -1023,7 +1023,7 @@ pub fn char_edit_distance(a: &str, b: &str) -> usize {
     prev[n]
 }
 
-/// Evaluate sentence-parser predictions against gold outputs.
+/// Evaluate sentence-boundary predictions against gold outputs.
 ///
 /// `pairs` is a slice of `(gold_output, predicted_output)` string pairs.
 /// Both strings should be raw model output strings (e.g. `"<boundary:emit>Hello.\n"`).
@@ -1118,7 +1118,7 @@ pub fn evaluate_predictions(pairs: &[(&str, &str)]) -> EvalMetrics {
     }
 }
 
-pub fn parse_sentence(text: &str, lowercase: bool) -> SentenceSyntaxAnalysis {
+pub fn parse_sentence(text: &str, lowercase: bool) -> GrammarAnalysis {
     let mut words = text
         .split_whitespace()
         .map(|word| {
@@ -1145,7 +1145,7 @@ fn terminal_from_text(text: &str) -> Option<TerminalPunctuation> {
 
 fn build_boundary_examples(
     sentences: &[(String, String)],
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
 ) -> Vec<BoundaryTrainingExample> {
     let mut examples = Vec::new();
     for (index, (sentence, source)) in sentences.iter().enumerate() {
@@ -1282,7 +1282,7 @@ pub fn naive_split_sentences(text: &str, lowercase: bool) -> Vec<String> {
 fn build_naive_discrepancy_examples(
     seams_sentences: &[String],
     source: &str,
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
 ) -> Vec<BoundaryTrainingExample> {
     let mut examples = Vec::new();
     for seams_sentence in seams_sentences {
@@ -1350,7 +1350,7 @@ fn normalize_sentence(text: &str, lowercase: bool) -> String {
 
 fn resolve_source_files_with_progress(
     out: &Path,
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
     progress: &mut impl FnMut(PrepareProgress),
 ) -> Result<Vec<PathBuf>> {
     let configured = discover_source_files(&config.source_paths)?;
@@ -1557,7 +1557,7 @@ fn write_jsonl_with_progress<T: Serialize>(
 }
 
 fn dataset_readme(
-    config: &SentenceParserConfig,
+    config: &SentenceBoundaryConfig,
     source_files: usize,
     sentences: usize,
     examples: usize,
@@ -1588,7 +1588,7 @@ mod tests {
     fn parse_output_matches_speech_syntax_contract() {
         let analysis = parse_sentence("The quick brown fox jumps.", false);
         let raw = serde_json::to_string(&analysis).unwrap();
-        let reparsed: SentenceSyntaxAnalysis = serde_json::from_str(&raw).unwrap();
+        let reparsed: GrammarAnalysis = serde_json::from_str(&raw).unwrap();
 
         assert_eq!(reparsed.terminal, Some(TerminalPunctuation::Period));
         assert!(!reparsed.tokens.is_empty());
@@ -1600,7 +1600,7 @@ mod tests {
             ("Who shot John F.".to_string(), "fixture".to_string()),
             ("Kennedy?".to_string(), "fixture".to_string()),
         ];
-        let config = SentenceParserConfig::default();
+        let config = SentenceBoundaryConfig::default();
         let examples = build_boundary_examples(&sentences, &config);
         let repair = examples
             .iter()
@@ -1621,7 +1621,7 @@ mod tests {
 
     #[test]
     fn naive_disagreement_becomes_repair_training_row() {
-        let config = SentenceParserConfig::default();
+        let config = SentenceBoundaryConfig::default();
         let rows = build_naive_discrepancy_examples(
             &["Who shot John F. Kennedy?".to_string()],
             "fixture",
@@ -1638,7 +1638,7 @@ mod tests {
 
     #[test]
     fn naive_disagreement_mines_each_detected_sentence_without_raw_file_alignment() {
-        let config = SentenceParserConfig::default();
+        let config = SentenceBoundaryConfig::default();
         let rows = build_naive_discrepancy_examples(
             &[
                 "A chapter title that would have shifted raw-file alignment.".to_string(),
@@ -1685,7 +1685,7 @@ mod tests {
 
     #[test]
     fn prepare_reuses_checkpoints_and_does_not_touch_legacy_parts() {
-        let out = tempfile_path("sentence-parser-resume");
+        let out = tempfile_path("sentence-boundary-resume");
         let _ = fs::remove_dir_all(&out);
         fs::create_dir_all(&out).expect("create temp dataset dir");
         let source = out.join("source.txt");
@@ -1698,14 +1698,14 @@ mod tests {
         fs::write(&legacy_part, "legacy partial should remain untouched\n")
             .expect("write legacy partial");
 
-        let config = SentenceParserConfig {
+        let config = SentenceBoundaryConfig {
             dataset_id: "resume-test".to_string(),
             source_paths: vec![source],
             include_default_gutenberg: false,
             include_synthetic: false,
             include_naive_discrepancies: true,
             max_examples_per_sentence: 2,
-            ..SentenceParserConfig::default()
+            ..SentenceBoundaryConfig::default()
         };
 
         let first = prepare_dataset(&out, &config).expect("first prepare");

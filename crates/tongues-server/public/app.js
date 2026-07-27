@@ -127,7 +127,7 @@ function flattenCommands(commands, parentHelp = '') {
 function groupName(name) {
     const names = {
         'g2p2g': 'G2P2G',
-        'sentence-parser': 'Sentence Parser',
+        'sentence-boundary': 'Sentence Parser',
         'head2phones': 'Head2Phones',
         'common-phone': 'Common Phone',
         'styletts2': 'StyleTTS2',

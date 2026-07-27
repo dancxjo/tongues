@@ -56,6 +56,15 @@ const FALLBACK_NODE_THEME={accent:"#8ba5bf",surface:"#202c3b"};
 
 function announce(text,error=false){byId("status").textContent=text;byId("status").classList.toggle("error",error);}
 
+function linguisticCoverageLabel(item){
+  const languages=item?.linguistic_coverage?.languages??[];
+  const varieties=item?.linguistic_coverage?.varieties??[];
+  return [
+    languages.length?`languages ${languages.join(", ")}`:null,
+    varieties.length?`varieties ${varieties.join(", ")}`:null,
+  ].filter(Boolean).join(" · ");
+}
+
 function isRunActive(status=runState.status) {
   return PIPELINE_RUN_ACTIVE_STATUSES.has(status);
 }
@@ -571,7 +580,7 @@ export const graphStudioTestHooks={
 
 function renderPalette(){
   const query=byId("palette-search").value.trim().toLowerCase(),groups=new Map();
-  catalog.filter(item=>`${item.label} ${item.kind} ${item.detail} ${item.group}`.toLowerCase().includes(query))
+  catalog.filter(item=>`${item.label} ${item.kind} ${item.detail} ${item.group} ${linguisticCoverageLabel(item)}`.toLowerCase().includes(query))
     .forEach(item=>{if(!groups.has(item.group))groups.set(item.group,[]);groups.get(item.group).push(item);});
   byId("palette").replaceChildren(...[...groups].map(([group,items])=>{
     const details=document.createElement("details");details.className="palette-group";details.open=true;
@@ -583,9 +592,9 @@ function renderPalette(){
           <span class="palette-node-icon" aria-hidden="true">${escapeHtml(catalogItemIcon(item))}</span>
           <span>${escapeHtml(item.label)}</span>
         </span>
-        <small>${escapeHtml(item.kind)} · ${escapeHtml(item.readiness)}</small>
+        <small>${escapeHtml([item.kind,item.readiness,linguisticCoverageLabel(item)].filter(Boolean).join(" · "))}</small>
       `;
-      button.title=item.detail;button.draggable=true;
+      button.title=[item.detail,linguisticCoverageLabel(item)].filter(Boolean).join(" · ");button.draggable=true;
       button.ondragstart=event=>event.dataTransfer.setData("application/x-tongues-catalog-id",item.id);
       button.onclick=()=>addCatalogNode(item);list.append(button);});
     details.append(list);return details;
@@ -867,7 +876,7 @@ function renderInspector(){
 
 function renderNodeInspector(node){
   const item=catalogEntryForNode(node,catalog);
-  byId("node-title").textContent=nodeTitle(node);byId("node-detail").textContent=item?.detail??node.kind;
+  byId("node-title").textContent=nodeTitle(node);byId("node-detail").textContent=[item?.detail??node.kind,linguisticCoverageLabel(item)].filter(Boolean).join(" · ");
   const commandByKind={tts:"speak",interpretation:"interpretation/stream"};
   const commandId=commandByKind[node.kind];
   byId("node-docs").href=commandId?`/commands/${commandId}`:`/commands?capability=${encodeURIComponent(node.kind)}`;

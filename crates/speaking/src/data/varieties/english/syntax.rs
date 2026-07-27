@@ -1,8 +1,8 @@
 use crate::segment::TerminalPunctuation;
 use crate::syntax::{
-    GrammarRuleSet, PartOfSpeech, ProsodicRole, RawLinkGrammarBackend, RawLinkGrammarCost,
-    RawLinkGrammarLink, RawLinkGrammarParse, SentenceSyntaxAnalysis, SyntacticLink,
-    SyntacticLinkKind, SyntacticLinkParse, SyntaxToken, link, normalize_syntax_word, push_link,
+    GrammarRuleSet, PartOfSpeech, ProsodicRole, GrammarBackend, BackendCost,
+    BackendLink, BackendParse, GrammarAnalysis, SyntacticLink,
+    SyntacticLinkKind, RankedGrammarParse, SyntaxToken, link, normalize_syntax_word, push_link,
 };
 
 pub fn syntax_profile() -> GrammarRuleSet {
@@ -45,14 +45,14 @@ pub fn syntax_profile() -> GrammarRuleSet {
 pub fn parse_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-) -> SentenceSyntaxAnalysis {
+) -> GrammarAnalysis {
     parse_english_grammar(words, terminal)
 }
 
 pub fn parse_english_grammar(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-) -> SentenceSyntaxAnalysis {
+) -> GrammarAnalysis {
     let pairs = words
         .iter()
         .filter_map(|word| {
@@ -72,13 +72,13 @@ pub fn parse_english_grammar(
         .sum();
     let raw_links = links
         .iter()
-        .map(|link| RawLinkGrammarLink {
+        .map(|link| BackendLink {
             left: link.left,
             right: link.right,
             label: link_label(link.kind).to_string(),
         })
         .collect::<Vec<_>>();
-    let parse = SyntacticLinkParse { links, rank: 1.0 };
+    let parse = RankedGrammarParse { links, rank: 1.0 };
     let tokens = normalized
         .iter()
         .enumerate()
@@ -102,35 +102,21 @@ pub fn parse_english_grammar(
         })
         .collect();
 
-    SentenceSyntaxAnalysis {
+    GrammarAnalysis {
         tokens,
-        link_parses: vec![parse],
-        raw_link_grammar_parses: vec![RawLinkGrammarParse {
+        ranked_parses: vec![parse],
+        backend_parses: vec![BackendParse {
             links: raw_links,
-            cost: Some(RawLinkGrammarCost {
+            cost: Some(BackendCost {
                 unused: Some(unlinked),
                 disjunct: Some(0.0),
                 length: Some(length),
             }),
             accepted: true,
-            backend: RawLinkGrammarBackend::TonguesRuleGrammar,
+            backend: GrammarBackend::TonguesRules,
         }],
         terminal,
     }
-}
-
-pub fn parse_link_grammar(
-    words: &[String],
-    terminal: Option<TerminalPunctuation>,
-) -> SentenceSyntaxAnalysis {
-    parse_grammar(words, terminal)
-}
-
-pub fn parse_english_link_grammar(
-    words: &[String],
-    terminal: Option<TerminalPunctuation>,
-) -> SentenceSyntaxAnalysis {
-    parse_english_grammar(words, terminal)
 }
 
 fn build_links(words: &[String]) -> Vec<SyntacticLink> {

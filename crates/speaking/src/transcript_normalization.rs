@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Confidence, EventRef, EventTimes, GrammarParser, LanguageHypothesis, Provenance, SegmentId,
-    SentenceSyntaxAnalysis, StreamEvent, StreamEventEnvelope, TerminalPunctuation, TextRole,
+    GrammarAnalysis, StreamEvent, StreamEventEnvelope, TerminalPunctuation, TextRole,
     TimedToken, VarietyGrammarParser, VarietyId,
 };
 
@@ -76,7 +76,7 @@ pub struct NormalizedTranscriptSegment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommittedTranscriptArtifacts {
     pub transcript: NormalizedTranscriptSegment,
-    pub syntax: SentenceSyntaxAnalysis,
+    pub syntax: GrammarAnalysis,
     pub interpretation: serde_json::Value,
 }
 
@@ -91,7 +91,7 @@ impl CommittedTranscriptArtifacts {
                     .expect("normalized transcript is serializable"),
             },
             StreamEvent::DerivedArtifact {
-                stage: "sentence_parser".into(),
+                stage: "sentence_boundary".into(),
                 artifact_id: artifact_id.clone(),
                 value: serde_json::to_value(&self.syntax).expect("sentence syntax is serializable"),
             },
@@ -194,7 +194,7 @@ pub trait CommittedTranscriptInterpreter {
     fn interpret(
         &mut self,
         transcript: &NormalizedTranscriptSegment,
-        syntax: &SentenceSyntaxAnalysis,
+        syntax: &GrammarAnalysis,
     ) -> anyhow::Result<serde_json::Value>;
 }
 
@@ -205,7 +205,7 @@ impl CommittedTranscriptInterpreter for StructuralTranscriptInterpreter {
     fn interpret(
         &mut self,
         transcript: &NormalizedTranscriptSegment,
-        syntax: &SentenceSyntaxAnalysis,
+        syntax: &GrammarAnalysis,
     ) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::json!({
             "text": transcript.downstream_text,

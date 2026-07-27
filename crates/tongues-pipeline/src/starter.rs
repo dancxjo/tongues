@@ -256,6 +256,7 @@ pub fn fixture_catalog() -> GraphCatalog {
             provider: "fixture".into(),
             model: format!("{id}-v1"),
             readiness: Readiness::Ready,
+            linguistic_coverage: Default::default(),
             capabilities: BTreeSet::from([capability.into()]),
             configuration_schema: serde_json::json!({"type":"object"}),
             default_config: serde_json::json!({}),

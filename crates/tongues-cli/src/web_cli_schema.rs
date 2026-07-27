@@ -12,7 +12,7 @@ pub struct WebCliSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WebCliCommand {
-    /// Stable capability ID, for example `sentence-parser/train`.
+    /// Stable capability ID, for example `sentence-boundary/train`.
     pub id: String,
     pub name: String,
     pub command: Vec<String>,
@@ -251,7 +251,7 @@ fn route_for(path: &[String]) -> String {
             if matches!(
                 family.as_str(),
                 "g2p2g"
-                    | "sentence-parser"
+                    | "sentence-boundary"
                     | "head2phones"
                     | "interpretation"
                     | "common-phone"

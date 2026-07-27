@@ -10,7 +10,9 @@ carry a separate component or port inventory.
 - `GET /api/pipeline/catalog` returns node kinds, typed input/output ports,
   configuration schemas/defaults, adapters, merge semantics, and the
   components currently resolved from the ASR, diarization, interpretation,
-  response-generation, and TTS registries.
+  response-generation, and TTS registries. Component `linguistic_coverage`
+  declares evidence-backed Tongues language and pronunciation-variety IDs as
+  separate dimensions. An omitted dimension is undeclared, not universal.
 - `GET /api/pipeline/starters` returns currently executable TTS,
   transcription, diarized meeting transcription, spoken interpretation, and
   live-conversation graphs. A starter is omitted if one of its required
