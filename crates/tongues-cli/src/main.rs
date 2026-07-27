@@ -9,6 +9,7 @@
 
 mod duplex_cmd;
 mod fetch_corpora;
+pub mod language_routing_cmd;
 pub mod models;
 mod speak;
 mod speech_corpus;
@@ -154,6 +155,10 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Show shared language detection and ASR routing capabilities
+    #[command(name = "language-routing")]
+    LanguageRouting,
+
     /// Detect speech and segment utterances in a WAV file or CPAL microphone
     Vad(vad_cmd::VadCommand),
 
@@ -1952,6 +1957,7 @@ fn main() -> Result<()> {
     }
 
     match command {
+        Commands::LanguageRouting => language_routing_cmd::run(),
         Commands::Vad(command) => vad_cmd::run(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {

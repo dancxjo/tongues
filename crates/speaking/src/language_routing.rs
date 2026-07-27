@@ -101,6 +101,38 @@ pub struct AsrLanguageCapability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanguageIdentifierCapability {
+    pub detector_id: String,
+    pub model_id: String,
+    pub installed: bool,
+    pub languages: Vec<LanguageId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LanguageRoutingCapabilities {
+    pub selection_modes: Vec<String>,
+    pub default_switch_policy: LanguageSwitchPolicy,
+    pub detectors: Vec<LanguageIdentifierCapability>,
+    pub asr_providers: Vec<AsrLanguageCapability>,
+    pub unsupported_language_policies: Vec<String>,
+}
+
+impl LanguageRoutingCapabilities {
+    pub fn new(
+        detectors: Vec<LanguageIdentifierCapability>,
+        asr_providers: Vec<AsrLanguageCapability>,
+    ) -> Self {
+        Self {
+            selection_modes: vec!["fixed".into(), "detect".into()],
+            default_switch_policy: LanguageSwitchPolicy::default(),
+            detectors,
+            asr_providers,
+            unsupported_language_policies: vec!["error".into(), "fallback".into()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "policy")]
 pub enum UnsupportedLanguagePolicy {
     Error,

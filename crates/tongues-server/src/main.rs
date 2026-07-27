@@ -277,6 +277,10 @@ fn build_app(state: AppState) -> Router {
             "/api/audio-input/browser-stream",
             get(audio_input_ws::browser_audio_upgrade),
         )
+        .route(
+            "/api/language-routing/capabilities",
+            get(get_language_routing_capabilities),
+        )
         .route("/api/emotions", get(get_emotions))
         .route("/api/cli/schema", get(get_cli_schema))
         .route("/api/files", get(list_files))
@@ -344,6 +348,10 @@ async fn get_live_providers() -> impl IntoResponse {
 
 async fn get_audio_input_capabilities() -> impl IntoResponse {
     Json(tongues_audio::input_capabilities())
+}
+
+async fn get_language_routing_capabilities() -> impl IntoResponse {
+    Json(tongues_cli::language_routing_cmd::capabilities())
 }
 
 async fn get_cli_schema() -> impl IntoResponse {
