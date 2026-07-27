@@ -15,6 +15,7 @@ pub struct RankedLanguageHypothesis {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanguageDetection {
     pub segment_id: String,
+    pub sequence: u64,
     pub hypotheses: Vec<RankedLanguageHypothesis>,
 }
 
@@ -146,6 +147,7 @@ pub enum UnsupportedLanguagePolicy {
 pub struct LanguageRoute {
     /// Detection remains visible even when the selected route falls back.
     pub detection: Option<LanguageDetection>,
+    pub segment_sequence: u64,
     pub selected_language: LanguageId,
     pub provider_id: String,
     pub model_id: String,
@@ -160,6 +162,7 @@ pub struct LanguageRouter {
     providers: Vec<AsrLanguageCapability>,
     active: Option<LanguageId>,
     pending: Option<(LanguageId, u32)>,
+    last_sequence: Option<u64>,
 }
 
 impl LanguageRouter {
@@ -188,6 +191,7 @@ impl LanguageRouter {
             providers,
             active,
             pending: None,
+            last_sequence: None,
         })
     }
 
@@ -195,7 +199,23 @@ impl LanguageRouter {
         &self.providers
     }
 
-    pub fn route(&mut self, detection: Option<LanguageDetection>) -> anyhow::Result<LanguageRoute> {
+    pub fn route(
+        &mut self,
+        segment_sequence: u64,
+        detection: Option<LanguageDetection>,
+    ) -> anyhow::Result<LanguageRoute> {
+        if self
+            .last_sequence
+            .is_some_and(|previous| segment_sequence <= previous)
+        {
+            anyhow::bail!("language routing received an out-of-order segment");
+        }
+        if detection
+            .as_ref()
+            .is_some_and(|detection| detection.sequence != segment_sequence)
+        {
+            anyhow::bail!("language detection sequence does not match the routed segment");
+        }
         if let Some(detection) = &detection {
             detection.validate()?;
         }
@@ -208,11 +228,13 @@ impl LanguageRouter {
             }
         };
         self.active = Some(selected.clone());
+        self.last_sequence = Some(segment_sequence);
         let changed_language = previous.as_ref().is_some_and(|old| old != &selected);
 
         if let Some(provider) = self.compatible_provider(&selected) {
             return Ok(LanguageRoute {
                 detection,
+                segment_sequence,
                 selected_language: selected,
                 provider_id: provider.provider_id.clone(),
                 model_id: provider.model_id.clone(),
@@ -244,6 +266,7 @@ impl LanguageRouter {
                     })?;
                 Ok(LanguageRoute {
                     detection,
+                    segment_sequence,
                     selected_language: language.clone(),
                     provider_id: provider.provider_id.clone(),
                     model_id: provider.model_id.clone(),
@@ -329,6 +352,7 @@ mod tests {
     fn detection(segment: usize, ranked: &[(&str, f32)]) -> LanguageDetection {
         LanguageDetection {
             segment_id: format!("segment:{segment}"),
+            sequence: segment as u64,
             hypotheses: ranked
                 .iter()
                 .map(|(id, confidence)| RankedLanguageHypothesis {
@@ -369,7 +393,7 @@ mod tests {
             providers(),
         )
         .unwrap();
-        assert_eq!(router.route(None).unwrap().provider_id, "english-asr");
+        assert_eq!(router.route(0, None).unwrap().provider_id, "english-asr");
     }
 
     #[test]
@@ -383,20 +407,20 @@ mod tests {
         .unwrap();
         assert_eq!(
             router
-                .route(Some(detection(0, &[("en", 0.9), ("es", 0.1)])))
+                .route(0, Some(detection(0, &[("en", 0.9), ("es", 0.1)])))
                 .unwrap()
                 .selected_language,
             language("en")
         );
         assert_eq!(
             router
-                .route(Some(detection(1, &[("es", 0.9), ("en", 0.1)])))
+                .route(1, Some(detection(1, &[("es", 0.9), ("en", 0.1)])))
                 .unwrap()
                 .selected_language,
             language("en")
         );
         let switched = router
-            .route(Some(detection(2, &[("es", 0.92), ("en", 0.08)])))
+            .route(2, Some(detection(2, &[("es", 0.92), ("en", 0.08)])))
             .unwrap();
         assert_eq!(switched.selected_language, language("es"));
         assert!(switched.changed_language);
@@ -411,9 +435,9 @@ mod tests {
             providers(),
         )
         .unwrap();
-        router.route(Some(detection(0, &[("en", 0.9)]))).unwrap();
+        router.route(0, Some(detection(0, &[("en", 0.9)]))).unwrap();
         let route = router
-            .route(Some(detection(1, &[("es", 0.55), ("en", 0.45)])))
+            .route(1, Some(detection(1, &[("es", 0.55), ("en", 0.45)])))
             .unwrap();
         assert_eq!(route.selected_language, language("en"));
         assert_eq!(
@@ -437,12 +461,35 @@ mod tests {
             providers(),
         )
         .unwrap();
-        let route = router.route(Some(detection(0, &[("fr", 0.95)]))).unwrap();
+        let route = router
+            .route(0, Some(detection(0, &[("fr", 0.95)])))
+            .unwrap();
         assert_eq!(route.selected_language, language("en"));
         assert_eq!(
             route.detection.unwrap().hypotheses[0].language,
             language("fr")
         );
         assert!(route.fallback_reason.is_some());
+    }
+
+    #[test]
+    fn segment_routing_rejects_reordering() {
+        let mut router = LanguageRouter::new(
+            LanguageSelectionMode::Fixed {
+                language: language("en"),
+            },
+            LanguageSwitchPolicy::default(),
+            UnsupportedLanguagePolicy::Error,
+            providers(),
+        )
+        .unwrap();
+        router.route(4, None).unwrap();
+        assert!(
+            router
+                .route(3, None)
+                .unwrap_err()
+                .to_string()
+                .contains("out-of-order")
+        );
     }
 }
