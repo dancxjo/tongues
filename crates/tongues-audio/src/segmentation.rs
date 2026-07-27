@@ -360,10 +360,11 @@ impl UtteranceSegmenter {
     }
 
     pub fn force_flush(&mut self, reason: SegmentCloseReason) -> Vec<SegmentationEvent> {
-        self.metrics.forced_flushes = self.metrics.forced_flushes.saturating_add(1);
         if self.active.is_some() {
+            self.metrics.forced_flushes = self.metrics.forced_flushes.saturating_add(1);
             vec![self.close_active(reason)]
         } else if !self.pending_speech.is_empty() {
+            self.metrics.forced_flushes = self.metrics.forced_flushes.saturating_add(1);
             vec![self.drop_pending(reason)]
         } else {
             Vec::new()
@@ -791,8 +792,8 @@ mod tests {
         let mut sequence = 0;
         feed(&mut segmenter, &mut sequence, true, 3);
         feed(&mut segmenter, &mut sequence, false, 30);
-        segmenter.note_source_discontinuity(4, 7);
         segmenter.force_flush(SegmentCloseReason::ForcedFlush);
+        segmenter.note_source_discontinuity(4, 7);
         assert_eq!(segmenter.metrics().frames_observed, 33);
         assert!((segmenter.metrics().speech_ratio() - 3.0 / 33.0).abs() < 1.0e-9);
         assert_eq!(segmenter.metrics().mean_endpoint_latency_ms(), 300.0);

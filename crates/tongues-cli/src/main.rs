@@ -13,6 +13,7 @@ pub mod models;
 mod speak;
 mod speech_corpus;
 mod styletts2_cmds;
+mod vad_cmd;
 mod vits_cmds;
 mod vocoder_cmds;
 mod web_cli_schema;
@@ -153,6 +154,9 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Detect speech and segment utterances in a WAV file
+    Vad(vad_cmd::VadCommand),
+
     /// Simulate deterministic duplex completion beams and commit frontiers
     Duplex {
         #[command(subcommand)]
@@ -1948,6 +1952,7 @@ fn main() -> Result<()> {
     }
 
     match command {
+        Commands::Vad(command) => vad_cmd::run(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {
             speech_corpus::run_speech_corpus_command(command, output_mode.quiet)
