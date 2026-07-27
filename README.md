@@ -114,7 +114,9 @@ For detailed training, data preparation, and model-family documentation, see:
 
 - [G2P2G](docs/g2p2g.md)
 - [Wiktionary](docs/wiktionary.md)
-- [Sentence parser](docs/sentence-boundary.md)
+- [Sentence boundary](docs/sentence-boundary.md)
+- [Grammar parser](docs/grammar-parser.md)
+- [Boundary and grammar terminology migration](docs/terminology-migration.md)
 - [Head2Phones exceptional cases](docs/head2phones-exceptional-cases.md)
 - [Head2Phones v0 model card](docs/models/head2phones-v0.md)
 - [Interpretation](docs/interpretation.md)
@@ -179,6 +181,8 @@ ndarray/autodiff with CUDA where the selected command and machine support it.
 | `just train` | Train the default `g2p2g` model. |
 | `just infer "farkle"` | Run one G2P2G prediction. |
 | `just sentence-boundary train --training-set all` | Forward a model-family command to `tongues`. |
+| `just grammar-parser parse "The quick brown fox jumps."` | Emit a backend-neutral grammar analysis. |
+| `just sentence-boundaries --model models/sentence-boundary/v0` | Stream text through the boundary detector. |
 | `just emotions prepare --source-manifest datasets/emotions/labels.jsonl` | Prepare emotion classifier cuts from the shared emotion corpora. |
 | `just sentence-boundary clean --all` | Archive default sentence-boundary data/model artifacts and recreate empty run directories. |
 | `just g2p2g repl` | Start the G2P2G REPL. |
@@ -231,6 +235,7 @@ just emotions clean --all
 | `speaking` | linguistic IR, lexicons, phonemicization, realization, and ASR runtime | active |
 | `common-phone` | compact acoustic frames -> phones/features | experimental |
 | `sentence-boundary` | cursor-time sentence boundary, continuation, and repair | experimental |
+| `grammar-parser` | native-rule or UDPipe grammar analysis | active |
 | `head2phones` | streaming head chunk -> phones front end | experimental |
 | `interpretation` | utterance-level ASR and multi-head acoustic interpretation | experimental |
 | `emotions` | pooled-log-mel audio emotion classification | experimental |

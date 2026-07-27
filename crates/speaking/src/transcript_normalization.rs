@@ -91,7 +91,7 @@ impl CommittedTranscriptArtifacts {
                     .expect("normalized transcript is serializable"),
             },
             StreamEvent::DerivedArtifact {
-                stage: "sentence_boundary".into(),
+                stage: "grammar_parser".into(),
                 artifact_id: artifact_id.clone(),
                 value: serde_json::to_value(&self.syntax).expect("sentence syntax is serializable"),
             },

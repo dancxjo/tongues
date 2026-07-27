@@ -20,7 +20,9 @@ pub enum RecognitionWorkflowStage {
     Segmentation,
     AutomaticSpeechRecognition,
     TranscriptNormalization,
-    SentenceBoundary,
+    SentenceBoundaryDetection,
+    #[serde(alias = "sentence_parser")]
+    GrammarParsing,
     Interpretation,
     ResponseProvider,
     ResponseFormatting,
@@ -53,7 +55,7 @@ pub fn recognition_workflow(verb: FriendlySpeechVerb) -> RecognitionWorkflowDefi
                 Stage::AudioInput,
                 Stage::AutomaticSpeechRecognition,
                 Stage::TranscriptNormalization,
-                Stage::SentenceBoundary,
+                Stage::GrammarParsing,
             ],
         ),
         FriendlySpeechVerb::Interpret => (
@@ -62,7 +64,7 @@ pub fn recognition_workflow(verb: FriendlySpeechVerb) -> RecognitionWorkflowDefi
                 Stage::AudioInput,
                 Stage::AutomaticSpeechRecognition,
                 Stage::TranscriptNormalization,
-                Stage::SentenceBoundary,
+                Stage::GrammarParsing,
                 Stage::Interpretation,
             ],
         ),
@@ -72,7 +74,7 @@ pub fn recognition_workflow(verb: FriendlySpeechVerb) -> RecognitionWorkflowDefi
                 Stage::AudioInput,
                 Stage::AutomaticSpeechRecognition,
                 Stage::TranscriptNormalization,
-                Stage::SentenceBoundary,
+                Stage::GrammarParsing,
                 Stage::Interpretation,
                 Stage::ResponseProvider,
                 Stage::ResponseFormatting,
@@ -101,7 +103,7 @@ mod tests {
         assert!(
             recognition_workflow(FriendlySpeechVerb::Recognize)
                 .stages
-                .contains(&RecognitionWorkflowStage::SentenceBoundary)
+                .contains(&RecognitionWorkflowStage::GrammarParsing)
         );
         let converse = recognition_workflow(FriendlySpeechVerb::Converse);
         assert!(

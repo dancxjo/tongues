@@ -252,6 +252,7 @@ fn route_for(path: &[String]) -> String {
                 family.as_str(),
                 "g2p2g"
                     | "sentence-boundary"
+                    | "grammar-parser"
                     | "head2phones"
                     | "interpretation"
                     | "common-phone"

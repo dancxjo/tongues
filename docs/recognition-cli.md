@@ -64,7 +64,8 @@ tongues listen recording.wav --emit-pcm \
 ```
 
 Advanced stage commands remain available, including `vad`,
-`language-routing`, `duplex`, `sentence-boundary`, and `interpretation`.
+`language-routing`, `duplex`, `sentence-boundary`, `grammar-parser`, and
+`interpretation`.
 
 ## Conversation
 

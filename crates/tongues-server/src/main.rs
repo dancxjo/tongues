@@ -391,6 +391,7 @@ fn build_app(state: AppState) -> Router {
         .route("/pronunciation-demo/", get(serve_app_index))
         .route("/g2p2g/{*path}", get(serve_app_index))
         .route("/sentence-boundary/{*path}", get(serve_app_index))
+        .route("/grammar-parser/{*path}", get(serve_app_index))
         .route("/head2phones/{*path}", get(serve_app_index))
         .route("/interpretation/{*path}", get(serve_app_index))
         .route("/emotions/{*path}", get(serve_app_index))
@@ -3302,10 +3303,10 @@ const WEB_EXPOSED_COMMAND_IDS: &[&str] = &[
     "sentence-boundary/clean",
     "sentence-boundary/eval",
     "sentence-boundary/infer",
-    "sentence-boundary/parse",
     "sentence-boundary/prepare",
     "sentence-boundary/stream",
     "sentence-boundary/train",
+    "grammar-parser/parse",
     "speak",
     "speaking",
     "styletts2/discover",

@@ -5,7 +5,7 @@
 // tongues g2p2g train --data datasets/g2p2g/openepd-v0 --out models/g2p2g/openepd-v0
 // tongues g2p2g eval --model models/g2p2g/openepd-v0 --split test
 // tongues g2p2g infer --model models/g2p2g/openepd-v0 "charlotte"
-// tongues sentence-boundary parse --model models/sentence-boundary/v0 "The quick fox jumps."
+// tongues grammar-parser parse "The quick fox jumps."
 
 mod duplex_cmd;
 mod fetch_corpora;
@@ -80,8 +80,8 @@ const DEFAULT_WIKTIONARY_DATA_DIR: &str = "datasets/wiktionary/enwiktionary-2026
 const DEFAULT_WIKTIONARY_MODEL_DIR: &str = "models/wiktionary/enwiktionary-2026-06-01-v0-phones";
 const DEFAULT_G2P2G_DATA_DIR: &str = "datasets/g2p2g/openepd-v0";
 const DEFAULT_G2P2G_MODEL_DIR: &str = "models/g2p2g/openepd-v0";
-const DEFAULT_SENTENCE_PARSER_DATA_DIR: &str = "datasets/sentence-boundary/v0";
-const DEFAULT_SENTENCE_PARSER_MODEL_DIR: &str = "models/sentence-boundary/v0";
+const DEFAULT_SENTENCE_BOUNDARY_DATA_DIR: &str = "datasets/sentence-boundary/v0";
+const DEFAULT_SENTENCE_BOUNDARY_MODEL_DIR: &str = "models/sentence-boundary/v0";
 const DEFAULT_HEAD2PHONES_DATA_DIR: &str = "datasets/head2phones/v0";
 const DEFAULT_HEAD2PHONES_MODEL_DIR: &str = "models/head2phones/v0";
 const DEFAULT_HEAD2PHONES_BATCH_SIZE: usize = 8;
@@ -220,11 +220,18 @@ enum Commands {
         command: G2p2gCommands,
     },
 
-    /// Prepare, train, and run sentence parser models
-    #[command(name = "sentence-boundary")]
+    /// Prepare, train, evaluate, and run cursor-time sentence-boundary models
+    #[command(name = "sentence-boundary", alias = "sentence-parser")]
     SentenceBoundary {
         #[command(subcommand)]
         command: SentenceBoundaryCommands,
+    },
+
+    /// Parse text into a backend-neutral grammar analysis
+    #[command(name = "grammar-parser")]
+    GrammarParser {
+        #[command(subcommand)]
+        command: GrammarParserCommands,
     },
 
     /// Prepare, train, and run rolling head-chunk-to-phones models
@@ -817,9 +824,9 @@ enum SentenceBoundaryCommands {
     /// Archive selected default artifacts and recreate empty run directories
     Clean(CleanArgs),
 
-    /// Prepare sentence parser training data
+    /// Prepare sentence-boundary training data
     Prepare {
-        /// TOML config file for the sentence parser pipeline
+        /// TOML config file for the sentence-boundary pipeline
         #[arg(long, default_value = "configs/sentence-boundary/default.toml")]
         config: PathBuf,
 
@@ -827,14 +834,14 @@ enum SentenceBoundaryCommands {
         #[arg(long = "input")]
         inputs: Vec<PathBuf>,
 
-        /// Output directory for parser data
+        /// Output directory for sentence-boundary data
         #[arg(long, default_value = "datasets/sentence-boundary/v0")]
         out: PathBuf,
     },
 
-    /// Train the sentence parser model
+    /// Train the sentence-boundary model
     Train {
-        /// TOML config file for the sentence parser pipeline
+        /// TOML config file for the sentence-boundary pipeline
         #[arg(long, default_value = "configs/sentence-boundary/default.toml")]
         config: PathBuf,
 
@@ -891,9 +898,9 @@ enum SentenceBoundaryCommands {
         training_set: SentenceBoundaryTrainingSetArg,
     },
 
-    /// Evaluate a trained sentence parser model on a prepared split
+    /// Evaluate a trained sentence-boundary model on a prepared split
     Eval {
-        /// Directory containing the parser model
+        /// Directory containing the sentence-boundary model
         #[arg(long, default_value = "models/sentence-boundary/v0")]
         model: PathBuf,
 
@@ -918,10 +925,11 @@ enum SentenceBoundaryCommands {
         report: Option<PathBuf>,
     },
 
-    /// Parse a sentence into the speech syntax analysis shape
+    /// Deprecated compatibility entry point; use `grammar-parser parse`
+    #[command(hide = true)]
     Parse {
-        /// Directory containing the parser model
-        #[arg(long, default_value = "models/sentence-boundary/v0")]
+        /// Legacy model directory used only to recover the lowercase setting
+        #[arg(long, default_value = "models/sentence-parser/v0")]
         model: PathBuf,
 
         /// Sentence to parse
@@ -930,7 +938,7 @@ enum SentenceBoundaryCommands {
 
     /// Run cursor-time sentence-boundary seq2seq inference
     Infer {
-        /// Directory containing the parser model
+        /// Directory containing the sentence-boundary model
         #[arg(long, default_value = "models/sentence-boundary/v0")]
         model: PathBuf,
 
@@ -942,7 +950,7 @@ enum SentenceBoundaryCommands {
         cursor: String,
     },
 
-    /// Stream stdin through the cursor-time sentence parser
+    /// Stream stdin through the cursor-time sentence-boundary detector
     Stream {
         /// Directory containing the parser model
         #[arg(long, default_value = "models/sentence-boundary/v0")]
@@ -951,6 +959,27 @@ enum SentenceBoundaryCommands {
         /// ANSI control sequence emitted before a repaired sentence
         #[arg(long, default_value = "\u{1b}[1A\u{1b}[2K")]
         repair_control: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum GrammarParserCommands {
+    /// Parse text into a backend-neutral grammar analysis
+    Parse {
+        /// Speaking variety whose grammar rules or UDPipe model should be used
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+
+        /// Grammar parser backend
+        #[arg(long, value_enum, default_value = "auto")]
+        backend: GrammarParserBackendArg,
+
+        /// Lowercase tokens before parsing
+        #[arg(long)]
+        lowercase: bool,
+
+        /// Sentence to parse
+        text: String,
     },
 }
 
@@ -1889,6 +1918,13 @@ enum SentenceBoundaryTrainingSetArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+enum GrammarParserBackendArg {
+    Auto,
+    TonguesRules,
+    UdPipe,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum RefinementSourceArg {
     /// Mine held-out split examples where model predictions disagree with OpenEPD.
     Discrepancies,
@@ -2021,6 +2057,7 @@ fn main() -> Result<()> {
         Commands::Vocoder { command } => vocoder_cmds::run(command, device_arg),
         Commands::G2p2g { command } => run_g2p2g_command(command, device_arg, output_mode),
         Commands::SentenceBoundary { command } => run_sentence_boundary_command(command, device_arg),
+        Commands::GrammarParser { command } => run_grammar_parser_command(command),
         Commands::Head2phones { command } => run_head2phones_command(command, device_arg),
         Commands::Styletts2 { command } => {
             styletts2_cmds::run_styletts2_command(command, device_arg)
@@ -2735,7 +2772,9 @@ fn read_sentence_boundary_config(
         return Ok(tongues_sentence_boundary::SentenceBoundaryConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+    let config = toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    tongues_sentence_boundary::validate_config_schema(&config)?;
+    Ok(config)
 }
 
 fn sentence_boundary_prepare_progress_message(
@@ -2798,8 +2837,8 @@ fn run_sentence_boundary_command(
         SentenceBoundaryCommands::Clean(args) => cmd_clean_family(
             "sentence-boundary",
             &args,
-            DEFAULT_SENTENCE_PARSER_DATA_DIR,
-            DEFAULT_SENTENCE_PARSER_MODEL_DIR,
+            DEFAULT_SENTENCE_BOUNDARY_DATA_DIR,
+            DEFAULT_SENTENCE_BOUNDARY_MODEL_DIR,
         ),
         SentenceBoundaryCommands::Prepare {
             config,
@@ -2936,18 +2975,19 @@ fn run_sentence_boundary_command(
             device_arg,
         ),
         SentenceBoundaryCommands::Parse { model, text } => {
-            let config_path = model.join("model_config.json");
-            let lowercase = if config_path.exists() {
-                let raw = fs::read_to_string(&config_path)
-                    .with_context(|| format!("reading {}", config_path.display()))?;
-                let config: tongues_sentence_boundary::SentenceBoundaryConfig =
-                    serde_json::from_str(&raw)
-                        .with_context(|| format!("parsing {}", config_path.display()))?;
-                config.lowercase
-            } else {
-                false
-            };
-            let analysis = tongues_sentence_boundary::parse_sentence(&text, lowercase);
+            warn_legacy_command(
+                "sentence-parser parse",
+                "grammar-parser parse [--variety <code>] [--backend <backend>]",
+            );
+            let lowercase = tongues_sentence_boundary::read_model_family_config(&model)?
+                .map(|config| config.lowercase)
+                .unwrap_or(false);
+            let analysis = parse_grammar_text(
+                &text,
+                speaking::data::varieties::DEFAULT_SPEAKING_VARIETY,
+                speaking::GrammarParserBackend::Auto,
+                lowercase,
+            )?;
             println!("{}", serde_json::to_string_pretty(&analysis)?);
             Ok(())
         }
@@ -2961,6 +3001,62 @@ fn run_sentence_boundary_command(
             repair_control,
         } => cmd_sentence_boundary_stream(&model, &repair_control, device_arg),
     }
+}
+
+fn run_grammar_parser_command(command: GrammarParserCommands) -> Result<()> {
+    match command {
+        GrammarParserCommands::Parse {
+            variety,
+            backend,
+            lowercase,
+            text,
+        } => {
+            let backend = match backend {
+                GrammarParserBackendArg::Auto => speaking::GrammarParserBackend::Auto,
+                GrammarParserBackendArg::TonguesRules => {
+                    speaking::GrammarParserBackend::TonguesRules
+                }
+                GrammarParserBackendArg::UdPipe => speaking::GrammarParserBackend::UdPipe,
+            };
+            let analysis = parse_grammar_text(&text, &variety, backend, lowercase)?;
+            println!("{}", serde_json::to_string_pretty(&analysis)?);
+            Ok(())
+        }
+    }
+}
+
+fn parse_grammar_text(
+    text: &str,
+    variety: &str,
+    backend: speaking::GrammarParserBackend,
+    lowercase: bool,
+) -> Result<speaking::GrammarAnalysis> {
+    anyhow::ensure!(
+        speaking::data::variety_by_code(variety).is_some(),
+        "unknown speaking variety `{variety}`"
+    );
+    let words = text
+        .split_whitespace()
+        .map(|word| {
+            let word =
+                word.trim_matches(|c: char| matches!(c, '.' | '?' | '!' | ',' | ';' | ':'));
+            if lowercase {
+                word.to_lowercase()
+            } else {
+                word.to_string()
+            }
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let terminal = match text.trim_end().chars().last() {
+        Some('?') => Some(speaking::TerminalPunctuation::Question),
+        Some('!') => Some(speaking::TerminalPunctuation::Exclamation),
+        Some('.') => Some(speaking::TerminalPunctuation::Period),
+        _ => None,
+    };
+    let parser =
+        speaking::VarietyGrammarParser::with_backend(VarietyId(variety.to_string()), backend);
+    Ok(speaking::GrammarParser::parse(&parser, &words, terminal))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5310,6 +5406,35 @@ fn compact_display(value: &str, max_chars: usize) -> String {
     compact
 }
 
+fn read_sentence_boundary_manifest(
+    model_dir: &Path,
+) -> Result<tongues_neural::ModelArtifactManifest> {
+    let manifest_path = model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
+    let manifest = tongues_neural::read_manifest(&manifest_path)
+        .with_context(|| format!("reading manifest from {}", manifest_path.display()))?;
+    anyhow::ensure!(
+        tongues_sentence_boundary::supports_manifest_family(&manifest.family),
+        "expected sentence-boundary manifest schema v1, found family `{}`. Migrate the model manifest family before retrying",
+        manifest.family
+    );
+    if manifest.family != tongues_sentence_boundary::FAMILY {
+        eprintln!(
+            "warning: loading a legacy sentence-boundary family name; rewrite manifest.json family as `{}` before {}",
+            tongues_sentence_boundary::FAMILY,
+            tongues_sentence_boundary::compatibility::REMOVAL_DATE
+        );
+    }
+    Ok(manifest)
+}
+
+fn read_sentence_boundary_lowercase(model_dir: &Path) -> Result<bool> {
+    Ok(
+        tongues_sentence_boundary::read_model_family_config(model_dir)?
+            .map(|config| config.lowercase)
+            .unwrap_or(false),
+    )
+}
+
 fn cmd_sentence_boundary_eval(
     model_dir: &Path,
     data: &Path,
@@ -5322,14 +5447,7 @@ fn cmd_sentence_boundary_eval(
     anyhow::ensure!(limit > 0, "--limit must be greater than zero");
 
     // Preliminary artifact validation.
-    let manifest_path = model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE);
-    let manifest = tongues_neural::read_manifest(&manifest_path)
-        .with_context(|| format!("reading manifest from {}", manifest_path.display()))?;
-    anyhow::ensure!(
-        manifest.family == tongues_sentence_boundary::FAMILY,
-        "expected sentence-boundary manifest, found `{}`",
-        manifest.family
-    );
+    read_sentence_boundary_manifest(model_dir)?;
 
     let split_path = data.join(format!("{split}.jsonl"));
     let rows: Vec<tongues_sentence_boundary::BoundaryTrainingExample> =
@@ -5343,18 +5461,14 @@ fn cmd_sentence_boundary_eval(
     let start_config = std::time::Instant::now();
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let lowercase = read_json_file::<tongues_sentence_boundary::SentenceBoundaryConfig>(
-        &model_dir.join("sentence_boundary_config.json"),
-    )
-    .map(|config| config.lowercase)
-    .unwrap_or(false);
+    let lowercase = read_sentence_boundary_lowercase(model_dir)?;
 
     let mut shuffled_indexes: Vec<usize> = (0..rows.len()).collect();
     let mut rng = StdRng::seed_from_u64(seed);
     shuffled_indexes.shuffle(&mut rng);
     let sample_indexes: Vec<usize> = shuffled_indexes.into_iter().take(limit).collect();
 
-    println!("Sentence parser eval");
+    println!("Sentence-boundary eval");
     println!("  model: {}", model_dir.display());
     println!("  data:  {}", data.display());
     println!(
@@ -5538,20 +5652,10 @@ fn cmd_sentence_boundary_infer(
     cursor: &str,
     device_arg: DeviceArg,
 ) -> Result<()> {
-    let manifest =
-        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
-    anyhow::ensure!(
-        manifest.family == tongues_sentence_boundary::FAMILY,
-        "expected sentence-boundary manifest, found `{}`",
-        manifest.family
-    );
+    read_sentence_boundary_manifest(model_dir)?;
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let lowercase = read_json_file::<tongues_sentence_boundary::SentenceBoundaryConfig>(
-        &model_dir.join("sentence_boundary_config.json"),
-    )
-    .map(|config| config.lowercase)
-    .unwrap_or(false);
+    let lowercase = read_sentence_boundary_lowercase(model_dir)?;
     let input = tongues_sentence_boundary::format_boundary_input(previous, cursor, lowercase);
     let output = match device_arg {
         DeviceArg::Cpu => {
@@ -5584,20 +5688,10 @@ fn cmd_sentence_boundary_stream(
     repair_control: &str,
     device_arg: DeviceArg,
 ) -> Result<()> {
-    let manifest =
-        tongues_neural::read_manifest(&model_dir.join(tongues_neural::ARTIFACT_MANIFEST_FILE))?;
-    anyhow::ensure!(
-        manifest.family == tongues_sentence_boundary::FAMILY,
-        "expected sentence-boundary manifest, found `{}`",
-        manifest.family
-    );
+    read_sentence_boundary_manifest(model_dir)?;
     let model_config: ModelConfig = read_json_file(&model_dir.join("model_config.json"))?;
     let vocab: Vocab = read_json_file(&model_dir.join("vocab.json"))?;
-    let lowercase = read_json_file::<tongues_sentence_boundary::SentenceBoundaryConfig>(
-        &model_dir.join("sentence_boundary_config.json"),
-    )
-    .map(|config| config.lowercase)
-    .unwrap_or(false);
+    let lowercase = read_sentence_boundary_lowercase(model_dir)?;
 
     match device_arg {
         DeviceArg::Cpu => {

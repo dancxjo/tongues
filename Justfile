@@ -31,9 +31,13 @@ continue *args:
 be *args:
     @cargo run -q --bin tongues -- be "$@"
 
-# Stream stdin through the sentence parser and emit one sentence per line
-parse *args:
+# Stream stdin through the sentence-boundary detector and emit one sentence per line
+sentence-boundaries *args:
     @cargo run -q --bin tongues -- sentence-boundary stream "$@"
+
+# Parse text into a backend-neutral grammar analysis
+grammar-parse *args:
+    @cargo run -q --bin tongues -- grammar-parser parse "$@"
 
 # Quick split demos
 split target='sentences':
@@ -169,6 +173,10 @@ wiktionary *args:
 # Forward a model-family command to the tongues CLI
 sentence-boundary *args:
     cargo run --bin tongues -- sentence-boundary "$@"
+
+# Forward a grammar-parser command to the tongues CLI
+grammar-parser *args:
+    cargo run --bin tongues -- grammar-parser "$@"
 
 # Forward a model-family command to the tongues CLI
 head2phones *args:

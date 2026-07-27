@@ -299,16 +299,21 @@ production-ready ASR system. The streaming heads learn monotonic partial output 
 alignment. The after-utterance head is meant to learn correction with more
 context. Both share the same cheap acoustic frontend and model artifact layout.
 
-## Sentence Parser
+## Sentence Boundary and Grammar Parser
 
 ```sh
 cargo run --release -- sentence-boundary prepare
 cargo run --release -- sentence-boundary train
 cargo run --release -- sentence-boundary eval --model models/sentence-boundary/v0 --data datasets/sentence-boundary/v0 --split test
-cargo run --release -- sentence-boundary parse --model models/sentence-boundary/v0 "The quick brown fox jumps."
+cargo run --release -- grammar-parser parse "The quick brown fox jumps."
 ```
 
-The sentence parser family trains a cursor-boundary seq2seq model. `eval` runs model inference on a prepared split and reports action accuracy, boundary precision/recall/F1, and repair edit distance. The `parse` command runs the separate rule-based `GrammarAnalysis` utility. Syntax analysis goes through the uniform grammar parser API: UDPipe can provide parsed CoNLL-U when configured, and each variety owns a fallback rule profile that emits the same typed links plus raw parser metadata. The cursor-time boundary model is still separate from the syntax backend.
+The sentence-boundary family trains a cursor-time emit/continue/repair model.
+`eval` reports action accuracy, boundary precision/recall/F1, and repair edit
+distance. The separate `grammar-parser` command emits `GrammarAnalysis`.
+UDPipe can provide parsed CoNLL-U when configured, while each variety owns a
+native fallback rule profile that emits the same typed links plus backend-native
+metadata. See the [terminology migration](terminology-migration.md).
 
 ## Rule-Based Speech Helpers
 

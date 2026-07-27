@@ -504,6 +504,8 @@ test("browser workflow wires persistence, streamed execution, cancellation, and 
   assert.match(browserHtml,/role="listbox"/);
   assert.match(browserHtml,/id="replacement-results".*aria-live="polite"/);
   assert.match(browserSource,/replacementCandidates\(pipeline,node\.id,catalog\)/);
+  assert.match(browserSource,/linguisticCoverageLabel\(option\.candidate\)/);
+  assert.match(browserSource,/linguisticCoverageLabel\(option\)/);
   assert.match(browserSource,/\/api\/pipeline\/validate/);
   assert.match(browserSource,/commitReplacement\(/);
   assert.match(browserSource,/replacementRenderLimit=100/);

@@ -2,7 +2,7 @@
 
 `CommittedTranscriptPipeline` is the library-owned boundary between recognition
 and linguistic/semantic consumers. It accepts the shared streaming event
-contract one event at a time and invokes normalization, sentence parsing, and
+contract one event at a time and invokes normalization, grammar parsing, and
 interpretation only for `CommittedSegment` events whose role is `recognition`.
 Partial hypotheses, revisions, generated text, warnings, and transport events
 cannot trigger downstream interpretation or irreversible actions.
@@ -26,7 +26,7 @@ together rather than overwriting one another.
 The deterministic baseline selects filled-pause and digit-word rules by the
 recognized language's primary subtag. English, French, German, and Spanish
 digit sequences are supported; filled pauses likewise use language-specific
-sets. The sentence parser receives the matching built-in linguistic variety
+sets. The grammar parser receives the matching built-in linguistic variety
 where available. Unknown languages retain common cleanup and use the default
 parser rather than pretending that language-specific inverse normalization was
 available.

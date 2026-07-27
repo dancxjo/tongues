@@ -646,7 +646,7 @@ function openQuickAdd(context){
 }
 function renderQuickAdd(){
   const query=byId("quick-add-search").value.trim().toLowerCase();
-  const options=quickAddOptions.filter(option=>`${option.candidate.label} ${option.candidate.provider} ${option.candidate.model} ${option.candidate.kind} ${option.reason}`.toLowerCase().includes(query));
+  const options=quickAddOptions.filter(option=>`${option.candidate.label} ${option.candidate.provider} ${option.candidate.model} ${option.candidate.kind} ${option.reason} ${linguisticCoverageLabel(option.candidate)}`.toLowerCase().includes(query));
   byId("quick-add-results").replaceChildren(...options.slice(0,200).map(option=>{
     const button=document.createElement("button");button.type="button";button.className="quick-add-option";button.setAttribute("role","option");
     button.setAttribute("aria-disabled",String(!option.compatible));button.disabled=!option.compatible;
@@ -655,7 +655,7 @@ function renderQuickAdd(){
         <span class="quick-add-icon" aria-hidden="true">${escapeHtml(catalogItemIcon(option.candidate))}</span>
         <span>
           <strong>${escapeHtml(option.candidate.label)}</strong>
-          <small>${escapeHtml(option.candidate.provider)} · ${escapeHtml(option.candidate.model)} · ${escapeHtml(option.reason)}</small>
+          <small>${escapeHtml([option.candidate.provider,option.candidate.model,linguisticCoverageLabel(option.candidate),option.reason].filter(Boolean).join(" · "))}</small>
         </span>
       </span>
     `;
@@ -1004,7 +1004,7 @@ function showReplacementPickerStep(){
 function filteredReplacementOptions(){
   const query=byId("replacement-search").value.trim().toLowerCase(),provider=byId("replacement-provider").value,readiness=byId("replacement-readiness").value;
   return replacementOptions.filter(option=>(!provider||option.provider===provider)&&(!readiness||option.readiness===readiness)
-    &&(!query||`${option.label} ${option.provider} ${option.model} ${option.component_id} ${option.detail} ${option.reason}`.toLowerCase().includes(query)));
+    &&(!query||`${option.label} ${option.provider} ${option.model} ${option.component_id} ${option.detail} ${option.reason} ${linguisticCoverageLabel(option)}`.toLowerCase().includes(query)));
 }
 
 function renderReplacementCandidates(){

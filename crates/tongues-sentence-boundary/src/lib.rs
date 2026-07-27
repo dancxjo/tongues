@@ -20,13 +20,13 @@ use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use speaking::segment::TerminalPunctuation;
-use speaking::syntax::{GrammarParser, GrammarAnalysis, VarietyGrammarParser};
 use tongues_core::{Vocab, BOS_ID, EOS_ID};
 use tongues_data::Seq2SeqExample;
 
 pub const FAMILY: &str = "sentence-boundary";
 pub const ARCHITECTURE: &str = "seq2seq-transformer";
+pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const MODEL_CONFIG_FILE: &str = "sentence_boundary_config.json";
 pub const TASK_TOKEN: &str = "<task:sentence_boundary>";
 pub const PREVIOUS_TOKEN: &str = "<ctx:previous>";
 pub const CURSOR_TOKEN: &str = "<ctx:cursor>";
@@ -48,6 +48,8 @@ const DEFAULT_GUTENBERG_URLS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SentenceBoundaryConfig {
+    #[serde(default = "default_config_schema_version")]
+    pub schema_version: u32,
     pub dataset_id: String,
     pub lowercase: bool,
     #[serde(default)]
@@ -81,6 +83,7 @@ pub struct SentenceBoundaryConfig {
 impl Default for SentenceBoundaryConfig {
     fn default() -> Self {
         Self {
+            schema_version: CONFIG_SCHEMA_VERSION,
             dataset_id: "v0".to_string(),
             lowercase: false,
             source_paths: Vec::new(),
@@ -98,6 +101,60 @@ impl Default for SentenceBoundaryConfig {
             max_naive_discrepancies_per_file: default_max_naive_discrepancies_per_file(),
         }
     }
+}
+
+fn default_config_schema_version() -> u32 {
+    CONFIG_SCHEMA_VERSION
+}
+
+pub fn validate_config_schema(config: &SentenceBoundaryConfig) -> Result<()> {
+    anyhow::ensure!(
+        config.schema_version == CONFIG_SCHEMA_VERSION,
+        "unsupported sentence-boundary config schema_version={}; expected {}. Migrate the artifact with a Tongues release that supports that schema before retrying",
+        config.schema_version,
+        CONFIG_SCHEMA_VERSION
+    );
+    Ok(())
+}
+
+pub fn supports_manifest_family(family: &str) -> bool {
+    family == FAMILY || compatibility::is_legacy_family(family)
+}
+
+pub fn read_model_family_config(dir: &Path) -> Result<Option<SentenceBoundaryConfig>> {
+    let canonical = dir.join(MODEL_CONFIG_FILE);
+    let path = if canonical.exists() {
+        canonical
+    } else {
+        let legacy = dir.join(compatibility::LEGACY_MODEL_CONFIG_FILE);
+        if !legacy.exists() {
+            return Ok(None);
+        }
+        legacy
+    };
+    let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let config: SentenceBoundaryConfig =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    validate_config_schema(&config)?;
+    Ok(Some(config))
+}
+
+pub mod compatibility {
+    //! Durable v1 artifact names accepted during the terminology migration.
+
+    pub const LEGACY_FAMILY: &str = "sentence-parser";
+    pub const LEGACY_MODEL_CONFIG_FILE: &str = "sentence_parser_config.json";
+    pub const REMOVAL_DATE: &str = "2027-07-27";
+
+    pub(crate) fn is_legacy_family(family: &str) -> bool {
+        family == LEGACY_FAMILY
+    }
+
+    #[deprecated(
+        since = "0.1.0",
+        note = "use SentenceBoundaryConfig; removal 2027-07-27"
+    )]
+    pub type SentenceParserConfig = super::SentenceBoundaryConfig;
 }
 
 fn default_include_default_gutenberg() -> bool {
@@ -289,6 +346,7 @@ struct LoadedPrepareShard {
 }
 
 pub fn prepare_dataset(out: &Path, config: &SentenceBoundaryConfig) -> Result<PrepareReport> {
+    validate_config_schema(config)?;
     prepare_dataset_with_progress(out, config, |_| {})
 }
 
@@ -331,6 +389,7 @@ pub fn prepare_dataset_with_progress(
     config: &SentenceBoundaryConfig,
     mut progress: impl FnMut(PrepareProgress),
 ) -> Result<PrepareReport> {
+    validate_config_schema(config)?;
     progress(PrepareProgress::Stage {
         message: format!(
             "Creating sentence-boundary output directory {}",
@@ -1118,31 +1177,6 @@ pub fn evaluate_predictions(pairs: &[(&str, &str)]) -> EvalMetrics {
     }
 }
 
-pub fn parse_sentence(text: &str, lowercase: bool) -> GrammarAnalysis {
-    let mut words = text
-        .split_whitespace()
-        .map(|word| {
-            word.trim_matches(|c: char| matches!(c, '.' | '?' | '!' | ',' | ';' | ':'))
-                .to_string()
-        })
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    if lowercase {
-        words = words.into_iter().map(|word| word.to_lowercase()).collect();
-    }
-    let terminal = terminal_from_text(text);
-    VarietyGrammarParser::default().parse(&words, terminal)
-}
-
-fn terminal_from_text(text: &str) -> Option<TerminalPunctuation> {
-    match text.trim_end().chars().last()? {
-        '?' => Some(TerminalPunctuation::Question),
-        '!' => Some(TerminalPunctuation::Exclamation),
-        '.' => Some(TerminalPunctuation::Period),
-        _ => None,
-    }
-}
-
 fn build_boundary_examples(
     sentences: &[(String, String)],
     config: &SentenceBoundaryConfig,
@@ -1583,16 +1617,6 @@ fn dataset_readme(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_output_matches_speech_syntax_contract() {
-        let analysis = parse_sentence("The quick brown fox jumps.", false);
-        let raw = serde_json::to_string(&analysis).unwrap();
-        let reparsed: GrammarAnalysis = serde_json::from_str(&raw).unwrap();
-
-        assert_eq!(reparsed.terminal, Some(TerminalPunctuation::Period));
-        assert!(!reparsed.tokens.is_empty());
-    }
 
     #[test]
     fn repair_example_merges_bad_initial_cut() {

@@ -1,3 +1,4 @@
+schema_version = 1
 dataset_id = "v0"
 lowercase = false
 # Optional local Project Gutenberg-style .txt files/directories. If this is

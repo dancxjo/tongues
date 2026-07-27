@@ -1,4 +1,4 @@
-# Sentence Parser
+# Sentence Boundary
 
 `sentence-boundary` is a seq2seq cursor-boundary model family. It is trained from Project Gutenberg-style plain text using the `seams` sentence detector as the teacher.
 
@@ -106,10 +106,10 @@ just sentence-boundary eval \
 Stream stdin into newline-delimited sentences:
 
 ```sh
-printf 'Who shot John F.\nKennedy? Another sentence.\n' | just parse --model models/sentence-boundary/v0
+printf 'Who shot John F.\nKennedy? Another sentence.\n' | just sentence-boundaries --model models/sentence-boundary/v0
 ```
 
-`just parse` uses `sentence-boundary stream`. On `<boundary:repair>`, it writes the configured repair control sequence before the repaired sentence; the default is ANSI cursor-up plus erase-line (`ESC[1A ESC[2K`) so terminal consumers can replace the prior emitted line.
+`just sentence-boundaries` uses `sentence-boundary stream`. On `<boundary:repair>`, it writes the configured repair control sequence before the repaired sentence; the default is ANSI cursor-up plus erase-line (`ESC[1A ESC[2K`) so terminal consumers can replace the prior emitted line.
 
 The model sees only:
 
@@ -134,4 +134,7 @@ cursor   = "Kennedy?"
 target   = "<boundary:repair>Who shot John F. Kennedy?"
 ```
 
-The legacy `sentence-boundary parse` command still emits the existing rule-based `speaking::syntax::GrammarAnalysis` shape for compatibility.
+This family does not perform grammatical or dependency parsing. Use
+`tongues grammar-parser parse` for a `speaking::syntax::GrammarAnalysis`.
+The old command spelling and its `parse` subcommand are described in the
+[terminology migration](terminology-migration.md).
