@@ -338,6 +338,12 @@ bounded ambiguity expansion, and explicit complete/partial/failed status. See
 the [grammar parser contract](grammar-parser.md) and
 [terminology migration](terminology-migration.md).
 
+Backend selection is itself inspectable. Each analysis records requested and
+selected backends, every attempt and fallback reason, native coverage, external
+identity/version/model checksum, and token projection loss. UDPipe runs behind
+bounded input/output, timeout, cancellation, and stderr-redaction controls.
+`grammar-parser health` exposes the same readiness contract without parsing.
+
 ## Rule-Based Speech Helpers
 
 ```sh

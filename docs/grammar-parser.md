@@ -9,6 +9,7 @@ interpretation or resolution.
 just grammar-parser parse "The quick brown fox jumps."
 just grammar-parser parse --variety fr-FR-Standard --backend tongues-rules \
   "Je vois la maison."
+just grammar-parser health --variety en-US
 ```
 
 The canonical JSON shape uses:
@@ -22,6 +23,72 @@ The canonical JSON shape uses:
 `tongues-rules` selects only the native rules. `ud-pipe` selects UDPipe and
 returns `status = "failed"` with a diagnostic if that explicitly requested
 backend is unavailable; it does not claim a native parse came from UDPipe.
+
+Every analysis includes a `backend_report`:
+
+- `requested` records `auto`, `tongues_rules`, or `ud_pipe`;
+- `selected` names the backend whose analysis was returned;
+- `attempts` retain each backend identity, terminal state, bounded diagnostic,
+  elapsed time, process exit code, projection loss, and native coverage;
+- `fallback_reason` explains why `auto` selected native rules after an external
+  attempt.
+
+Terminal backend states distinguish readiness, unsupported variety, unavailable
+model, spawn failure, timeout, cancellation, malformed output, oversized input
+or output, token-alignment loss, partial projection, accepted output, and
+backend rejection. A failed forced backend is therefore different from a
+grammatical fragment that produced a partial native analysis.
+
+## Configuration and readiness
+
+The native backend is ready when the requested variety declares a
+`syntax_analyzer` or `syntax_rules` profile. Every built-in v1 variety has an
+honest native profile; a missing profile is reported as unsupported rather than
+silently treated as a successful empty parse.
+
+UDPipe discovery checks these variables:
+
+| Variable | Meaning |
+|---|---|
+| `TONGUES_UDPIPE_MODEL_<VARIETY>` | Model path explicitly scoped to one normalized variety name, for example `TONGUES_UDPIPE_MODEL_EN_US_GA`. |
+| `TONGUES_UDPIPE_MODEL` | Shared model path. A shared model must also declare compatible varieties. |
+| `TONGUES_UDPIPE_MODEL_VARIETIES` | Comma-separated exact variety codes supported by the shared model. |
+| `TONGUES_UDPIPE_COMMAND` | UDPipe executable; defaults to `udpipe`. |
+
+`grammar-parser health` validates variety support, model readability, a bounded
+command version probe, and reports the command, version, model path, SHA-256,
+and declared varieties without running a parse or synthesis pipeline.
+Programmatic callers can use `grammar_backend_catalog` for the same serializable
+readiness contract.
+
+`auto` uses UDPipe only when it is configured for the exact requested variety
+and returns a complete projection. Otherwise the external attempt remains in
+`backend_report.attempts`, native rules run, and `fallback_reason` records
+whether configuration, compatibility, execution, rejection, or projection was
+responsible.
+
+## Bounded execution and projection
+
+UDPipe execution defaults to a 2-second deadline, 64 KiB input, 2 MiB stdout,
+and 16 KiB stderr. Stdout and stderr are drained concurrently so the child
+cannot deadlock on a full pipe. Timeout and cancellation kill and reap the
+child. Captured stderr is bounded, whitespace-normalized, and redacts the model
+path and tokens shaped like keys, passwords, secrets, or access tokens.
+`UdPipeExecutionLimits` allows stricter caller-specific limits.
+
+CoNLL-U projection aligns normalized token forms instead of truncating both
+token arrays to their shorter length. `GrammarProjectionReport` records input
+and backend token counts, aligned tokens, unmatched input indices, unmatched
+backend token IDs/forms, and links that could not be projected. All input
+tokens remain in `GrammarAnalysis.tokens`; unmatched tokens carry unknown facts.
+Raw backend links remain in `backend_parses`, while generic typed links use only
+successfully aligned input indices.
+
+`backend_report` is an additive serialization field. Legacy grammar JSON that
+omits it still decodes with an empty `auto` report; newly produced analyses
+always populate the report at the `VarietyGrammarParser` or UDPipe boundary.
+Backend-native links and costs remain inside the explicit `backend_parses`
+envelope rather than being copied into normalized rank or confidence fields.
 
 ## Ranked alternatives
 

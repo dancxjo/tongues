@@ -964,6 +964,13 @@ enum SentenceBoundaryCommands {
 
 #[derive(Subcommand, Debug)]
 enum GrammarParserCommands {
+    /// Report native and external grammar backend readiness without parsing
+    Health {
+        /// Speaking variety whose backend readiness should be inspected
+        #[arg(long, default_value = "en-US")]
+        variety: String,
+    },
+
     /// Parse text into a backend-neutral grammar analysis
     Parse {
         /// Speaking variety whose grammar rules or UDPipe model should be used
@@ -3011,6 +3018,15 @@ fn run_sentence_boundary_command(
 
 fn run_grammar_parser_command(command: GrammarParserCommands) -> Result<()> {
     match command {
+        GrammarParserCommands::Health { variety } => {
+            anyhow::ensure!(
+                speaking::data::variety_by_code(&variety).is_some(),
+                "unknown speaking variety `{variety}`"
+            );
+            let catalog = speaking::grammar_backend_catalog(VarietyId(variety));
+            println!("{}", serde_json::to_string_pretty(&catalog)?);
+            Ok(())
+        }
         GrammarParserCommands::Parse {
             variety,
             backend,
@@ -13708,6 +13724,16 @@ mod tests {
             cli.command,
             Some(Commands::GrammarParser {
                 command: GrammarParserCommands::Parse { .. }
+            })
+        ));
+
+        let health =
+            Cli::try_parse_from(["tongues", "grammar-parser", "health", "--variety", "en-US"])
+                .expect("grammar-parser health should parse");
+        assert!(matches!(
+            health.command,
+            Some(Commands::GrammarParser {
+                command: GrammarParserCommands::Health { .. }
             })
         ));
 

@@ -1,13 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use crate::data::varieties::DEFAULT_SPEAKING_VARIETY;
 use crate::data::variety_by_code;
 use crate::ids::VarietyId;
 use crate::segment::TerminalPunctuation;
 use crate::syntax_ambiguity::rank_and_expand_parses;
+use crate::syntax_backend::{
+    BackendTokenIdentity, GrammarBackendAttempt, GrammarBackendReport, GrammarBackendState,
+    GrammarCoverageReport, GrammarFallbackReason, GrammarProjectionReport, UdPipeBackendConfig,
+    UdPipeExecutionLimits, discover_udpipe_config, execute_udpipe,
+};
 
 pub type WordIndex = usize;
 
@@ -30,6 +35,8 @@ pub struct GrammarAnalysis {
     pub status: GrammarAnalysisStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<String>,
+    #[serde(default)]
+    pub backend_report: GrammarBackendReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +206,7 @@ impl Default for GrammarAnalysis {
             terminal: None,
             status: GrammarAnalysisStatus::Failed,
             diagnostic: Some("grammar analysis was not produced".into()),
+            backend_report: GrammarBackendReport::default(),
         }
     }
 }
@@ -326,8 +334,10 @@ pub trait GrammarParser {
     fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GrammarParserBackend {
+    #[default]
     Auto,
     TonguesRules,
     UdPipe,
@@ -337,6 +347,7 @@ pub enum GrammarParserBackend {
 pub struct VarietyGrammarParser {
     variety: VarietyId,
     backend: GrammarParserBackend,
+    udpipe: Option<UdPipeGrammarParser>,
 }
 
 impl Default for VarietyGrammarParser {
@@ -350,11 +361,21 @@ impl VarietyGrammarParser {
         Self {
             variety,
             backend: GrammarParserBackend::Auto,
+            udpipe: None,
         }
     }
 
     pub fn with_backend(variety: VarietyId, backend: GrammarParserBackend) -> Self {
-        Self { variety, backend }
+        Self {
+            variety,
+            backend,
+            udpipe: None,
+        }
+    }
+
+    pub fn with_udpipe_parser(mut self, parser: UdPipeGrammarParser) -> Self {
+        self.udpipe = Some(parser);
+        self
     }
 
     pub fn variety(&self) -> &VarietyId {
@@ -370,20 +391,107 @@ impl GrammarParser for VarietyGrammarParser {
     fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
         match self.backend {
             GrammarParserBackend::Auto => {
-                if let Some(analysis) = parse_udpipe_for_variety(&self.variety, words, terminal) {
+                let external =
+                    parse_udpipe_for_variety(&self.variety, words, terminal, self.udpipe.as_ref());
+                if external.status == GrammarAnalysisStatus::Complete {
+                    let mut analysis = external;
+                    analysis.backend_report.requested = GrammarParserBackend::Auto;
                     return analysis;
                 }
-                parse_with_variety_rules(&self.variety, words, terminal)
+                let fallback_reason = external
+                    .backend_report
+                    .attempts
+                    .first()
+                    .map(|attempt| fallback_reason(attempt.state))
+                    .unwrap_or(GrammarFallbackReason::ExternalFailure);
+                let native_started = Instant::now();
+                let mut analysis = parse_with_variety_rules(&self.variety, words, terminal);
+                let native_attempt = native_attempt(
+                    &analysis,
+                    u64::try_from(native_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                );
+                let mut attempts = external.backend_report.attempts;
+                attempts.push(native_attempt);
+                analysis.backend_report = GrammarBackendReport {
+                    requested: GrammarParserBackend::Auto,
+                    selected: (analysis.status != GrammarAnalysisStatus::Failed)
+                        .then_some(GrammarBackend::TonguesRules),
+                    attempts,
+                    fallback_reason: Some(fallback_reason),
+                };
+                analysis
             }
             GrammarParserBackend::TonguesRules => {
-                parse_with_variety_rules(&self.variety, words, terminal)
+                let started = Instant::now();
+                let mut analysis = parse_with_variety_rules(&self.variety, words, terminal);
+                analysis.backend_report = GrammarBackendReport {
+                    requested: GrammarParserBackend::TonguesRules,
+                    selected: (analysis.status != GrammarAnalysisStatus::Failed)
+                        .then_some(GrammarBackend::TonguesRules),
+                    attempts: vec![native_attempt(
+                        &analysis,
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    )],
+                    fallback_reason: None,
+                };
+                analysis
             }
             GrammarParserBackend::UdPipe => {
-                parse_udpipe_for_variety(&self.variety, words, terminal).unwrap_or_else(|| {
-                    GrammarAnalysis::failed(terminal, "configured UDPipe backend was unavailable")
-                })
+                parse_udpipe_for_variety(&self.variety, words, terminal, self.udpipe.as_ref())
             }
         }
+    }
+}
+
+fn native_attempt(analysis: &GrammarAnalysis, duration_ms: u64) -> GrammarBackendAttempt {
+    let state = match analysis.status {
+        GrammarAnalysisStatus::Complete => GrammarBackendState::Accepted,
+        GrammarAnalysisStatus::Partial => GrammarBackendState::PartialProjection,
+        GrammarAnalysisStatus::Failed
+            if analysis.diagnostic.as_deref().is_some_and(|diagnostic| {
+                diagnostic.contains("unknown linguistic variety")
+                    || diagnostic.contains("has no grammar rules")
+            }) =>
+        {
+            GrammarBackendState::UnsupportedVariety
+        }
+        GrammarAnalysisStatus::Failed => GrammarBackendState::Rejected,
+    };
+    let mut attempt =
+        GrammarBackendAttempt::native(state, analysis.diagnostic.clone(), duration_ms);
+    let linked = analysis
+        .best_parse()
+        .into_iter()
+        .flat_map(|parse| &parse.links)
+        .flat_map(|link| [link.left, link.right])
+        .collect::<BTreeSet<_>>();
+    let unsupported_token_indices = analysis
+        .tokens
+        .iter()
+        .filter_map(|token| (!linked.contains(&token.word_index)).then_some(token.word_index))
+        .collect::<Vec<_>>();
+    attempt.coverage = Some(GrammarCoverageReport {
+        input_tokens: analysis.tokens.len(),
+        linked_tokens: linked.len(),
+        unsupported_constructs: unsupported_token_indices
+            .iter()
+            .filter_map(|index| analysis.tokens.get(*index))
+            .map(|token| format!("unlinked token {} {:?}", token.word_index, token.text))
+            .collect(),
+        unsupported_token_indices,
+    });
+    attempt
+}
+
+fn fallback_reason(state: GrammarBackendState) -> GrammarFallbackReason {
+    match state {
+        GrammarBackendState::UnavailableModel => GrammarFallbackReason::ExternalUnconfigured,
+        GrammarBackendState::UnsupportedVariety => GrammarFallbackReason::UnsupportedVariety,
+        GrammarBackendState::TokenAlignmentLoss | GrammarBackendState::PartialProjection => {
+            GrammarFallbackReason::ProjectionIncomplete
+        }
+        GrammarBackendState::Rejected => GrammarFallbackReason::ExternalRejected,
+        _ => GrammarFallbackReason::ExternalFailure,
     }
 }
 
@@ -412,23 +520,35 @@ fn parse_with_variety_rules(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UdPipeGrammarParser {
-    model_path: String,
-    command: String,
+    config: UdPipeBackendConfig,
 }
 
 impl UdPipeGrammarParser {
     pub fn new(model_path: impl Into<String>) -> Self {
         Self {
-            model_path: model_path.into(),
-            command: "udpipe".into(),
+            config: UdPipeBackendConfig {
+                model_path: std::path::PathBuf::from(model_path.into()),
+                command: "udpipe".into(),
+                configured_varieties: Vec::new(),
+                limits: UdPipeExecutionLimits::default(),
+            },
         }
     }
 
     pub fn with_command(model_path: impl Into<String>, command: impl Into<String>) -> Self {
         Self {
-            model_path: model_path.into(),
-            command: command.into(),
+            config: UdPipeBackendConfig {
+                model_path: std::path::PathBuf::from(model_path.into()),
+                command: command.into(),
+                configured_varieties: Vec::new(),
+                limits: UdPipeExecutionLimits::default(),
+            },
         }
+    }
+
+    pub fn with_limits(mut self, limits: UdPipeExecutionLimits) -> Self {
+        self.config.limits = limits;
+        self
     }
 
     pub fn parse_with_status(
@@ -436,31 +556,123 @@ impl UdPipeGrammarParser {
         words: &[String],
         terminal: Option<TerminalPunctuation>,
     ) -> Option<GrammarAnalysis> {
+        let analysis = self.parse_detailed(words, terminal, None);
+        (analysis.status != GrammarAnalysisStatus::Failed).then_some(analysis)
+    }
+
+    pub fn parse_detailed(
+        &self,
+        words: &[String],
+        terminal: Option<TerminalPunctuation>,
+        cancelled: Option<&AtomicBool>,
+    ) -> GrammarAnalysis {
         let input = udpipe_horizontal_input(words, terminal);
-        let mut child = Command::new(&self.command)
-            .arg("--input=horizontal")
-            .arg("--tag")
-            .arg("--parse")
-            .arg(&self.model_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        child.stdin.as_mut()?.write_all(input.as_bytes()).ok()?;
-        let output = child.wait_with_output().ok()?;
-        if !output.status.success() {
-            return None;
+        let execution = execute_udpipe(&self.config, input.as_bytes(), cancelled);
+        let identity = self.config.identity();
+        if execution.state != GrammarBackendState::Accepted {
+            let diagnostic = if execution.stderr.is_empty() {
+                format!("UDPipe backend ended in {:?}", execution.state)
+            } else {
+                execution.stderr.clone()
+            };
+            let mut analysis = GrammarAnalysis::failed(terminal, diagnostic.clone());
+            analysis.backend_report = GrammarBackendReport {
+                requested: GrammarParserBackend::UdPipe,
+                selected: None,
+                attempts: vec![GrammarBackendAttempt {
+                    backend: GrammarBackend::UdPipe,
+                    state: execution.state,
+                    diagnostic: Some(diagnostic),
+                    identity: Some(identity),
+                    projection: None,
+                    coverage: None,
+                    duration_ms: execution.duration_ms,
+                    exit_code: execution.status.and_then(|status| status.code()),
+                }],
+                fallback_reason: None,
+            };
+            return analysis;
         }
-        let conllu = String::from_utf8(output.stdout).ok()?;
-        analysis_from_udpipe_conllu(words, terminal, &conllu)
+        let conllu = match String::from_utf8(execution.stdout) {
+            Ok(conllu) => conllu,
+            Err(error) => {
+                let diagnostic = format!("UDPipe returned non-UTF-8 output: {error}");
+                let mut analysis = GrammarAnalysis::failed(terminal, diagnostic.clone());
+                analysis.backend_report = GrammarBackendReport {
+                    requested: GrammarParserBackend::UdPipe,
+                    selected: None,
+                    attempts: vec![GrammarBackendAttempt {
+                        backend: GrammarBackend::UdPipe,
+                        state: GrammarBackendState::MalformedOutput,
+                        diagnostic: Some(diagnostic),
+                        identity: Some(identity),
+                        projection: None,
+                        coverage: None,
+                        duration_ms: execution.duration_ms,
+                        exit_code: execution.status.and_then(|status| status.code()),
+                    }],
+                    fallback_reason: None,
+                };
+                return analysis;
+            }
+        };
+        let Some((mut analysis, projection)) =
+            analysis_from_udpipe_conllu(words, terminal, &conllu)
+        else {
+            let diagnostic = if execution.stderr.is_empty() {
+                "UDPipe output contained no projectable CoNLL-U tokens".into()
+            } else {
+                execution.stderr
+            };
+            let mut analysis = GrammarAnalysis::failed(terminal, diagnostic.clone());
+            analysis.backend_report = GrammarBackendReport {
+                requested: GrammarParserBackend::UdPipe,
+                selected: None,
+                attempts: vec![GrammarBackendAttempt {
+                    backend: GrammarBackend::UdPipe,
+                    state: GrammarBackendState::MalformedOutput,
+                    diagnostic: Some(diagnostic),
+                    identity: Some(identity),
+                    projection: None,
+                    coverage: None,
+                    duration_ms: execution.duration_ms,
+                    exit_code: execution.status.and_then(|status| status.code()),
+                }],
+                fallback_reason: None,
+            };
+            return analysis;
+        };
+        let state = if analysis.status == GrammarAnalysisStatus::Complete {
+            GrammarBackendState::Accepted
+        } else if !projection.unmatched_input_indices.is_empty()
+            || !projection.unmatched_backend_tokens.is_empty()
+        {
+            GrammarBackendState::TokenAlignmentLoss
+        } else {
+            GrammarBackendState::PartialProjection
+        };
+        analysis.backend_report = GrammarBackendReport {
+            requested: GrammarParserBackend::UdPipe,
+            selected: Some(GrammarBackend::UdPipe),
+            attempts: vec![GrammarBackendAttempt {
+                backend: GrammarBackend::UdPipe,
+                state,
+                diagnostic: analysis.diagnostic.clone(),
+                identity: Some(identity),
+                projection: Some(projection),
+                coverage: None,
+                duration_ms: execution.duration_ms,
+                exit_code: execution.status.and_then(|status| status.code()),
+            }],
+            fallback_reason: None,
+        };
+        analysis
     }
 }
 
 impl GrammarParser for UdPipeGrammarParser {
     fn parse(&self, words: &[String], terminal: Option<TerminalPunctuation>) -> GrammarAnalysis {
-        self.parse_with_status(words, terminal)
-            .unwrap_or_else(|| GrammarAnalysis::failed(terminal, "UDPipe parsing failed"))
+        self.parse_detailed(words, terminal, None)
     }
 }
 
@@ -468,34 +680,37 @@ fn parse_udpipe_for_variety(
     variety_id: &VarietyId,
     words: &[String],
     terminal: Option<TerminalPunctuation>,
-) -> Option<GrammarAnalysis> {
-    let model_path = udpipe_model_path_for_variety(variety_id)?;
-    UdPipeGrammarParser::new(model_path).parse_with_status(words, terminal)
-}
-
-fn udpipe_model_path_for_variety(variety_id: &VarietyId) -> Option<String> {
-    let scoped = format!(
-        "TONGUES_UDPIPE_MODEL_{}",
-        variety_id
-            .0
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() {
-                    character.to_ascii_uppercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>()
-    );
-    std::env::var(scoped)
-        .ok()
-        .filter(|path| !path.trim().is_empty())
-        .or_else(|| {
-            std::env::var("TONGUES_UDPIPE_MODEL")
-                .ok()
-                .filter(|path| !path.trim().is_empty())
-        })
+    configured: Option<&UdPipeGrammarParser>,
+) -> GrammarAnalysis {
+    if let Some(parser) = configured {
+        return parser.parse_detailed(words, terminal, None);
+    }
+    match discover_udpipe_config(variety_id) {
+        Ok(config) => UdPipeGrammarParser { config }.parse_detailed(words, terminal, None),
+        Err(readiness) => {
+            let diagnostic = readiness
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| "configured UDPipe backend was unavailable".into());
+            let mut analysis = GrammarAnalysis::failed(terminal, diagnostic.clone());
+            analysis.backend_report = GrammarBackendReport {
+                requested: GrammarParserBackend::UdPipe,
+                selected: None,
+                attempts: vec![GrammarBackendAttempt {
+                    backend: GrammarBackend::UdPipe,
+                    state: readiness.state,
+                    diagnostic: Some(diagnostic),
+                    identity: readiness.identity,
+                    projection: None,
+                    coverage: None,
+                    duration_ms: 0,
+                    exit_code: None,
+                }],
+                fallback_reason: None,
+            };
+            analysis
+        }
+    }
 }
 
 fn udpipe_horizontal_input(words: &[String], terminal: Option<TerminalPunctuation>) -> String {
@@ -523,44 +738,77 @@ fn analysis_from_udpipe_conllu(
     words: &[String],
     terminal: Option<TerminalPunctuation>,
     conllu: &str,
-) -> Option<GrammarAnalysis> {
+) -> Option<(GrammarAnalysis, GrammarProjectionReport)> {
     let udpipe_tokens = parse_udpipe_tokens(conllu);
     if udpipe_tokens.is_empty() {
         return None;
     }
-    let projected_len = words.len().min(udpipe_tokens.len());
+    let (input_to_backend, backend_to_input) = align_udpipe_tokens(words, &udpipe_tokens);
+    let unmatched_input_indices = input_to_backend
+        .iter()
+        .enumerate()
+        .filter_map(|(index, backend)| backend.is_none().then_some(index))
+        .collect::<Vec<_>>();
+    let unmatched_backend_tokens = backend_to_input
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| input.is_none())
+        .map(|(index, _)| BackendTokenIdentity {
+            id: udpipe_tokens[index].id,
+            form: udpipe_tokens[index].form.clone(),
+        })
+        .collect::<Vec<_>>();
+    let aligned_tokens = input_to_backend
+        .iter()
+        .filter(|backend| backend.is_some())
+        .count();
     let mut links = Vec::new();
     let mut raw_links = Vec::new();
-    for token in udpipe_tokens.iter().take(projected_len) {
+    let mut dropped_backend_links = 0;
+    let backend_id_to_index = udpipe_tokens
+        .iter()
+        .enumerate()
+        .map(|(index, token)| (token.id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (dependent_backend_index, token) in udpipe_tokens.iter().enumerate() {
         let Some(head) = token.head else {
             continue;
         };
-        if head == 0 || head > projected_len {
+        if head == 0 {
             continue;
         }
-        let dependent = token.id.saturating_sub(1);
-        let head = head - 1;
-        if dependent >= projected_len || dependent == head {
+        let Some(&head_backend_index) = backend_id_to_index.get(&head) else {
+            dropped_backend_links += 1;
+            continue;
+        };
+        let raw_left = dependent_backend_index.min(head_backend_index);
+        let raw_right = dependent_backend_index.max(head_backend_index);
+        raw_links.push(BackendLink {
+            left: raw_left,
+            right: raw_right,
+            label: token.deprel.clone(),
+        });
+        let (Some(dependent), Some(head)) = (
+            backend_to_input[dependent_backend_index],
+            backend_to_input[head_backend_index],
+        ) else {
+            dropped_backend_links += 1;
+            continue;
+        };
+        if dependent == head {
+            dropped_backend_links += 1;
             continue;
         }
-        let kind = udpipe_deprel_link_kind(&token.deprel);
-        let left = dependent.min(head);
-        let right = dependent.max(head);
         push_link(
             &mut links,
             SyntacticLink {
-                left,
-                right,
-                kind,
+                left: dependent.min(head),
+                right: dependent.max(head),
+                kind: udpipe_deprel_link_kind(&token.deprel),
                 confidence: 0.9,
                 source: SyntacticLinkSource::UdPipeProjection,
             },
         );
-        raw_links.push(BackendLink {
-            left,
-            right,
-            label: token.deprel.clone(),
-        });
     }
     raw_links.sort_by(|left, right| {
         left.left
@@ -571,14 +819,21 @@ fn analysis_from_udpipe_conllu(
     raw_links.dedup_by(|left, right| {
         left.left == right.left && left.right == right.right && left.label == right.label
     });
-    let parse_status = if projected_len == words.len() && (projected_len <= 1 || !links.is_empty())
-    {
+    let projection = GrammarProjectionReport {
+        input_tokens: words.len(),
+        backend_tokens: udpipe_tokens.len(),
+        aligned_tokens,
+        unmatched_input_indices,
+        unmatched_backend_tokens,
+        dropped_backend_links,
+    };
+    let parse_status = if projection.is_complete() && (words.len() <= 1 || !links.is_empty()) {
         GrammarParseStatus::Complete
     } else {
         GrammarParseStatus::Partial
     };
     let ranked_parses = rank_and_expand_parses(
-        &words[..projected_len],
+        words,
         links,
         GrammarBackend::UdPipe,
         0,
@@ -587,37 +842,36 @@ fn analysis_from_udpipe_conllu(
         GrammarRankingPolicy::default(),
     );
     let parse = ranked_parses.first()?;
-    let tokens = udpipe_tokens
+    let tokens = words
         .iter()
-        .take(projected_len)
         .enumerate()
-        .map(|(word_index, token)| {
+        .map(|(word_index, word)| {
             let syntactic_links = parse
                 .links
                 .iter()
                 .filter(|link| link.left == word_index || link.right == word_index)
                 .map(|link| link.kind)
                 .collect::<Vec<_>>();
-            let pos = udpipe_upos_part_of_speech(&token.upos);
+            let pos = input_to_backend[word_index]
+                .and_then(|backend_index| udpipe_tokens.get(backend_index))
+                .map(|token| udpipe_upos_part_of_speech(&token.upos))
+                .unwrap_or(PartOfSpeech::Unknown);
             SyntaxToken {
                 word_index,
-                text: words
-                    .get(word_index)
-                    .cloned()
-                    .unwrap_or_else(|| token.form.clone()),
+                text: word.clone(),
                 pos,
                 prosodic_role: multilingual_prosodic_role(pos, &syntactic_links),
                 syntactic_links,
             }
         })
         .collect::<Vec<_>>();
-    let unlinked = unlinked_word_count(projected_len, &parse.links) as f32;
+    let unlinked = unlinked_word_count(words.len(), &parse.links) as f32;
     let length = parse
         .links
         .iter()
         .map(|link| link.right.abs_diff(link.left) as f32)
         .sum();
-    Some(GrammarAnalysis {
+    let analysis = GrammarAnalysis {
         tokens,
         ranked_parses,
         backend_parses: vec![BackendParse {
@@ -639,10 +893,61 @@ fn analysis_from_udpipe_conllu(
         diagnostic: (parse_status == GrammarParseStatus::Partial).then(|| {
             format!(
                 "UDPipe projected {projected_len} of {} tokens or returned no links",
-                words.len()
+                words.len(),
+                projected_len = projection.aligned_tokens
             )
         }),
-    })
+        backend_report: GrammarBackendReport::default(),
+    };
+    Some((analysis, projection))
+}
+
+fn align_udpipe_tokens(
+    words: &[String],
+    backend: &[UdPipeToken],
+) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    const LOOKAHEAD: usize = 8;
+    let mut input_to_backend = vec![None; words.len()];
+    let mut backend_to_input = vec![None; backend.len()];
+    let mut input_index = 0;
+    let mut backend_index = 0;
+    while input_index < words.len() && backend_index < backend.len() {
+        if alignment_token(&words[input_index]) == alignment_token(&backend[backend_index].form) {
+            input_to_backend[input_index] = Some(backend_index);
+            backend_to_input[backend_index] = Some(input_index);
+            input_index += 1;
+            backend_index += 1;
+            continue;
+        }
+        let input_skip = (input_index + 1..words.len().min(input_index + LOOKAHEAD + 1))
+            .find(|candidate| {
+                alignment_token(&words[*candidate]) == alignment_token(&backend[backend_index].form)
+            })
+            .map(|candidate| candidate - input_index);
+        let backend_skip = (backend_index + 1..backend.len().min(backend_index + LOOKAHEAD + 1))
+            .find(|candidate| {
+                alignment_token(&words[input_index]) == alignment_token(&backend[*candidate].form)
+            })
+            .map(|candidate| candidate - backend_index);
+        match (input_skip, backend_skip) {
+            (Some(input_skip), Some(backend_skip)) if input_skip <= backend_skip => {
+                input_index += input_skip;
+            }
+            (Some(input_skip), None) => input_index += input_skip,
+            (_, Some(backend_skip)) => backend_index += backend_skip,
+            (None, None) => {
+                input_index += 1;
+                backend_index += 1;
+            }
+        }
+    }
+    (input_to_backend, backend_to_input)
+}
+
+fn alignment_token(token: &str) -> String {
+    token
+        .trim_matches(|character: char| !character.is_alphanumeric() && character != '\'')
+        .to_lowercase()
 }
 
 fn parse_udpipe_tokens(conllu: &str) -> Vec<UdPipeToken> {
@@ -1078,6 +1383,7 @@ fn parse_rule_grammar(
         },
         diagnostic: (parse_status == GrammarParseStatus::Partial)
             .then(|| "native grammar produced no typed links".into()),
+        backend_report: GrammarBackendReport::default(),
     }
 }
 
@@ -2694,6 +3000,11 @@ mod tests {
             analysis.backend_parses[0].backend,
             GrammarBackend::TonguesRules
         );
+        assert_eq!(
+            analysis.backend_report,
+            GrammarBackendReport::default(),
+            "the additive backend report must remain optional for legacy JSON"
+        );
 
         let canonical = serde_json::to_value(&analysis).unwrap();
         assert!(canonical.get("ranked_parses").is_some());
@@ -2784,10 +3095,11 @@ mod tests {
 3\tat\t_\tADP\t_\t_\t4\tcase\t_\t_
 4\tus\t_\tPRON\t_\t_\t2\tobl\t_\t_
 ";
-        let analysis =
+        let (analysis, projection) =
             analysis_from_udpipe_conllu(&words, Some(TerminalPunctuation::Period), conllu)
                 .expect("fixture should project");
 
+        assert!(projection.is_complete());
         assert_eq!(analysis.tokens[1].pos, PartOfSpeech::Verb);
         assert_eq!(analysis.status, GrammarAnalysisStatus::Complete);
         assert!(analysis.ranked_parses.len() >= 2);

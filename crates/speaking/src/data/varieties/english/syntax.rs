@@ -140,6 +140,7 @@ pub fn parse_english_grammar(
         },
         diagnostic: (parse_status == GrammarParseStatus::Partial)
             .then(|| "native English grammar produced no typed links".into()),
+        backend_report: Default::default(),
     }
 }
 
