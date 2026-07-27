@@ -28,6 +28,16 @@ pub trait VoiceActivityDetector {
     fn process_frame(&mut self, frame: &AudioBuffer) -> Result<VadDecision>;
 }
 
+impl<T: VoiceActivityDetector + ?Sized> VoiceActivityDetector for Box<T> {
+    fn backend(&self) -> VadBackendKind {
+        (**self).backend()
+    }
+
+    fn process_frame(&mut self, frame: &AudioBuffer) -> Result<VadDecision> {
+        (**self).process_frame(frame)
+    }
+}
+
 pub fn create_vad_backend(kind: VadBackendKind) -> Box<dyn VoiceActivityDetector> {
     match kind {
         VadBackendKind::Energy => Box::new(EnergyVad::default()),

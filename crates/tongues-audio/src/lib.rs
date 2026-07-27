@@ -13,16 +13,24 @@ use rustfft::FftPlanner;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod segmentation;
 mod source;
+mod speech_pipeline;
 mod system_input;
 mod transform;
 mod vad;
 
+pub use segmentation::{
+    AudioSegment, AuthoritativeBoundary, BoundaryEvidenceKind, SegmentCloseReason,
+    SegmentationConfig, SegmentationEvent, SegmentationFrame, SegmentationMetrics,
+    UtteranceSegmenter,
+};
 pub use source::{
     bounded_audio_input, AudioDiscontinuity, AudioSource, AudioSourceDescriptor, AudioSourceEvent,
     AudioSourceKind, BoundedAudioInput, BoundedAudioInputSender, PcmEncoding, PcmReaderSource,
     PushedAudioChunk, SourceAudioChunk, WavAudioSource,
 };
+pub use speech_pipeline::{VadPipelineEvent, VadSegmentationPipeline};
 pub use system_input::{
     input_capabilities, input_device_inventory, AudioInputCapabilities, CpalAudioSource,
     InputDeviceInfo,
