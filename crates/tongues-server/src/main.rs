@@ -10837,6 +10837,7 @@ mod tests {
             resource_owner: "node:source".into(),
             lifecycle: Vec::new(),
             merge: None,
+            splitter: None,
         };
 
         let mut stream = text_file_output_stream(&step, &root)
