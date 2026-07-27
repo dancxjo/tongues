@@ -39,6 +39,16 @@ pub struct GraphNode {
     pub component_id: Option<String>,
     #[serde(default)]
     pub config: Map<String, Value>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub bypassed: bool,
+}
+
+impl GraphNode {
+    pub const fn is_active(&self) -> bool {
+        !self.disabled && !self.bypassed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

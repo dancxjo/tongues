@@ -90,6 +90,7 @@ pub fn starter_graph(
         }
         StarterGraph::MeetingTranscription => {
             add(&mut graph, "microphone", "microphone", None);
+            add(&mut graph, "vad", "vad", None);
             add(
                 &mut graph,
                 "asr",
@@ -104,8 +105,9 @@ pub fn starter_graph(
             );
             add(&mut graph, "join", "diarized_transcript", None);
             add(&mut graph, "transcript", "transcript_sink", None);
-            edge(&mut graph, "microphone", "out", "asr", "audio");
-            edge(&mut graph, "microphone", "out", "diarization", "audio");
+            edge(&mut graph, "microphone", "out", "vad", "in");
+            edge(&mut graph, "vad", "out", "asr", "audio");
+            edge(&mut graph, "vad", "out", "diarization", "audio");
             edge(&mut graph, "asr", "committed", "join", "transcript");
             edge(&mut graph, "diarization", "speakers", "join", "speakers");
             edge(&mut graph, "join", "out", "transcript", "in");
@@ -220,6 +222,8 @@ fn add(graph: &mut GraphDocument, id: &str, kind: &str, component_id: Option<Str
         kind: kind.into(),
         component_id,
         config: Default::default(),
+        disabled: false,
+        bypassed: false,
     });
 }
 

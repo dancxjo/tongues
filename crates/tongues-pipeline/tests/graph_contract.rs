@@ -24,11 +24,90 @@ fn meeting_graph_fans_out_and_has_explicit_join_semantics() {
     let fanout = plan
         .channels
         .iter()
-        .filter(|channel| channel.from == Endpoint::new("microphone", "out"))
+        .filter(|channel| channel.from == Endpoint::new("vad", "out"))
         .collect::<Vec<_>>();
     assert_eq!(fanout.len(), 2);
     assert!(fanout.iter().all(|channel| channel.capacity == 16));
+    assert!(plan.channels.iter().any(|channel| {
+        channel.from == Endpoint::new("microphone", "out")
+            && channel.to == Endpoint::new("vad", "in")
+    }));
     assert!(plan.steps.iter().any(|step| step.node_id == "join"));
+}
+
+#[test]
+fn tts_accepts_exactly_one_raw_text_or_linguistic_plan_input() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    graph.nodes.insert(
+        1,
+        GraphNode {
+            id: "linguistic".into(),
+            kind: "linguistic".into(),
+            component_id: None,
+            config: Default::default(),
+            disabled: false,
+            bypassed: false,
+        },
+    );
+    graph.edges[0] = GraphEdge {
+        id: "text-to-linguistic".into(),
+        from: Endpoint::new("text", "out"),
+        to: Endpoint::new("linguistic", "in"),
+        capacity: 16,
+    };
+    graph.edges.insert(
+        1,
+        GraphEdge {
+            id: "plan-to-tts".into(),
+            from: Endpoint::new("linguistic", "out"),
+            to: Endpoint::new("tts", "plan"),
+            capacity: 16,
+        },
+    );
+    assert!(validate_graph(&graph, &catalog).valid);
+
+    graph.edges.push(GraphEdge {
+        id: "raw-text-too".into(),
+        from: Endpoint::new("text", "out"),
+        to: Endpoint::new("tts", "in"),
+        capacity: 16,
+    });
+    assert!(
+        validate_graph(&graph, &catalog)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "port.alternative_input_required")
+    );
+}
+
+#[test]
+fn disabled_and_structurally_bypassed_nodes_do_not_enter_the_execution_plan() {
+    let catalog = fixture_catalog();
+    let mut graph = starter_graph(StarterGraph::TextToSpeech, &catalog).unwrap();
+    graph.nodes.push(GraphNode {
+        id: "disabled-control".into(),
+        kind: "control_source".into(),
+        component_id: None,
+        config: Default::default(),
+        disabled: true,
+        bypassed: false,
+    });
+    graph.nodes.push(GraphNode {
+        id: "bypassed-control".into(),
+        kind: "control_source".into(),
+        component_id: None,
+        config: Default::default(),
+        disabled: false,
+        bypassed: true,
+    });
+    let plan = compile_graph(&graph, &catalog).unwrap();
+    assert!(
+        !plan
+            .steps
+            .iter()
+            .any(|step| step.node_id == "disabled-control" || step.node_id == "bypassed-control")
+    );
 }
 
 #[test]

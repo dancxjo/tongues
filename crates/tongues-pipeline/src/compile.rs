@@ -115,6 +115,25 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
                 Some(&edge.id),
             ));
         }
+        let inactive_endpoint = nodes
+            .get(edge.from.node_id.as_str())
+            .into_iter()
+            .chain(nodes.get(edge.to.node_id.as_str()))
+            .find(|node| !node.is_active());
+        if let Some(node) = inactive_endpoint {
+            diagnostics.push(error(
+                graph,
+                "edge.inactive_node",
+                format!(
+                    "Edge `{}` references disabled or bypassed node `{}`; remove the edge or enable the node.",
+                    edge.id, node.id
+                ),
+                Some(&node.id),
+                None,
+                Some(&edge.id),
+            ));
+            continue;
+        }
         let from = resolved_port(
             graph,
             catalog,
@@ -175,6 +194,9 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
     }
 
     for node in nodes.values() {
+        if !node.is_active() {
+            continue;
+        }
         let Some(kind) = catalog.node_kinds.get(&node.kind) else {
             diagnostics.push(error(
                 graph,
@@ -252,6 +274,32 @@ pub fn validate_graph(graph: &GraphDocument, catalog: &GraphCatalog) -> Validati
                     Some(&port.id),
                     None,
                 ));
+            }
+        }
+        if kind.kind == "tts" {
+            let text = incoming
+                .get(&Endpoint::new(&node.id, "in"))
+                .map_or(0, Vec::len);
+            let plan = incoming
+                .get(&Endpoint::new(&node.id, "plan"))
+                .map_or(0, Vec::len);
+            if text + plan != 1 {
+                let mut diagnostic = error(
+                    graph,
+                    "port.alternative_input_required",
+                    format!(
+                        "`{}` requires exactly one speech input: raw text on `in` or a linguistic/prosody utterance plan on `plan`.",
+                        node.id
+                    ),
+                    Some(&node.id),
+                    Some("in"),
+                    None,
+                );
+                diagnostic.suggestions.push(
+                    "Connect a text source to `in`, or connect linguistic analysis to `plan`."
+                        .into(),
+                );
+                diagnostics.push(diagnostic);
             }
         }
     }
@@ -710,6 +758,7 @@ pub fn compile_graph(
     let resolved_components = graph
         .nodes
         .iter()
+        .filter(|node| node.is_active())
         .filter_map(|node| {
             node.component_id.as_ref().map(|component_id| {
                 let component: &ComponentSpec = &catalog.components[component_id];
@@ -759,6 +808,7 @@ fn topological_order(graph: &GraphDocument) -> Vec<String> {
     let mut indegree = graph
         .nodes
         .iter()
+        .filter(|node| node.is_active())
         .map(|node| (node.id.clone(), 0usize))
         .collect::<BTreeMap<_, _>>();
     let mut outgoing = BTreeMap::<String, Vec<String>>::new();

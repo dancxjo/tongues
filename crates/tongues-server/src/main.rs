@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use axum::{
     Json, Router,
+    body::{Body, Bytes},
     extract::DefaultBodyLimit,
     extract::{Path, Query, Request, State},
     http::{Method, StatusCode, header},
@@ -23,6 +24,7 @@ use speaking::{
 };
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::convert::Infallible;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
@@ -323,6 +325,12 @@ fn build_app(state: AppState) -> Router {
         .route("/api/pipeline/validate", post(validate_pipeline_graph))
         .route("/api/pipeline/compile", post(compile_pipeline_graph))
         .route("/api/pipeline/migrate", post(migrate_pipeline_graph))
+        .route("/api/pipeline/graphs", get(list_pipeline_graphs))
+        .route(
+            "/api/pipeline/graphs/{graph_id}",
+            get(get_pipeline_graph).put(save_pipeline_graph),
+        )
+        .route("/api/pipeline/run", post(run_pipeline_graph))
         .route("/api/live/providers", get(get_live_providers))
         .route("/api/live/turn", post(start_live_turn))
         .route("/api/live/turn/{turn_id}/cancel", post(cancel_live_turn))
@@ -625,6 +633,219 @@ async fn migrate_pipeline_graph(Json(value): Json<serde_json::Value>) -> Respons
         )
             .into_response(),
     }
+}
+
+const PIPELINE_GRAPH_DIR: &str = "data/speech-graphs";
+
+#[derive(Debug, Serialize)]
+struct PipelineGraphSummary {
+    graph_id: String,
+    revision: u64,
+    name: String,
+    node_count: usize,
+    edge_count: usize,
+}
+
+fn pipeline_graph_file(root: &FsPath, graph_id: &str) -> Result<PathBuf, String> {
+    if graph_id.is_empty()
+        || graph_id.len() > 160
+        || !graph_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')
+        })
+    {
+        return Err(
+            "graph ID must contain only letters, numbers, dash, underscore, colon, or dot".into(),
+        );
+    }
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in graph_id.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Ok(root
+        .join(PIPELINE_GRAPH_DIR)
+        .join(format!("{hash:016x}.json")))
+}
+
+fn read_pipeline_graph(path: &FsPath) -> Result<tongues_pipeline::GraphDocument, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let value = serde_json::from_slice(bytes.as_slice()).map_err(|error| error.to_string())?;
+    tongues_pipeline::migrate_graph_json(value)
+        .map(|report| report.document)
+        .map_err(|error| error.to_string())
+}
+
+async fn list_pipeline_graphs(State(state): State<AppState>) -> impl IntoResponse {
+    let directory = state.workspace_root.join(PIPELINE_GRAPH_DIR);
+    let mut graphs = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| read_pipeline_graph(&entry.path()).ok())
+        .map(|graph| PipelineGraphSummary {
+            graph_id: graph.graph_id,
+            revision: graph.revision,
+            name: graph.metadata.name,
+            node_count: graph.nodes.len(),
+            edge_count: graph.edges.len(),
+        })
+        .collect::<Vec<_>>();
+    graphs.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Json(json!({"schema_version": tongues_pipeline::GRAPH_SCHEMA_VERSION, "graphs": graphs}))
+}
+
+async fn get_pipeline_graph(
+    State(state): State<AppState>,
+    Path(graph_id): Path<String>,
+) -> Response {
+    let path = match pipeline_graph_file(&state.workspace_root, &graph_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    match read_pipeline_graph(&path) {
+        Ok(document) if document.graph_id == graph_id => {
+            Json(json!({"document": document})).into_response()
+        }
+        Ok(_) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "stored graph identity does not match the requested graph"})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "saved graph was not found"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn save_pipeline_graph(
+    State(state): State<AppState>,
+    Path(graph_id): Path<String>,
+    Json(graph): Json<tongues_pipeline::GraphDocument>,
+) -> Response {
+    if graph.graph_id != graph_id {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "request graph ID does not match the document graph ID"})),
+        )
+            .into_response();
+    }
+    let path = match pipeline_graph_file(&state.workspace_root, &graph_id) {
+        Ok(path) => path,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+        }
+    };
+    if let Ok(current) = read_pipeline_graph(&path) {
+        if current.graph_id != graph.graph_id {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "graph storage identity collision"})),
+            )
+                .into_response();
+        }
+        if graph.revision < current.revision {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "saved graph is revision {}; refusing older revision {}",
+                        current.revision, graph.revision
+                    )
+                })),
+            )
+                .into_response();
+        }
+    }
+    let Some(directory) = path.parent() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "invalid graph store path"})),
+        )
+            .into_response();
+    };
+    if let Err(error) = std::fs::create_dir_all(directory) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response();
+    }
+    let part = path.with_extension("json.part");
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::File::create(&part).map_err(|error| error.to_string())?;
+        serde_json::to_writer_pretty(&mut file, &graph).map_err(|error| error.to_string())?;
+        file.write_all(b"\n").map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&part, &path).map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(()) => Json(json!({"document": graph})).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("could not save graph: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+async fn run_pipeline_graph(
+    State(state): State<AppState>,
+    Json(graph): Json<tongues_pipeline::GraphDocument>,
+) -> Response {
+    let requested = graph
+        .nodes
+        .iter()
+        .filter_map(|node| node.component_id.clone())
+        .collect::<Vec<_>>();
+    let catalog = pipeline_graph_catalog(&state, &requested).await;
+    let plan = match tongues_pipeline::compile_graph(&graph, &catalog) {
+        Ok(plan) => plan,
+        Err(failure) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(failure)).into_response();
+        }
+    };
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        for step in &plan.steps {
+            for kind in ["started", "output", "completed"] {
+                let detail = match kind {
+                    "output" => Some(format!(
+                        "deterministic contract output from {}",
+                        step.component_id.as_deref().unwrap_or(&step.node_kind)
+                    )),
+                    _ => None,
+                };
+                let line = json!({
+                    "plan_id": plan.plan_id,
+                    "graph_id": plan.graph_id,
+                    "graph_revision": plan.graph_revision,
+                    "node_id": step.node_id,
+                    "component_id": step.component_id,
+                    "kind": kind,
+                    "elapsed_ms": started.elapsed().as_millis() as u64,
+                    "detail": detail,
+                })
+                .to_string()
+                    + "\n";
+                if sender.send(Ok(Bytes::from(line))).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+    });
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+        ))
+        .unwrap()
 }
 
 async fn get_audio_input_capabilities() -> impl IntoResponse {
@@ -9272,6 +9493,27 @@ mod tests {
             .expect("fixture ASR")
             .model = "fixture-asr-v2".into();
         assert_ne!(first, pipeline_catalog_revision(&catalog));
+    }
+
+    #[test]
+    fn pipeline_graph_store_uses_safe_stable_paths_and_round_trips_documents() {
+        let root =
+            std::env::temp_dir().join(format!("tongues-pipeline-store-{}", uuid::Uuid::new_v4()));
+        let graph = tongues_pipeline::GraphDocument::new("pipeline:saved-demo", "Saved demo");
+        let path = pipeline_graph_file(&root, &graph.graph_id).expect("safe graph ID");
+        std::fs::create_dir_all(path.parent().expect("graph directory"))
+            .expect("create graph directory");
+        serde_json::to_writer_pretty(std::fs::File::create(&path).expect("create graph"), &graph)
+            .expect("write graph");
+
+        assert_eq!(read_pipeline_graph(&path).expect("read graph"), graph);
+        assert_eq!(
+            pipeline_graph_file(&root, &graph.graph_id).expect("stable path"),
+            path
+        );
+        assert!(pipeline_graph_file(&root, "../escape").is_err());
+
+        std::fs::remove_dir_all(&root).expect("remove isolated graph store fixture");
     }
 
     #[test]

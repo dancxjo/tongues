@@ -21,6 +21,37 @@ carry a separate component or port inventory.
   422 with the same structured diagnostics.
 - `POST /api/pipeline/migrate` upgrades a saved graph document without resolving
   its runtime component IDs.
+- `GET /api/pipeline/graphs` and `GET`/`PUT
+  /api/pipeline/graphs/{graph_id}` list, reopen, and atomically persist graph
+  documents under `data/speech-graphs`.
+- `POST /api/pipeline/run` compiles the current graph and streams deterministic
+  lifecycle-contract events as NDJSON. It is the browser acceptance runner;
+  provider adapters remain responsible for real microphone, model, and audio
+  resources at the `NodeRunner` boundary.
+
+## Patch canvas
+
+`/speech-dataflow.html` uses Cytoscape from a pinned jsDelivr URL for pan, zoom,
+touch, node movement, selection, and edge rendering. Tongues code owns graph
+meaning, typed-port compatibility, adapter explanations, diagnostics,
+persistence, configuration, and accessibility.
+
+The palette and inspector are built only from `/api/pipeline/catalog`. Required
+inputs without an edge are shown as dashed ghost ports and carry the
+backend diagnostic in their accessible label. Selecting an output highlights
+only compatible input targets; incompatible selections name both value types
+and any registered adapter path. Output fan-out creates one bounded edge per
+consumer, while fan-in remains available only through backend-declared merge
+nodes.
+
+The DOM graph outline provides keyboard selection, movement, and deletion
+alongside the pointer/touch canvas. Port buttons, live diagnostics, validation,
+and streamed execution changes use status/live regions for screen readers.
+Starter graphs can replace the document or be inserted as reusable subgraphs.
+Node layout is saved in the graph metadata label `studio.layout.v1`; it does
+not change runtime routing. Disabled nodes and structurally bypassed nodes
+remain visible in the saved document but do not enter the execution plan;
+their old edges are removed explicitly rather than silently rerouted.
 
 The friendly CLI and browser are expected to call this library-owned contract;
 neither surface should reproduce routing rules.

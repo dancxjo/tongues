@@ -1,25 +1,78 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Speech Dataflow · Tongues</title><style>
-:root{color-scheme:dark;--bg:#10151c;--panel:#1b2430;--line:#3a4a5e;--ink:#edf4ff;--muted:#9fb0c4;--accent:#80dfcd;--warn:#ffcc75}*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px system-ui}header,main{max-width:1200px;margin:auto;padding:1rem}a{color:var(--accent)}
-.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0}button,select,input{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:.45rem;padding:.55rem}
-button:focus,select:focus,input:focus,.node:focus{outline:3px solid var(--accent);outline-offset:2px}.layout{display:grid;grid-template-columns:2fr 1fr;gap:1rem}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:.8rem;padding:1rem}.nodes{display:grid;gap:.55rem;padding:0;list-style:none}.node{display:grid;grid-template-columns:2rem 1fr auto;gap:.6rem;align-items:center;border:1px solid var(--line);border-radius:.5rem;padding:.65rem}
-.node div{display:grid}.node small{color:var(--muted)}.node.selected{border-color:var(--accent)}.node.bypassed{opacity:.55}.badge{font-size:.75rem}.order{font-size:1.3rem}
-#validation[data-state=invalid],.error{color:var(--warn)}.run-events .partial{font-style:italic;color:var(--muted)}.run-events .committed{font-weight:bold;color:var(--accent)}
-@media(max-width:760px){.layout{grid-template-columns:1fr}}</style></head><body>
-<header><a href="/speech/compose">← Speech Studio</a> · <a id="open-timeline" href="/wavedeck.html">Open session Timeline</a>
-<h1>Bidirectional speech dataflow</h1><p>Configure execution here; inspect and correct evidence in WaveDeck.</p></header><main>
-<section class="panel"><div class="toolbar"><label>Starter <select id="template"></select></label>
-<label>Name <input id="pipeline-name"></label><button id="save">Save</button><button id="restore">Restore</button><button id="share">Share JSON</button></div><p id="validation" role="status"></p></section>
-<div class="layout"><section class="panel" aria-labelledby="graph-heading"><h2 id="graph-heading">Pipeline graph</h2><ol id="nodes" class="nodes"></ol></section>
-<aside class="panel"><h2>Node library</h2><select id="catalog" aria-label="Backend node"></select><button id="add">Add after selected</button>
-<h3>Selected node</h3><div class="toolbar"><button id="up">Move up</button><button id="down">Move down</button><button id="duplicate">Duplicate</button><button id="remove">Remove</button></div>
-<select id="replacement" aria-label="Replacement node"></select><button id="replace">Replace compatible</button>
-<label>Configuration JSON<textarea id="node-config" rows="5"></textarea></label><button id="configure">Apply configuration</button>
-<h3>Typed connection</h3><select id="connect-from" aria-label="Connection source"></select><select id="connect-to" aria-label="Connection target"></select><button id="connect">Connect</button></aside></div>
-<section class="panel"><h2>Live evidence preview</h2><p>Partials/revisions are italic; committed recognition is bold and never inferred from unstable text.</p>
-<label>Input level <meter id="level" min="0" max="1" value="0"></meter></label>
-<dl id="telemetry"><dt>Boundary</dt><dd>idle</dd><dt>First partial</dt><dd>—</dd><dt>Committed</dt><dd>—</dd><dt>Language / speaker</dt><dd>—</dd><dt>Stage latency</dt><dd>—</dd><dt>Error</dt><dd>none</dd></dl>
-<button id="run">Run deterministic pipeline</button><ol id="run-events" class="run-events" aria-live="polite"></ol></section>
-<p id="status" role="status" aria-live="polite"></p></main><script type="module" src="/speech-dataflow.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Speech Studio Patch Canvas · Tongues</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0c1118;--panel:#161f2b;--panel2:#202c3b;--line:#40536a;--ink:#edf5ff;--muted:#a6b7ca;--accent:#76e2ce;--warn:#ffc86b;--bad:#ff8c91;--source:#72b7ff;--audio:#70d6a4;--text:#dca3ff;--control:#ffca70}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}button,input,select,textarea{font:inherit}
+    button,input,select,textarea{color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:.45rem;padding:.5rem}
+    button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{cursor:not-allowed;opacity:.5}:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+    a{color:var(--accent)}header{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;border-bottom:1px solid var(--line)}header h1{font-size:1.2rem;margin:0}header p{margin:0;color:var(--muted)}
+    .toolbar{display:flex;align-items:end;gap:.5rem;flex-wrap:wrap;padding:.65rem 1rem;border-bottom:1px solid var(--line)}label{display:grid;gap:.2rem;color:var(--muted);font-size:.85rem}.grow{flex:1;min-width:14rem}
+    .workspace{display:grid;grid-template-columns:17rem minmax(26rem,1fr) 20rem;height:calc(100vh - 145px);min-height:540px}.sidebar{overflow:auto;background:var(--panel);padding:.8rem;border-right:1px solid var(--line)}.sidebar.right{border-right:0;border-left:1px solid var(--line)}
+    h2{font-size:1rem;margin:.25rem 0 .65rem}h3{font-size:.9rem;margin:1rem 0 .4rem}.palette-search{width:100%}.palette-group{margin:.8rem 0}.palette-group summary{color:var(--muted);cursor:pointer}.palette-list{display:grid;gap:.35rem;margin-top:.4rem}
+    .palette-node{text-align:left}.palette-node small{display:block;color:var(--muted)}.palette-node[data-readiness=unavailable]{border-color:var(--bad)}
+    .canvas-wrap{position:relative;min-width:0}.canvas-help{position:absolute;z-index:3;left:.75rem;top:.6rem;margin:0;padding:.3rem .55rem;background:#0c1118cc;border-radius:.35rem;color:var(--muted);pointer-events:none}
+    #canvas{position:absolute;inset:0;background-color:#0e151e;background-image:radial-gradient(#34455a 1px,transparent 1px);background-size:20px 20px;touch-action:none}
+    #canvas[data-connecting=true]{box-shadow:inset 0 0 0 3px var(--accent)}.section{border-top:1px solid var(--line);padding-top:.75rem;margin-top:.75rem}.stack{display:grid;gap:.45rem}.row{display:flex;gap:.4rem;flex-wrap:wrap}.row>*{flex:1}
+    .port-list{display:grid;gap:.35rem}.port{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:.35rem;padding:.4rem;border:1px solid var(--line);border-radius:.45rem;text-align:left;background:var(--panel2)}
+    .port.compatible{border-color:var(--accent)}.port.missing{border-style:dashed;border-color:var(--warn)}.port-dot{width:.75rem;height:.75rem;border-radius:50%;background:var(--muted)}.port[data-type^=audio] .port-dot{background:var(--audio)}.port[data-type=text] .port-dot,.port[data-type^=transcript] .port-dot{background:var(--text)}.port[data-type=control] .port-dot,.port[data-type=cancellation] .port-dot{background:var(--control)}
+    .port small,.muted{color:var(--muted)}.diagnostic{border-left:3px solid var(--warn);padding:.35rem .5rem;margin:.35rem 0;background:#352b1c}.error{color:var(--bad)}.ready{color:var(--accent)}
+    #config-fields input,#config-fields select,#config-fields textarea{width:100%}.events{max-height:13rem;overflow:auto;padding-left:1.5rem}.events li{margin:.25rem 0}.events .output{color:var(--accent)}.events .failed{color:var(--bad)}
+    .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+    #validation{margin:0;padding:.35rem 1rem;border-bottom:1px solid var(--line)}#validation[data-state=valid]{color:var(--accent)}#validation[data-state=invalid]{color:var(--warn)}
+    dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:.7rem;max-width:42rem;width:calc(100% - 2rem)}dialog::backdrop{background:#0009}dialog textarea{width:100%}
+    @media(max-width:900px){.workspace{grid-template-columns:14rem 1fr}.sidebar.right{position:fixed;z-index:5;right:0;top:0;bottom:0;width:min(22rem,90vw);transform:translateX(100%);transition:.2s}.sidebar.right.open{transform:none}.mobile-inspector{display:inline-block!important}}
+    @media(max-width:620px){header p{display:none}.workspace{grid-template-columns:1fr}.sidebar.left{position:fixed;z-index:5;left:0;top:0;bottom:0;width:min(18rem,90vw);transform:translateX(-100%);transition:.2s}.sidebar.left.open{transform:none}.mobile-palette{display:inline-block!important}.workspace{height:calc(100vh - 190px)}}
+  </style>
+</head>
+<body>
+  <header><a href="/speech/compose">← Studio</a><h1>Patch canvas</h1><p>Backend-typed speech graphs with explicit branches, adapters, and merges</p></header>
+  <div class="toolbar">
+    <button class="mobile-palette" hidden id="toggle-palette">Nodes</button>
+    <label>Starter <select id="template"></select></label>
+    <label class="grow">Graph name <input id="pipeline-name"></label>
+    <button id="new">New</button><button id="save">Save</button><button id="open">Open</button><button id="duplicate-graph">Duplicate</button><button id="share">Share</button>
+    <button id="fit">Fit</button><button id="run">Run</button><button id="cancel" disabled>Cancel</button>
+    <button class="mobile-inspector" hidden id="toggle-inspector">Inspector</button>
+  </div>
+  <p id="validation" role="status">Loading backend discovery…</p>
+  <main class="workspace">
+    <aside class="sidebar left" id="palette-panel" aria-labelledby="palette-heading">
+      <h2 id="palette-heading">Node palette</h2>
+      <input id="palette-search" class="palette-search" type="search" placeholder="Search capabilities" aria-label="Search node palette">
+      <div id="palette"></div>
+      <div class="section"><h2>Reusable templates</h2><div id="subgraphs" class="stack"></div></div>
+    </aside>
+    <section class="canvas-wrap" aria-labelledby="canvas-heading">
+      <h2 id="canvas-heading" class="sr-only">Pipeline canvas</h2>
+      <p class="canvas-help">Drag to move · wheel/pinch to zoom · Space+drag to pan · Tab for keyboard outline</p>
+      <div id="canvas" tabindex="0" role="application" aria-describedby="canvas-instructions"></div>
+      <p id="canvas-instructions" class="sr-only">Use Tab to reach graph nodes in the outline. Enter selects a node. Arrow keys move it. Delete removes it. Use the inspector to connect typed ports.</p>
+      <ol id="graph-outline" class="sr-only" aria-label="Keyboard graph outline"></ol>
+    </section>
+    <aside class="sidebar right" id="inspector-panel" aria-labelledby="inspector-heading">
+      <h2 id="inspector-heading">Inspector</h2>
+      <div id="empty-inspector" class="muted">Select a node or edge.</div>
+      <div id="node-inspector" hidden>
+        <strong id="node-title"></strong><p id="node-detail" class="muted"></p><p id="node-readiness"></p>
+        <div class="row"><button id="duplicate">Duplicate</button><button id="replace">Replace</button><button id="bypass">Bypass</button><button id="disable">Disable</button><button id="delete">Delete</button></div>
+        <h3>Inputs</h3><div id="input-ports" class="port-list"></div>
+        <h3>Outputs</h3><div id="output-ports" class="port-list"></div>
+        <div id="connection-panel" class="section" hidden><strong id="connection-source"></strong><p class="muted">Choose a compatible input. Escape cancels.</p><button id="cancel-connect">Cancel connection</button></div>
+        <div class="section"><h3>Configuration</h3><div id="config-fields" class="stack"></div><button id="apply-config">Apply configuration</button></div>
+        <div id="node-diagnostics" class="section"></div>
+      </div>
+      <div id="edge-inspector" hidden><strong id="edge-title"></strong><p id="edge-type"></p><label>Buffer capacity<input id="edge-capacity" type="number" min="1"></label><button id="apply-edge">Apply</button> <button id="delete-edge">Delete edge</button><div id="edge-diagnostics"></div></div>
+      <div class="section"><h2>Run events</h2><ol id="run-events" class="events" aria-live="polite"></ol></div>
+    </aside>
+  </main>
+  <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+  <dialog id="open-dialog"><form method="dialog"><h2>Open a saved graph</h2><div id="saved-graphs" class="stack"></div><div class="row"><button value="cancel">Cancel</button></div></form></dialog>
+  <dialog id="share-dialog"><form method="dialog"><h2>Share graph</h2><p>Copy this backend URL or the versioned graph JSON.</p><input id="share-url" readonly><textarea id="share-json" rows="12" readonly></textarea><div class="row"><button type="button" id="copy-share">Copy URL</button><button value="close">Close</button></div></form></dialog>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.33.1/dist/cytoscape.min.js" crossorigin="anonymous"></script>
+  <script type="module" src="/speech-dataflow.js"></script>
+</body>
+</html>

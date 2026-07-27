@@ -273,7 +273,11 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
             "Text source",
             vec![port("out", Output, Text, Many, true)],
         ),
-        node("linguistic", "Linguistic analysis", io(Text, UtterancePlan)),
+        node(
+            "linguistic",
+            "Linguistic and prosody analysis",
+            io(Text, UtterancePlan),
+        ),
         component_node(
             "response",
             "Response generation",
@@ -286,7 +290,17 @@ fn builtin_node_kinds() -> Vec<NodeKindSpec> {
             io(Text, Text),
             "interpretation",
         ),
-        component_node("tts", "Speech synthesis", io(Text, AudioStream), "tts"),
+        component_node(
+            "tts",
+            "Speech synthesis",
+            vec![
+                port("in", Input, Text, Optional, false),
+                port("plan", Input, UtterancePlan, Optional, false),
+                port("out", Output, AudioStream, Many, true),
+                port("error", Output, Error, Many, false),
+            ],
+            "tts",
+        ),
         node(
             "audio_output",
             "Audio output",
