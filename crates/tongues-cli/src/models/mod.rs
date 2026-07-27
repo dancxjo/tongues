@@ -19,6 +19,6 @@ pub use manifest::{
     MODEL_BUNDLES, MULTIBAND_MELGAN_VOCODER_ID, YOURTTS_MODEL_ID,
 };
 pub use selection::{
-    selected_bundle, selected_bundle_for_kind, selected_llm_model_label, selected_llm_model_path,
-    selected_voice_model_bundle,
+    asr_whisper_model_path, selected_bundle, selected_bundle_for_kind, selected_llm_model_label,
+    selected_llm_model_path, selected_voice_model_bundle,
 };

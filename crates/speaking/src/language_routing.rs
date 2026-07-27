@@ -44,8 +44,12 @@ impl LanguageDetection {
 
 pub trait LanguageIdentifier {
     fn identity(&self) -> &str;
-    fn detect(&mut self, segment_id: &str, audio: &AudioFrame)
-    -> anyhow::Result<LanguageDetection>;
+    fn detect(
+        &mut self,
+        segment_id: &str,
+        sequence: u64,
+        audio: &AudioFrame,
+    ) -> anyhow::Result<LanguageDetection>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

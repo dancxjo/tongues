@@ -6,14 +6,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::manifest::{
     bundle_archive_members, bundle_multimodal_projector_asset, bundle_primary_asset,
-    bundle_required_assets, find_bundle, ModelAsset, ModelBundle, ModelKind, DEFAULT_LLM_MODEL_ID,
-    DEFAULT_VOICE_MODEL_ID,
+    bundle_required_assets, find_bundle, ModelAsset, ModelBundle, ModelKind, DEFAULT_ASR_MODEL_ID,
+    DEFAULT_LLM_MODEL_ID, DEFAULT_VOICE_MODEL_ID,
 };
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct ModelSelection {
     llm: Option<String>,
     voice_model: Option<String>,
+}
+
+pub fn asr_whisper_model_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("TONGUES_WHISPER_MODEL")
+        .or_else(|| std::env::var_os("MORTAR_ASR_WHISPER_MODEL"))
+    {
+        return Ok(PathBuf::from(path));
+    }
+    let bundle =
+        find_bundle(DEFAULT_ASR_MODEL_ID).context("default ASR model bundle is not registered")?;
+    let asset = bundle_primary_asset(bundle)?;
+    Ok(asset_path(&resolve_mortar_home()?, asset))
 }
 
 pub fn selected_llm_model_path() -> Result<PathBuf> {

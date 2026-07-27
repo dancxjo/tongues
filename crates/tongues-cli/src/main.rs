@@ -157,7 +157,7 @@ struct Cli {
 enum Commands {
     /// Show shared language detection and ASR routing capabilities
     #[command(name = "language-routing")]
-    LanguageRouting,
+    LanguageRouting(language_routing_cmd::LanguageRoutingCommand),
 
     /// Detect speech and segment utterances in a WAV file or CPAL microphone
     Vad(vad_cmd::VadCommand),
@@ -1957,7 +1957,7 @@ fn main() -> Result<()> {
     }
 
     match command {
-        Commands::LanguageRouting => language_routing_cmd::run(),
+        Commands::LanguageRouting(command) => language_routing_cmd::run(command),
         Commands::Vad(command) => vad_cmd::run(command),
         Commands::Duplex { command } => duplex_cmd::run(command),
         Commands::SpeechCorpus { command } => {

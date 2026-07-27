@@ -88,13 +88,15 @@ pub fn ensure_face_models_available() -> Result<FaceModelPaths> {
 }
 
 pub fn ensure_asr_whisper_model_available() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("MORTAR_ASR_WHISPER_MODEL") {
+    if let Some(path) = std::env::var_os("TONGUES_WHISPER_MODEL")
+        .or_else(|| std::env::var_os("MORTAR_ASR_WHISPER_MODEL"))
+    {
         let path = PathBuf::from(path);
         if is_non_empty_file(&path) {
             return Ok(path);
         }
         anyhow::bail!(
-            "MORTAR_ASR_WHISPER_MODEL points to a missing or empty file: {}",
+            "configured Whisper model points to a missing or empty file: {}",
             path.display()
         );
     }

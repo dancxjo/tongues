@@ -4,6 +4,10 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use speaking::{
+    LanguageIdentifier, LanguageRoute, LanguageRouter, LanguageSelectionMode, LanguageSwitchPolicy,
+    UnsupportedLanguagePolicy, WhisperLanguageIdentifier,
+};
 use tongues_audio::{
     AudioSourceDescriptor, AudioSourceKind, CleanupPipeline, CleanupStageConfig, PushedAudioChunk,
     SegmentationConfig, SegmentationEvent, UtteranceSegmenter, VadBackendKind, VadPipelineEvent,
@@ -14,6 +18,14 @@ const BROWSER_AUDIO_SCHEMA_VERSION: u16 = 1;
 const BROWSER_AUDIO_QUEUE_CHUNKS: usize = 8;
 const BROWSER_AUDIO_HEADER_BYTES: usize = 16;
 const MAX_BROWSER_AUDIO_CHUNK_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct BrowserLanguageRouting {
+    mode: LanguageSelectionMode,
+    #[serde(default)]
+    switching: LanguageSwitchPolicy,
+    unsupported: UnsupportedLanguagePolicy,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
@@ -28,6 +40,8 @@ enum ClientControl {
         segmentation: SegmentationConfig,
         #[serde(default)]
         cleanup: Vec<CleanupStageConfig>,
+        #[serde(default)]
+        language_routing: Option<BrowserLanguageRouting>,
     },
     End,
 }
@@ -43,6 +57,7 @@ enum ProbeEvent {
         vad_backend: VadBackendKind,
         segmentation: SegmentationConfig,
         cleanup: Vec<CleanupStageConfig>,
+        language_routing: Option<BrowserLanguageRouting>,
     },
     CleanupCompared {
         chunk_sequence: u64,
@@ -76,6 +91,9 @@ enum ProbeEvent {
         reason: tongues_audio::SegmentCloseReason,
         speech_duration_ms: u64,
         total_duration_ms: u64,
+    },
+    LanguageRouted {
+        route: LanguageRoute,
     },
     Discontinuity {
         expected_chunk_sequence: u64,
@@ -138,6 +156,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
         vad_backend,
         segmentation,
         cleanup,
+        language_routing,
     } = control
     else {
         let _ = send_error(
@@ -206,6 +225,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
     };
     let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel(64);
     let consumer_segmentation = segmentation.clone();
+    let consumer_language_routing = language_routing.clone();
     let consumer = tokio::task::spawn_blocking(move || {
         // The WebRTC implementation owns a native handle that is not `Send`.
         // Construct and consume it wholly within this blocking worker.
@@ -233,6 +253,56 @@ async fn browser_audio_session(mut socket: WebSocket) {
                 return;
             }
         };
+        let language_capabilities = tongues_cli::language_routing_cmd::capabilities();
+        let mut language_router = match consumer_language_routing.as_ref() {
+            Some(config) => match LanguageRouter::new(
+                config.mode.clone(),
+                config.switching,
+                config.unsupported.clone(),
+                language_capabilities.asr_providers.clone(),
+            ) {
+                Ok(router) => Some(router),
+                Err(error) => {
+                    let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                        code: "invalid_language_routing",
+                        message: error.to_string(),
+                    });
+                    return;
+                }
+            },
+            None => None,
+        };
+        let mut language_identifier = if matches!(
+            consumer_language_routing
+                .as_ref()
+                .map(|config| &config.mode),
+            Some(LanguageSelectionMode::Detect { .. })
+        ) {
+            let Some(detector) = language_capabilities
+                .detectors
+                .iter()
+                .find(|detector| detector.installed)
+            else {
+                let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                    code: "language_detector_unavailable",
+                    message: "no installed language detector is available".into(),
+                });
+                return;
+            };
+            match WhisperLanguageIdentifier::new_quiet(&detector.model_id) {
+                Ok(identifier) => Some(identifier),
+                Err(error) => {
+                    let _ = probe_tx.blocking_send(ProbeEvent::Error {
+                        code: "language_detector_unavailable",
+                        message: error.to_string(),
+                    });
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let mut language_sequence = 0_u64;
         loop {
             let probe = match pipeline.next_event() {
                 Ok(Some(VadPipelineEvent::VadDecision { frame, decision })) => ProbeEvent::Level {
@@ -271,13 +341,48 @@ async fn browser_audio_session(mut socket: WebSocket) {
                         segment_id: segment_id.0,
                         endpoint_latency_ms,
                     },
-                    SegmentationEvent::SegmentFinalized(segment) => ProbeEvent::SegmentFinal {
-                        segment_id: segment.id.0,
-                        accepted: true,
-                        reason: segment.close_reason,
-                        speech_duration_ms: segment.speech_duration_ms,
-                        total_duration_ms: segment.total_duration_ms,
-                    },
+                    SegmentationEvent::SegmentFinalized(segment) => {
+                        let final_probe = ProbeEvent::SegmentFinal {
+                            segment_id: segment.id.0.clone(),
+                            accepted: true,
+                            reason: segment.close_reason,
+                            speech_duration_ms: segment.speech_duration_ms,
+                            total_duration_ms: segment.total_duration_ms,
+                        };
+                        if probe_tx.blocking_send(final_probe).is_err() {
+                            break;
+                        }
+                        if let Some(router) = &mut language_router {
+                            match route_audio_segment(
+                                router,
+                                language_identifier.as_mut(),
+                                language_sequence,
+                                &segment,
+                            ) {
+                                Ok(route) => {
+                                    if probe_tx
+                                        .blocking_send(ProbeEvent::LanguageRouted { route })
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(error) => {
+                                    if probe_tx
+                                        .blocking_send(ProbeEvent::Error {
+                                            code: "language_routing_failed",
+                                            message: error.to_string(),
+                                        })
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
+                            language_sequence = language_sequence.saturating_add(1);
+                        }
+                        continue;
+                    }
                     SegmentationEvent::SegmentDropped(segment) => ProbeEvent::SegmentFinal {
                         segment_id: segment.id.0,
                         accepted: false,
@@ -317,6 +422,7 @@ async fn browser_audio_session(mut socket: WebSocket) {
             vad_backend,
             segmentation,
             cleanup,
+            language_routing,
         },
     )
     .await
@@ -481,6 +587,41 @@ fn peak(samples: &[f32]) -> f32 {
         .iter()
         .map(|sample| sample.abs())
         .fold(0.0, f32::max)
+}
+
+fn route_audio_segment(
+    router: &mut LanguageRouter,
+    identifier: Option<&mut WhisperLanguageIdentifier>,
+    sequence: u64,
+    segment: &tongues_audio::AudioSegment,
+) -> anyhow::Result<LanguageRoute> {
+    let Some(first) = segment.frames.first() else {
+        anyhow::bail!("cannot route an empty audio segment");
+    };
+    let mut audio = tongues_audio::AudioBuffer {
+        samples: segment
+            .frames
+            .iter()
+            .flat_map(|frame| frame.audio.samples.iter().copied())
+            .collect(),
+        sample_rate_hz: first.audio.sample_rate_hz,
+        channels: first.audio.channels,
+    };
+    audio = audio.convert_channels(1)?.resample_linear(16_000)?;
+    let detection = identifier
+        .map(|identifier| {
+            identifier.detect(
+                &segment.id.0,
+                sequence,
+                &speaking::AudioFrame {
+                    sample_rate_hz: audio.sample_rate_hz,
+                    channels: audio.channels,
+                    samples: audio.samples,
+                },
+            )
+        })
+        .transpose()?;
+    router.route(sequence, detection)
 }
 
 async fn send_error(

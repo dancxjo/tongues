@@ -5,11 +5,15 @@ mod imp {
     use whisper_cpp_plus::whisper_cpp_plus_sys as whisper_ffi;
     use whisper_cpp_plus::{FullParams, SamplingStrategy, WhisperState};
 
+    use crate::LanguageId;
     use crate::asr::{
         AudioFrame, SpeechRecognizer, StreamingPartialKind, StreamingRecognition,
         StreamingRecognizerBackend, StreamingSpeechRecognizer,
     };
     use crate::event::StreamEvent;
+    use crate::language_routing::{
+        LanguageDetection, LanguageIdentifier, RankedLanguageHypothesis,
+    };
     use crate::transcript::{TranscriptCandidateTracker, TranscriptChunk};
     use crate::word_stream::TranscriptWord;
 
@@ -25,6 +29,84 @@ mod imp {
         sample_rate_hz: u32,
         input_silence_padding_ms: u64,
         candidate_tracker: TranscriptCandidateTracker,
+    }
+
+    pub struct WhisperLanguageIdentifier {
+        ctx: whisper_cpp_plus::WhisperContext,
+    }
+
+    impl WhisperLanguageIdentifier {
+        pub fn new_quiet(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+            configure_whisper_logging(true);
+            let ctx = whisper_cpp_plus::WhisperContext::new(model_path.as_ref())?;
+            anyhow::ensure!(
+                ctx.is_multilingual(),
+                "Whisper language identification requires a multilingual model"
+            );
+            Ok(Self { ctx })
+        }
+    }
+
+    impl LanguageIdentifier for WhisperLanguageIdentifier {
+        fn identity(&self) -> &str {
+            "whisper-language-id"
+        }
+
+        fn detect(
+            &mut self,
+            segment_id: &str,
+            sequence: u64,
+            audio: &AudioFrame,
+        ) -> anyhow::Result<LanguageDetection> {
+            anyhow::ensure!(
+                audio.sample_rate_hz == 16_000 && audio.channels == 1,
+                "Whisper language identification expects mono 16000 Hz audio"
+            );
+            anyhow::ensure!(!audio.samples.is_empty(), "cannot identify empty audio");
+            let mut state = WhisperState::new(&self.ctx)?;
+            let params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+                .language("auto")
+                .no_timestamps(true);
+            state.full(params, &audio.samples)?;
+            let language_id = state.full_lang_id();
+            anyhow::ensure!(language_id >= 0, "Whisper did not identify a language");
+            let language_ptr = unsafe { whisper_ffi::whisper_lang_str(language_id) };
+            anyhow::ensure!(
+                !language_ptr.is_null(),
+                "Whisper returned an unknown language identity"
+            );
+            let language = unsafe { std::ffi::CStr::from_ptr(language_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            let mut probability_sum = 0.0_f32;
+            let mut probability_count = 0_u32;
+            for segment in 0..state.full_n_segments() {
+                for token in 0..state.full_n_tokens(segment) {
+                    if let Some(token) = state.full_get_token_data(segment, token)
+                        && token.p.is_finite()
+                    {
+                        probability_sum += token.p.clamp(0.0, 1.0);
+                        probability_count = probability_count.saturating_add(1);
+                    }
+                }
+            }
+            let confidence = if probability_count == 0 {
+                0.5
+            } else {
+                probability_sum / probability_count as f32
+            };
+            Ok(LanguageDetection {
+                segment_id: segment_id.into(),
+                sequence,
+                hypotheses: vec![RankedLanguageHypothesis {
+                    language: LanguageId(language),
+                    confidence,
+                    evidence_ms: (audio.samples.len() as u64).saturating_mul(1_000)
+                        / u64::from(audio.sample_rate_hz),
+                    provenance: self.identity().into(),
+                }],
+            })
+        }
     }
 
     const DEFAULT_INPUT_SILENCE_PADDING_MS: u64 = 250;

@@ -1521,6 +1521,24 @@
             maximum_segment_ms: Number(byId('browser-mic-maximum-segment')?.value || 30000),
         };
         const vadBackend = byId('browser-mic-vad')?.value || 'web_rtc';
+        const languageMode = byId('recognition-language-mode')?.value || 'fixed';
+        const fixedLanguage = byId('recognition-language-fixed')?.value || 'en';
+        const languageRouting = {
+            mode: languageMode === 'detect'
+                ? { mode: 'detect', candidates: [] }
+                : { mode: 'fixed', language: fixedLanguage },
+            switching: {
+                minimum_confidence: Number(byId('recognition-language-confidence')?.value || 0.65),
+                minimum_evidence_ms: Number(byId('recognition-language-evidence')?.value || 300),
+                switch_margin: Number(byId('recognition-language-margin')?.value || 0.15),
+                consecutive_segments: 2,
+            },
+            unsupported: {
+                policy: 'fallback',
+                provider_id: 'common-phone',
+                language: 'en',
+            },
+        };
         const cleanup = [];
         if (byId('browser-cleanup-dc')?.checked) cleanup.push({ kind: 'dc_removal', pole: 0.995 });
         if (byId('browser-cleanup-gate')?.checked) cleanup.push({ kind: 'noise_gate', threshold_rms: 0.012, attenuation: 0.15 });
@@ -1569,6 +1587,7 @@
                         vad_backend: vadBackend,
                         segmentation,
                         cleanup,
+                        language_routing: languageRouting,
                     }));
                 }, { once: true });
                 socket.addEventListener('message', (event) => {
@@ -1607,6 +1626,14 @@
                     } else if (message.type === 'segment_final') {
                         appendBrowserMicEvent(
                             `${message.accepted ? 'Finalized' : 'Dropped short'} segment ${message.segment_id}: ${message.speech_duration_ms} ms speech, ${message.reason}.`,
+                        );
+                    } else if (message.type === 'language_routed') {
+                        const route = message.route || {};
+                        const detected = route.detection?.hypotheses?.map((hypothesis) => (
+                            `${hypothesis.language} ${Number(hypothesis.confidence || 0).toFixed(2)}`
+                        )).join(', ') || 'fixed';
+                        appendBrowserMicEvent(
+                            `Language ${detected}; routed ${route.selected_language} to ${route.provider_id} (${route.model_id})${route.fallback_reason ? `; ${route.fallback_reason}` : ''}.`,
                         );
                     } else if (message.type === 'discontinuity') {
                         appendBrowserMicEvent(
