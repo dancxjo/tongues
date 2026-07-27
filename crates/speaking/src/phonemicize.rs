@@ -4160,25 +4160,26 @@ mod tests {
 
     #[test]
     fn suffixed_numbers_and_grouped_years_are_variety_data_driven() {
-        let mut variety = variety_by_code("fr").expect("built-in French variety");
-        let names = variety.number_names.as_mut().expect("French number names");
+        let mut variety = variety_by_code("en-US").expect("built-in fixture variety");
+        variety.id = VarietyId("normalization-fixture".into());
+        let names = variety.number_names.as_mut().expect("fixture number names");
         names.suffixed_number_names = vec![crate::variety::SuffixedNumberName {
             value: 60,
-            suffixes: vec!["a".into()],
-            name: "années-soixante".into(),
+            suffixes: vec!["z".into()],
+            name: "six-decades".into(),
         }];
         names.grouped_year_names = vec![crate::variety::GroupedYearName {
             first: 1900,
             last: 1999,
             divisor: 100,
-            exact_group_name: "cents".into(),
-            leading_zero_name: "zéro".into(),
+            exact_group_name: "centuries".into(),
+            leading_zero_name: "zero".into(),
         }];
-        names.year_preceding_words = vec!["en".into()];
+        names.year_preceding_words = vec!["during".into()];
 
         assert_eq!(
-            normalize_general_numbers("en 1965 et les 60a", &variety),
-            "en dix-neuf soixante-cinq et les années-soixante"
+            normalize_general_numbers("during 1965 and the 60z", &variety),
+            "during nineteen sixty-five and the six-decades"
         );
     }
 
@@ -5444,7 +5445,14 @@ mod tests {
         );
         assert_eq!(
             normalize_text_for_variety("2024-06-20", &VarietyId("fr-FR-Standard".into())),
-            "vingt vingt-quatre tiret zéro six tiret vingt"
+            "deux mille vingt-quatre tiret zéro six tiret vingt"
+        );
+        assert_eq!(
+            normalize_text_for_variety(
+                "le mouvement hippie des années 60",
+                &VarietyId("fr-FR-Standard".into())
+            ),
+            "le mouvement hippie des années soixante"
         );
     }
 

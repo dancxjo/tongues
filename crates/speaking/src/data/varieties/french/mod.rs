@@ -129,13 +129,6 @@ fn french_number_names() -> NumberNameSet {
         &[],
     );
     names.hundred_name = Some("cent".into());
-    names.grouped_year_names = vec![crate::variety::GroupedYearName {
-        first: 2010,
-        last: 2099,
-        divisor: 100,
-        exact_group_name: "cent".into(),
-        leading_zero_name: "zéro".into(),
-    }];
     names.ordinal_suffixes = vec![OrdinalSuffixName {
         value: 1,
         suffixes: vec!["er".into(), "re".into()],
