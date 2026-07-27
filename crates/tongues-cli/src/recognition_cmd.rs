@@ -206,6 +206,9 @@ fn open_source(command: &FriendlyRecognitionCommand) -> Result<CliAudioSource> {
         )?));
     }
     if command.microphone {
+        eprintln!(
+            "Microphone capture active; raw audio and transcript retention are disabled by default."
+        );
         return Ok(CliAudioSource::Microphone(CpalAudioSource::open(
             command.input_device.as_deref(),
             32,

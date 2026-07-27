@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "cases": [
+    {
+      "id": "en-accent-noise", "license": "CC0-1.0", "language": "en",
+      "reference": "Call Mina at forty two", "hypothesis": "call mina at forty two",
+      "partials": ["call", "call me", "call mina at", "call mina at forty two"],
+      "detected_language": "en", "tags": ["accent","numbers_names","noise","long_silence"],
+      "words": [{"text":"Call","start_ms":100,"end_ms":250,"speaker":"a"},{"text":"Mina","start_ms":260,"end_ms":420,"speaker":"a"}],
+      "predicted_words": [{"text":"Call","start_ms":105,"end_ms":245,"speaker":"a"},{"text":"Mina","start_ms":270,"end_ms":430,"speaker":"a"}],
+      "audio_duration_ms": 2000, "recognition_duration_ms": 500, "first_partial_ms": 120,
+      "endpoint_latency_ms": 310, "peak_memory_bytes": 1048576, "dropped_audio_chunks": 0
+    },
+    {
+      "id": "es-code-switch-echo", "license": "CC0-1.0", "language": "es",
+      "reference": "hola Sam open the door", "hypothesis": "hola Sam open the door",
+      "partials": ["ola", "hola Sam", "hola Sam open", "hola Sam open the door"],
+      "detected_language": "es", "tags": ["code_switching","echo","overlap"],
+      "words": [{"text":"hola","start_ms":0,"end_ms":200,"speaker":"a"},{"text":"Sam","start_ms":210,"end_ms":350,"speaker":"b"}],
+      "predicted_words": [{"text":"hola","start_ms":10,"end_ms":210,"speaker":"a"},{"text":"Sam","start_ms":215,"end_ms":360,"speaker":"b"}],
+      "audio_duration_ms": 1500, "recognition_duration_ms": 600, "first_partial_ms": 160,
+      "endpoint_latency_ms": 350, "peak_memory_bytes": 2097152, "dropped_audio_chunks": 0
+    },
+    {
+      "id": "low-resource-clipped", "license": "CC0-1.0", "language": "ckt",
+      "reference": "ытлён", "hypothesis": "ытлён",
+      "partials": ["ыт", "ытлён"], "detected_language": "ru",
+      "tags": ["low_resource","clipping","malformed_stream"],
+      "words": [], "predicted_words": [],
+      "audio_duration_ms": 900, "recognition_duration_ms": 900, "first_partial_ms": 400,
+      "endpoint_latency_ms": 800, "peak_memory_bytes": 3145728, "dropped_audio_chunks": 1
+    },
+    {
+      "id": "long-speech", "license": "CC0-1.0", "language": "en",
+      "reference": "a deliberately long utterance remains bounded", "hypothesis": "a deliberately long utterance remains bounded",
+      "partials": ["a deliberately", "a deliberately long utterance", "a deliberately long utterance remains bounded"],
+      "detected_language": "en", "tags": ["long_speech"],
+      "words": [], "predicted_words": [],
+      "audio_duration_ms": 120000, "recognition_duration_ms": 60000, "first_partial_ms": 200,
+      "endpoint_latency_ms": 300, "peak_memory_bytes": 2097152, "dropped_audio_chunks": 0
+    }
+  ]
+}

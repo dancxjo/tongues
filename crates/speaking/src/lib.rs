@@ -6,6 +6,7 @@
 
 pub mod acoustics;
 pub mod asr;
+pub mod asr_evaluation;
 pub mod conformance;
 pub mod data;
 pub mod diarization;
@@ -48,6 +49,7 @@ pub mod word_stream;
 
 pub use acoustics::*;
 pub use asr::*;
+pub use asr_evaluation::*;
 pub use conformance::*;
 pub use data::*;
 pub use diarization::*;
