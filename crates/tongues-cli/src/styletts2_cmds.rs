@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use serde_json::json;
 
@@ -237,10 +237,10 @@ fn run_discover(
     let predicted_symbols = predicted_symbols_list.join(" || ");
 
     for i in 0..num_samples {
-        let sample_seed: u64 = rng.gen();
-        let alpha: f32 = rng.gen_range(0.0..1.0);
-        let beta: f32 = rng.gen_range(0.0..1.0);
-        let speed: f64 = rng.gen_range(0.85..1.2);
+        let sample_seed: u64 = rng.random();
+        let alpha: f32 = rng.random_range(0.0..1.0);
+        let beta: f32 = rng.random_range(0.0..1.0);
+        let speed: f64 = rng.random_range(0.85..1.2);
 
         let diffusion_opts = StyleTts2DiffusionOptions {
             diffusion_steps: 5,
@@ -255,9 +255,9 @@ fn run_discover(
 
         let mut style_ref = None;
         if tier == 2 {
-            let v1 = &reference_vectors[rng.gen_range(0..reference_vectors.len())];
-            let v2 = &reference_vectors[rng.gen_range(0..reference_vectors.len())];
-            let w: f32 = rng.gen();
+            let v1 = &reference_vectors[rng.random_range(0..reference_vectors.len())];
+            let v2 = &reference_vectors[rng.random_range(0..reference_vectors.len())];
+            let w: f32 = rng.random();
             let mut mixed = Vec::with_capacity(256);
             for (a, b) in v1.iter().zip(v2.iter()) {
                 mixed.push(w * a + (1.0 - w) * b);
@@ -272,8 +272,8 @@ fn run_discover(
         } else if tier == 3 {
             let mut feral = Vec::with_capacity(256);
             for _ in 0..128 {
-                let u1: f32 = rng.gen_range(1e-6..1.0);
-                let u2: f32 = rng.gen_range(0.0..1.0);
+                let u1: f32 = rng.random_range(1e-6..1.0);
+                let u2: f32 = rng.random_range(0.0..1.0);
                 let z0 = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
                 let z1 = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).sin();
                 feral.push(z0);

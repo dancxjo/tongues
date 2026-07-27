@@ -23,7 +23,8 @@ use burn::nn::{
 use burn::tensor::activation::{leaky_relu, softmax};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Int, Tensor, TensorData};
-use rand::distributions::{Distribution, WeightedIndex};
+use rand::distr::weighted::WeightedIndex;
+use rand::distr::Distribution;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};

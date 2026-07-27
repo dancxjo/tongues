@@ -595,7 +595,10 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    Ok(Sha256::digest(fs::read(path)?)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn print_paths(run: &Path) {

@@ -605,7 +605,11 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn checksum_sidecar_path(path: &Path) -> PathBuf {
@@ -707,7 +711,15 @@ mod tests {
 
     #[test]
     fn artifact_getter_includes_all_mbrola_databases_and_notices() {
-        for id in ["mbrola-us1", "mbrola-us3", "mbrola-en1", "mbrola-nl2"] {
+        for id in [
+            "mbrola-us1",
+            "mbrola-us3",
+            "mbrola-en1",
+            "mbrola-nl2",
+            "mbrola-la1",
+            "mbrola-in1",
+            "mbrola-in2",
+        ] {
             let bundle = find_bundle(id).unwrap_or_else(|| panic!("{id} should be registered"));
             assert_eq!(bundle.kind, ModelKind::EndToEndSpeech);
             assert!(

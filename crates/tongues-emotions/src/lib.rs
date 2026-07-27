@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tongues_interpretation::{InterpretationConfig, DEFAULT_MEL_BINS, DEFAULT_SAMPLE_RATE_HZ};
@@ -855,9 +855,11 @@ fn random_cuts(
     let max_samples = ms_to_samples(config.max_cut_ms, config.sample_rate_hz).max(min_samples);
     let mut cuts = Vec::new();
     for _ in 0..config.cuts_per_wav {
-        let duration = rng.gen_range(min_samples..=max_samples).min(samples.len());
+        let duration = rng
+            .random_range(min_samples..=max_samples)
+            .min(samples.len());
         let start = if samples.len() > duration {
-            rng.gen_range(0..=(samples.len() - duration))
+            rng.random_range(0..=(samples.len() - duration))
         } else {
             0
         };
@@ -979,7 +981,11 @@ fn emotion_data_identity(data: &Path) -> Result<String> {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn emotion_epoch_rng(seed: u64, epoch: usize) -> StdRng {

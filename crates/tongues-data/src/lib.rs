@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result};
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::{IndexedRandom, SliceRandom};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use speaking::{phonemicizer_for_variety, PhonemicizeRequest, VarietyId};
-use tongues_core::{Vocab, BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID};
+use speaking::{PhonemicizeRequest, VarietyId, phonemicizer_for_variety};
+use tongues_core::{BOS_ID, EOS_ID, G2P_ID, P2G_ID, PAD_ID, Vocab};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OllamaVerifierConfig {
@@ -1135,8 +1135,8 @@ pub fn collate_batch(examples: &[Seq2SeqExample], max_src_len: usize, max_tgt_le
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     #[test]
     fn test_cmu_parsing_base_words() {

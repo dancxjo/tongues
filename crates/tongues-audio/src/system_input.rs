@@ -1,17 +1,17 @@
 //! Host audio-device discovery and bounded CPAL capture.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use speaking::{AudioEncoding, AudioFormat, ChannelLayout, StreamSource};
 
 use crate::{
-    bounded_audio_input, invalid, AudioBuffer, AudioSource, AudioSourceDescriptor,
-    AudioSourceEvent, AudioSourceKind, BoundedAudioInput, BoundedAudioInputSender,
-    PushedAudioChunk, Result,
+    AudioBuffer, AudioSource, AudioSourceDescriptor, AudioSourceEvent, AudioSourceKind,
+    BoundedAudioInput, BoundedAudioInputSender, PushedAudioChunk, Result, bounded_audio_input,
+    invalid,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,16 +36,12 @@ pub struct AudioInputCapabilities {
 
 pub fn input_device_inventory() -> Result<Vec<InputDeviceInfo>> {
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|device| device.name().ok());
+    let default_name = host.default_input_device().map(|device| device.to_string());
     let devices = host
         .input_devices()
         .map_err(|error| invalid(format!("failed to enumerate audio input devices: {error}")))?
         .map(|device| {
-            let display_name = device
-                .name()
-                .unwrap_or_else(|_| "<unnamed input device>".into());
+            let display_name = device.to_string();
             InputDeviceInfo {
                 id: display_name.clone(),
                 is_default: Some(display_name.as_str()) == default_name.as_deref(),
@@ -93,13 +89,11 @@ impl CpalAudioSource {
     pub fn open(device_id: Option<&str>, queue_capacity: usize) -> Result<Self> {
         let host = cpal::default_host();
         let device = select_device(&host, device_id)?;
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "<unnamed input device>".into());
+        let device_name = device.to_string();
         let supported = device
             .default_input_config()
             .map_err(|error| invalid(format!("failed to inspect `{device_name}`: {error}")))?;
-        let sample_rate_hz = supported.sample_rate().0;
+        let sample_rate_hz = supported.sample_rate();
         let channels = supported.channels();
         let format = AudioFormat {
             encoding: AudioEncoding::PcmF32Le,
@@ -169,7 +163,7 @@ fn select_device(host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Dev
             .input_devices()
             .map_err(|error| invalid(format!("failed to enumerate input devices: {error}")))?;
         return devices
-            .find(|device| device.name().ok().as_deref() == Some(device_id))
+            .find(|device| device.to_string() == device_id)
             .ok_or_else(|| invalid(format!("no input device with id `{device_id}`")));
     }
     host.default_input_device()
@@ -182,13 +176,13 @@ fn build_f32_stream(
     channels: u16,
     sender: BoundedAudioInputSender,
 ) -> Result<cpal::Stream> {
-    let sample_rate_hz = config.sample_rate.0;
+    let sample_rate_hz = config.sample_rate;
     let sequence = Arc::new(AtomicU64::new(0));
     let start_frame = Arc::new(AtomicU64::new(0));
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[f32], _| {
                 push_callback_chunk(
                     data.to_vec(),
@@ -213,13 +207,13 @@ fn build_i16_stream(
     channels: u16,
     sender: BoundedAudioInputSender,
 ) -> Result<cpal::Stream> {
-    let sample_rate_hz = config.sample_rate.0;
+    let sample_rate_hz = config.sample_rate;
     let sequence = Arc::new(AtomicU64::new(0));
     let start_frame = Arc::new(AtomicU64::new(0));
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[i16], _| {
                 push_callback_chunk(
                     data.iter()
@@ -246,13 +240,13 @@ fn build_u16_stream(
     channels: u16,
     sender: BoundedAudioInputSender,
 ) -> Result<cpal::Stream> {
-    let sample_rate_hz = config.sample_rate.0;
+    let sample_rate_hz = config.sample_rate;
     let sequence = Arc::new(AtomicU64::new(0));
     let start_frame = Arc::new(AtomicU64::new(0));
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[u16], _| {
                 push_callback_chunk(
                     data.iter()

@@ -14,7 +14,7 @@ use std::{env, thread};
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
@@ -1480,12 +1480,12 @@ fn synthesize_boundary_text(sentences: usize, seed: u64) -> String {
     let mut lines = Vec::new();
 
     for index in 0..sentences {
-        let first = first_names[rng.gen_range(0..first_names.len())];
-        let last = last_names[rng.gen_range(0..last_names.len())];
-        let other = last_names[rng.gen_range(0..last_names.len())];
-        let place = places[rng.gen_range(0..places.len())];
-        let object = objects[rng.gen_range(0..objects.len())];
-        let verb = verbs[rng.gen_range(0..verbs.len())];
+        let first = first_names[rng.random_range(0..first_names.len())];
+        let last = last_names[rng.random_range(0..last_names.len())];
+        let other = last_names[rng.random_range(0..last_names.len())];
+        let place = places[rng.random_range(0..places.len())];
+        let object = objects[rng.random_range(0..objects.len())];
+        let verb = verbs[rng.random_range(0..verbs.len())];
         let text = match index % 6 {
             0 => format!("Mr. {last} {verb} {object} before noon."),
             1 => format!("Dr. {last} met {first} at {place}, and they compared notes."),

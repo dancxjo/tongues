@@ -3016,7 +3016,7 @@ impl AudioStreamPlayer {
                 anyhow::bail!("No default audio output device available.");
             }
         };
-        let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+        let device_name = device.to_string();
 
         let config = match device.default_output_config() {
             Ok(c) => c,
@@ -3029,7 +3029,7 @@ impl AudioStreamPlayer {
             }
         };
         let sample_format = config.sample_format();
-        let output_sample_rate = config.sample_rate().0;
+        let output_sample_rate = config.sample_rate();
         let channels = config.channels();
 
         let samples = Arc::new(Mutex::new(Vec::new()));
@@ -3046,7 +3046,7 @@ impl AudioStreamPlayer {
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => device.build_output_stream(
-                &stream_config,
+                stream_config.clone(),
                 move |output: &mut [f32], _| {
                     let guard = samples_clone.lock().unwrap();
                     let mut frame_idx = 0;
@@ -3078,7 +3078,7 @@ impl AudioStreamPlayer {
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_output_stream(
-                &stream_config,
+                stream_config.clone(),
                 move |output: &mut [i16], _| {
                     let guard = samples_clone.lock().unwrap();
                     let mut frame_idx = 0;
@@ -3113,7 +3113,7 @@ impl AudioStreamPlayer {
                 None,
             )?,
             cpal::SampleFormat::U16 => device.build_output_stream(
-                &stream_config,
+                stream_config,
                 move |output: &mut [u16], _| {
                     let guard = samples_clone.lock().unwrap();
                     let mut frame_idx = 0;

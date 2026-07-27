@@ -1597,7 +1597,14 @@ fn hash_reader(reader: &mut impl Read) -> Result<(u64, String)> {
             .context("file size overflow")?;
         digest.update(&buffer[..read]);
     }
-    Ok((size, format!("{:x}", digest.finalize())))
+    Ok((
+        size,
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    ))
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -1622,7 +1629,10 @@ fn catalog_entry_fingerprint(entry: &ModelCatalogEntry) -> Result<String> {
         .collect::<Vec<_>>();
     let source =
         serde_json::to_vec(&artifacts).context("failed to serialize artifact fingerprints")?;
-    Ok(format!("{:x}", Sha256::digest(source)))
+    Ok(Sha256::digest(source)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn modified_unix_nanos(metadata: &fs::Metadata) -> Option<u64> {

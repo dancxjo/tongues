@@ -15,7 +15,7 @@ use std::{env, thread};
 use anyhow::{Context, Result};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rayon::prelude::*;
 use seams::SentenceDetectorDialog;
 use serde::de::DeserializeOwned;
@@ -1951,11 +1951,11 @@ fn synthetic_buffers(
     let materials = synthetic_language_materials(config);
     (0..count)
         .map(|_| {
-            let head_material = &materials[rng.gen_range(0..materials.len())];
-            let remainder_material = &materials[rng.gen_range(0..materials.len())];
-            let head = head_material.heads[rng.gen_range(0..head_material.heads.len())];
+            let head_material = &materials[rng.random_range(0..materials.len())];
+            let remainder_material = &materials[rng.random_range(0..materials.len())];
+            let head = head_material.heads[rng.random_range(0..head_material.heads.len())];
             let rest = remainder_material.remainders
-                [rng.gen_range(0..remainder_material.remainders.len())];
+                [rng.random_range(0..remainder_material.remainders.len())];
             SyntheticBuffer {
                 text: synthetic_buffer_text(head, rest),
                 head_language: head_material.language.to_string(),
@@ -2851,7 +2851,7 @@ fn random_complete_buffers(
     }
     let mut out = Vec::new();
     for _ in 0..config.random_cuts_per_buffer {
-        let keep = rng.gen_range(0..=rest_graphemes.len());
+        let keep = rng.random_range(0..=rest_graphemes.len());
         let suffix = rest_graphemes[..keep].concat();
         out.push(format!("{}{}", &buffer[..head_end_byte], suffix));
     }
@@ -2865,7 +2865,7 @@ fn no_head_prefixes(head: &str, config: &Head2PhonesConfig, rng: &mut StdRng) ->
     }
     let mut cuts = vec![graphemes.len() / 3, graphemes.len() * 2 / 3];
     for _ in 0..config.no_head_cuts_per_head {
-        cuts.push(rng.gen_range(1..graphemes.len()));
+        cuts.push(rng.random_range(1..graphemes.len()));
     }
     for (index, grapheme) in graphemes.iter().enumerate() {
         if grapheme.chars().any(|ch| {

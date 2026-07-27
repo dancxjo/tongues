@@ -262,7 +262,12 @@ fn resolve_stats_digest(config_path: &Path, audio: &mut AudioFeatureConfig) -> R
             resolved.display()
         )
     })?;
-    audio.stats_sha256 = Some(format!("{:x}", Sha256::digest(bytes)));
+    audio.stats_sha256 = Some(
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    );
     Ok(())
 }
 

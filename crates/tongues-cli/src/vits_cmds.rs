@@ -604,10 +604,12 @@ fn count_jsonl(path: &Path) -> Result<usize> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
-    Ok(format!(
-        "{:x}",
+    Ok(
         Sha256::digest(fs::read(path).with_context(|| format!("reading {}", path.display()))?)
-    ))
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 fn print_paths(layout: &VitsRunLayout) {
