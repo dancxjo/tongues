@@ -1436,6 +1436,8 @@
             byId('browser-mic-stop')?.addEventListener('click', () => {
                 stopBrowserMicProbe();
             });
+            byId('recognition-language-mode')?.addEventListener('change', updateLanguageRoutingLabels);
+            updateLanguageRoutingLabels();
         }
     }
 
@@ -1456,9 +1458,9 @@
                         <option value="detect" ${detectorReady ? '' : 'disabled'}>Auto-detect${detectorReady ? '' : ' (detector model not installed)'}</option>
                     </select>
                 </label>
-                <label>Language
+                <label><span id="recognition-language-label">Fixed language</span>
                     <select id="recognition-language-fixed">
-                        ${languages.map((language) => `<option value="${escapeAttribute(language)}">${escapeHtml(language)}</option>`).join('')}
+                        ${languages.map((language) => `<option value="${escapeAttribute(language)}" ${language === 'en' ? 'selected' : ''}>${escapeHtml(language)}</option>`).join('')}
                     </select>
                 </label>
                 <label>Minimum confidence
@@ -1473,8 +1475,21 @@
                 <p>${detectorReady
                     ? 'Detection evidence remains visible if ASR routing falls back.'
                     : 'Auto-detect fails closed until the advertised detector model is installed; fixed-language routing remains available.'}</p>
+                <p id="recognition-language-status" class="recognition-language-status">No segment has been routed yet.</p>
             </div>
         `;
+    }
+
+    function updateLanguageRoutingLabels() {
+        const detecting = byId('recognition-language-mode')?.value === 'detect';
+        const label = byId('recognition-language-label');
+        if (label) label.textContent = detecting ? 'Fallback language' : 'Fixed language';
+        const status = byId('recognition-language-status');
+        if (status && !status.dataset.routed) {
+            status.textContent = detecting
+                ? 'Waiting for a finalized segment to identify.'
+                : `Pinned to ${byId('recognition-language-fixed')?.value || 'en'}.`;
+        }
     }
 
     function setBrowserMicStatus(message, failed = false) {
@@ -1632,6 +1647,11 @@
                         const detected = route.detection?.hypotheses?.map((hypothesis) => (
                             `${hypothesis.language} ${Number(hypothesis.confidence || 0).toFixed(2)}`
                         )).join(', ') || 'fixed';
+                        const routeStatus = byId('recognition-language-status');
+                        if (routeStatus) {
+                            routeStatus.dataset.routed = 'true';
+                            routeStatus.textContent = `Detected ${detected}; active route ${route.selected_language} → ${route.provider_id}.`;
+                        }
                         appendBrowserMicEvent(
                             `Language ${detected}; routed ${route.selected_language} to ${route.provider_id} (${route.model_id})${route.fallback_reason ? `; ${route.fallback_reason}` : ''}.`,
                         );

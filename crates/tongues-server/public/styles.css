@@ -633,6 +633,11 @@ a {
     gap: 0.2rem;
 }
 
+.language-routing-controls .recognition-language-status {
+    color: var(--text);
+    font-weight: 700;
+}
+
 .browser-mic-probe meter {
     flex: 1 1 10rem;
     min-width: 8rem;

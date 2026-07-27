@@ -658,6 +658,9 @@ test('browser microphone capture crosses the shared bounded server input', () =>
     assert.match(studioSource, /minimum_confidence/);
     assert.match(studioSource, /language_routing: languageRouting/);
     assert.match(studioSource, /message\.type === 'language_routed'/);
+    assert.match(studioSource, /recognition-language-status/);
+    assert.match(studioSource, /Detected \$\{detected\}; active route/);
+    assert.match(studioSource, /Fallback language/);
     assert.match(stylesSource, /\.browser-mic-probe/);
 });
 
