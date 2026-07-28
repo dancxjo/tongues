@@ -182,7 +182,7 @@ fn build_f32_stream(
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[f32], _| {
                 push_callback_chunk(
                     data.to_vec(),
@@ -213,7 +213,7 @@ fn build_i16_stream(
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[i16], _| {
                 push_callback_chunk(
                     data.iter()
@@ -246,7 +246,7 @@ fn build_u16_stream(
     let error_sender = sender.clone();
     device
         .build_input_stream(
-            config.clone(),
+            *config,
             move |data: &[u16], _| {
                 push_callback_chunk(
                     data.iter()

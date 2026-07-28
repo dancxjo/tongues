@@ -427,7 +427,7 @@ fn speech_demo(raw_args: Vec<String>) -> Result<(), String> {
         "She found a blue feather on the path and tucked it into her notebook.",
         "At dusk, the library windows glowed softly above the sleeping square.",
     ];
-    sentences.shuffle(&mut rand::thread_rng());
+    sentences.shuffle(&mut rand::rng());
 
     println!(
         "speech-demo: starting one resident process for all backends ({})",

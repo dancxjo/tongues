@@ -83,7 +83,7 @@ impl CpalAudioSink {
         let config = self.config.config();
         let stream = match self.config.sample_format() {
             cpal::SampleFormat::F32 => self.device.build_output_stream(
-                config.clone(),
+                config,
                 {
                     let callback_state = Arc::clone(&state);
                     move |output: &mut [f32], _| {
@@ -94,7 +94,7 @@ impl CpalAudioSink {
                 None,
             ),
             cpal::SampleFormat::I16 => self.device.build_output_stream(
-                config.clone(),
+                config,
                 {
                     let callback_state = Arc::clone(&state);
                     move |output: &mut [i16], _| {

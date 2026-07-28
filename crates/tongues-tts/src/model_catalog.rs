@@ -92,21 +92,16 @@ pub struct ModelCatalogEntry {
     pub artifacts: Vec<CatalogArtifact>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogModelKind {
     AcousticModel,
     NeuralVocoder,
+    #[default]
     EndToEndSpeech,
     VoiceConversion,
     StyleTts2,
     VoiceModel,
-}
-
-impl Default for CatalogModelKind {
-    fn default() -> Self {
-        Self::EndToEndSpeech
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

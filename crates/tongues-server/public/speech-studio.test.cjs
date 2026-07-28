@@ -216,6 +216,11 @@ test('catalog fetch inventory includes every missing artifact exactly once', () 
     assert.match(studioSource, /Promise\.all\(modelIds\.map/);
 });
 
+test('speech model detail exposes a direct artifact fetch action', () => {
+    assert.match(studioSource, /class="secondary-button fetch-speech-artifact">Fetch artifact/);
+    assert.match(studioSource, /startCatalogFetch\(path, path\.display_name\)/);
+});
+
 test('runtime polling waits for each request instead of using an overlapping interval', () => {
     assert.doesNotMatch(studioSource, /setInterval\s*\(/);
     assert.match(

@@ -2415,9 +2415,9 @@ pub fn evaluate_alignment(
         .into_iter()
         .flat_map(|path| path.units.iter())
         .map(|unit| {
-            let observed = if unit.relation == AlignmentUnitRelation::Insertion {
-                0.0
-            } else if unit.input_unit_ids.is_empty() {
+            let observed = if unit.relation == AlignmentUnitRelation::Insertion
+                || unit.input_unit_ids.is_empty()
+            {
                 0.0
             } else {
                 1.0
@@ -2520,11 +2520,11 @@ pub fn evaluate_alignment(
 fn edit_counts<T: Eq>(reference: &[T], prediction: &[T]) -> (usize, usize, usize, usize) {
     let mut table =
         vec![vec![(0usize, 0usize, 0usize, 0usize); prediction.len() + 1]; reference.len() + 1];
-    for index in 1..=reference.len() {
-        table[index][0] = (index, 0, index, 0);
+    for (index, row) in table.iter_mut().enumerate().skip(1) {
+        row[0] = (index, 0, index, 0);
     }
-    for index in 1..=prediction.len() {
-        table[0][index] = (index, index, 0, 0);
+    for (index, cell) in table[0].iter_mut().enumerate().skip(1) {
+        *cell = (index, index, 0, 0);
     }
     for left in 1..=reference.len() {
         for right in 1..=prediction.len() {

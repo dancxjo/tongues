@@ -59,7 +59,7 @@ impl Default for EnergyVadConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct EnergyVad {
     config: EnergyVadConfig,
 }
@@ -72,14 +72,6 @@ impl EnergyVad {
             ));
         }
         Ok(Self { config })
-    }
-}
-
-impl Default for EnergyVad {
-    fn default() -> Self {
-        Self {
-            config: EnergyVadConfig::default(),
-        }
     }
 }
 

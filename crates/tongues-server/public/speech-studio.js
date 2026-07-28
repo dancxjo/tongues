@@ -1992,10 +1992,23 @@
             </dl>
             ${path.unavailable_reason ? `<p class="inline-error">${escapeHtml(path.unavailable_reason)}</p>` : ''}
             <div class="model-actions">
+                ${path.install_command ? '<button type="button" class="secondary-button fetch-speech-artifact">Fetch artifact</button>' : ''}
                 ${path.install_command ? `<button type="button" class="secondary-button copy-install-command" data-command="${escapeAttribute(path.install_command)}">Copy install command</button>` : ''}
                 ${catalog.length && path.verification_status !== 'verified' && path.verification_status !== 'unavailable' ? '<button type="button" class="secondary-button verify-speech-pipeline">Verify pipeline</button>' : ''}
                 ${path.load_state === 'loaded' ? '<button type="button" class="secondary-button unload-speech-path">Unload model</button>' : ''}
             </div>`;
+        card.querySelector('.fetch-speech-artifact')?.addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.textContent = 'Starting fetch…';
+            try {
+                await startCatalogFetch(path, path.display_name);
+            } catch (error) {
+                showError(`Fetch failed: ${error.message}`);
+                button.disabled = false;
+                button.textContent = 'Fetch artifact';
+            }
+        });
         card.querySelector('.copy-install-command')?.addEventListener('click', async (event) => {
             await navigator.clipboard.writeText(event.currentTarget.dataset.command);
             event.currentTarget.textContent = 'Install command copied';
