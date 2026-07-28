@@ -51,6 +51,48 @@ test('selects a complete runnable path and keeps unavailable inventory visible',
     assert.equal(studio.availablePaths(discovery).length, 2);
 });
 
+test('speech samples cover many scripts and only expose languages with compatible paths', () => {
+    assert.ok(studio.SPEECH_SAMPLES.length >= 50);
+    assert.ok(studio.SPEECH_SAMPLES.some((language) => language.code === 'ar'));
+    assert.ok(studio.SPEECH_SAMPLES.some((language) => language.code === 'zh'));
+    assert.ok(studio.SPEECH_SAMPLES.some((language) => language.code === 'hi'));
+
+    const english = fixturePath({
+        catalog: [{ languages: ['eng'] }],
+    });
+    const thai = fixturePath({
+        backend: 'fairseq',
+        model: 'fairseq-mms-vits-tha',
+        catalog: [{ languages: ['tha'] }],
+    });
+    const discovery = {
+        paths: [english, thai],
+        compositions: [
+            {
+                id: 'pipeline/english',
+                backend: english.backend,
+                model: english.model,
+                runnable: true,
+                pipeline: { end_to_end: english.model },
+            },
+            {
+                id: 'pipeline/thai',
+                backend: thai.backend,
+                model: thai.model,
+                runnable: true,
+                pipeline: { end_to_end: thai.model },
+            },
+        ],
+    };
+
+    assert.deepEqual(
+        studio.sampleLanguagesForDiscovery(discovery).map((language) => language.code),
+        ['en', 'th'],
+    );
+    assert.equal(studio.pathSupportsSampleLanguage(english, 'en'), true);
+    assert.equal(studio.pathSupportsSampleLanguage(english, 'th'), false);
+});
+
 test('deduplicates pending catalog verification calls', () => {
     assert.deepEqual(studio.pendingVerificationIds({
         verification_ids: [

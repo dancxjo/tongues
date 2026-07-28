@@ -472,6 +472,27 @@ a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.sample-picker {
+    align-items: end;
+    background: var(--panel-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(180px, 0.8fr) repeat(2, minmax(0, 1fr));
+    margin-bottom: 1rem;
+    padding: 1rem;
+}
+
+.sample-picker > div:first-child {
+    align-self: center;
+}
+
+.sample-picker strong {
+    display: block;
+    margin-top: 0.2rem;
+}
+
 .recipe-summary {
     align-items: start;
     background: var(--panel-soft);
@@ -2178,6 +2199,7 @@ audio::-webkit-media-controls-panel {
     }
 
     .speak-choice-grid,
+    .sample-picker,
     .live-controls,
     .live-frontiers,
     .compare-candidates,

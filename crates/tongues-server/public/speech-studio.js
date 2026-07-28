@@ -78,6 +78,70 @@
     const catalogPageCache = new Map();
     const LIVE_CONVERSATION_SCHEMA_VERSION = 1;
     const LIVE_TERMINAL_MESSAGE_STATES = new Set(['completed', 'stopped', 'failed']);
+    const SPEECH_SAMPLES = [
+        ['ar', 'ara', 'Arabic', 'العربية', ['مرحبًا بالعالم. هذا مثال قصير لتحويل النص إلى كلام.']],
+        ['am', 'amh', 'Amharic', 'አማርኛ', ['ሰላም ለዓለም። ይህ አጭር የንግግር ምሳሌ ነው።']],
+        ['az', 'aze', 'Azerbaijani', 'Azərbaycanca', ['Salam dünya. Bu, nitq sintezi üçün qısa bir nümunədir.']],
+        ['bn', 'ben', 'Bengali', 'বাংলা', ['হ্যালো পৃথিবী। এটি কথ্য ভাষার একটি ছোট নমুনা।']],
+        ['bg', 'bul', 'Bulgarian', 'Български', ['Здравей, свят. Това е кратък пример за синтез на реч.']],
+        ['ca', 'cat', 'Catalan', 'Català', ['Hola, món. Aquest és un exemple breu de síntesi de veu.']],
+        ['zh', 'cmn', 'Chinese (Mandarin)', '中文（普通话）', ['你好，世界。这是一段简短的语音合成示例。', '今天天气很好，我们一起去公园散步吧。']],
+        ['hr', 'hrv', 'Croatian', 'Hrvatski', ['Pozdrav, svijete. Ovo je kratak primjer sinteze govora.']],
+        ['cs', 'ces', 'Czech', 'Čeština', ['Ahoj světe. Toto je krátká ukázka syntézy řeči.']],
+        ['da', 'dan', 'Danish', 'Dansk', ['Hej verden. Dette er et kort eksempel på talesyntese.']],
+        ['nl', 'nld', 'Dutch', 'Nederlands', ['Hallo wereld. Dit is een kort voorbeeld van spraaksynthese.']],
+        ['en', 'eng', 'English', 'English', [
+            'All human beings are born free and equal in dignity and rights.',
+            'The quick brown fox jumps over the lazy dog.',
+            'Welcome to Tongues. Choose a voice, then listen to this sample.',
+        ]],
+        ['et', 'est', 'Estonian', 'Eesti', ['Tere, maailm. See on lühike kõnesünteesi näide.']],
+        ['fi', 'fin', 'Finnish', 'Suomi', ['Hei maailma. Tämä on lyhyt esimerkki puhesynteesistä.']],
+        ['fr', 'fra', 'French', 'Français', ['Bonjour le monde. Voici un court exemple de synthèse vocale.', 'Portez ce vieux whisky au juge blond qui fume.']],
+        ['ka', 'kat', 'Georgian', 'ქართული', ['გამარჯობა, მსოფლიო. ეს მეტყველების სინთეზის მოკლე მაგალითია.']],
+        ['de', 'deu', 'German', 'Deutsch', ['Hallo Welt. Dies ist ein kurzes Beispiel für Sprachsynthese.', 'Franz jagt im komplett verwahrlosten Taxi quer durch Bayern.']],
+        ['el', 'ell', 'Greek', 'Ελληνικά', ['Γεια σου, κόσμε. Αυτό είναι ένα σύντομο παράδειγμα σύνθεσης ομιλίας.']],
+        ['gu', 'guj', 'Gujarati', 'ગુજરાતી', ['નમસ્તે દુનિયા. આ વાણી સંશ્લેષણનું ટૂંકું ઉદાહરણ છે.']],
+        ['he', 'heb', 'Hebrew', 'עברית', ['שלום עולם. זוהי דוגמה קצרה לסינתזת דיבור.']],
+        ['hi', 'hin', 'Hindi', 'हिन्दी', ['नमस्ते दुनिया। यह वाक् संश्लेषण का एक छोटा उदाहरण है।']],
+        ['hu', 'hun', 'Hungarian', 'Magyar', ['Helló, világ! Ez egy rövid példa a beszédszintézisre.']],
+        ['is', 'isl', 'Icelandic', 'Íslenska', ['Halló heimur. Þetta er stutt dæmi um talgervingu.']],
+        ['id', 'ind', 'Indonesian', 'Bahasa Indonesia', ['Halo dunia. Ini adalah contoh singkat sintesis ucapan.']],
+        ['ga', 'gle', 'Irish', 'Gaeilge', ['Dia duit, a dhomhain. Seo sampla gairid de shintéis cainte.']],
+        ['it', 'ita', 'Italian', 'Italiano', ['Ciao mondo. Questo è un breve esempio di sintesi vocale.', 'Quel vituperabile xenofobo zelante assaggia il whisky ed esclama.']],
+        ['ja', 'jpn', 'Japanese', '日本語', ['こんにちは、世界。これは音声合成の短い例です。', '今日はいい天気ですね。一緒に散歩しましょう。']],
+        ['kn', 'kan', 'Kannada', 'ಕನ್ನಡ', ['ನಮಸ್ಕಾರ ಜಗತ್ತು. ಇದು ಭಾಷಣ ಸಂಶ್ಲೇಷಣೆಯ ಒಂದು ಚಿಕ್ಕ ಉದಾಹರಣೆ.']],
+        ['ko', 'kor', 'Korean', '한국어', ['안녕하세요, 세상. 이것은 음성 합성의 짧은 예입니다.']],
+        ['lv', 'lav', 'Latvian', 'Latviešu', ['Sveika, pasaule. Šis ir īss runas sintēzes piemērs.']],
+        ['lt', 'lit', 'Lithuanian', 'Lietuvių', ['Labas, pasauli. Tai trumpas kalbos sintezės pavyzdys.']],
+        ['ms', 'msa', 'Malay', 'Bahasa Melayu', ['Hai dunia. Ini ialah contoh ringkas sintesis pertuturan.']],
+        ['ml', 'mal', 'Malayalam', 'മലയാളം', ['നമസ്കാരം ലോകമേ. ഇത് സംഭാഷണ സംശ്ലേഷണത്തിന്റെ ഒരു ചെറിയ ഉദാഹരണമാണ്.']],
+        ['mr', 'mar', 'Marathi', 'मराठी', ['नमस्कार जग. हे वाक् संश्लेषणाचे एक छोटे उदाहरण आहे.']],
+        ['ne', 'nep', 'Nepali', 'नेपाली', ['नमस्ते संसार। यो वाक् संश्लेषणको छोटो उदाहरण हो।']],
+        ['no', 'nor', 'Norwegian', 'Norsk', ['Hei, verden. Dette er et kort eksempel på talesyntese.']],
+        ['fa', 'fas', 'Persian', 'فارسی', ['سلام دنیا. این یک نمونه کوتاه از تبدیل متن به گفتار است.']],
+        ['pl', 'pol', 'Polish', 'Polski', ['Witaj, świecie. To jest krótki przykład syntezy mowy.']],
+        ['pt', 'por', 'Portuguese', 'Português', ['Olá, mundo. Este é um breve exemplo de síntese de fala.', 'A rápida raposa marrom salta sobre o cão preguiçoso.']],
+        ['pa', 'pan', 'Punjabi', 'ਪੰਜਾਬੀ', ['ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਦੁਨੀਆ। ਇਹ ਬੋਲੀ ਸੰਸਲੇਸ਼ਣ ਦੀ ਇੱਕ ਛੋਟੀ ਮਿਸਾਲ ਹੈ।']],
+        ['ro', 'ron', 'Romanian', 'Română', ['Salut, lume. Acesta este un scurt exemplu de sinteză vocală.']],
+        ['ru', 'rus', 'Russian', 'Русский', ['Здравствуй, мир. Это короткий пример синтеза речи.', 'Съешь ещё этих мягких французских булок, да выпей чаю.']],
+        ['sr', 'srp', 'Serbian', 'Српски', ['Здраво, свете. Ово је кратак пример синтезе говора.']],
+        ['sk', 'slk', 'Slovak', 'Slovenčina', ['Ahoj, svet. Toto je krátka ukážka syntézy reči.']],
+        ['sl', 'slv', 'Slovenian', 'Slovenščina', ['Pozdravljen, svet. To je kratek primer sinteze govora.']],
+        ['es', 'spa', 'Spanish', 'Español', ['Hola, mundo. Este es un breve ejemplo de síntesis de voz.', 'El veloz murciélago hindú comía feliz cardillo y kiwi.']],
+        ['sw', 'swa', 'Swahili', 'Kiswahili', ['Habari, dunia. Huu ni mfano mfupi wa usanisi wa sauti.']],
+        ['sv', 'swe', 'Swedish', 'Svenska', ['Hej världen. Det här är ett kort exempel på talsyntes.']],
+        ['ta', 'tam', 'Tamil', 'தமிழ்', ['வணக்கம் உலகமே. இது பேச்சுத் தொகுப்பின் ஒரு சிறிய எடுத்துக்காட்டு.']],
+        ['te', 'tel', 'Telugu', 'తెలుగు', ['నమస్కారం ప్రపంచం. ఇది ప్రసంగ సంశ్లేషణకు ఒక చిన్న ఉదాహరణ.']],
+        ['th', 'tha', 'Thai', 'ไทย', ['สวัสดีชาวโลก นี่คือตัวอย่างสั้น ๆ ของการสังเคราะห์เสียงพูด']],
+        ['tr', 'tur', 'Turkish', 'Türkçe', ['Merhaba dünya. Bu, konuşma sentezinin kısa bir örneğidir.']],
+        ['uk', 'ukr', 'Ukrainian', 'Українська', ['Привіт, світе. Це короткий приклад синтезу мовлення.']],
+        ['ur', 'urd', 'Urdu', 'اردو', ['سلام دنیا۔ یہ تقریری ترکیب کی ایک مختصر مثال ہے۔']],
+        ['vi', 'vie', 'Vietnamese', 'Tiếng Việt', ['Xin chào thế giới. Đây là một ví dụ ngắn về tổng hợp giọng nói.']],
+        ['cy', 'cym', 'Welsh', 'Cymraeg', ['Helo, fyd. Dyma enghraifft fer o synthesis lleferydd.']],
+    ].map(([code, iso3, name, nativeName, texts]) => ({
+        code, iso3, name, nativeName, texts,
+    }));
     const WORKFLOWS = {
         speak: {
             path: '/speech',
@@ -217,6 +281,45 @@
     const listedValues = (capability) => (
         capability?.support === 'listed' ? (capability.values || []) : []
     );
+    const normalizedLanguageCode = (value) => String(value || '')
+        .trim()
+        .toLowerCase()
+        .replaceAll('_', '-')
+        .split('-')[0];
+    const SAMPLE_LANGUAGE_ALIASES = {
+        az: ['azj'],
+        fa: ['pes'],
+        ms: ['zsm'],
+        no: ['nob', 'nno'],
+        zh: ['zho'],
+    };
+    function pathLanguageCodes(path) {
+        const values = [
+            ...(path?.linguistic_coverage?.languages || []),
+            ...(path?.languages?.values || []),
+            ...(path?.catalog || []).flatMap((entry) => entry.languages || []),
+            ...varietiesForPath(path).flatMap((variety) => [variety.id, variety.language]),
+        ];
+        return new Set(values.map(normalizedLanguageCode).filter(Boolean));
+    }
+    function pathSupportsSampleLanguage(path, language) {
+        if (!path || !language) return true;
+        const sample = typeof language === 'string'
+            ? SPEECH_SAMPLES.find((candidate) => candidate.code === language || candidate.iso3 === language)
+            : language;
+        if (!sample) return false;
+        const codes = pathLanguageCodes(path);
+        return [sample.code, sample.iso3, ...(SAMPLE_LANGUAGE_ALIASES[sample.code] || [])]
+            .some((code) => codes.has(code));
+    }
+    function sampleLanguagesForDiscovery(discovery) {
+        const paths = availableCompositions(discovery).map(
+            (composition) => pathForComposition(composition, discovery),
+        ).filter(Boolean);
+        return SPEECH_SAMPLES.filter((language) => (
+            paths.some((path) => pathSupportsSampleLanguage(path, language))
+        ));
+    }
     const comparisonSpeaker = (path, recipe = {}) => {
         if (recipe.speaker) return recipe.speaker;
         if (!path?.speakers?.required) return null;
@@ -522,6 +625,22 @@
                     </div>
                     <form id="synth-form" novalidate>
                         <div id="speech-error" class="inline-error hidden" role="alert" tabindex="-1"></div>
+                        <div class="sample-picker" aria-labelledby="speech-samples-heading">
+                            <div>
+                                <p class="eyebrow" id="speech-samples-heading">Sample library</p>
+                                <strong>Try a language this recipe can speak</strong>
+                            </div>
+                            <div class="form-group">
+                                <label for="speech-language">Language</label>
+                                <select id="speech-language"></select>
+                                <small id="speech-language-detail">Loading compatible languages…</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="speech-sample">Sample text</label>
+                                <select id="speech-sample"></select>
+                                <small>Selecting a sample fills the text below.</small>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label for="text">Text to speak</label>
                             <textarea id="text" required>All human beings are born free and equal in dignity and rights. They are endowed with reason and conscience and should act towards one another in a spirit of brotherhood.</textarea>
@@ -1267,6 +1386,14 @@
     function renderPathSelector() {
         const select = byId('speech-preset');
         const liveSelect = byId('live-recipe');
+        const sampleLanguage = byId('speech-language')?.value || '';
+        const supportsSelectedLanguage = (composition) => (
+            !sampleLanguage
+            || pathSupportsSampleLanguage(
+                pathForComposition(composition, state.discovery),
+                sampleLanguage,
+            )
+        );
         select.replaceChildren();
         liveSelect?.replaceChildren();
         select.appendChild(new Option('Current pipeline', 'custom'));
@@ -1275,7 +1402,9 @@
             const composition = state.discovery.compositions.find(
                 (candidate) => candidate.id === preset.composition_id,
             );
-            if (preset.developer || !composition?.runnable) continue;
+            if (preset.developer || !composition?.runnable || !supportsSelectedLanguage(composition)) {
+                continue;
+            }
             const option = new Option(
                 preset.display_name,
                 preset.id,
@@ -1287,7 +1416,7 @@
             const composition = state.discovery.compositions.find(
                 (candidate) => candidate.id === recipe.compositionId,
             );
-            if (!composition) continue;
+            if (!composition || !supportsSelectedLanguage(composition)) continue;
             select.appendChild(new Option(`${recipe.name} · saved`, recipe.id));
             liveSelect?.appendChild(new Option(`${recipe.name} · saved`, recipe.id));
         }
@@ -1302,7 +1431,7 @@
         const voiceInput = byId('speech-voice');
         const voiceOptions = byId('speech-voice-options');
         voiceOptions.replaceChildren();
-        for (const composition of availableCompositions(state.discovery)) {
+        for (const composition of availableCompositions(state.discovery).filter(supportsSelectedLanguage)) {
             const path = (state.discovery.paths || []).find((candidate) => (
                 candidate.backend === composition.backend && candidate.model === composition.model
             ));
@@ -1325,6 +1454,41 @@
         }
         const mock = (state.discovery.compositions || []).find((path) => path.backend === 'mock');
         byId('select-mock-path').classList.toggle('hidden', !mock);
+    }
+
+    function renderSpeechSamples({ replaceText = false } = {}) {
+        const languageSelect = byId('speech-language');
+        const sampleSelect = byId('speech-sample');
+        if (!languageSelect || !sampleSelect || !state.discovery) return;
+        const languages = sampleLanguagesForDiscovery(state.discovery);
+        const previousLanguage = languageSelect.value;
+        languageSelect.replaceChildren(...languages.map((language) => (
+            new Option(
+                language.name === language.nativeName
+                    ? language.name
+                    : `${language.name} · ${language.nativeName}`,
+                language.code,
+            )
+        )));
+        const selectedLanguage = languages.find((language) => language.code === previousLanguage)
+            || languages.find((language) => pathSupportsSampleLanguage(selectedPath(), language))
+            || languages.find((language) => language.code === 'en')
+            || languages[0];
+        languageSelect.value = selectedLanguage?.code || '';
+        languageSelect.disabled = languages.length < 2;
+        byId('speech-language-detail').textContent = languages.length
+            ? `${languages.length} sampled languages have a discovered speech path. Voice and recipe choices are filtered to this language.`
+            : 'No discovered speech path matches the sample library.';
+        sampleSelect.replaceChildren(...(selectedLanguage?.texts || []).map((text, index) => (
+            new Option(
+                `${index + 1}. ${text.length > 72 ? `${text.slice(0, 69)}…` : text}`,
+                String(index),
+            )
+        )));
+        sampleSelect.disabled = !selectedLanguage?.texts?.length;
+        if (replaceText && selectedLanguage?.texts?.length) {
+            byId('text').value = selectedLanguage.texts[0];
+        }
     }
 
     function componentById(id) {
@@ -2925,6 +3089,7 @@
             );
             state.presetId = preset?.id || '';
         }
+        renderSpeechSamples();
         renderPathSelector();
         renderInventory();
         renderSelectedPath();
@@ -3123,6 +3288,12 @@
                     + ` of ${page.page.total.toLocaleString()} cached`
                 );
             }
+        }
+        if (generation === state.catalogRequestGeneration && merged) {
+            state.discovery = mergeInventoryDiscovery(state.discovery, merged);
+            renderSpeechSamples();
+            renderPathSelector();
+            renderSelectedPath();
         }
     }
 
@@ -4467,6 +4638,33 @@
             state.presetId = preset.id;
             renderSelectedPath();
         });
+        byId('speech-language').addEventListener('change', (event) => {
+            const language = event.target.value;
+            const current = selectedComposition();
+            const candidates = availableCompositions(state.discovery).filter((composition) => (
+                pathSupportsSampleLanguage(
+                    pathForComposition(composition, state.discovery),
+                    language,
+                )
+            ));
+            const next = current && candidates.some((candidate) => candidate.id === current.id)
+                ? current
+                : (candidates.find((candidate) => candidate.runnable) || candidates[0]);
+            if (next) {
+                state.pathKey = next.id;
+                state.presetId = '';
+            }
+            renderSpeechSamples({ replaceText: true });
+            renderPathSelector();
+            renderSelectedPath();
+        });
+        byId('speech-sample').addEventListener('change', (event) => {
+            const language = SPEECH_SAMPLES.find(
+                (candidate) => candidate.code === byId('speech-language').value,
+            );
+            const text = language?.texts?.[Number(event.target.value)];
+            if (text) byId('text').value = text;
+        });
         byId('live-recipe').addEventListener('change', (event) => {
             byId('speech-preset').value = event.target.value;
             byId('speech-preset').dispatchEvent(new Event('change'));
@@ -4854,6 +5052,8 @@
         init,
         parseNumberArray,
         pathKey,
+        pathLanguageCodes,
+        pathSupportsSampleLanguage,
         pathForComposition,
         mergeDiscovery,
         mergeInventoryDiscovery,
@@ -4869,6 +5069,8 @@
         savedRecipeModelIds,
         selectInitialPath,
         selectInitialComposition,
+        sampleLanguagesForDiscovery,
+        SPEECH_SAMPLES,
         setWorkflow,
         speechInstructionForPath,
         studioShell,

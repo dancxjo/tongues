@@ -317,25 +317,26 @@ impl MbrolaSymbolMap {
         ];
         let variants: &[(&str, &str)] = match voice_id {
             "us1" | "mbrola-us1" => &[
-                ("ɝ", "3"),
-                ("ɚ", "3"),
-                ("oʊ", "oU"),
-                ("aɪ", "aI"),
-                ("ɑɪ", "aI"),
-                ("eɪ", "eI"),
-                ("ER", "3"),
-                ("OW", "oU"),
-                ("AY", "aI"),
-                ("EY", "eI"),
-                ("ER0", "3"),
-                ("ER1", "3"),
-                ("OW0", "oU"),
-                ("OW1", "oU"),
-                ("AY0", "aI"),
-                ("AY1", "aI"),
-                ("EY0", "eI"),
-                ("EY1", "eI"),
-                ("DX", "d"),
+                ("ɝ", "r="),
+                ("ɚ", "r="),
+                ("oʊ", "@U"),
+                ("aɪ", "AI"),
+                ("ɑɪ", "AI"),
+                ("eɪ", "EI"),
+                ("ɾ", "4"),
+                ("ER", "r="),
+                ("OW", "@U"),
+                ("AY", "AI"),
+                ("EY", "EI"),
+                ("ER0", "r="),
+                ("ER1", "r="),
+                ("OW0", "@U"),
+                ("OW1", "@U"),
+                ("AY0", "AI"),
+                ("AY1", "AI"),
+                ("EY0", "EI"),
+                ("EY1", "EI"),
+                ("DX", "4"),
             ],
             "us3" | "mbrola-us3" => &[
                 ("ɝ", "r="),
@@ -717,6 +718,7 @@ impl MbrolaProjector {
         let speech_boundaries = speech_boundary_insertions(plan, &self.timing);
         let mut speech_boundary_index = 0;
         let mut previous_single_symbol: Option<String> = None;
+        let mut previous_contiguous_symbol: Option<String> = None;
 
         for (index, token) in plan.target_phones.iter().enumerate() {
             while speech_boundary_index < speech_boundaries.len()
@@ -729,12 +731,14 @@ impl MbrolaProjector {
                 report.inserted_breaks += 1;
                 speech_boundary_index += 1;
                 previous_single_symbol = None;
+                previous_contiguous_symbol = None;
             }
             let phone = spec_phone(token)?;
             if is_structural_boundary(phone) {
                 if !matches!(phone.as_str(), "ipa.phone.|" | "boundary.word") {
                     previous_single_symbol = None;
                 }
+                previous_contiguous_symbol = None;
                 continue;
             }
             let source = phone_display_symbol(phone);
@@ -774,6 +778,7 @@ impl MbrolaProjector {
                 report.inserted_breaks += 1;
                 break_index += 1;
                 previous_single_symbol = None;
+                previous_contiguous_symbol = None;
             }
 
             let mut duration_ms = seconds_to_ms(span.duration_s())?;
@@ -815,7 +820,23 @@ impl MbrolaProjector {
                 .then(|| format!("{}:", symbols[0]))
                 .filter(|geminate| self.inventory.contains(geminate))
                 .filter(|_| previous_single_symbol.as_deref() == Some(symbols[0].as_str()));
-            if let Some(geminate) = geminate {
+            let compound = (symbols.as_slice() == ["u"]
+                && previous_contiguous_symbol.as_deref() == Some("j")
+                && self.inventory.contains("iU"))
+            .then_some("iU");
+            if let Some(compound) = compound {
+                let previous = phones
+                    .last_mut()
+                    .expect("a contiguous j exists for us3 iU lowering");
+                previous.symbol = compound.into();
+                previous.duration_ms = previous
+                    .duration_ms
+                    .checked_add(duration_ms)
+                    .ok_or(MbrolaLoweringError::DurationOverflow)?;
+                previous.pitch_targets = pitch_targets;
+                previous_single_symbol = None;
+                previous_contiguous_symbol = None;
+            } else if let Some(geminate) = geminate {
                 let previous = phones
                     .last_mut()
                     .expect("a previous single symbol exists for geminate lowering");
@@ -825,6 +846,7 @@ impl MbrolaProjector {
                     .checked_add(duration_ms)
                     .ok_or(MbrolaLoweringError::DurationOverflow)?;
                 previous_single_symbol = None;
+                previous_contiguous_symbol = None;
             } else {
                 for (symbol_index, (symbol, symbol_duration)) in
                     symbols.into_iter().zip(split_durations).enumerate()
@@ -835,7 +857,8 @@ impl MbrolaProjector {
                             split_pitch_targets(&pitch_targets, symbol_index, symbol_count),
                         ),
                     );
-                    previous_single_symbol = single_symbol;
+                    previous_single_symbol = single_symbol.clone();
+                    previous_contiguous_symbol = single_symbol;
                 }
             }
             inferred_cursor_s = span.end_s;
@@ -1516,6 +1539,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn us1_uses_its_card_symbols_for_diphthongs_rhotics_and_flaps() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-us1").expect("us1 voice config");
+        let voice = MbrolaVoiceMetadata {
+            id: config.id.into(),
+            variety: config.variety.into(),
+            baseline_hz: None,
+            pitch_range_hz: None,
+        };
+        let inventory = ["4", "@U", "AI", "EI", "r="]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let map = config.symbol_map();
+        for (phone, expected) in [
+            ("aɪ", "AI"),
+            ("eɪ", "EI"),
+            ("oʊ", "@U"),
+            ("ɝ", "r="),
+            ("ɾ", "4"),
+        ] {
+            assert_eq!(
+                map.resolve(phone, &voice, &inventory).unwrap(),
+                vec![expected],
+                "us1 card projection for {phone}"
+            );
+        }
+    }
+
+    #[test]
+    fn us3_contracts_j_u_to_the_card_i_u_unit() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-us3").expect("us3 voice config");
+        let mut plan = plan();
+        plan.variety = VarietyId(config.variety.into());
+        plan.target_phones = vec![token("h", None), token("j", None), token("u", None)];
+        plan.target_syllables.clear();
+        plan.boundaries.clear();
+        plan.target_prosody = ProsodyTrack::default();
+        let projector = MbrolaProjector {
+            voice: MbrolaVoiceMetadata {
+                id: config.id.into(),
+                variety: config.variety.into(),
+                baseline_hz: None,
+                pitch_range_hz: None,
+            },
+            symbol_map: config.symbol_map(),
+            inventory: ["_", "h", "iU", "j", "u"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            timing: MbrolaTimingProfile::default(),
+            control_baseline_hz: None,
+            control_pitch_range_hz: None,
+        };
+
+        let (lowered, _) = projector.project(&plan).unwrap();
+
+        assert_eq!(
+            lowered
+                .phones
+                .iter()
+                .map(|phone| phone.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "iU"]
+        );
     }
 
     #[test]
