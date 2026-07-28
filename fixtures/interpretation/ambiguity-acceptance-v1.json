@@ -1,0 +1,461 @@
+{
+  "schema_version": 1,
+  "corpus_id": "tongues-interpretation-ambiguity-v1",
+  "description": "Evaluation-only multilingual fixtures for grammar, pronunciation, evidence claims, backend degradation, and streaming repair.",
+  "split_policy": {
+    "purpose": "evaluation_only",
+    "grouping_key": "leakage_group",
+    "training_exclusion_keys": [
+      "tongues-authored-interpretation-acceptance-v1",
+      "tongues-existing-duplex-eval-v1"
+    ]
+  },
+  "sources": [
+    {
+      "id": "tongues-authored",
+      "name": "Tongues authored interpretation acceptance prompts",
+      "license": "MIT",
+      "provenance": "Short test utterances authored in the Tongues repository; some mirror existing production unit-test probes.",
+      "url": "https://github.com/dancxjo/tongues",
+      "evaluation_only": true,
+      "training_exclusion_key": "tongues-authored-interpretation-acceptance-v1"
+    },
+    {
+      "id": "tongues-duplex-fixtures",
+      "name": "Tongues deterministic Duplex evaluation fixtures",
+      "license": "MIT",
+      "provenance": "References immutable cases in fixtures/duplex/completion_scenarios_v1.json.",
+      "url": "https://github.com/dancxjo/tongues/blob/main/fixtures/duplex/completion_scenarios_v1.json",
+      "evaluation_only": true,
+      "training_exclusion_key": "tongues-existing-duplex-eval-v1"
+    }
+  ],
+  "cases": [
+    {
+      "id": "en-pp-attachment",
+      "description": "Native rules retain close noun- and verb-attachment alternatives.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-attachment",
+      "variety": "en-US-GA",
+      "text": "I saw the man with the telescope.",
+      "ci": true,
+      "child_issues": [176, 177, 178, 179, 185, 184],
+      "phenomena": ["prepositional_attachment", "ranked_parse", "claims"],
+      "contributions": ["native_rule", "external_backend", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["subject", "object", "preposition", "determiner"],
+        "required_parse_variants": ["prepositional_attachment"],
+        "min_ranked_parses": 3,
+        "min_claims": 4,
+        "min_resolutions": 1,
+        "min_conflicts": 2,
+        "min_lifecycle_events": 1,
+        "required_provenance_sources": ["grammar", "lexicon", "prosody"],
+        "min_boundaries": 1,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "en-contextual-heteronyms",
+      "description": "Verb and noun context select separate stress-bearing pronunciations while alternatives remain inspectable.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-heteronyms",
+      "variety": "en-US-GA",
+      "text": "I record the permit.",
+      "ci": true,
+      "child_issues": [178, 183, 184],
+      "phenomena": ["heteronym", "pronunciation", "stress"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["subject", "object", "determiner"],
+        "min_ranked_parses": 1,
+        "min_claims": 4,
+        "min_resolutions": 2,
+        "min_conflicts": 2,
+        "min_lifecycle_events": 1,
+        "min_pronunciation_alternatives": 2,
+        "required_candidate_phonemes": [
+          [
+            "en-US-GA.phoneme.ɹ",
+            "en-US-GA.phoneme.ʌ",
+            "en-US-GA.phoneme.k",
+            "en-US-GA.phoneme.ɔ",
+            "en-US-GA.phoneme.ɹ",
+            "en-US-GA.phoneme.d"
+          ],
+          [
+            "en-US-GA.phoneme.ɹ",
+            "en-US-GA.phoneme.ɛ",
+            "en-US-GA.phoneme.k",
+            "en-US-GA.phoneme.ɝ",
+            "en-US-GA.phoneme.d"
+          ]
+        ],
+        "required_selected_phonemes": [
+          [
+            "en-US-GA.phoneme.ɹ",
+            "en-US-GA.phoneme.ʌ",
+            "en-US-GA.phoneme.k",
+            "en-US-GA.phoneme.ɔ",
+            "en-US-GA.phoneme.ɹ",
+            "en-US-GA.phoneme.d"
+          ],
+          [
+            "en-US-GA.phoneme.p",
+            "en-US-GA.phoneme.ɝ",
+            "en-US-GA.phoneme.m",
+            "en-US-GA.phoneme.ɪ",
+            "en-US-GA.phoneme.t"
+          ]
+        ],
+        "min_boundaries": 1,
+        "min_primary_stress": 2
+      }
+    },
+    {
+      "id": "en-homophone-late-evidence",
+      "description": "A /mi:t/ homophone remains provisional until late evidence repairs one branch and withdraws the other.",
+      "source_id": "tongues-duplex-fixtures",
+      "leakage_group": "duplex-homophone-repair",
+      "variety": "en-US-GA",
+      "text": "meet the",
+      "ci": true,
+      "child_issues": [178, 182, 181, 184],
+      "phenomena": ["homophone", "late_evidence", "streaming_repair"],
+      "contributions": ["learned", "combined"],
+      "expected": {
+        "min_claims": 2,
+        "min_resolutions": 1,
+        "min_conflicts": 2,
+        "min_primary_stress": 1,
+        "streaming": {
+          "fixture_id": "homophones",
+          "final_committed_text": "meet the",
+          "requires_repair": true,
+          "requires_withdrawal": true,
+          "requires_abstention": true,
+          "stable_prefix_retained": true
+        }
+      }
+    },
+    {
+      "id": "en-garden-path-stable-prefix",
+      "description": "Late syntactic evidence repairs only the unstable tail and retains the committed prefix.",
+      "source_id": "tongues-duplex-fixtures",
+      "leakage_group": "duplex-garden-path",
+      "variety": "en-US-GA",
+      "text": "The old man the boats.",
+      "ci": true,
+      "child_issues": [177, 181, 184],
+      "phenomena": ["garden_path", "streaming_repair", "stable_prefix"],
+      "contributions": ["combined"],
+      "expected": {
+        "min_claims": 3,
+        "min_conflicts": 2,
+        "min_lifecycle_events": 1,
+        "min_boundaries": 1,
+        "streaming": {
+          "fixture_id": "garden-path",
+          "final_committed_text": "The old man the boats",
+          "requires_repair": true,
+          "requires_withdrawal": true,
+          "stable_prefix_retained": true
+        }
+      }
+    },
+    {
+      "id": "en-phonetic-article-onset",
+      "description": "Article realization uses the following phonetic onset rather than spelling.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-article-onset",
+      "variety": "en-US-GA",
+      "text": "an apple and a pear.",
+      "ci": true,
+      "child_issues": [178, 183],
+      "phenomena": ["article", "phonetic_onset", "weak_form"],
+      "contributions": ["combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["determiner", "coordination"],
+        "min_claims": 4,
+        "min_resolutions": 2,
+        "min_pronunciation_alternatives": 2,
+        "required_selected_phonemes": [
+          ["en-US-GA.phoneme.ʌ", "en-US-GA.phoneme.n"],
+          ["en-US-GA.phoneme.ʌ"]
+        ],
+        "min_boundaries": 1
+      }
+    },
+    {
+      "id": "en-weak-and-strong-to",
+      "description": "Citation intent keeps the function word to strong and provenance-preserving.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-function-word-to",
+      "variety": "en-US-GA",
+      "text": "Say to now.",
+      "style": {
+        "citation_word_indices": [1]
+      },
+      "ci": true,
+      "child_issues": [178, 183],
+      "phenomena": ["citation_to", "strong_form", "manual_intent"],
+      "contributions": ["combined"],
+      "expected": {
+        "min_claims": 3,
+        "min_resolutions": 1,
+        "min_pronunciation_alternatives": 1,
+        "required_candidate_phonemes": [
+          ["en-US-GA.phoneme.t", "en-US-GA.phoneme.ɪ"],
+          ["en-US-GA.phoneme.t", "en-US-GA.phoneme.ʌ"]
+        ],
+        "required_selected_phonemes": [
+          ["en-US-GA.phoneme.t", "en-US-GA.phoneme.ɪ"]
+        ],
+        "min_boundaries": 1,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "en-infinitival-to",
+      "description": "Infinitival to remains distinct from prepositional and citation uses.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-to-islands",
+      "variety": "en-US-GA",
+      "text": "I want to see the movie.",
+      "ci": false,
+      "child_issues": [176, 177, 183],
+      "phenomena": ["infinitival_to", "weak_form"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["infinitival_marker", "determiner"],
+        "min_claims": 5,
+        "min_resolutions": 1,
+        "min_boundaries": 1
+      }
+    },
+    {
+      "id": "en-contractions-and-auxiliaries",
+      "description": "Contractions remain lexical evidence while a weak auxiliary and coordination retain their own claims.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-contractions-auxiliaries",
+      "variety": "en-US-GA",
+      "text": "They're ready and we can stay.",
+      "ci": false,
+      "child_issues": [178, 183, 184],
+      "phenomena": ["contraction", "auxiliary", "weak_form", "coordination"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["coordination"],
+        "min_ranked_parses": 1,
+        "min_claims": 4,
+        "min_resolutions": 2,
+        "min_pronunciation_alternatives": 2,
+        "min_boundaries": 1,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "en-prepositional-to",
+      "description": "Prepositional to is represented by its own typed dependency.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-to-islands",
+      "variety": "en-US-GA",
+      "text": "I walked to school.",
+      "ci": false,
+      "child_issues": [176, 177, 183],
+      "phenomena": ["prepositional_to", "weak_form"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["subject", "preposition"],
+        "min_claims": 4,
+        "min_resolutions": 1,
+        "min_boundaries": 1
+      }
+    },
+    {
+      "id": "en-coordination-and-complement",
+      "description": "Coordination and complement attachment remain typed and ranked.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-coordination-complement",
+      "variety": "en-US-GA",
+      "text": "Alice and Bob know that she left.",
+      "ci": false,
+      "child_issues": [177, 178, 179],
+      "phenomena": ["coordination", "complement_attachment"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["coordination", "complement"],
+        "min_ranked_parses": 2,
+        "min_claims": 5,
+        "min_boundaries": 1
+      }
+    },
+    {
+      "id": "en-discourse-islands",
+      "description": "Contrast, vocative, apposition, and parenthetical islands remain evidence rather than forced truth.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-discourse-islands",
+      "variety": "en-US-GA",
+      "text": "Oh Joe, many people, particularly doctors, prefer not tea but coffee?",
+      "ci": false,
+      "child_issues": [177, 178, 183, 184],
+      "phenomena": ["contrast", "vocative", "apposition", "parenthetical", "question"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["vocative", "parenthetical", "contrast_pair"],
+        "min_claims": 6,
+        "min_boundaries": 1,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "en-fragment-abstention",
+      "description": "A short fragment remains conservative instead of inventing a complete clause.",
+      "source_id": "tongues-authored",
+      "leakage_group": "english-fragment",
+      "variety": "en-US-GA",
+      "text": "With the telescope?",
+      "ci": false,
+      "child_issues": [177, 179, 181],
+      "phenomena": ["fragment", "question", "conservative"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "required_links": ["preposition", "determiner"],
+        "min_ranked_parses": 1,
+        "min_claims": 2,
+        "min_boundaries": 1
+      }
+    },
+    {
+      "id": "fr-romance-clitic-pp",
+      "description": "French clitic and PP evidence uses the French variety profile and retains alternatives.",
+      "source_id": "tongues-authored",
+      "leakage_group": "french-romance",
+      "variety": "fr-FR-Standard",
+      "text": "je le vois dans la maison",
+      "ci": true,
+      "child_issues": [176, 177, 179, 183],
+      "phenomena": ["romance", "clitic", "prepositional_attachment"],
+      "typology_roles": ["romance"],
+      "contributions": ["native_rule", "external_backend", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["subject", "object", "preposition", "determiner"],
+        "required_parse_variants": ["prepositional_attachment"],
+        "min_ranked_parses": 3,
+        "min_claims": 4,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "sa-case-rich-free-order",
+      "description": "Sanskrit subject/object evidence is variety-owned and does not depend on English word order.",
+      "source_id": "tongues-authored",
+      "leakage_group": "sanskrit-case-rich",
+      "variety": "sa-Deva-Standard",
+      "text": "रामः फलम् खादति",
+      "ci": true,
+      "child_issues": [176, 178, 179, 183],
+      "phenomena": ["case_rich", "free_word_order", "phonology"],
+      "typology_roles": ["case_rich_free_word_order"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "complete",
+        "required_links": ["subject"],
+        "min_ranked_parses": 1,
+        "min_claims": 2,
+        "min_primary_stress": 1
+      }
+    },
+    {
+      "id": "ckt-lower-resource-explicit-partial",
+      "description": "Chukchi pronunciation remains available while unsupported grammar is explicitly partial.",
+      "source_id": "tongues-authored",
+      "leakage_group": "chukchi-lower-resource",
+      "variety": "ckt",
+      "text": "Ԓыгъоравэт ӄытԓэгъэн",
+      "ci": true,
+      "child_issues": [176, 178, 179, 183, 184],
+      "phenomena": ["lower_resource", "partial_backend", "explicit_unsupported"],
+      "typology_roles": ["lower_resource"],
+      "contributions": ["native_rule", "combined"],
+      "expected": {
+        "grammar_status": "partial",
+        "min_ranked_parses": 1,
+        "min_claims": 2,
+        "min_primary_stress": 1,
+        "required_provenance_sources": ["grammar", "rule"],
+        "explicit_unsupported": [
+          "No Chukchi typed grammar links are claimed by the native v1 profile."
+        ]
+      }
+    }
+  ],
+  "backend_probes": [
+    {
+      "id": "native-rules-required",
+      "description": "The default native path is deterministic and never optional.",
+      "variety": "en-US-GA",
+      "text": "I saw the man with the telescope.",
+      "backend": "tongues_rules",
+      "optional": false,
+      "allowed_dispositions": ["accepted", "conservative"]
+    },
+    {
+      "id": "udpipe-ready-or-honest-skip",
+      "description": "UDPipe may run when configured and otherwise reports why it skipped.",
+      "variety": "en-US-GA",
+      "text": "Alice reads the book.",
+      "backend": "ud_pipe",
+      "optional": true,
+      "allowed_dispositions": ["accepted", "conservative", "skipped"]
+    },
+    {
+      "id": "link-grammar-ready-or-honest-skip",
+      "description": "The optional Link Grammar parity oracle never gates the default path.",
+      "variety": "en-US-GA",
+      "text": "Alice reads the book.",
+      "backend": "link_grammar_oracle",
+      "optional": true,
+      "allowed_dispositions": ["accepted", "conservative", "skipped"]
+    },
+    {
+      "id": "external-timeout-fallback",
+      "description": "A bounded timeout preserves the failure and falls back.",
+      "variety": "en-US-GA",
+      "text": "Alice reads.",
+      "backend": "ud_pipe",
+      "injected_state": "timeout",
+      "optional": false,
+      "allowed_dispositions": ["fallback"]
+    },
+    {
+      "id": "external-malformed-output-fallback",
+      "description": "Malformed output is not interpreted as a zero-confidence parse.",
+      "variety": "en-US-GA",
+      "text": "Alice reads.",
+      "backend": "ud_pipe",
+      "injected_state": "malformed_output",
+      "optional": false,
+      "allowed_dispositions": ["fallback"]
+    },
+    {
+      "id": "external-token-mismatch-conservative",
+      "description": "Token alignment loss retains partial evidence without forcing a winner.",
+      "variety": "fr-FR-Standard",
+      "text": "je le vois",
+      "backend": "ud_pipe",
+      "injected_state": "token_alignment_loss",
+      "optional": false,
+      "allowed_dispositions": ["conservative"]
+    }
+  ]
+}

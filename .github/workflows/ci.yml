@@ -78,6 +78,8 @@ jobs:
         run: cargo build --release -p tongues-cli --locked
       - name: Test workspace
         run: cargo test --workspace --no-fail-fast --locked
+      - name: Run bounded interpretation acceptance corpus
+        run: target/release/tongues duplex acceptance --profile ci --report target/interpretation/ci-report.json
       - name: Check server UI JavaScript
         run: |
           node --check crates/tongues-server/public/app.js

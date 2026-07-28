@@ -6,17 +6,22 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use speaking::{UtteranceId, VarietyId};
 use tongues_duplex::{
-    discover_duplex_models, evaluate_duplex_model, export_duplex_model,
-    prepare_dataset_with_progress, replay_journal, train_duplex_model, DuplexFixtureSuite,
+    discover_duplex_models, evaluate_duplex_model, evaluate_interpretation_acceptance_with_progress,
+    export_duplex_model, load_interpretation_acceptance_corpus, prepare_dataset_with_progress,
+    replay_journal, train_duplex_model, AcceptanceProfile, AcceptanceProgress, DuplexFixtureSuite,
     DuplexPrepareProgress, DuplexSimulator, EvidenceModality, FixtureCompletionProvider,
-    InterpretationClaimView, InterpretationInspectionPage, InterpretationInspectionQuery,
-    LearnedCompletionProvider, LearnedDuplexConfig, LearnedDuplexModel,
-    NormalizedCompletionHypothesis, ObservedEvidence, OracleCompletionProvider, SimulatorConfig,
-    SimulatorEventKind, SimulatorJournal, SimulatorState,
+    InterpretationAcceptanceReport, InterpretationClaimView, InterpretationInspectionPage,
+    InterpretationInspectionQuery, LearnedCompletionProvider, LearnedDuplexConfig,
+    LearnedDuplexModel, NormalizedCompletionHypothesis, ObservedEvidence,
+    OracleCompletionProvider, SimulatorConfig, SimulatorEventKind, SimulatorJournal, SimulatorState,
     studio_projection_from_journal_with_inspection,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
+const DEFAULT_ACCEPTANCE_CORPUS_PATH: &str =
+    "fixtures/interpretation/ambiguity-acceptance-v1.json";
+const DEFAULT_ACCEPTANCE_REPORT_PATH: &str =
+    "target/interpretation/ambiguity-acceptance-report.json";
 const DEFAULT_DUPLEX_DATA_DIR: &str = "datasets/duplex/v0";
 const DEFAULT_DUPLEX_RUN_DIR: &str = "models/duplex/prefix-transducer";
 const DEFAULT_DUPLEX_MODEL_ROOT: &str = "models/duplex";
@@ -31,6 +36,8 @@ pub enum DuplexCommands {
     Train(DuplexTrainCommand),
     /// Evaluate continuation, calibration, behavior, latency, and safety metrics
     Evaluate(DuplexEvaluateCommand),
+    /// Evaluate the deterministic multilingual interpretation acceptance corpus
+    Acceptance(DuplexAcceptanceCommand),
     /// Run learned cached or uncached prefix inference
     Infer(DuplexInferCommand),
     /// Export a runtime-consumable artifact and model card
@@ -146,6 +153,48 @@ pub struct DuplexEvaluateCommand {
     split: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DuplexAcceptanceProfile {
+    Ci,
+    Full,
+}
+
+impl From<DuplexAcceptanceProfile> for AcceptanceProfile {
+    fn from(value: DuplexAcceptanceProfile) -> Self {
+        match value {
+            DuplexAcceptanceProfile::Ci => Self::Ci,
+            DuplexAcceptanceProfile::Full => Self::Full,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct DuplexAcceptanceCommand {
+    /// Versioned multilingual interpretation acceptance corpus
+    #[arg(long, default_value = DEFAULT_ACCEPTANCE_CORPUS_PATH)]
+    corpus: PathBuf,
+
+    /// Deterministic Duplex fixtures referenced by streaming cases
+    #[arg(long, default_value = DEFAULT_FIXTURES_PATH)]
+    fixtures: PathBuf,
+
+    /// Bounded no-download CI subset or the complete offline corpus
+    #[arg(long, value_enum, default_value = "ci")]
+    profile: DuplexAcceptanceProfile,
+
+    /// Optional learned Duplex checkpoint for a separately reported contribution
+    #[arg(long)]
+    learned_model: Option<PathBuf>,
+
+    /// Durable diffable JSON report written through a .part file
+    #[arg(long, default_value = DEFAULT_ACCEPTANCE_REPORT_PATH)]
+    report: PathBuf,
+
+    /// Also emit the complete report to stdout
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Args, Debug)]
 pub struct DuplexInferCommand {
     /// Checkpoint file, training run directory, or exported model file
@@ -185,6 +234,7 @@ pub fn run(command: DuplexCommands) -> Result<()> {
         DuplexCommands::Prepare(command) => run_prepare(command),
         DuplexCommands::Train(command) => run_train(command),
         DuplexCommands::Evaluate(command) => run_evaluate(command),
+        DuplexCommands::Acceptance(command) => run_acceptance(command),
         DuplexCommands::Infer(command) => run_infer(command),
         DuplexCommands::Export(command) => run_export(command),
         DuplexCommands::Discover(command) => run_discover(command),
@@ -210,6 +260,118 @@ fn run_evaluate(command: DuplexEvaluateCommand) -> Result<()> {
     let report = evaluate_duplex_model(&command.model, &command.split)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+fn run_acceptance(command: DuplexAcceptanceCommand) -> Result<()> {
+    let corpus = load_interpretation_acceptance_corpus(&command.corpus)?;
+    let fixtures = load_suite(&command.fixtures)?;
+    let mut learned_model = command
+        .learned_model
+        .as_deref()
+        .map(LearnedDuplexModel::load)
+        .transpose()
+        .with_context(|| {
+            format!(
+                "loading optional learned acceptance checkpoint {}",
+                command
+                    .learned_model
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("<none>"))
+                    .display()
+            )
+        })?;
+    eprintln!(
+        "acceptance: profile={:?} corpus={} report={}",
+        command.profile,
+        command.corpus.display(),
+        command.report.display()
+    );
+    let report = evaluate_interpretation_acceptance_with_progress(
+        &corpus,
+        &fixtures,
+        command.profile.into(),
+        learned_model.as_mut(),
+        |event| match event {
+            AcceptanceProgress::CaseStarted { index, total, id } => {
+                eprintln!("acceptance: case {index}/{total} {id}")
+            }
+            AcceptanceProgress::CaseCompleted {
+                index,
+                total,
+                id,
+                passed,
+            } => eprintln!(
+                "acceptance: case {index}/{total} {id} {}",
+                if passed { "passed" } else { "failed" }
+            ),
+            AcceptanceProgress::BackendProbe { index, total, id } => {
+                eprintln!("acceptance: backend {index}/{total} {id}")
+            }
+        },
+    )?;
+    write_json_atomic(&command.report, &report, "interpretation acceptance report")?;
+    if command.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_acceptance_summary(&report, &command.report);
+    }
+    if !report.passed {
+        bail!(
+            "interpretation acceptance failed: {} case(s) failed; inspect {}",
+            report.failed_cases,
+            command.report.display()
+        );
+    }
+    Ok(())
+}
+
+fn print_acceptance_summary(report: &InterpretationAcceptanceReport, path: &Path) {
+    println!(
+        "interpretation acceptance: {} ({}/{} cases, profile {:?})",
+        if report.passed { "PASS" } else { "FAIL" },
+        report.passed_cases,
+        report.selected_cases,
+        report.profile
+    );
+    println!(
+        "metrics: links={:.3} ambiguity={:.3} lexical-top-k={:.3} homophone/heteronym={:.3} repair-p/r={:.3}/{:.3} pronunciation={:.3} boundary/stress={:.3} latency-p95={}us",
+        report.metrics.parse_link_agreement,
+        report.metrics.ambiguity_recall,
+        report.metrics.top_k_lexical_accuracy,
+        report.metrics.homophone_heteronym_accuracy,
+        report.metrics.repair_precision,
+        report.metrics.repair_recall,
+        report.metrics.pronunciation_selection_accuracy,
+        report.metrics.boundary_stress_accuracy,
+        report.metrics.latency_p95_micros,
+    );
+    for (contribution, result) in &report.contributions {
+        println!(
+            "contribution {:?}: attempted={} passed={} failed={} skipped={}",
+            contribution, result.attempted, result.passed, result.failed, result.skipped
+        );
+    }
+    for probe in report
+        .backend_probes
+        .iter()
+        .filter(|probe| probe.skip_reason.is_some())
+    {
+        println!(
+            "backend {:?}: {:?} — {}",
+            probe.backend,
+            probe.disposition,
+            probe.skip_reason.as_deref().unwrap_or("skipped")
+        );
+    }
+    for case in report.cases.iter().filter(|case| !case.passed) {
+        for diff in &case.diffs {
+            println!(
+                "diff {} {}: expected {}, actual {}",
+                case.id, diff.path, diff.expected, diff.actual
+            );
+        }
+    }
+    println!("report: {}", path.display());
 }
 
 fn run_infer(command: DuplexInferCommand) -> Result<()> {
@@ -444,25 +606,32 @@ fn load_suite(path: &Path) -> Result<DuplexFixtureSuite> {
 }
 
 fn write_journal_atomic(path: &Path, journal: &SimulatorJournal) -> Result<()> {
+    write_json_atomic(path, journal, "duplex journal")
+}
+
+fn write_json_atomic(
+    path: &Path,
+    value: &impl serde::Serialize,
+    artifact: &str,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("creating duplex journal directory {}", parent.display())
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating {artifact} directory {}", parent.display()))?;
         }
     }
     let part = part_path(path);
-    let file = File::create(&part)
-        .with_context(|| format!("creating duplex journal {}", part.display()))?;
+    let file =
+        File::create(&part).with_context(|| format!("creating {artifact} {}", part.display()))?;
     let mut writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, journal)
-        .with_context(|| format!("writing duplex journal {}", part.display()))?;
+    serde_json::to_writer_pretty(&mut writer, value)
+        .with_context(|| format!("writing {artifact} {}", part.display()))?;
     writer.write_all(b"\n")?;
     writer.flush()?;
     writer.get_ref().sync_all()?;
     fs::rename(&part, path).with_context(|| {
         format!(
-            "renaming completed duplex journal {} to {}",
+            "renaming completed {artifact} {} to {}",
             part.display(),
             path.display()
         )
@@ -815,5 +984,25 @@ mod tests {
             command.evidence_target.as_deref(),
             Some("resolution:word-1")
         );
+    }
+
+    #[test]
+    fn parses_multilingual_acceptance_profiles_and_report_path() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "acceptance",
+            "--profile",
+            "full",
+            "--report",
+            "target/report.json",
+            "--json",
+        ])
+        .unwrap();
+        let DuplexCommands::Acceptance(command) = cli.command else {
+            panic!("expected duplex acceptance command");
+        };
+        assert!(matches!(command.profile, DuplexAcceptanceProfile::Full));
+        assert_eq!(command.report, PathBuf::from("target/report.json"));
+        assert!(command.json);
     }
 }

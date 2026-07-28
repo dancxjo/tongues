@@ -4,10 +4,12 @@
 //! orchestration: providers propose morpheme continuations, the simulator
 //! normalizes them, and only a directly supported common prefix may commit.
 
+mod acceptance;
 mod inspection;
 mod learned;
 mod linguistic;
 
+pub use acceptance::*;
 pub use inspection::*;
 pub use learned::*;
 pub use linguistic::*;

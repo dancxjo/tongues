@@ -178,6 +178,14 @@ sentence-boundary *args:
 grammar-parser *args:
     cargo run --bin tongues -- grammar-parser "$@"
 
+# Run the evaluation-only interpretation corpus; use profile=full offline
+interpretation-acceptance profile='ci' *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    profile="$1"
+    shift
+    cargo run -q -p tongues-cli -- duplex acceptance --profile "$profile" "$@"
+
 # Forward a model-family command to the tongues CLI
 head2phones *args:
     cargo run --bin tongues -- head2phones "$@"
