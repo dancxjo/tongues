@@ -233,8 +233,14 @@ impl MbrolaSymbolMap {
             ("aʊ", "aU"),
             ("ɔɪ", "OI"),
             ("p", "p"),
+            ("pʰ", "p"),
+            ("p˭", "p"),
             ("t", "t"),
+            ("tʰ", "t"),
+            ("t˭", "t"),
             ("k", "k"),
+            ("kʰ", "k"),
+            ("k˭", "k"),
             ("d", "d"),
             ("g", "g"),
             ("n", "n"),
@@ -380,12 +386,6 @@ impl MbrolaSymbolMap {
                         ("eə", "e@"),
                         ("ɪə", "I@"),
                         ("ʊə", "U@"),
-                        ("pʰ", "p"),
-                        ("p˭", "p"),
-                        ("tʰ", "t"),
-                        ("t˭", "t"),
-                        ("kʰ", "k"),
-                        ("k˭", "k"),
                         ("AA", "A:"),
                         ("AO", "O:"),
                         ("EH", "e"),
@@ -1483,6 +1483,38 @@ mod tests {
                 vec![expected],
                 "en1 card projection for {phone}"
             );
+        }
+    }
+
+    #[test]
+    fn american_voices_lower_english_stop_allophones_to_card_inventory() {
+        let inventory = ["_", "k", "p", "t"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for id in ["mbrola-us1", "mbrola-us3"] {
+            let config = MbrolaVoiceConfig::for_id(id).expect("American English voice config");
+            let voice = MbrolaVoiceMetadata {
+                id: config.id.into(),
+                variety: config.variety.into(),
+                baseline_hz: None,
+                pitch_range_hz: None,
+            };
+            let map = config.symbol_map();
+            for (phone, expected) in [
+                ("pʰ", "p"),
+                ("p˭", "p"),
+                ("tʰ", "t"),
+                ("t˭", "t"),
+                ("kʰ", "k"),
+                ("k˭", "k"),
+            ] {
+                assert_eq!(
+                    map.resolve(phone, &voice, &inventory).unwrap(),
+                    vec![expected],
+                    "{id} card projection for {phone}"
+                );
+            }
         }
     }
 
