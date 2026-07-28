@@ -716,6 +716,7 @@ impl MbrolaProjector {
         let mut break_index = 0;
         let speech_boundaries = speech_boundary_insertions(plan, &self.timing);
         let mut speech_boundary_index = 0;
+        let mut previous_single_symbol: Option<String> = None;
 
         for (index, token) in plan.target_phones.iter().enumerate() {
             while speech_boundary_index < speech_boundaries.len()
@@ -727,9 +728,13 @@ impl MbrolaProjector {
                 ));
                 report.inserted_breaks += 1;
                 speech_boundary_index += 1;
+                previous_single_symbol = None;
             }
             let phone = spec_phone(token)?;
             if is_structural_boundary(phone) {
+                if !matches!(phone.as_str(), "ipa.phone.|" | "boundary.word") {
+                    previous_single_symbol = None;
+                }
                 continue;
             }
             let source = phone_display_symbol(phone);
@@ -768,6 +773,7 @@ impl MbrolaProjector {
                 phones.push(MbrolaPhone::new(MBROLA_SILENCE, duration_ms));
                 report.inserted_breaks += 1;
                 break_index += 1;
+                previous_single_symbol = None;
             }
 
             let mut duration_ms = seconds_to_ms(span.duration_s())?;
@@ -805,14 +811,32 @@ impl MbrolaProjector {
             };
             let split_durations = split_duration(duration_ms, symbols.len())?;
             let symbol_count = split_durations.len();
-            for (symbol_index, (symbol, symbol_duration)) in
-                symbols.into_iter().zip(split_durations).enumerate()
-            {
-                phones.push(
-                    MbrolaPhone::new(symbol, symbol_duration).with_pitch_targets(
-                        split_pitch_targets(&pitch_targets, symbol_index, symbol_count),
-                    ),
-                );
+            let geminate = (symbols.len() == 1 && !is_vowel_symbol(source))
+                .then(|| format!("{}:", symbols[0]))
+                .filter(|geminate| self.inventory.contains(geminate))
+                .filter(|_| previous_single_symbol.as_deref() == Some(symbols[0].as_str()));
+            if let Some(geminate) = geminate {
+                let previous = phones
+                    .last_mut()
+                    .expect("a previous single symbol exists for geminate lowering");
+                previous.symbol = geminate;
+                previous.duration_ms = previous
+                    .duration_ms
+                    .checked_add(duration_ms)
+                    .ok_or(MbrolaLoweringError::DurationOverflow)?;
+                previous_single_symbol = None;
+            } else {
+                for (symbol_index, (symbol, symbol_duration)) in
+                    symbols.into_iter().zip(split_durations).enumerate()
+                {
+                    let single_symbol = (symbol_count == 1).then(|| symbol.clone());
+                    phones.push(
+                        MbrolaPhone::new(symbol, symbol_duration).with_pitch_targets(
+                            split_pitch_targets(&pitch_targets, symbol_index, symbol_count),
+                        ),
+                    );
+                    previous_single_symbol = single_symbol;
+                }
             }
             inferred_cursor_s = span.end_s;
         }
@@ -886,12 +910,17 @@ fn speech_boundary_insertions(
     plan: &UtterancePlan,
     profile: &MbrolaTimingProfile,
 ) -> Vec<(usize, u32)> {
-    let grapheme_count = plan
-        .intended_text
-        .as_deref()
-        .map(|text| text.chars().count())
-        .unwrap_or_default()
-        .max(1);
+    let word_boundary_indices = plan
+        .target_phones
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            spec_phone(token)
+                .ok()
+                .is_some_and(|phone| phone.as_str() == "boundary.word")
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
     let mut boundaries = plan
         .boundaries
         .iter()
@@ -901,15 +930,21 @@ fn speech_boundary_insertions(
                 (BoundaryKind::Phrase, _, _) => profile.phrase_break_ms,
                 (BoundaryKind::BreathGroup, _, _) => profile.breath_group_break_ms,
                 (BoundaryKind::Turn, _, _) | (_, _, Some(_)) => profile.turn_break_ms,
-                (BoundaryKind::Word, _, _) => profile.word_break_ms,
+                // An ordinary word boundary is not a pause. Keeping adjacent
+                // phones contiguous lets MBROLA use the cross-word diphone
+                // instead of writing a short run of zero-valued samples.
+                (BoundaryKind::Word, _, _) => return None,
                 _ => return None,
             }
             .clamp(profile.min_break_ms, profile.max_break_ms);
-            let phone_index = boundary
-                .after_grapheme_index
-                .saturating_mul(plan.target_phones.len())
-                .div_ceil(grapheme_count)
-                .min(plan.target_phones.len());
+            // Phonemicizer boundaries use the completed word's index. Place
+            // the pause at the corresponding structural word token rather
+            // than proportionally projecting that index across characters
+            // and phones, which can put silence inside a word.
+            let phone_index = word_boundary_indices
+                .get(boundary.after_grapheme_index)
+                .copied()
+                .unwrap_or(plan.target_phones.len());
             Some((phone_index, duration))
         })
         .collect::<Vec<_>>();
@@ -1243,6 +1278,8 @@ pub enum MbrolaLoweringError {
     InvalidDuration(f64),
     #[error("cannot split {duration_ms} ms across {parts} MBROLA symbols")]
     InvalidExpansionDuration { duration_ms: u32, parts: usize },
+    #[error("MBROLA phone duration overflow while combining a geminate")]
+    DurationOverflow,
     #[error("invalid prosodic break duration {0} seconds")]
     InvalidBreakDuration(f32),
     #[error("pitch point at {time_s} seconds must be finite and positive, got {hz}")]
@@ -1484,6 +1521,40 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_word_boundaries_do_not_insert_silence() {
+        let mut plan = plan();
+        plan.intended_text = Some("huh huh".into());
+        plan.boundaries.push(speaking::SpeechBoundaryToken {
+            kind: BoundaryKind::Word,
+            after_grapheme_index: 0,
+            span: None,
+            terminal: None,
+            pause: None,
+        });
+
+        assert!(speech_boundary_insertions(&plan, &MbrolaTimingProfile::default()).is_empty());
+    }
+
+    #[test]
+    fn paused_boundaries_land_on_structural_word_tokens() {
+        let mut plan = plan();
+        plan.intended_text = Some("a deliberately long first word, huh".into());
+        plan.target_phones.insert(1, token("boundary.word", None));
+        plan.boundaries.push(speaking::SpeechBoundaryToken {
+            kind: BoundaryKind::Word,
+            after_grapheme_index: 0,
+            span: None,
+            terminal: None,
+            pause: Some(speaking::PauseKind::Comma),
+        });
+
+        assert_eq!(
+            speech_boundary_insertions(&plan, &MbrolaTimingProfile::default()),
+            vec![(1, 110)]
+        );
+    }
+
+    #[test]
     fn esperanto_nl2_configuration_covers_the_complete_inventory() {
         let config = MbrolaVoiceConfig::for_id("mbrola-eo-nl2").expect("Esperanto voice config");
         assert_eq!(config.database_id, "mbrola-nl2");
@@ -1553,6 +1624,38 @@ mod tests {
             map.resolve("ks", &voice, &inventory).unwrap(),
             vec!["k", "s"]
         );
+    }
+
+    #[test]
+    fn latin_la1_uses_card_geminate_units_for_doubled_consonants() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-la-la1").expect("Latin voice config");
+        let mut plan = plan();
+        plan.variety = VarietyId(config.variety.into());
+        plan.target_phones = vec![
+            token("s", None),
+            token("ipa.phone.|", None),
+            token("s", None),
+        ];
+        plan.target_syllables.clear();
+        plan.boundaries.clear();
+        plan.target_prosody = ProsodyTrack::default();
+        let projector = MbrolaProjector {
+            voice: MbrolaVoiceMetadata {
+                id: config.id.into(),
+                variety: config.variety.into(),
+                baseline_hz: None,
+                pitch_range_hz: None,
+            },
+            symbol_map: config.symbol_map(),
+            inventory: ["_", "s", "s:"].into_iter().map(str::to_string).collect(),
+            timing: MbrolaTimingProfile::default(),
+            control_baseline_hz: None,
+            control_pitch_range_hz: None,
+        };
+
+        let (lowered, _) = projector.project(&plan).unwrap();
+
+        assert_eq!(lowered.phones, vec![MbrolaPhone::new("s:", 144)]);
     }
 
     #[test]
