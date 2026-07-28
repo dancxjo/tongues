@@ -12630,6 +12630,19 @@ mod tests {
                 language: "fra".into(),
             }
         );
+        let welsh = metadata
+            .iter()
+            .find(|variety| variety.value == "cy-GB-Standard")
+            .expect("Welsh metadata");
+        assert_eq!(welsh.language, "cy");
+        assert_eq!(welsh.language_tag.as_deref(), Some("cy-GB"));
+        assert_eq!(
+            welsh.pronunciation_fallback,
+            PronunciationFallbackMetadata::Mapped {
+                provider: "wiktionary",
+                language: "cym".into(),
+            }
+        );
     }
 
     #[test]

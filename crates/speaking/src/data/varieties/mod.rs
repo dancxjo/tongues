@@ -7,6 +7,7 @@ pub mod greek;
 pub mod latin;
 pub mod sanskrit;
 pub mod spanish;
+pub mod welsh;
 
 use std::collections::BTreeSet;
 
@@ -32,6 +33,7 @@ pub const SYNTAX_PROFILE_GREEK: &str = "greek";
 pub const SYNTAX_PROFILE_LATIN: &str = "latin";
 pub const SYNTAX_PROFILE_SANSKRIT: &str = "sanskrit";
 pub const SYNTAX_PROFILE_SPANISH: &str = "spanish";
+pub const SYNTAX_PROFILE_WELSH: &str = "welsh";
 
 pub const ORTHOGRAPHY_PROFILE_ALIAS: &str = "alias";
 pub const ORTHOGRAPHY_PROFILE_CHUKCHI: &str = "chukchi_cyrillic";
@@ -42,6 +44,7 @@ pub const ORTHOGRAPHY_PROFILE_GREEK: &str = "greek";
 pub const ORTHOGRAPHY_PROFILE_LATIN: &str = "latin";
 pub const ORTHOGRAPHY_PROFILE_SANSKRIT: &str = "sanskrit";
 pub const ORTHOGRAPHY_PROFILE_SPANISH: &str = "spanish";
+pub const ORTHOGRAPHY_PROFILE_WELSH: &str = "welsh";
 
 pub const PROSODY_RHYTHM_MORA_TIMED: &str = "mora_timed";
 pub const PROSODY_RHYTHM_STRESS_TIMED: &str = "stress_timed";
@@ -295,6 +298,19 @@ pub fn sanskrit_punctuation_profile() -> PunctuationProfile {
     }
 }
 
+pub fn welsh_punctuation_profile() -> PunctuationProfile {
+    PunctuationProfile {
+        period_abbreviations: strings(&["dr", "yr ath", "e.e", "tua", "ion", "chwef", "mawrth"]),
+        title_abbreviations: strings(&["dr", "yr ath"]),
+        ambiguous_period_abbreviations: Vec::new(),
+        sentence_starter_words_after_ambiguous_abbreviation: strings(&[
+            "y", "yr", "mae", "roedd", "bydd", "mi", "fe", "ond", "a", "neu", "pwy", "beth",
+            "pryd", "ble", "pam", "sut",
+        ]),
+        ambiguous_period_spoken_forms: Vec::new(),
+    }
+}
+
 pub fn english_question_contour_profile() -> QuestionContourProfile {
     QuestionContourProfile {
         yes_no_openers: strings(&[
@@ -450,6 +466,15 @@ pub fn sanskrit_question_contour_profile() -> QuestionContourProfile {
     }
 }
 
+pub fn welsh_question_contour_profile() -> QuestionContourProfile {
+    QuestionContourProfile {
+        yes_no_openers: strings(&["ydy", "oes", "a", "ai", "fydd", "fedr", "gall"]),
+        wh_openers: strings(&["pwy", "beth", "pryd", "ble", "lle", "pam", "sut", "pa"]),
+        alternative_coordinators: strings(&["neu"]),
+        paired_alternative_openers: strings(&["naill"]),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct VarietyRegistration {
     pub canonical_id: &'static str,
@@ -543,6 +568,7 @@ fn builtin_variety_registrations() -> impl Iterator<Item = &'static VarietyRegis
         latin::REGISTRATIONS,
         sanskrit::REGISTRATIONS,
         spanish::REGISTRATIONS,
+        welsh::REGISTRATIONS,
     ]
     .into_iter()
     .flatten()

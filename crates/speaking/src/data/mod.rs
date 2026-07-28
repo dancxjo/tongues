@@ -8,7 +8,9 @@ pub use varieties::{
     builtin_languages, builtin_varieties, canonical_variety_id, language_tag_for_variety,
     variety_by_code, wiktionary_language_for_variety,
 };
-pub use varieties::{chukchi, english, esperanto, french, german, greek, latin, sanskrit, spanish};
+pub use varieties::{
+    chukchi, english, esperanto, french, german, greek, latin, sanskrit, spanish, welsh,
+};
 
 #[cfg(test)]
 mod tests {
@@ -45,6 +47,8 @@ mod tests {
         assert_eq!(canonical_variety_id("es").unwrap().0, "es-ES-Castilian");
         assert_eq!(canonical_variety_id("es-419").unwrap().0, "es-419-Standard");
         assert!(variety_by_code("es-ES-Castilian").is_some());
+        assert_eq!(canonical_variety_id("cy").unwrap().0, "cy-GB-Standard");
+        assert_eq!(canonical_variety_id("cym").unwrap().0, "cy-GB-Standard");
     }
 
     #[test]
@@ -140,7 +144,9 @@ mod tests {
                 .iter()
                 .map(|language| language.id.0.as_str())
                 .collect::<Vec<_>>(),
-            ["ckt", "en", "eo", "fr", "de", "el", "grc", "la", "sa", "es"]
+            [
+                "ckt", "en", "eo", "fr", "de", "el", "grc", "la", "sa", "es", "cy"
+            ]
         );
         let published_language_ids = published_languages
             .iter()
@@ -164,6 +170,10 @@ mod tests {
         assert_eq!(
             wiktionary_language_for_variety("fr-FR-Standard"),
             Some("fra")
+        );
+        assert_eq!(
+            wiktionary_language_for_variety("cy-GB-Standard"),
+            Some("cym")
         );
         assert_eq!(wiktionary_language_for_variety("not-a-variety"), None);
     }

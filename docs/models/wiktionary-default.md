@@ -69,7 +69,7 @@ Model shape:
 
 ## Data and task mix
 
-The current checked-in model was trained before the later default-language expansion that adds Latin, Greek, Ancient Greek, Sanskrit, Spanish synthetic rows, and supplemental Greek-name/legal/scientific collation. Its saved `wiktionary_config.json` has:
+The current checked-in model was trained before the later default-language expansion that adds Welsh, Latin, Greek, Ancient Greek, Sanskrit, Spanish synthetic rows, and supplemental Greek-name/legal/scientific collation. Its saved `wiktionary_config.json` has:
 
 ```json
 {

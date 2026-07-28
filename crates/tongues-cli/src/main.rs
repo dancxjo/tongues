@@ -10023,6 +10023,7 @@ fn speaking_demo_famous_sentence(variety: &speaking::LinguisticVariety) -> Optio
         "grc-Attic" | "grc-Koine" => return Some("Ἄνδρα μοι ἔννεπε, Μοῦσα."),
         "la-Classical" | "la-Ecclesiastical" => return Some("Arma virumque cano."),
         "es-ES-Castilian" | "es-419-Standard" => return Some("En un lugar de la Mancha."),
+        "cy-GB-Standard" => return Some("Hen Wlad Fy Nhadau."),
         _ => {}
     }
     match variety.language.0.as_str() {
@@ -10080,6 +10081,7 @@ fn speaking_demo_builtin_utterance(variety: &str) -> Option<&'static str> {
         "grc-Attic" | "grc-Koine" => Some("και λογος, και φως?"),
         "la-Classical" | "la-Ecclesiastical" => Some("Salve, amice?"),
         "sa-Deva-Standard" => Some("धर्म, कर्म?"),
+        "cy-GB-Standard" => Some("Mae'r iaith Gymraeg yn fyw?"),
         _ => None,
     }
 }

@@ -2574,6 +2574,8 @@ mod tests {
             ("sa-Deva-Standard", "san"),
             ("eo", "epo"),
             ("epo", "epo"),
+            ("cy-GB-Standard", "cym"),
+            ("cym", "cym"),
         ] {
             assert_eq!(
                 wiktionary_language_for_variety(variety),

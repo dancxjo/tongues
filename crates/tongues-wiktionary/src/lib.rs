@@ -225,10 +225,12 @@ impl Default for WiktionaryConfig {
             train_frac: 0.8,
             valid_frac: 0.1,
             seed: 42,
-            languages: ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            languages: [
+                "eng", "fra", "deu", "spa", "cym", "lat", "ell", "grc", "san",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             train_task: "all".to_string(),
             train_notations: default_train_notations(),
             include_reverse: true,
@@ -2809,6 +2811,7 @@ fn wiktionary_lang_from_iso3(lang: &str) -> Option<&'static str> {
         "fra" => Some("fr"),
         "deu" => Some("de"),
         "spa" => Some("es"),
+        "cym" => Some("cy"),
         "lat" => Some("la"),
         "ell" => Some("el"),
         "grc" => Some("grc"),
@@ -2823,6 +2826,7 @@ fn iso3_from_wiktionary_lang(lang: &str) -> Option<&'static str> {
         "fr" => Some("fra"),
         "de" => Some("deu"),
         "es" => Some("spa"),
+        "cy" => Some("cym"),
         "la" => Some("lat"),
         "el" => Some("ell"),
         "grc" => Some("grc"),
@@ -4331,7 +4335,7 @@ fn wiktionary_ollama_verification_prompt_with_row_count(
          - output should not be empty, null, a placeholder, JSON, Markdown, or an instruction.\n\
          - source should name a source artifact or corpus and should not be empty.\n\
          - Pronunciation text may contain IPA, stress marks, syllable dots, length marks, tie bars, diacritics, spaces, hyphens, apostrophes, and punctuation. Do not report unfamiliar IPA by itself.\n\
-         - Wiktionary language codes can be ISO-like or Wiktionary-specific, including eng, fra, deu, spa, lat, ell, grc, san, ine-pro, gem-pro, enm, ang, la, grc, sa, and many historical/proto codes. Do not report a language code solely because it is unfamiliar.\n\
+         - Wiktionary language codes can be ISO-like or Wiktionary-specific, including eng, fra, deu, spa, cym, lat, ell, grc, san, ine-pro, gem-pro, enm, ang, cy, la, grc, sa, and many historical/proto codes. Do not report a language code solely because it is unfamiliar.\n\
          - Metadata controls inside <META> ... </META>, such as <accent:rp>, <region:canada>, and <feature:non_ae_tensing>, are valid.\n\
          - Do not verify that a pronunciation, spelling, or etymology is factually correct. Only detect obvious row-shape, task-tag, control-tag, delimiter, escaping, empty-output, and task/output consistency problems.\n\n\
          Good examples that should return {{\"sane\":true,\"issue\":null}}:\n\
@@ -4403,7 +4407,9 @@ fn stable_wiktionary_vocab_inputs() -> Vec<String> {
         ]),
     ];
 
-    for lang in ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"] {
+    for lang in [
+        "eng", "fra", "deu", "spa", "cym", "lat", "ell", "grc", "san",
+    ] {
         inputs.push(format!(
             "<task:orthography_to_phonology> <lang:{lang}> <repr:phonemes> abc"
         ));
@@ -4589,7 +4595,7 @@ mod tests {
         assert_eq!(config.dump_index_url, DEFAULT_DUMP_INDEX_URL);
         assert_eq!(
             config.languages,
-            ["eng", "fra", "deu", "spa", "lat", "ell", "grc", "san"]
+            ["eng", "fra", "deu", "spa", "cym", "lat", "ell", "grc", "san"]
         );
         assert_eq!(config.train_task, "all");
         assert_eq!(config.train_notations, ["phonemic", "phonetic"]);
@@ -5381,6 +5387,29 @@ From {{etyl|la|en}} {{m|la|turpis|t=ugly}}.
                     == "<task:orthography_to_phonology> <lang:spa> <META> <accent:castilian> </META> <repr:phonemes> zapato"
                 && example.output == "θaˈpato"
                 && example.source == "synthetic-spanish-orthography+enwiktionary-title"
+        }));
+    }
+
+    #[test]
+    fn extracts_welsh_pronunciation_with_iso3_language_identity() {
+        let config = WiktionaryConfig {
+            languages: vec!["cym".to_string()],
+            ..WiktionaryConfig::default()
+        };
+        let text = r#"==Welsh==
+===Pronunciation===
+* {{IPA|cy|/kəmˈrai̯ɡ/}}
+"#;
+
+        let data = extract_page_data("Cymraeg", text, &config);
+
+        assert!(data.phonemes.iter().any(|entry| {
+            entry.lang == "cym" && entry.wiktionary_lang == "cy" && entry.ipa == "/kəmˈrai̯ɡ/"
+        }));
+        let examples = expand_training_examples(&data.phonemes, &config);
+        assert!(examples.iter().any(|example| {
+            example.input == "<task:orthography_to_phonology> <lang:cym> <repr:phonemes> Cymraeg"
+                && example.output == "kəmˈrai̯ɡ"
         }));
     }
 

@@ -6,6 +6,7 @@ varieties = [
   "de-DE-Standard",
   "es-ES-Castilian",
   "es-419-Standard",
+  "cy-GB-Standard",
   "la-Classical",
   "la-Ecclesiastical",
   "el-GR-Standard",

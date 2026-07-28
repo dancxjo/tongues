@@ -25,7 +25,7 @@ This downloads the English Wiktionary MediaWiki XML bzip2 dump from the configur
 https://dumps.wikimedia.org/other/mediawiki_content_current/enwiktionary/2026-06-01/xml/bzip2/
 ```
 
-The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `lat`, `ell`, `grc`, and `san`.
+The parser streams a decompressed MediaWiki XML dump and extracts `{{IPA}}`, `{{audio}}`, `{{homophones}}`, and `{{rhymes}}` pronunciation-section patterns for `eng`, `fra`, `deu`, `spa`, `cym`, `lat`, `ell`, `grc`, and `san`.
 
 Slash-delimited `/phonemes/` are written to `phonemes.jsonl`; bracket-delimited `[phones]` are written separately to `phones.jsonl`. Entry etymology templates from Etymology sections are written to `etymologies.jsonl`. Model-facing rows normalize orthography and pronunciation payloads with Unicode NFC, then expand into orthography-to-phonology, phonology-to-orthography, phonetic-realization, find-etymology, and language-guessing tasks.
 
