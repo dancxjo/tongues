@@ -59,6 +59,7 @@
                         </aside>
                         <form class="glass-panel command-form">
                             <div id="skeleton-doc" class="page-doc"></div>
+                            <p id="command-risk" class="status-card warning hidden" role="alert"></p>
                             <div class="form-group">
                                 <label for="command-preview">CLI Command</label>
                                 <div class="copy-field">
@@ -82,6 +83,7 @@
                             </div>
                             <div class="workbench-output-header">
                                 <strong id="workbench-job-status">Not run</strong>
+                                <a id="workbench-job-link" class="hidden" href="/commands">Durable execution record</a>
                                 <label for="output-mode">Inspect output as</label>
                                 <select id="output-mode">
                                     <option value="stream">Event stream</option>

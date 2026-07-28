@@ -29,6 +29,9 @@ pub struct WebCliCommand {
     pub model_href: Option<String>,
     /// A meaningful Speech Studio starter, when this command has a graph form.
     pub studio_template: Option<String>,
+    /// Explicit mutation risk for browser confirmation and recovery guidance.
+    pub risk: WebCliRisk,
+    pub risk_notice: Option<String>,
     pub arguments: Vec<WebCliArgument>,
     pub subcommands: Vec<WebCliCommand>,
 }
@@ -38,6 +41,13 @@ pub struct WebCliCommand {
 pub enum WebCliPresentation {
     Workflow,
     Component,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebCliRisk {
+    Standard,
+    Destructive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -120,6 +130,8 @@ fn command_schema(
         capability_href: format!("/commands/{id}"),
         model_href: model_href_for(&id).map(str::to_string),
         studio_template: studio_template_for(&id).map(str::to_string),
+        risk: risk_for(&id),
+        risk_notice: risk_notice_for(&id).map(str::to_string),
         arguments: command
             .get_arguments()
             .filter(|argument| !argument.is_hide_set())
@@ -160,6 +172,20 @@ fn studio_template_for(id: &str) -> Option<&'static str> {
         "interpretation/stream" => Some("interpretation"),
         _ => None,
     }
+}
+
+fn risk_for(id: &str) -> WebCliRisk {
+    if id.ends_with("/clean") {
+        WebCliRisk::Destructive
+    } else {
+        WebCliRisk::Standard
+    }
+}
+
+fn risk_notice_for(id: &str) -> Option<&'static str> {
+    id.ends_with("/clean").then_some(
+        "This command removes prepared intermediate data. Confirm the paths in the preview; recovery requires running Prepare again.",
+    )
 }
 
 fn argument_schema(command: &Command, argument: &Arg) -> WebCliArgument {
@@ -317,6 +343,7 @@ mod tests {
         assert_eq!(run.capability_href, "/commands/family/run");
         assert_eq!(run.presentation, WebCliPresentation::Component);
         assert_eq!(run.studio_template, None);
+        assert_eq!(run.risk, WebCliRisk::Standard);
         let mode = run.arguments.iter().find(|arg| arg.id == "mode").unwrap();
         assert_eq!(mode.defaults, ["safe"]);
         assert_eq!(mode.value_enum, ["safe", "fast"]);
@@ -324,5 +351,9 @@ mod tests {
         let quiet = run.arguments.iter().find(|arg| arg.id == "quiet").unwrap();
         assert!(quiet.global);
         assert_eq!(quiet.conflicts, ["verbose"]);
+        assert_eq!(risk_for("wiktionary/clean"), WebCliRisk::Destructive);
+        assert!(risk_notice_for("wiktionary/clean")
+            .unwrap()
+            .contains("Prepare"));
     }
 }

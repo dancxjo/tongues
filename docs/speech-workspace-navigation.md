@@ -45,6 +45,17 @@ draft**, not a past execution. The starter is resolved from the backend starter
 catalog on every fresh page load. Saving gives the draft an independent graph
 ID and replaces the URL with its durable graph route.
 
+Starting a Workbench command creates an atomic backend record under
+`data/command-jobs` before the process launches. Its `/commands/{command-id}`
+URL preserves the schema-owned argument draft and adds the durable `job` ID.
+Opening that URL restores status, bounded output, progress, artifacts, and the
+exact validated argv after a browser or server restart. A job that was running
+when the server stopped is restored as failed with an explicit
+`Interrupted by server restart` phase; Tongues never presents it as completed.
+Output files link through the bounded artifact download API. Commands classified
+as destructive by the server-owned CLI schema show recovery guidance and
+require confirmation immediately before submission.
+
 Graph execution creates a run record before streaming lifecycle events.
 Graph Studio exposes `/runs/{run-id}/tracks` as soon as the first event arrives.
 This carries an **execution run**. The tracks page can return to the exact saved

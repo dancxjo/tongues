@@ -26,6 +26,14 @@ test('Workbench runs, cancels, restores safe form state, and inspects structured
     assert.match(app, /tongues\.command-workbench\.recent\.v1/);
     assert.match(app, /new EventSource\(`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/events`\)/);
     assert.match(app, /\/api\/jobs\/\$\{encodeURIComponent\(activeJobId\)\}\/cancel/);
+    assert.match(app, /invocation_path: `\$\{window\.location\.pathname\}\$\{window\.location\.search\}`/);
+    assert.match(app, /searchParams\.set\('job', data\.job_id\)/);
+    assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('job'\)/);
+    assert.match(html, /id="workbench-job-link"/);
+    assert.match(app, /form\.reportValidity\(\)/);
+    assert.match(app, /activePage\.risk === 'destructive'.*window\.confirm/);
+    assert.match(html, /id="command-risk"/);
+    assert.match(app, /artifact\.download_url/);
     for (const mode of ['stream', 'jsonl', 'json', 'raw']) {
         assert.match(html, new RegExp(`<option value="${mode}">`));
     }

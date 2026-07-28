@@ -216,7 +216,7 @@ async fn run_server() -> Result<(), StartupError> {
     let state = AppState {
         workspace_root: workspace_root.clone(),
         static_dir: static_dir.clone(),
-        jobs: Arc::new(Mutex::new(HashMap::new())),
+        jobs: load_job_registry(&workspace_root),
         speech: Arc::new(Mutex::new(ResidentSpeechService::default())),
         speech_admission: SpeechAdmission::new(speech_max_in_flight),
         speech_phase: Arc::new(AtomicU8::new(SPEECH_PHASE_IDLE)),
@@ -887,6 +887,7 @@ async fn phone_align_api(Json(payload): Json<PhoneAlignmentApiRequest>) -> Respo
 const PIPELINE_GRAPH_DIR: &str = "data/speech-graphs";
 const PIPELINE_RUN_DIR: &str = "data/speech-runs";
 const TIMELINE_SESSION_DIR: &str = "data/speech-sessions";
+const COMMAND_JOB_DIR: &str = "data/command-jobs";
 static PIPELINE_RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize)]
@@ -3305,12 +3306,15 @@ struct JobRecord {
     events: broadcast::Sender<JobEvent>,
     child: Option<Arc<Mutex<Child>>>,
     cancel_requested: bool,
+    record_path: PathBuf,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct JobSummary {
     id: String,
     label: String,
+    command_id: String,
+    invocation_path: String,
     command: String,
     args: Vec<String>,
     status: JobStatus,
@@ -3320,7 +3324,7 @@ struct JobSummary {
     progress: JobProgress,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct JobProgress {
     phase: String,
     current: Option<u64>,
@@ -3337,7 +3341,7 @@ impl Default for JobProgress {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum JobStatus {
     Running,
@@ -3346,7 +3350,7 @@ enum JobStatus {
     Canceled,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct JobOutputLine {
     stream: String,
     line: String,
@@ -3384,8 +3388,15 @@ struct JobDetail {
 #[derive(Deserialize)]
 struct StartJobRequest {
     label: Option<String>,
+    invocation_path: Option<String>,
     command: String,
     args: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DurableJobRecord {
+    summary: JobSummary,
+    output: Vec<JobOutputLine>,
 }
 
 /// Browser execution is deny-by-default. Adding a Clap command does not expose
@@ -3967,9 +3978,15 @@ async fn start_job(
     State(state): State<AppState>,
     Json(payload): Json<StartJobRequest>,
 ) -> impl IntoResponse {
-    if let Err(error) = validate_job_request(&state.workspace_root, &payload) {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
+    let command_id = match validate_job_request(&state.workspace_root, &payload) {
+        Ok(command_id) => command_id,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    let invocation_path =
+        match validate_invocation_path(payload.invocation_path.as_deref(), &command_id) {
+            Ok(path) => path,
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        };
     {
         let jobs = state.jobs.lock().expect("job registry lock");
         let running = jobs
@@ -3995,6 +4012,8 @@ async fn start_job(
     let summary = JobSummary {
         id: id.clone(),
         label,
+        command_id,
+        invocation_path,
         command: payload.command.clone(),
         args: payload.args.clone(),
         status: JobStatus::Running,
@@ -4007,6 +4026,9 @@ async fn start_job(
             total: None,
         },
     };
+    let record_path =
+        durable_record_file(&state.workspace_root, COMMAND_JOB_DIR, &id, "command job")
+            .expect("generated command job ID is valid");
     {
         let mut jobs = state.jobs.lock().expect("job registry lock");
         jobs.insert(
@@ -4017,8 +4039,18 @@ async fn start_job(
                 events: tx.clone(),
                 child: None,
                 cancel_requested: false,
+                record_path,
             },
         );
+        let job = jobs.get(&id).expect("new job record");
+        if let Err(error) = persist_job_record(job) {
+            jobs.remove(&id);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create durable command record: {error}"),
+            )
+                .into_response();
+        }
     }
 
     let workspace_root = state.workspace_root.clone();
@@ -4096,7 +4128,10 @@ async fn job_events(
 // Several validations retain their matched values for precise error messages;
 // Rust 2021 cannot express the suggested let-chain.
 #[allow(clippy::collapsible_if)]
-fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> Result<(), String> {
+fn validate_job_request(
+    workspace_root: &FsPath,
+    payload: &StartJobRequest,
+) -> Result<String, String> {
     if payload.command != "cargo" {
         return Err("only cargo jobs are supported".into());
     }
@@ -4241,7 +4276,21 @@ fn validate_job_request(workspace_root: &FsPath, payload: &StartJobRequest) -> R
         }
         cursor += 1;
     }
-    Ok(())
+    Ok((*command_id).to_string())
+}
+
+fn validate_invocation_path(path: Option<&str>, command_id: &str) -> Result<String, String> {
+    let expected = format!("/commands/{command_id}");
+    let path = path.unwrap_or(expected.as_str());
+    if path.len() > 8_192
+        || path.contains('#')
+        || !(path == expected || path.starts_with(&format!("{expected}?")))
+    {
+        return Err(format!(
+            "invocation path must identify the validated command `{expected}`"
+        ));
+    }
+    Ok(path.to_string())
 }
 
 fn find_web_cli_command<'a>(
@@ -4647,6 +4696,95 @@ fn job_detail(state: &AppState, job_id: &str) -> Option<JobDetail> {
     })
 }
 
+fn persist_job_record(job: &JobRecord) -> Result<(), String> {
+    write_durable_json(
+        &job.record_path,
+        &DurableJobRecord {
+            summary: job.summary.clone(),
+            output: job.output.iter().cloned().collect(),
+        },
+    )
+}
+
+fn load_job_registry(workspace_root: &FsPath) -> JobRegistry {
+    let directory = workspace_root.join(COMMAND_JOB_DIR);
+    let mut jobs = HashMap::new();
+    for entry in std::fs::read_dir(&directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let loaded = std::fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<DurableJobRecord>(&bytes)
+                    .map_err(|error| error.to_string())
+            });
+        let mut durable = match loaded {
+            Ok(durable) => durable,
+            Err(error) => {
+                eprintln!(
+                    "Warning: unable to restore command job {}: {error}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+        let expected_path = match durable_record_file(
+            workspace_root,
+            COMMAND_JOB_DIR,
+            &durable.summary.id,
+            "command job",
+        ) {
+            Ok(expected) if expected == path => expected,
+            Ok(_) => {
+                eprintln!(
+                    "Warning: command job identity does not match {}",
+                    path.display()
+                );
+                continue;
+            }
+            Err(error) => {
+                eprintln!(
+                    "Warning: invalid command job identity in {}: {error}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+        if durable.summary.status == JobStatus::Running {
+            durable.summary.status = JobStatus::Failed;
+            durable.summary.updated_at_ms = now_ms();
+            durable.summary.progress = JobProgress {
+                phase: "Interrupted by server restart".into(),
+                current: Some(1),
+                total: Some(1),
+            };
+        }
+        let (events, _) = broadcast::channel(256);
+        let record = JobRecord {
+            summary: durable.summary,
+            output: durable.output.into(),
+            events,
+            child: None,
+            cancel_requested: false,
+            record_path: expected_path,
+        };
+        if let Err(error) = persist_job_record(&record) {
+            eprintln!(
+                "Warning: unable to reconcile command job {}: {error}",
+                record.record_path.display()
+            );
+        }
+        jobs.insert(record.summary.id.clone(), record);
+    }
+    Arc::new(Mutex::new(jobs))
+}
+
 fn run_job_process(jobs: JobRegistry, job_id: String, workspace_root: PathBuf) {
     let (command, args) = {
         let jobs_guard = jobs.lock().expect("job registry lock");
@@ -4770,6 +4908,9 @@ fn append_job_output(jobs: &JobRegistry, job_id: &str, stream: &str, line: &str)
             job.output.pop_front();
         }
         let _ = job.events.send(event);
+        if let Err(error) = persist_job_record(job) {
+            eprintln!("Warning: unable to persist command job {job_id}: {error}");
+        }
     }
 }
 
@@ -4780,6 +4921,9 @@ fn update_job_progress(jobs: &JobRegistry, job_id: &str, progress: JobProgress) 
         job.summary.updated_at_ms = at_ms;
         job.summary.progress = progress.clone();
         let _ = job.events.send(JobEvent::Progress { progress, at_ms });
+        if let Err(error) = persist_job_record(job) {
+            eprintln!("Warning: unable to persist command job {job_id}: {error}");
+        }
     }
 }
 
@@ -4801,6 +4945,9 @@ fn finish_job(jobs: &JobRegistry, job_id: &str, status: JobStatus, exit_code: Op
         let _ = job.events.send(JobEvent::Status {
             summary: job.summary.clone(),
         });
+        if let Err(error) = persist_job_record(job) {
+            eprintln!("Warning: unable to persist command job {job_id}: {error}");
+        }
     }
 }
 
@@ -12854,6 +13001,7 @@ mod tests {
 
         let valid = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12872,6 +13020,7 @@ mod tests {
 
         let unknown_flag = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12888,6 +13037,7 @@ mod tests {
 
         let bad_config_path = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12904,6 +13054,7 @@ mod tests {
 
         let bad_positional_path = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12921,6 +13072,7 @@ mod tests {
 
         let conflicting_globals = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12937,6 +13089,7 @@ mod tests {
 
         let invalid_enum = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12953,6 +13106,7 @@ mod tests {
 
         let repeatable_enum = StartJobRequest {
             label: None,
+            invocation_path: None,
             command: "cargo".into(),
             args: vec![
                 "run".into(),
@@ -12969,6 +13123,81 @@ mod tests {
         assert!(validate_job_request(&workspace, &repeatable_enum).is_ok());
 
         std::fs::remove_dir_all(workspace).expect("remove job workspace");
+    }
+
+    #[test]
+    fn command_jobs_are_durable_and_restart_fails_running_work_closed() {
+        let workspace = test_workspace("durable-command-jobs");
+        let id = "job-fixture";
+        let record_path =
+            durable_record_file(&workspace, COMMAND_JOB_DIR, id, "command job").unwrap();
+        let (events, _) = broadcast::channel(4);
+        let record = JobRecord {
+            summary: JobSummary {
+                id: id.into(),
+                label: "Phones".into(),
+                command_id: "phones".into(),
+                invocation_path: "/commands/phones?arg.text=hello".into(),
+                command: "cargo".into(),
+                args: vec![
+                    "run".into(),
+                    "--bin".into(),
+                    "tongues".into(),
+                    "--".into(),
+                    "phones".into(),
+                    "hello".into(),
+                ],
+                status: JobStatus::Running,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                exit_code: None,
+                progress: JobProgress {
+                    phase: "Running".into(),
+                    current: None,
+                    total: None,
+                },
+            },
+            output: VecDeque::from([JobOutputLine {
+                stream: "stdout".into(),
+                line: "fixture output".into(),
+                at_ms: 1,
+            }]),
+            events,
+            child: None,
+            cancel_requested: false,
+            record_path: record_path.clone(),
+        };
+        persist_job_record(&record).expect("persist command job");
+        assert!(!record_path.with_extension("json.part").exists());
+
+        let jobs = load_job_registry(&workspace);
+        let jobs = jobs.lock().expect("loaded job registry");
+        let restored = jobs.get(id).expect("restored command job");
+        assert_eq!(restored.summary.status, JobStatus::Failed);
+        assert_eq!(
+            restored.summary.progress.phase,
+            "Interrupted by server restart"
+        );
+        assert_eq!(restored.output[0].line, "fixture output");
+        assert_eq!(
+            restored.summary.invocation_path,
+            "/commands/phones?arg.text=hello"
+        );
+
+        std::fs::remove_dir_all(workspace).expect("remove durable job workspace");
+    }
+
+    #[test]
+    fn invocation_paths_must_match_the_validated_command() {
+        assert_eq!(
+            validate_invocation_path(Some("/commands/phones?arg.text=hello"), "phones").unwrap(),
+            "/commands/phones?arg.text=hello"
+        );
+        assert!(validate_invocation_path(Some("/commands/speak"), "phones").is_err());
+        assert!(
+            validate_invocation_path(Some("https://example.test/commands/phones"), "phones")
+                .is_err()
+        );
     }
 
     fn test_workspace(label: &str) -> PathBuf {

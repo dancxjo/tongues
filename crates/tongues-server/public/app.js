@@ -385,6 +385,9 @@ function renderCommandPage(page) {
             · hierarchy <code>${escapeHtml(page.command.join(' → '))}</code>
             ${page.aliases?.length ? ` · aliases <code>${escapeHtml(page.aliases.join(', '))}</code>` : ''}
         </p>`;
+    const risk = byId('command-risk');
+    risk.textContent = page.risk_notice || '';
+    risk.classList.toggle('hidden', page.risk !== 'destructive');
     byId('skeleton-fields').innerHTML = primary.length
         ? primary.map(renderControl).join('')
         : '<p class="empty-controls">This command has no command-specific controls.</p>';
@@ -565,15 +568,24 @@ function initJobs() {
     });
     byId('output-mode').addEventListener('change', renderWorkbenchOutput);
     loadJobs();
+    const routeJobId = new URLSearchParams(window.location.search).get('job');
+    if (routeJobId) selectJob(routeJobId);
 }
 
 async function startCurrentPageJob() {
     if (!activePage || activePage.page !== 'command') return;
+    const form = document.querySelector('#command-workbench-page .command-form');
+    if (!form.reportValidity()) return;
+    if (activePage.risk === 'destructive' && !window.confirm(activePage.risk_notice)) return;
     const request = buildJobRequest(activePage);
     const response = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: activePage.title, ...request }),
+        body: JSON.stringify({
+            label: activePage.title,
+            invocation_path: `${window.location.pathname}${window.location.search}`,
+            ...request,
+        }),
     });
     if (!response.ok) return alert(await response.text());
     const data = await response.json();
@@ -582,6 +594,9 @@ async function startCurrentPageJob() {
     byId('cancel-command').classList.remove('hidden');
     jobOutputLines = [];
     jobArtifacts = [];
+    const invocationUrl = new URL(data.summary.invocation_path, window.location.origin);
+    invocationUrl.searchParams.set('job', data.job_id);
+    history.replaceState({}, '', `${invocationUrl.pathname}${invocationUrl.search}`);
     await loadJobs();
     selectJob(data.job_id);
 }
@@ -639,7 +654,9 @@ function renderJobDetail(summary, output, artifacts) {
     renderWorkbenchStatus(summary);
     renderWorkbenchOutput();
     byId('job-artifacts').innerHTML = artifacts.length
-        ? artifacts.map((artifact) => `<div class="artifact-row">${escapeHtml(artifact.path)}</div>`).join('')
+        ? artifacts.map((artifact) => artifact.download_url
+            ? `<a class="artifact-row" href="${escapeHtml(artifact.download_url)}" download>${escapeHtml(artifact.path)}</a>`
+            : `<div class="artifact-row">${escapeHtml(artifact.path)}</div>`).join('')
         : '<div class="artifact-empty">Output files will appear here.</div>';
 }
 
@@ -671,6 +688,12 @@ function renderJobOutput() {
 function renderWorkbenchStatus(summary) {
     byId('workbench-job-status').textContent = `${summary.label}: ${summary.status} · ${summary.progress.phase}`;
     byId('cancel-command').classList.toggle('hidden', summary.status !== 'running');
+    const link = byId('workbench-job-link');
+    const invocationUrl = new URL(summary.invocation_path, window.location.origin);
+    invocationUrl.searchParams.set('job', summary.id);
+    link.href = `${invocationUrl.pathname}${invocationUrl.search}`;
+    link.textContent = `Execution ${summary.id}`;
+    link.classList.remove('hidden');
 }
 
 function renderWorkbenchOutput() {
