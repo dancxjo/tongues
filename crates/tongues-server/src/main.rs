@@ -962,7 +962,7 @@ async fn list_pipeline_graphs(State(state): State<AppState>) -> impl IntoRespons
             edge_count: graph.edges.len(),
         })
         .collect::<Vec<_>>();
-    graphs.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    graphs.sort_by_key(|graph| graph.name.to_lowercase());
     Json(json!({"schema_version": tongues_pipeline::GRAPH_SCHEMA_VERSION, "graphs": graphs}))
 }
 
@@ -1710,6 +1710,7 @@ type PipelineOutputStream = Pin<
     >,
 >;
 
+#[allow(clippy::too_many_arguments)]
 fn pipeline_run_event(
     run_id: &str,
     plan: &tongues_pipeline::ExecutionPlan,
@@ -2165,14 +2166,14 @@ async fn save_timeline_session(
             .into_response();
     }
     sanitize_timeline_session(&mut record.session);
-    if let Some(conversation) = &record.context.conversation {
-        if let Err(error) = conversation.validate() {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"error": error})),
-            )
-                .into_response();
-        }
+    if let Some(conversation) = &record.context.conversation
+        && let Err(error) = conversation.validate()
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": error})),
+        )
+            .into_response();
     }
     if record
         .context

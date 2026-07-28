@@ -364,7 +364,7 @@ enum ServerMessage {
     },
     Recognition {
         sequence: u64,
-        event: StreamEvent,
+        event: Box<StreamEvent>,
     },
     Ended {
         session_id: String,
@@ -518,9 +518,15 @@ async fn stream_session(
                 match events {
                     Ok(events) => {
                         for event in events {
-                            if send_ws(&mut socket, &ServerMessage::Recognition { sequence, event })
-                                .await
-                                .is_err()
+                            if send_ws(
+                                &mut socket,
+                                &ServerMessage::Recognition {
+                                    sequence,
+                                    event: Box::new(event),
+                                },
+                            )
+                            .await
+                            .is_err()
                             {
                                 cancel(&state, &session, "client disconnected");
                                 return;
@@ -542,7 +548,10 @@ async fn stream_session(
                             for event in events {
                                 if send_ws(
                                     &mut socket,
-                                    &ServerMessage::Recognition { sequence, event },
+                                    &ServerMessage::Recognition {
+                                        sequence,
+                                        event: Box::new(event),
+                                    },
                                 )
                                 .await
                                 .is_err()
@@ -574,7 +583,10 @@ async fn stream_session(
                         for event in events {
                             let _ = send_ws(
                                 &mut socket,
-                                &ServerMessage::Recognition { sequence, event },
+                                &ServerMessage::Recognition {
+                                    sequence,
+                                    event: Box::new(event),
+                                },
                             )
                             .await;
                             sequence = sequence.saturating_add(1);
