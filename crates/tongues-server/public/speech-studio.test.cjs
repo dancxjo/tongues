@@ -91,6 +91,10 @@ test('speech samples cover many scripts and only expose languages with compatibl
     );
     assert.equal(studio.pathSupportsSampleLanguage(english, 'en'), true);
     assert.equal(studio.pathSupportsSampleLanguage(english, 'th'), false);
+    assert.doesNotThrow(() => studio.pathLanguageCodes(fixturePath({
+        languages: { support: 'unsupported', values: { support: 'unsupported' } },
+        catalog: { support: 'unsupported' },
+    })));
 });
 
 test('deduplicates pending catalog verification calls', () => {

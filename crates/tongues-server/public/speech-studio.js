@@ -293,11 +293,12 @@
         no: ['nob', 'nno'],
         zh: ['zho'],
     };
+    const arrayValues = (value) => (Array.isArray(value) ? value : []);
     function pathLanguageCodes(path) {
         const values = [
-            ...(path?.linguistic_coverage?.languages || []),
-            ...(path?.languages?.values || []),
-            ...(path?.catalog || []).flatMap((entry) => entry.languages || []),
+            ...arrayValues(path?.linguistic_coverage?.languages),
+            ...arrayValues(path?.languages?.values),
+            ...arrayValues(path?.catalog).flatMap((entry) => arrayValues(entry.languages)),
             ...varietiesForPath(path).flatMap((variety) => [variety.id, variety.language]),
         ];
         return new Set(values.map(normalizedLanguageCode).filter(Boolean));
