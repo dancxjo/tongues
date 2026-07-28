@@ -520,9 +520,34 @@ test('builds duplex requests from prompt lines or saved journals', () => {
     });
     assert.deepEqual(studio.buildDuplexRequest({
         journalPath: ' target/duplex/oracle-chunks.journal.json ',
+        evidenceCursor: 20,
+        evidenceLimit: 10,
+        evidenceTargetId: ' resolution:word-1 ',
     }), {
         journal_path: 'target/duplex/oracle-chunks.journal.json',
+        evidence_cursor: 20,
+        evidence_limit: 10,
+        evidence_target_id: 'resolution:word-1',
     });
+});
+
+test('restores durable interpretation evidence deep links with exact target and page', () => {
+    const request = studio.duplexRequestFromLocation({
+        search: '?duplex_journal=runs%2Fambiguous.json&duplex_target=resolution%3Aword%2F1&duplex_cursor=20&duplex_limit=10',
+    });
+    assert.deepEqual(request, {
+        journal_path: 'runs/ambiguous.json',
+        evidence_cursor: 20,
+        evidence_limit: 10,
+        evidence_target_id: 'resolution:word/1',
+    });
+    assert.equal(
+        studio.duplexDeepLinkWith(
+            '/speech/operate?duplex_fixture=ambiguous&duplex_cursor=20',
+            { duplex_target: 'claim:one', duplex_cursor: null },
+        ),
+        '/speech/operate?duplex_fixture=ambiguous&duplex_target=claim%3Aone',
+    );
 });
 
 test('requires named speakers and rejects unavailable paths before submission', () => {
@@ -607,6 +632,16 @@ test('renders predicted duplex tokens distinctly and loads the server-projected 
     assert.match(studioSource, /\/api\/duplex\/project/);
     assert.match(stylesSource, /\.duplex-token-predicted/);
     assert.match(studioSource, /predicted[\s\S]*playable client audio/i);
+    assert.match(studioSource, /Unsupported duplex inspection schema/);
+    assert.match(studioSource, /No linguistic evidence was attached/);
+    assert.match(studioSource, /aria-label="Interpretation evidence pages"/);
+    assert.match(studioSource, /Permanent link to this target/);
+    assert.match(studioSource, /Conflicts with winner/);
+    assert.match(stylesSource, /data-authority="acoustic_evidence"/);
+    assert.equal(
+        studio.humanizeEvidenceValue({ type: 'lexical_identity', value: { lexeme_id: 'right' } }),
+        'lexical_identity: {"lexeme_id":"right"}',
+    );
 });
 
 test('routes every Speech Studio workflow to a stable deep link', () => {
@@ -822,7 +857,7 @@ test('operate keeps targeted verification, jobs, cancellation, and duplex eviden
     assert.match(studioSource, /Verify changed models/);
     assert.match(studioSource, /\/api\/jobs/);
     assert.match(studioSource, /data-cancel-job/);
-    assert.match(studioSource, /Labs: predictive duplex evidence/);
+    assert.match(studioSource, /Interpretation evidence/);
     assert.match(studioSource, /refreshOperateJobs/);
     assert.doesNotMatch(
         studioSource,

@@ -172,3 +172,5 @@ normalized score component, require declared identity layers to agree before
 commit, and invalidate only the revised tail. The policy and delivery boundary
 are documented in
 [Duplex Linguistic Evidence and Commit Policy](duplex-linguistic-evidence.md).
+The versioned, paginated CLI/API/Operate projection is documented in
+[Interpretation Evidence Inspection](interpretation-evidence-inspection.md).

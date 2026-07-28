@@ -10,6 +10,8 @@ const phoneticFixture = JSON.parse(readFileSync(new URL(
   "../../../fixtures/timeline/phonetic-segmentation-inspection-v1.json",
   import.meta.url,
 )));
+const runTracksSource = readFileSync(new URL("./run-tracks.js", import.meta.url), "utf8");
+const runTracksHtml = readFileSync(new URL("./run-tracks.html", import.meta.url), "utf8");
 
 const envelope = (sequence, offset_ms, event, provenance = {}) => ({
   schema_version: 1, stream_id: "stream:fixture", event_id: `event:${sequence}`, sequence,
@@ -158,6 +160,12 @@ test("phonetic focus and provenance survive a direct URL", () => {
   assert.equal(provenance.algorithm_version, "tongues.phonetic-segmentation.listenbury-lattice-v1");
   assert.equal(provenance.execution_record_id, "run:phonetic-v1");
   assert.equal(provenance.boundary_origin, "inferred");
+});
+
+test("run inspection exposes only local durable interpretation evidence links", () => {
+  assert.match(runTracksHtml, /id="interpretation-link"[^>]*hidden/);
+  assert.match(runTracksSource, /context\?\.interpretation_deep_link/);
+  assert.match(runTracksSource, /\^\\\/speech\\\/operate/);
 });
 
 test("zoom density keeps labels readable and long phone recordings bounded", () => {

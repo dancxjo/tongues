@@ -10,6 +10,8 @@ const phoneticFixture = JSON.parse(readFileSync(new URL(
   "../../../fixtures/timeline/phonetic-segmentation-inspection-v1.json",
   import.meta.url,
 )));
+const waveDeckSource = readFileSync(new URL("./wavedeck.js", import.meta.url), "utf8");
+const waveDeckHtml = readFileSync(new URL("./wavedeck.html", import.meta.url), "utf8");
 
 function base() {
   return {
@@ -85,6 +87,12 @@ test("Run Tracks handoff has a stable evidence interval to select", () => {
   const selected = projectSession(session).edited.find(span =>
     span.id.endsWith(":1") || (span.start_ms < 40 && span.end_ms > 10));
   assert.equal(selected.id, "word:1");
+});
+
+test("WaveDeck preserves an immutable-session handoff to interpretation evidence", () => {
+  assert.match(waveDeckHtml, /id="context-interpretation"[^>]*hidden/);
+  assert.match(waveDeckSource, /context\.interpretation_deep_link/);
+  assert.match(waveDeckSource, /\^\\\/speech\\\/operate/);
 });
 
 test("segmentation correction journey preserves baseline and records who what and when", () => {

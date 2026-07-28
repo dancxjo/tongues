@@ -2081,6 +2081,88 @@ audio::-webkit-media-controls-panel {
     padding-left: 1rem;
 }
 
+.duplex-evidence {
+    border-block: 1px solid var(--border);
+    margin-block: 1rem;
+    padding-block: 1rem;
+}
+
+#duplex-evidence-targets {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.evidence-target,
+.evidence-claim,
+.evidence-consequence {
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.evidence-target > summary,
+.evidence-claim-heading,
+.duplex-score-components,
+#duplex-evidence-pages {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    justify-content: space-between;
+}
+
+.evidence-target > summary {
+    cursor: pointer;
+}
+
+.evidence-claim[data-authority="acoustic_evidence"],
+.evidence-claim[data-authority="direct_observation"] {
+    border-left: 0.3rem solid rgba(34, 197, 94, 0.75);
+}
+
+.evidence-claim[data-authority="grammar_inference"],
+.evidence-claim[data-authority="contextual_inference"],
+.evidence-claim[data-authority="prosody_inference"] {
+    border-left: 0.3rem solid rgba(251, 191, 36, 0.75);
+}
+
+.evidence-claim[data-authority="manual_override"] {
+    border-left: 0.3rem solid rgba(96, 165, 250, 0.8);
+}
+
+.evidence-unknown {
+    border-style: dashed;
+    color: var(--text-muted);
+}
+
+.evidence-conflict {
+    background: rgba(248, 113, 113, 0.14);
+    border-radius: 999px;
+    display: inline-flex;
+    padding: 0.15rem 0.5rem;
+}
+
+.evidence-deep-link {
+    display: inline-flex;
+    margin-block: 0.5rem;
+}
+
+.duplex-score-components {
+    justify-content: flex-start;
+}
+
+.duplex-score-components span {
+    background: rgba(148, 163, 184, 0.12);
+    border-radius: 999px;
+    padding: 0.15rem 0.45rem;
+}
+
+#duplex-evidence-pages {
+    justify-content: flex-start;
+    margin-top: 0.75rem;
+}
+
 @media (max-width: 720px) {
     .workspace,
     .sidebar {

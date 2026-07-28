@@ -9,9 +9,11 @@ use tongues_duplex::{
     discover_duplex_models, evaluate_duplex_model, export_duplex_model,
     prepare_dataset_with_progress, replay_journal, train_duplex_model, DuplexFixtureSuite,
     DuplexPrepareProgress, DuplexSimulator, EvidenceModality, FixtureCompletionProvider,
+    InterpretationClaimView, InterpretationInspectionPage, InterpretationInspectionQuery,
     LearnedCompletionProvider, LearnedDuplexConfig, LearnedDuplexModel,
     NormalizedCompletionHypothesis, ObservedEvidence, OracleCompletionProvider, SimulatorConfig,
     SimulatorEventKind, SimulatorJournal, SimulatorState,
+    studio_projection_from_journal_with_inspection,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
@@ -74,6 +76,26 @@ pub struct DuplexDemoCommand {
     /// Human timeline or complete JSON result
     #[arg(long, value_enum, default_value = "text")]
     format: DuplexOutputFormat,
+
+    /// Emit the shared versioned server/CLI inspection contract as JSON
+    #[arg(long, conflicts_with = "format")]
+    json: bool,
+
+    /// Explain claims, alternatives, confidence, conflicts, and consequences
+    #[arg(long)]
+    explain: bool,
+
+    /// Evidence-page cursor for JSON or explain output
+    #[arg(long, default_value_t = 0)]
+    evidence_cursor: usize,
+
+    /// Bounded evidence-page size (clamped to the server contract maximum)
+    #[arg(long, default_value_t = tongues_duplex::DEFAULT_INTERPRETATION_PAGE_LIMIT)]
+    evidence_limit: usize,
+
+    /// Stable claim/resolution target ID to explain
+    #[arg(long)]
+    evidence_target: Option<String>,
 
     /// Learned checkpoint/artifact to use for direct chunks instead of the oracle
     #[arg(long)]
@@ -318,22 +340,29 @@ fn run_demo(command: DuplexDemoCommand) -> Result<()> {
     }
     let journal_path = command
         .journal
+        .clone()
         .unwrap_or_else(|| PathBuf::from(format!("target/duplex/{run_id}.journal.json")));
     write_journal_atomic(&journal_path, &journal)?;
+    let projection = studio_projection_from_journal_with_inspection(
+        run_id.clone(),
+        &journal,
+        &InterpretationInspectionQuery {
+            cursor: command.evidence_cursor,
+            limit: command.evidence_limit,
+            target_id: command.evidence_target.clone(),
+        },
+    )
+    .context("building versioned duplex inspection")?;
 
-    match command.format {
-        DuplexOutputFormat::Text => print_timeline(&run_id, &journal_path, &journal, &state),
-        DuplexOutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "run": run_id,
-                    "journal_path": journal_path,
-                    "journal": journal,
-                    "final_state": state,
-                    "replay_verified": true,
-                }))?
-            );
+    match (command.json, command.format) {
+        (false, DuplexOutputFormat::Text) => {
+            print_timeline(&run_id, &journal_path, &journal, &state);
+            if command.explain {
+                print_interpretation_explanation(&projection.interpretation);
+            }
+        }
+        (true, _) | (false, DuplexOutputFormat::Json) => {
+            println!("{}", serde_json::to_string_pretty(&projection)?);
         }
     }
     Ok(())
@@ -627,6 +656,103 @@ fn hypothesis_text(hypothesis: &NormalizedCompletionHypothesis) -> String {
         .join(" ")
 }
 
+fn print_interpretation_explanation(page: &InterpretationInspectionPage) {
+    println!(
+        "[interpretation] schema={} utterance={} evidence={:?} targets={} page={}..{}",
+        page.schema_version,
+        page.utterance_id.0,
+        page.evidence_status,
+        page.total,
+        page.cursor,
+        page.cursor + page.returned
+    );
+    for warning in &page.warnings {
+        println!("[interpretation] {}: {}", warning.code, warning.message);
+    }
+    for target in &page.targets {
+        println!(
+            "[interpretation] target={} kind={:?} status={:?}",
+            target.target_id, target.kind, target.status
+        );
+        if let Some(winner) = &target.winner {
+            print_claim_explanation("won", winner);
+        } else {
+            println!("  won: unknown (no eligible winner)");
+        }
+        for alternative in &target.alternatives {
+            print_claim_explanation("alternative", alternative);
+        }
+        for consequence in &target.consequences {
+            println!(
+                "  output: {} selected={} states={:?} score={:.3} blocks={:?}",
+                consequence.output_text,
+                consequence.selected,
+                consequence.statuses,
+                consequence.score.combined,
+                consequence.block_reasons
+            );
+        }
+        for link in &target.acoustic_links {
+            println!(
+                "  audio: {} frames={}..{} time={:.3}..{:.3}s alignment={}",
+                link.evidence_id,
+                link.span.frame_start,
+                link.span.frame_end,
+                link.span.time_start,
+                link.span.time_end,
+                link.alignment
+            );
+        }
+    }
+    for backend in &page.backend_reports {
+        println!(
+            "[interpretation] backend branch={} status={:?} selected={:?} attempts={} diagnostic={}",
+            backend.hypothesis_id,
+            backend.status,
+            backend.report.selected,
+            backend.report.attempts.len(),
+            backend.diagnostic.as_deref().unwrap_or("none")
+        );
+    }
+    for loss in &page.projection_losses {
+        println!(
+            "[interpretation] accepted projection loss {:?}: {} -> {}",
+            loss.evidence.dimension, loss.evidence.intended, loss.evidence.recovered
+        );
+    }
+    if let Some(next) = page.next_cursor {
+        println!(
+            "[interpretation] more targets: rerun with --evidence-cursor {next}"
+        );
+    }
+}
+
+fn print_claim_explanation(label: &str, claim: &InterpretationClaimView) {
+    let calibration = claim.calibration.as_deref().unwrap_or("uncalibrated");
+    let value = serde_json::to_string(&claim.value).unwrap_or_else(|_| "<unavailable>".into());
+    println!(
+        "  {label}: {} value={} authority={:?} source={:?}:{} confidence={:.3} ({}) lifecycle={:?}",
+        claim.claim_id.0,
+        value,
+        claim.authority,
+        claim.provenance.source,
+        claim.provenance.method,
+        claim.confidence,
+        calibration,
+        claim.lifecycle
+    );
+    println!("    reason: {} ({})", claim.rationale, claim.rationale_code);
+    if let Some(explanation) = &claim.resolution_explanation {
+        println!("    resolution: {explanation}");
+    }
+    if !claim.conflicts_with.is_empty() {
+        println!("    conflicts: {:?}", claim.conflicts_with);
+    }
+    if !claim.supports.is_empty() {
+        println!("    supports: {:?}", claim.supports);
+    }
+}
+
 fn modality_name(modality: EvidenceModality) -> &'static str {
     match modality {
         EvidenceModality::Text => "text",
@@ -663,5 +789,31 @@ mod tests {
         };
         assert_eq!(command.chunks.len(), 2);
         assert_eq!(command.posterior_mass, Some(0.9));
+    }
+
+    #[test]
+    fn parses_json_and_bounded_evidence_explanation_options() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "demo",
+            "--json",
+            "--evidence-cursor",
+            "20",
+            "--evidence-limit",
+            "10",
+            "--evidence-target",
+            "resolution:word-1",
+        ])
+        .unwrap();
+        let DuplexCommands::Demo(command) = cli.command else {
+            panic!("expected duplex demo command");
+        };
+        assert!(command.json);
+        assert_eq!(command.evidence_cursor, 20);
+        assert_eq!(command.evidence_limit, 10);
+        assert_eq!(
+            command.evidence_target.as_deref(),
+            Some("resolution:word-1")
+        );
     }
 }

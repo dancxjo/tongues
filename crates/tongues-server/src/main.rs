@@ -24,7 +24,7 @@ use speaking::{
     timeline::SpeechTimelineSession,
 };
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -42,8 +42,9 @@ use tokio::sync::{Semaphore, broadcast};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tongues_duplex::{
     DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
-    ObservedEvidence, OracleCompletionProvider, SimulatorConfig, SimulatorJournal,
-    studio_projection_from_journal,
+    InspectionWarning, InterpretationInspectionQuery, ObservedEvidence, OracleCompletionProvider,
+    SimulatorConfig, SimulatorJournal,
+    studio_projection_from_journal_with_inspection,
 };
 use tower_http::services::ServeDir;
 
@@ -336,6 +337,7 @@ fn build_app(state: AppState) -> Router {
             post(verify_speech_model),
         )
         .route("/api/duplex/project", post(project_duplex_request))
+        .route("/api/duplex/evidence", get(get_duplex_evidence))
         .route(
             "/api/phone-align",
             post(phone_align_api).layer(DefaultBodyLimit::max(MAX_PHONE_ALIGNMENT_BODY_BYTES)),
@@ -2047,6 +2049,10 @@ struct TimelineSessionContext {
     source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conversation: Option<LiveConversationSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interpretation_deep_link: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interpretation_target_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2168,6 +2174,23 @@ async fn save_timeline_session(
             )
                 .into_response();
         }
+    }
+    if record
+        .context
+        .interpretation_deep_link
+        .as_deref()
+        .is_some_and(|link| {
+            !link.starts_with("/speech/operate?")
+                && link != "/speech/operate"
+        })
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "interpretation_deep_link must be a local /speech/operate URL"
+            })),
+        )
+            .into_response();
     }
     if let Err(error) = record.session.validate() {
         return (
@@ -3170,7 +3193,7 @@ struct SpeechProjectionRequest {
     pipeline: Option<tongues_tts::SpeechPipelineSelection>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct DuplexProjectionRequest {
     #[serde(default)]
     fixture: Option<String>,
@@ -3184,6 +3207,46 @@ struct DuplexProjectionRequest {
     posterior_mass: Option<f64>,
     #[serde(default)]
     journal_path: Option<String>,
+    #[serde(default)]
+    evidence_cursor: usize,
+    #[serde(default = "default_interpretation_page_limit")]
+    evidence_limit: usize,
+    #[serde(default)]
+    evidence_target_id: Option<String>,
+}
+
+impl Default for DuplexProjectionRequest {
+    fn default() -> Self {
+        Self {
+            fixture: None,
+            chunks: Vec::new(),
+            mock_acoustics: Vec::new(),
+            variety: None,
+            posterior_mass: None,
+            journal_path: None,
+            evidence_cursor: 0,
+            evidence_limit: default_interpretation_page_limit(),
+            evidence_target_id: None,
+        }
+    }
+}
+
+fn default_interpretation_page_limit() -> usize {
+    tongues_duplex::DEFAULT_INTERPRETATION_PAGE_LIMIT
+}
+
+#[derive(Debug, Deserialize)]
+struct DuplexEvidenceQuery {
+    #[serde(default)]
+    fixture: Option<String>,
+    #[serde(default)]
+    journal_path: Option<String>,
+    #[serde(default)]
+    cursor: usize,
+    #[serde(default = "default_interpretation_page_limit")]
+    limit: usize,
+    #[serde(default)]
+    target_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -7763,18 +7826,91 @@ async fn project_duplex_request(
     }
 }
 
+async fn get_duplex_evidence(
+    State(state): State<AppState>,
+    Query(query): Query<DuplexEvidenceQuery>,
+) -> impl IntoResponse {
+    let request = DuplexProjectionRequest {
+        fixture: query.fixture,
+        journal_path: query.journal_path,
+        evidence_cursor: query.cursor,
+        evidence_limit: query.limit,
+        evidence_target_id: query.target_id,
+        ..DuplexProjectionRequest::default()
+    };
+    match build_duplex_projection(&state.workspace_root, request) {
+        Ok(response) => Json(response.interpretation).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
+}
+
 fn build_duplex_projection(
     workspace_root: &FsPath,
     request: DuplexProjectionRequest,
 ) -> Result<DuplexStudioProjection, String> {
-    let (run_id, journal) = duplex_run_and_journal(workspace_root, &request)?;
-    studio_projection_from_journal(run_id, &journal).map_err(|error| error.to_string())
+    let (run_id, journal, migration_warnings) =
+        duplex_run_and_journal(workspace_root, &request)?;
+    let mut projection = studio_projection_from_journal_with_inspection(
+        run_id,
+        &journal,
+        &InterpretationInspectionQuery {
+            cursor: request.evidence_cursor,
+            limit: request.evidence_limit,
+            target_id: request.evidence_target_id.clone(),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    projection
+        .interpretation
+        .warnings
+        .extend(migration_warnings);
+    projection.deep_link = duplex_inspection_deep_link(&request);
+    Ok(projection)
+}
+
+fn duplex_inspection_deep_link(request: &DuplexProjectionRequest) -> Option<String> {
+    let mut url = reqwest::Url::parse("http://localhost/speech/operate").ok()?;
+    let mut query = url.query_pairs_mut();
+    if let Some(journal_path) = request
+        .journal_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        query.append_pair("duplex_journal", journal_path);
+    } else if request.chunks.is_empty() && request.mock_acoustics.is_empty() {
+        query.append_pair(
+            "duplex_fixture",
+            request.fixture.as_deref().unwrap_or("who-shot-john-f"),
+        );
+    } else {
+        return None;
+    }
+    if let Some(target_id) = request
+        .evidence_target_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+    {
+        query.append_pair("duplex_target", target_id);
+    }
+    if request.evidence_cursor > 0 {
+        query.append_pair("duplex_cursor", &request.evidence_cursor.to_string());
+    }
+    if request.evidence_limit != default_interpretation_page_limit() {
+        query.append_pair("duplex_limit", &request.evidence_limit.to_string());
+    }
+    drop(query);
+    Some(match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    })
 }
 
 fn duplex_run_and_journal(
     workspace_root: &FsPath,
     request: &DuplexProjectionRequest,
-) -> Result<(String, SimulatorJournal), String> {
+) -> Result<(String, SimulatorJournal, Vec<InspectionWarning>), String> {
     if let Some(journal_path) = request.journal_path.as_deref().map(str::trim) {
         if journal_path.is_empty() {
             return Err("journal_path cannot be empty".into());
@@ -7784,6 +7920,7 @@ fn duplex_run_and_journal(
         let full_path = resolve_existing_artifact_path(workspace_root, &relative)?;
         let bytes = std::fs::read(&full_path)
             .map_err(|error| format!("failed to read journal {}: {error}", full_path.display()))?;
+        let migration_warnings = legacy_syntax_alias_warnings(&bytes);
         let journal: SimulatorJournal = serde_json::from_slice(&bytes)
             .map_err(|error| format!("failed to parse journal {}: {error}", full_path.display()))?;
         let run_id = relative
@@ -7791,7 +7928,7 @@ fn duplex_run_and_journal(
             .and_then(|stem| stem.to_str())
             .unwrap_or("duplex-replay")
             .to_string();
-        return Ok((run_id, journal));
+        return Ok((run_id, journal, migration_warnings));
     }
 
     if !request.chunks.is_empty() || !request.mock_acoustics.is_empty() {
@@ -7821,7 +7958,7 @@ fn duplex_run_and_journal(
                 .map_err(|error| error.to_string())?;
         }
         let (journal, _) = simulator.into_parts();
-        return Ok((run_id, journal));
+        return Ok((run_id, journal, Vec::new()));
     }
 
     let suite = load_duplex_fixture_suite(workspace_root)?;
@@ -7847,7 +7984,57 @@ fn duplex_run_and_journal(
             .map_err(|error| error.to_string())?;
     }
     let (journal, _) = simulator.into_parts();
-    Ok((fixture.id.clone(), journal))
+    Ok((fixture.id.clone(), journal, Vec::new()))
+}
+
+fn legacy_syntax_alias_warnings(bytes: &[u8]) -> Vec<InspectionWarning> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Vec::new();
+    };
+    let aliases = [
+        "link_parses",
+        "raw_link_grammar_parses",
+        "tongues_rule_grammar",
+        "tongues_link_grammar",
+        "link_grammar_rule",
+        "link_grammar_projection",
+    ];
+    let mut found = BTreeSet::new();
+    fn visit(
+        value: &serde_json::Value,
+        aliases: &[&str],
+        found: &mut BTreeSet<String>,
+    ) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    if aliases.contains(&key.as_str()) {
+                        found.insert(key.clone());
+                    }
+                    visit(value, aliases, found);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    visit(value, aliases, found);
+                }
+            }
+            serde_json::Value::String(value) if aliases.contains(&value.as_str()) => {
+                found.insert(value.clone());
+            }
+            _ => {}
+        }
+    }
+    visit(&value, &aliases, &mut found);
+    found
+        .into_iter()
+        .map(|alias| InspectionWarning {
+            code: "legacy_syntax_alias_migrated".into(),
+            message: format!(
+                "Legacy syntax alias '{alias}' was accepted and canonicalized in this inspection view."
+            ),
+        })
+        .collect()
 }
 
 fn load_duplex_fixture_suite(workspace_root: &FsPath) -> Result<DuplexFixtureSuite, String> {
@@ -11082,6 +11269,10 @@ mod tests {
                 run_id: Some(run.run_id.clone()),
                 source: Some("fixture".into()),
                 conversation: None,
+                interpretation_deep_link: Some(
+                    "/speech/operate?duplex_fixture=who-shot-john-f".into(),
+                ),
+                interpretation_target_id: Some("resolution:word-john-f".into()),
             },
             updated_at_ms: 20,
         };
@@ -11091,6 +11282,10 @@ mod tests {
         let restored: TimelineSessionRecord =
             serde_json::from_slice(&std::fs::read(session_path).unwrap()).unwrap();
         assert_eq!(restored.context.run_id, Some(run.run_id));
+        assert_eq!(
+            restored.context.interpretation_target_id.as_deref(),
+            Some("resolution:word-john-f")
+        );
         assert!(pipeline_run_file(&root, "../escape").is_err());
         assert!(timeline_session_file(&root, "session/escape").is_err());
 
@@ -11842,7 +12037,19 @@ mod tests {
         )
         .expect("fixture projection");
 
+        assert_eq!(
+            projection.schema_version,
+            tongues_duplex::STUDIO_PROJECTION_SCHEMA_VERSION
+        );
         assert!(projection.replay_verified);
+        assert_eq!(
+            projection.interpretation.evidence_status,
+            tongues_duplex::InspectionEvidenceStatus::Missing
+        );
+        assert_eq!(
+            projection.deep_link.as_deref(),
+            Some("/speech/operate?duplex_fixture=who-shot-john-f")
+        );
         assert!(!projection.timeline.is_empty());
         assert!(
             projection
@@ -11856,6 +12063,64 @@ mod tests {
                 .iter()
                 .any(|snapshot| snapshot.branches.iter().any(|branch| branch.selected))
         );
+    }
+
+    #[test]
+    fn duplex_evidence_deep_link_preserves_source_target_and_page() {
+        let link = duplex_inspection_deep_link(&DuplexProjectionRequest {
+            journal_path: Some("runs/duplex tests/ambiguous.json".into()),
+            evidence_cursor: 20,
+            evidence_limit: 10,
+            evidence_target_id: Some("resolution:word/right".into()),
+            ..DuplexProjectionRequest::default()
+        })
+        .expect("durable journal deep link");
+
+        assert!(link.starts_with("/speech/operate?"));
+        let parsed = reqwest::Url::parse(&format!("http://localhost{link}")).unwrap();
+        let query = parsed.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            query.get("duplex_journal").map(|value| value.as_ref()),
+            Some("runs/duplex tests/ambiguous.json")
+        );
+        assert_eq!(
+            query.get("duplex_target").map(|value| value.as_ref()),
+            Some("resolution:word/right")
+        );
+        assert_eq!(
+            query.get("duplex_cursor").map(|value| value.as_ref()),
+            Some("20")
+        );
+        assert_eq!(
+            query.get("duplex_limit").map(|value| value.as_ref()),
+            Some("10")
+        );
+        assert!(
+            duplex_inspection_deep_link(&DuplexProjectionRequest {
+                chunks: vec!["ephemeral".into()],
+                ..DuplexProjectionRequest::default()
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn duplex_inspection_reports_legacy_syntax_alias_migration() {
+        let warnings = legacy_syntax_alias_warnings(
+            br#"{
+                "syntax": {
+                    "link_parses": [],
+                    "backend": "tongues_link_grammar",
+                    "source": "link_grammar_projection"
+                }
+            }"#,
+        );
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings.iter().all(|warning| {
+            warning.code == "legacy_syntax_alias_migrated"
+                && warning.message.contains("canonicalized")
+        }));
+        assert!(legacy_syntax_alias_warnings(br#"{"backend":"tongues_rules"}"#).is_empty());
     }
 
     #[test]

@@ -57,6 +57,9 @@ function renderRecord(record) {
   byId("status-badge").textContent = state.projected.status;
   byId("status-badge").dataset.state = state.projected.status;
   byId("cancel-live").hidden = !state.socket;
+  const interpretationLink = safeInterpretationLink(record.context?.interpretation_deep_link);
+  byId("interpretation-link").hidden = !interpretationLink;
+  if (interpretationLink) byId("interpretation-link").href = interpretationLink;
   renderPrivacy();
   renderSegmentation();
   renderFilters();
@@ -219,6 +222,12 @@ function selectSpan(span, {updateUrl = true, focusHeading = true} = {}) {
   const sessionId = state.projected.session_id;
   byId("session-link").hidden = !sessionId;
   if (sessionId) byId("session-link").href = waveDeckHandoff(sessionId, span);
+  const interpretationLink = safeInterpretationLink(
+    span.metadata?.interpretation_deep_link
+      ?? state.record?.context?.interpretation_deep_link,
+  );
+  byId("interpretation-link").hidden = !interpretationLink;
+  if (interpretationLink) byId("interpretation-link").href = interpretationLink;
   byId("play-selection").disabled = !state.audioUrl;
   if (updateUrl) {
     const url = new URL(location.href);
@@ -228,6 +237,11 @@ function selectSpan(span, {updateUrl = true, focusHeading = true} = {}) {
   if (focusHeading) byId("selection-heading").focus();
   announce(`Selected ${span.label}; provenance and handoff controls are available.`);
   scheduleRender();
+}
+
+function safeInterpretationLink(link) {
+  return typeof link === "string"
+    && /^\/speech\/operate(?:\?|$)/.test(link) ? link : null;
 }
 
 function formatBoundary(boundary) {

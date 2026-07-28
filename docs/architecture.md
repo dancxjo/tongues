@@ -254,7 +254,8 @@ replacement, and post-playback correction decisions are written to the
 versioned simulator journal. Selected, committed, and verified are distinct
 auditable states; losing hypotheses are retained in audit history. Replay
 reconstructs the same final state without invoking the provider. See
-[Duplex Linguistic Evidence and Commit Policy](duplex-linguistic-evidence.md).
+[Duplex Linguistic Evidence and Commit Policy](duplex-linguistic-evidence.md)
+and [Interpretation Evidence Inspection](interpretation-evidence-inspection.md).
 
 ```sh
 cargo run -p tongues-cli -- duplex demo --fixture who-shot-john-f

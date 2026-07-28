@@ -33,12 +33,20 @@ async function request(path, options = {}) {
 function renderContext() {
   byId("context-run").hidden = !context.run_id;
   byId("context-graph").hidden = !context.graph_id;
+  const interpretationLink = safeInterpretationLink(context.interpretation_deep_link);
+  byId("context-interpretation").hidden = !interpretationLink;
   if (context.run_id) byId("context-run").href = `/runs/${encodeURIComponent(context.run_id)}/tracks`;
   if (context.graph_id) byId("context-graph").href = `/studio/graphs/${encodeURIComponent(context.graph_id)}`;
+  if (interpretationLink) byId("context-interpretation").href = interpretationLink;
   byId("session-context").textContent = context.source
     ? `Source: ${context.source}. Original evidence is immutable; edits remain a replayable interpretation.`
     : "Original evidence remains immutable. Edits are a separate replayable interpretation.";
   renderSegmentation();
+}
+
+function safeInterpretationLink(link) {
+  return typeof link === "string"
+    && /^\/speech\/operate(?:\?|$)/.test(link) ? link : null;
 }
 
 function renderSegmentation() {

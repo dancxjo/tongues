@@ -66,6 +66,7 @@
         conversationMicStartedAt: 0,
         conversationFirstPartialAt: 0,
         conversationCommittedAt: 0,
+        duplexRequest: null,
     };
     const VERIFICATION_CONCURRENCY = 1;
     const DEFAULT_COMPARISON_CONCURRENCY = 2;
@@ -899,14 +900,16 @@
                         <div id="operate-jobs" class="operate-jobs" aria-live="polite"></div>
                     </section>
                     <details class="operate-labs">
-                        <summary>Labs: predictive duplex evidence</summary>
+                        <summary>Interpretation evidence</summary>
                         <section class="duplex-panel" aria-labelledby="duplex-heading">
                     <div class="speech-section-heading">
                         <div>
-                            <h2 id="duplex-heading">Predictive duplex timeline</h2>
+                            <h2 id="duplex-heading">Interpretation decisions and predictive timeline</h2>
                             <p class="page-doc">
-                                The server projects replayable duplex belief snapshots so predicted
-                                text stays visible without ever becoming playable client audio.
+                                The concise timeline stays visible first. Expand an evidence target
+                                to inspect alternatives, sources, conflicts, confidence, revisions,
+                                backend degradation, and output consequences.
+                                Predicted text remains visible but never becomes playable client audio.
                             </p>
                         </div>
                         <div class="duplex-actions">
@@ -930,6 +933,13 @@
                     </div>
                     <div id="duplex-error" class="inline-error hidden" role="alert"></div>
                     <div id="duplex-summary" class="duplex-summary hidden"></div>
+                    <section id="duplex-evidence" class="duplex-evidence hidden"
+                        aria-labelledby="duplex-evidence-heading">
+                        <h3 id="duplex-evidence-heading" tabindex="-1">Evidence chain</h3>
+                        <div id="duplex-evidence-status" role="status" aria-live="polite"></div>
+                        <div id="duplex-evidence-targets"></div>
+                        <nav id="duplex-evidence-pages" aria-label="Interpretation evidence pages"></nav>
+                    </section>
                     <ol id="duplex-timeline" class="duplex-timeline hidden"></ol>
                         </section>
                     </details>
@@ -2523,19 +2533,59 @@
         mockAcoustics = '',
         variety = null,
         journalPath = '',
+        fixture = '',
+        evidenceCursor = 0,
+        evidenceLimit = 20,
+        evidenceTargetId = '',
     } = {}) {
         const replayPath = String(journalPath || '').trim();
-        if (replayPath) return { journal_path: replayPath };
-        const chunks = duplexLines(text);
-        const mockChunks = duplexLines(mockAcoustics);
-        if (!chunks.length && !mockChunks.length) {
-            throw new Error('Enter prompt text, mock acoustic chunks, or a saved journal path.');
+        const fixtureId = String(fixture || '').trim();
+        let payload;
+        if (replayPath) {
+            payload = { journal_path: replayPath };
+        } else if (fixtureId) {
+            payload = { fixture: fixtureId };
+        } else {
+            const chunks = duplexLines(text);
+            const mockChunks = duplexLines(mockAcoustics);
+            if (!chunks.length && !mockChunks.length) {
+                throw new Error('Enter prompt text, mock acoustic chunks, or a saved journal path.');
+            }
+            payload = {
+                chunks,
+                mock_acoustics: mockChunks,
+                variety,
+            };
         }
-        return {
-            chunks,
-            mock_acoustics: mockChunks,
-            variety,
+        if (Number(evidenceCursor) > 0) payload.evidence_cursor = Number(evidenceCursor);
+        if (Number(evidenceLimit) !== 20) payload.evidence_limit = Number(evidenceLimit);
+        const targetId = String(evidenceTargetId || '').trim();
+        if (targetId) payload.evidence_target_id = targetId;
+        return payload;
+    }
+
+    function duplexRequestFromLocation(locationLike) {
+        const params = new URLSearchParams(locationLike?.search || '');
+        const shared = {
+            evidenceCursor: Number(params.get('duplex_cursor') || 0),
+            evidenceLimit: Number(params.get('duplex_limit') || 20),
+            evidenceTargetId: params.get('duplex_target') || '',
         };
+        const journalPath = params.get('duplex_journal');
+        if (journalPath) return buildDuplexRequest({ journalPath, ...shared });
+        const fixture = params.get('duplex_fixture');
+        if (fixture) return buildDuplexRequest({ fixture, ...shared });
+        return null;
+    }
+
+    function duplexDeepLinkWith(link, changes = {}) {
+        if (!link) return '';
+        const url = new URL(link, 'http://localhost');
+        for (const [key, value] of Object.entries(changes)) {
+            if (value == null || value === '' || value === 0) url.searchParams.delete(key);
+            else url.searchParams.set(key, String(value));
+        }
+        return `${url.pathname}${url.search}`;
     }
 
     function duplexTokenMarkup(tokens, kind) {
@@ -2563,7 +2613,175 @@
         return event.type;
     }
 
+    function humanizeEvidenceValue(value) {
+        if (value == null) return 'unknown';
+        if (typeof value !== 'object') return String(value);
+        if (value.type && Object.hasOwn(value, 'value')) {
+            return `${value.type}: ${JSON.stringify(value.value)}`;
+        }
+        return JSON.stringify(value);
+    }
+
+    function interpretationClaimMarkup(claim, label) {
+        if (!claim) return `
+            <div class="evidence-claim evidence-unknown">
+                <strong>${escapeHtml(label)}</strong>
+                <span>Unknown — no eligible evidence winner.</span>
+            </div>`;
+        const calibration = claim.calibration || 'uncalibrated';
+        const conflict = claim.conflicts_with_winner
+            ? '<span class="evidence-conflict">Conflicts with winner</span>'
+            : '';
+        return `
+            <article class="evidence-claim" data-authority="${escapeAttribute(claim.authority)}">
+                <div class="evidence-claim-heading">
+                    <strong>${escapeHtml(label)} · ${escapeHtml(claim.claim_id)}</strong>
+                    <span>${escapeHtml(claim.authority)}</span>
+                </div>
+                <p>${escapeHtml(humanizeEvidenceValue(claim.value))}</p>
+                <dl class="metadata-grid compact">
+                    <div><dt>Source</dt><dd>${escapeHtml(`${claim.provenance?.source || 'unknown'} · ${claim.provenance?.method || 'unknown'}`)}</dd></div>
+                    <div><dt>Confidence</dt><dd>${Number(claim.confidence).toFixed(3)} · ${escapeHtml(calibration)}</dd></div>
+                    <div><dt>Lifecycle</dt><dd>${escapeHtml(claim.lifecycle)}</dd></div>
+                    <div><dt>Reason</dt><dd>${escapeHtml(claim.resolution_explanation || claim.rationale || 'Unknown')}</dd></div>
+                </dl>
+                ${conflict}
+                ${claim.supports?.length ? `<p>Supports: ${escapeHtml(claim.supports.join(', '))}</p>` : ''}
+                ${claim.conflicts_with?.length ? `<p>Conflicts: ${escapeHtml(claim.conflicts_with.join(', '))}</p>` : ''}
+            </article>`;
+    }
+
+    function scoreComponentMarkup(score = {}) {
+        const available = new Set(score.available_components || []);
+        const components = [
+            ['acoustic_likelihood', 'Acoustic'],
+            ['provider_prior', 'Provider'],
+            ['lexical_evidence', 'Lexical'],
+            ['grammar_parse_rank', 'Grammar'],
+            ['prosody_compatibility', 'Prosody'],
+            ['user_markup', 'User'],
+            ['direct_observation', 'Direct'],
+        ];
+        return components.map(([key, label]) => (
+            `<span>${escapeHtml(label)}: ${available.has(key) ? Number(score[key]).toFixed(3) : 'unknown'}</span>`
+        )).join('');
+    }
+
+    function interpretationTargetMarkup(target, deepLink) {
+        const winner = interpretationClaimMarkup(target.winner, 'Won');
+        const alternatives = (target.alternatives || []).map((claim) => (
+            interpretationClaimMarkup(claim, 'Alternative')
+        )).join('');
+        const consequences = (target.consequences || []).map((consequence) => `
+            <article class="evidence-consequence">
+                <strong>${escapeHtml(consequence.hypothesis_id)} · ${consequence.selected ? 'selected' : 'not selected'}</strong>
+                <p>Output: ${escapeHtml(consequence.output_text || 'unknown')}</p>
+                <div class="duplex-score-components">${scoreComponentMarkup(consequence.score)}</div>
+                <p>States: ${escapeHtml((consequence.statuses || []).join(', ') || 'candidate')}</p>
+                <p>Commit blocks: ${escapeHtml(JSON.stringify(consequence.block_reasons || []))}</p>
+            </article>`).join('');
+        const audio = (target.acoustic_links || []).map((link) => `
+            <li>${escapeHtml(link.evidence_id)} · frames ${link.span.frame_start}–${link.span.frame_end}
+                · ${Number(link.span.time_start).toFixed(3)}–${Number(link.span.time_end).toFixed(3)} s
+                · ${escapeHtml(link.alignment)}</li>`).join('');
+        const targetLink = duplexDeepLinkWith(deepLink, {
+            duplex_target: target.target_id,
+            duplex_cursor: null,
+        });
+        return `
+            <details class="evidence-target" data-target-id="${escapeAttribute(target.target_id)}">
+                <summary>
+                    <strong>${escapeHtml(target.kind)} · ${escapeHtml(target.status)}</strong>
+                    <span>${escapeHtml(target.target_id)}</span>
+                </summary>
+                ${targetLink ? `<a class="evidence-deep-link" href="${escapeAttribute(targetLink)}">Permanent link to this target</a>` : '<p>Permanent link unavailable until this run has a saved journal.</p>'}
+                ${winner}
+                ${alternatives || '<p>No close alternatives were retained for this target.</p>'}
+                <details>
+                    <summary>Linked spans and output consequences</summary>
+                    <p>Linked claims: ${escapeHtml((target.linked_claim_ids || []).join(', ') || 'none')}</p>
+                    ${audio ? `<ul>${audio}</ul>` : '<p>Audio frame evidence: unknown.</p>'}
+                    ${consequences || '<p>Downstream output consequence: unknown.</p>'}
+                </details>
+            </details>`;
+    }
+
+    function inspectionDiagnosticsMarkup(inspection) {
+        const backends = (inspection.backend_reports || []).map((backend) => `
+            <li>
+                <strong>${escapeHtml(backend.hypothesis_id)} · ${escapeHtml(backend.status)}</strong>
+                <span>selected backend: ${escapeHtml(backend.report?.selected || 'none')}</span>
+                <span>${escapeHtml(backend.diagnostic || 'No backend diagnostic')}</span>
+                <span>${backend.parse_alternatives?.length || 0} parse alternatives</span>
+            </li>`).join('');
+        const lifecycle = (inspection.lifecycle || []).map((transition) => `
+            <li>${escapeHtml(transition.claim_id)} · ${escapeHtml(transition.from)}
+                → ${escapeHtml(transition.to)} · ${escapeHtml(transition.reason)}</li>`).join('');
+        const losses = (inspection.projection_losses || []).map((loss) => `
+            <li>${escapeHtml(loss.evidence.dimension)} · ${escapeHtml(loss.evidence.intended)}
+                → ${escapeHtml(loss.evidence.recovered)} · accepted projection loss</li>`).join('');
+        const warnings = (inspection.warnings || []).map((warning) => `
+            <li><strong>${escapeHtml(warning.code)}</strong> · ${escapeHtml(warning.message)}</li>`
+        ).join('');
+        return `
+            <details class="evidence-diagnostics">
+                <summary>Backend, revision, projection-loss, and migration diagnostics</summary>
+                <h4>Backend state</h4>
+                ${backends ? `<ul>${backends}</ul>` : '<p>Backend evidence: unknown.</p>'}
+                <h4>Revision history</h4>
+                ${lifecycle ? `<ol>${lifecycle}</ol>` : '<p>No claim lifecycle changes on this page.</p>'}
+                <h4>Projection loss</h4>
+                ${losses ? `<ul>${losses}</ul>` : '<p>No accepted projection loss recorded.</p>'}
+                <h4>Warnings</h4>
+                ${warnings ? `<ul>${warnings}</ul>` : '<p>No migration or truncation warnings.</p>'}
+            </details>`;
+    }
+
+    function renderInterpretationInspection(projection) {
+        const section = byId('duplex-evidence');
+        const status = byId('duplex-evidence-status');
+        const targets = byId('duplex-evidence-targets');
+        const pages = byId('duplex-evidence-pages');
+        const inspection = projection?.interpretation;
+        if (!inspection) {
+            status.textContent = 'Interpretation evidence contract is missing from this response.';
+            targets.replaceChildren();
+            pages.replaceChildren();
+            section.classList.remove('hidden');
+            return;
+        }
+        if (inspection.evidence_status === 'missing') {
+            status.textContent = inspection.warnings?.[0]?.message
+                || 'No linguistic evidence was attached; alternatives and confidence are unknown.';
+            targets.replaceChildren();
+        } else {
+            status.textContent = `Showing ${inspection.returned} of ${inspection.total} evidence targets for ${inspection.utterance_id}.`;
+            const targetMarkup = (inspection.targets || []).map((target) => (
+                interpretationTargetMarkup(target, projection.deep_link)
+            )).join('') || '<p>No target matched this deep link.</p>';
+            targets.innerHTML = targetMarkup + inspectionDiagnosticsMarkup(inspection);
+        }
+        const links = [];
+        if (inspection.cursor > 0 && projection.deep_link) {
+            links.push(`<a href="${escapeAttribute(duplexDeepLinkWith(projection.deep_link, {
+                duplex_cursor: Math.max(0, inspection.cursor - inspection.limit),
+                duplex_target: null,
+            }))}">Previous evidence page</a>`);
+        }
+        if (inspection.next_cursor != null && projection.deep_link) {
+            links.push(`<a href="${escapeAttribute(duplexDeepLinkWith(projection.deep_link, {
+                duplex_cursor: inspection.next_cursor,
+                duplex_target: null,
+            }))}">Next evidence page</a>`);
+        }
+        pages.innerHTML = links.join(' ');
+        section.classList.remove('hidden');
+    }
+
     function renderDuplexProjection(projection) {
+        if (projection?.schema_version !== 2) {
+            throw new Error(`Unsupported duplex inspection schema ${projection?.schema_version ?? 'missing'}.`);
+        }
         const timeline = byId('duplex-timeline');
         const summary = byId('duplex-summary');
         const finalCommitted = projection?.final_state?.committed || [];
@@ -2573,7 +2791,8 @@
                 <div><dt>Replay</dt><dd>${projection.replay_verified ? 'Verified' : 'Mismatch'}</dd></div>
                 <div><dt>Events</dt><dd>${projection.timeline?.length || 0}</dd></div>
                 <div><dt>Final commit</dt><dd>${escapeHtml(finalCommitted.map((item) => item.surface).join(' ') || '—')}</dd></div>
-            </dl>`;
+            </dl>
+            ${projection.deep_link ? `<a class="evidence-deep-link" href="${escapeAttribute(projection.deep_link)}">Permanent link to this run and utterance</a>` : '<p>Permanent link unavailable for unsaved ad hoc evidence.</p>'}`;
         summary.classList.remove('hidden');
         timeline.innerHTML = (projection.timeline || []).map((snapshot) => `
             <li class="duplex-step">
@@ -2600,6 +2819,13 @@
                                 <span>${branch.selected ? 'selected' : 'standby'} · p=${Number(branch.probability || 0).toFixed(3)}</span>
                                 <span>${escapeHtml(branch.provenance)}</span>
                                 <div class="duplex-track">${duplexTokenMarkup(branch.morphemes, branch.selected ? 'predicted' : 'observed')}</div>
+                                <details>
+                                    <summary>Score and evidence references</summary>
+                                    <div class="duplex-score-components">${scoreComponentMarkup(branch.score)}</div>
+                                    <p>Claims: ${escapeHtml((branch.claim_ids || []).join(', ') || 'unknown')}</p>
+                                    <p>Resolutions: ${escapeHtml((branch.resolution_ids || []).join(', ') || 'unknown')}</p>
+                                    <p>Commit blocks: ${escapeHtml(JSON.stringify(branch.block_reasons || []))}</p>
+                                </details>
                             </li>
                         `).join('')}
                     </ul>
@@ -2607,6 +2833,7 @@
             </li>
         `).join('');
         timeline.classList.remove('hidden');
+        renderInterpretationInspection(projection);
     }
 
     async function loadDuplexProjection(payload) {
@@ -2616,7 +2843,9 @@
             body: JSON.stringify(payload),
         });
         if (!response.ok) throw new Error(await response.text());
-        return response.json();
+        const projection = await response.json();
+        state.duplexRequest = structuredClone(payload);
+        return projection;
     }
 
     function escapeHtml(value) {
@@ -2900,6 +3129,7 @@
 
     function hideDuplexResult() {
         byId('duplex-summary').classList.add('hidden');
+        byId('duplex-evidence').classList.add('hidden');
         byId('duplex-timeline').classList.add('hidden');
     }
 
@@ -4156,6 +4386,18 @@
             byId('speech-runtime-state').dataset.state = 'failed';
             byId('speech-runtime-state').textContent = 'failed';
         }
+        const linkedDuplexRequest = duplexRequestFromLocation(browser?.location);
+        if (linkedDuplexRequest) {
+            if (linkedDuplexRequest.journal_path) {
+                byId('duplex-journal-path').value = linkedDuplexRequest.journal_path;
+            }
+            try {
+                renderDuplexProjection(await loadDuplexProjection(linkedDuplexRequest));
+                byId('duplex-evidence-heading').focus();
+            } catch (error) {
+                showError(`Linked interpretation evidence failed: ${error.message}`, byId('duplex-error'));
+            }
+        }
 
         let catalogSearchTimer = null;
         document.querySelectorAll('[data-catalog-view]').forEach((button) => {
@@ -4591,8 +4833,11 @@
         defaultControlValues,
         deleteUserRecipe,
         cliRepresentation,
+        duplexDeepLinkWith,
         duplexLines,
+        duplexRequestFromLocation,
         finishLiveAssistant,
+        humanizeEvidenceValue,
         init,
         parseNumberArray,
         pathKey,
@@ -4606,6 +4851,7 @@
         pendingVerificationIds,
         preservesVerificationProgress,
         recipeSnapshot,
+        renderDuplexProjection,
         restoreRecipeValues,
         savedRecipeModelIds,
         selectInitialPath,

@@ -4,9 +4,11 @@
 //! orchestration: providers propose morpheme continuations, the simulator
 //! normalizes them, and only a directly supported common prefix may commit.
 
+mod inspection;
 mod learned;
 mod linguistic;
 
+pub use inspection::*;
 pub use learned::*;
 pub use linguistic::*;
 
@@ -2232,7 +2234,7 @@ pub trait SpeculativeConsumer {
     fn on_event(&mut self, event: &SimulatorEvent);
 }
 
-pub const STUDIO_PROJECTION_SCHEMA_VERSION: u32 = 1;
+pub const STUDIO_PROJECTION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DuplexBranchSnapshot {
@@ -2280,8 +2282,11 @@ pub struct DuplexStudioProjection {
     pub schema_version: u32,
     pub run_id: String,
     pub replay_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deep_link: Option<String>,
     pub journal: SimulatorJournal,
     pub final_state: SimulatorState,
+    pub interpretation: InterpretationInspectionPage,
     #[serde(default)]
     pub timeline: Vec<DuplexTimelineSnapshot>,
     #[serde(default)]
@@ -2466,6 +2471,18 @@ pub fn studio_projection_from_journal(
     run_id: impl Into<String>,
     journal: &SimulatorJournal,
 ) -> Result<DuplexStudioProjection, SimulatorError> {
+    studio_projection_from_journal_with_inspection(
+        run_id,
+        journal,
+        &InterpretationInspectionQuery::default(),
+    )
+}
+
+pub fn studio_projection_from_journal_with_inspection(
+    run_id: impl Into<String>,
+    journal: &SimulatorJournal,
+    inspection_query: &InterpretationInspectionQuery,
+) -> Result<DuplexStudioProjection, SimulatorError> {
     if journal.version != SIMULATOR_JOURNAL_VERSION {
         return Err(SimulatorError::UnsupportedJournalVersion {
             expected: SIMULATOR_JOURNAL_VERSION,
@@ -2492,12 +2509,15 @@ pub fn studio_projection_from_journal(
     }
 
     let final_state = replay_journal(journal)?;
+    let interpretation = interpretation_inspection_from_state(&final_state, inspection_query);
     Ok(DuplexStudioProjection {
         schema_version: STUDIO_PROJECTION_SCHEMA_VERSION,
         run_id: run_id.into(),
         replay_verified: state == final_state,
+        deep_link: None,
         journal: journal.clone(),
         final_state,
+        interpretation,
         timeline,
         transcript_events: consumer.transcript_events,
     })
@@ -4749,5 +4769,200 @@ mod tests {
             .hypotheses
             .contains_key(&CompletionHypothesisId("only".into())));
         assert!(serde_json::to_string(simulator.journal()).is_ok());
+    }
+
+    #[test]
+    fn interpretation_inspection_explains_winner_alternative_and_output_consequence() {
+        let utterance_id = "inspect-ambiguity";
+        let target = speaking::LinguisticTarget::word(
+            UtteranceId(utterance_id.into()),
+            "word-right",
+            TextRange { start: 0, end: 5 },
+        );
+        let mut acoustic = lexical_claim(
+            utterance_id,
+            "claim-right",
+            "right",
+            EvidenceSource::AcousticModel,
+            0.92,
+            TextRange { start: 0, end: 5 },
+        );
+        acoustic.target = target.clone();
+        acoustic.conflicts_with = vec![LinguisticClaimId("claim-write".into())];
+        let mut grammar = lexical_claim(
+            utterance_id,
+            "claim-write",
+            "write",
+            EvidenceSource::Grammar,
+            0.88,
+            TextRange { start: 0, end: 5 },
+        );
+        grammar.target = target.clone();
+        grammar.conflicts_with = vec![LinguisticClaimId("claim-right".into())];
+        let mut artifact = artifact_with_claims(utterance_id, vec![acoustic, grammar]);
+        let resolution = artifact
+            .resolve(
+                ClaimResolutionId("resolution-right-write".into()),
+                &target,
+                speaking::LinguisticClaimKind::LexicalIdentity,
+            )
+            .unwrap();
+        assert_eq!(
+            resolution.winner,
+            Some(LinguisticClaimId("claim-right".into()))
+        );
+
+        let mut right =
+            proposal_with_claim("right-branch", 0.55, "right", "audio", "claim-right");
+        right.resolution_ids = vec![ClaimResolutionId("resolution-right-write".into())];
+        let mut write =
+            proposal_with_claim("write-branch", 0.45, "write", "audio", "claim-write");
+        write.resolution_ids = vec![ClaimResolutionId("resolution-right-write".into())];
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId(utterance_id.into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig {
+                posterior_mass: 0.5,
+                min_commit_score_margin: 0.0,
+                ..SimulatorConfig::default()
+            },
+            StaticLinguisticProvider {
+                proposals: vec![right, write],
+            },
+        )
+        .unwrap();
+        let mut observed = ObservedEvidence::acoustics_with_span(
+            "audio",
+            "right",
+            AcousticSpan {
+                frame_start: 10,
+                frame_end: 24,
+                time_start: 0.2,
+                time_end: 0.48,
+                confidence: None,
+            },
+        );
+        observed.supports = vec!["right".into(), "write".into()];
+        observed.linguistic_evidence = Some(artifact);
+        simulator.observe(observed).unwrap();
+
+        let page = interpretation_inspection_from_state(
+            simulator.state(),
+            &InterpretationInspectionQuery::default(),
+        );
+
+        assert_eq!(
+            page.schema_version,
+            INTERPRETATION_INSPECTION_SCHEMA_VERSION
+        );
+        assert_eq!(page.evidence_status, InspectionEvidenceStatus::Available);
+        assert_eq!(page.total, 1);
+        let target = &page.targets[0];
+        assert_eq!(target.status, InterpretationTargetStatus::Resolved);
+        assert_eq!(
+            target.winner.as_ref().map(|claim| claim.authority),
+            Some(EvidenceAuthorityClass::AcousticEvidence)
+        );
+        assert_eq!(target.alternatives.len(), 1);
+        assert_eq!(
+            target.alternatives[0].authority,
+            EvidenceAuthorityClass::GrammarInference
+        );
+        assert!(target.alternatives[0].conflicts_with_winner);
+        assert_eq!(target.acoustic_links[0].span.frame_start, 10);
+        assert_eq!(
+            target.acoustic_links[0].alignment,
+            "utterance_or_chunk_span"
+        );
+        assert_eq!(target.consequences.len(), 2);
+        assert!(target.consequences.iter().any(|view| view.selected));
+        assert!(serde_json::to_string(&page).is_ok());
+    }
+
+    #[test]
+    fn interpretation_inspection_paginates_and_marks_missing_or_unknown_targets() {
+        let mut state =
+            SimulatorState::new(UtteranceId("inspect-page".into()), VarietyId("en-US".into()));
+        let missing = interpretation_inspection_from_state(
+            &state,
+            &InterpretationInspectionQuery::default(),
+        );
+        assert_eq!(missing.evidence_status, InspectionEvidenceStatus::Missing);
+        assert_eq!(missing.total, 0);
+        assert!(missing.warnings.iter().any(|warning| {
+            warning.code == "linguistic_evidence_missing" && warning.message.contains("unknown")
+        }));
+
+        let mut artifact = artifact_with_claims(
+            "inspect-page",
+            vec![
+                lexical_claim(
+                    "inspect-page",
+                    "claim-a",
+                    "a",
+                    EvidenceSource::Lexicon,
+                    0.6,
+                    TextRange { start: 0, end: 1 },
+                ),
+                lexical_claim(
+                    "inspect-page",
+                    "claim-b",
+                    "b",
+                    EvidenceSource::Grammar,
+                    0.7,
+                    TextRange { start: 2, end: 3 },
+                ),
+            ],
+        );
+        artifact
+            .invalidate_text_revision(
+                TextRange { start: 2, end: 3 },
+                "operator proposed a corrected interpretation",
+            )
+            .unwrap();
+        state.linguistic_evidence = Some(artifact);
+        let first = interpretation_inspection_from_state(
+            &state,
+            &InterpretationInspectionQuery {
+                cursor: 0,
+                limit: 1,
+                target_id: None,
+            },
+        );
+        assert_eq!(first.returned, 1);
+        assert_eq!(first.total, 2);
+        assert_eq!(first.next_cursor, Some(1));
+
+        let historical = interpretation_inspection_from_state(
+            &state,
+            &InterpretationInspectionQuery {
+                target_id: Some("claim:claim-b".into()),
+                ..InterpretationInspectionQuery::default()
+            },
+        );
+        assert_eq!(
+            historical.targets[0].status,
+            InterpretationTargetStatus::Historical
+        );
+        assert_eq!(historical.lifecycle.len(), 1);
+        assert_eq!(
+            historical.lifecycle[0].reason,
+            "operator proposed a corrected interpretation"
+        );
+
+        let unknown = interpretation_inspection_from_state(
+            &state,
+            &InterpretationInspectionQuery {
+                target_id: Some("claim:missing".into()),
+                ..InterpretationInspectionQuery::default()
+            },
+        );
+        assert!(unknown.targets.is_empty());
+        assert!(
+            unknown
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "target_not_found")
+        );
     }
 }
