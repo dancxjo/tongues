@@ -468,6 +468,30 @@ fn print_timeline(
                 evidence.id,
                 evidence.content
             ),
+            SimulatorEventKind::EvidenceRevised {
+                replacement,
+                retention,
+                reason,
+                ..
+            } => println!(
+                "[evidence] #{:02} revise {} stable_morphemes={} invalidated_claims={}: {}",
+                event.sequence,
+                replacement.id,
+                retention.stable_morpheme_count,
+                retention.invalidated_claim_ids.len(),
+                reason
+            ),
+            SimulatorEventKind::LinguisticClaimsUpdated {
+                update,
+                artifact,
+                affected_claim_ids,
+            } => println!(
+                "[evidence] #{:02} claims {:?} affected={} retained={}",
+                event.sequence,
+                update,
+                affected_claim_ids.len(),
+                artifact.claims.len()
+            ),
             SimulatorEventKind::HypothesisProposed { hypothesis } => {
                 println!(
                     "[prediction] #{:02} propose {} p={:.3}: {}",
@@ -508,6 +532,29 @@ fn print_timeline(
                     .join(", "),
                 shared_prefix.join(" ")
             ),
+            SimulatorEventKind::HypothesesReranked {
+                rankings,
+                score_margin,
+                abstained,
+            } => println!(
+                "[inference] #{:02} rerank leading={} margin={:.3} abstained={} competitors={}",
+                event.sequence,
+                rankings
+                    .first()
+                    .map(|ranking| ranking.id.0.as_str())
+                    .unwrap_or("<none>"),
+                score_margin,
+                abstained,
+                rankings.len()
+            ),
+            SimulatorEventKind::CommitDecisionRecorded { diagnostic } => println!(
+                "[inference] #{:02} commit-decision {}->{} committed={} reasons={:?}",
+                event.sequence,
+                diagnostic.frontier_from,
+                diagnostic.frontier_to,
+                diagnostic.committed,
+                diagnostic.reasons
+            ),
             SimulatorEventKind::CommitFrontierAdvanced {
                 from,
                 to,
@@ -531,6 +578,14 @@ fn print_timeline(
                 result.metrics.phone_error_rate,
                 result.metrics.morpheme_agreement,
                 result.metrics.verification_latency_ms,
+            ),
+            SimulatorEventKind::SynthesisDeliveryUpdated { record } => println!(
+                "[delivery] #{:02} {} {:?}: {}",
+                event.sequence, record.emission_id, record.state, record.text
+            ),
+            SimulatorEventKind::RepairDeliveryRequired { decision } => println!(
+                "[delivery] #{:02} repair {} {:?}: {}",
+                event.sequence, decision.emission_id, decision.policy, decision.reason
             ),
         }
     }

@@ -21,7 +21,8 @@ use tongues_data::check_group_split_leakage;
 
 use crate::{
     CompletionMorpheme, CompletionProposal, CompletionProvider, CompletionProviderError,
-    CompletionRequest, DuplexTrainingRow, TrainingRowKind, normalize_key, tokenize_morphemes,
+    CompletionRequest, DuplexTrainingRow, LinguisticScoreHints, TrainingRowKind, normalize_key,
+    tokenize_morphemes,
 };
 
 pub const DUPLEX_MODEL_SCHEMA_VERSION: u32 = 1;
@@ -486,6 +487,10 @@ impl CompletionProvider for LearnedCompletionProvider {
                     syntax: Some(GrammarAnalysis::default()),
                     prosody: None,
                     evidence: evidence.clone(),
+                    claim_ids: Vec::new(),
+                    resolution_ids: Vec::new(),
+                    identity_evidence: Vec::new(),
+                    score_hints: LinguisticScoreHints::default(),
                     provenance: provenance.clone(),
                 }
             })
@@ -1010,6 +1015,7 @@ fn observed_morphemes(request: &CompletionRequest) -> Vec<CompletionMorpheme> {
                 key: normalize_key(&surface),
                 surface,
                 variety: request.variety.clone(),
+                occurrence_id: None,
                 evidence: vec![evidence.id.clone()],
             });
         }

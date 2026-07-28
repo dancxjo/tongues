@@ -166,5 +166,9 @@ remain readable. Non-English varieties without the English weak-form rules
 serialize reduction applicability as unknown/not applicable rather than a
 false claim.
 
-Other producer integrations and the live duplex commit frontier remain layered
-on top of this shared contract.
+Interpretation can attach this artifact to Duplex observations. Duplex
+hypotheses reference claim and resolution IDs, attribute each claim to one
+normalized score component, require declared identity layers to agree before
+commit, and invalidate only the revised tail. The policy and delivery boundary
+are documented in
+[Duplex Linguistic Evidence and Commit Policy](duplex-linguistic-evidence.md).

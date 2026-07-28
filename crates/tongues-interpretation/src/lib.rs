@@ -752,7 +752,7 @@ pub fn stream_event_to_evidence(
 ) -> tongues_duplex::ObservedEvidence {
     use tongues_duplex::AcousticSpan;
 
-    let (transcript, confidence) = match event {
+    let (transcript, confidence, linguistic_evidence) = match event {
         speaking::StreamEvent::PartialHypothesis {
             text, confidence, ..
         }
@@ -761,11 +761,28 @@ pub fn stream_event_to_evidence(
         }
         | speaking::StreamEvent::RevisedHypothesis {
             text, confidence, ..
-        } => (text.clone(), confidence.clone()),
-        _ => (String::new(), None),
+        } => (text.clone(), confidence.clone(), None),
+        speaking::StreamEvent::DerivedArtifact { stage, value, .. } => {
+            let lattice = value.get("homophone_hypotheses");
+            let transcript = lattice
+                .and_then(|lattice| lattice.get("transcript"))
+                .or_else(|| value.get("transcript"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let nested_evidence = lattice
+                .and_then(|lattice| lattice.get("linguistic_evidence"))
+                .or_else(|| value.get("linguistic_evidence"));
+            let linguistic_evidence = nested_evidence
+                .cloned()
+                .or_else(|| (stage == "linguistic_claims").then(|| value.clone()))
+                .and_then(|artifact| serde_json::from_value(artifact).ok());
+            (transcript, None, linguistic_evidence)
+        }
+        _ => (String::new(), None, None),
     };
 
-    tongues_duplex::ObservedEvidence::acoustics_with_span(
+    let mut evidence = tongues_duplex::ObservedEvidence::acoustics_with_span(
         id,
         transcript,
         AcousticSpan {
@@ -775,7 +792,9 @@ pub fn stream_event_to_evidence(
             time_end,
             confidence,
         },
-    )
+    );
+    evidence.linguistic_evidence = linguistic_evidence;
+    evidence
 }
 
 pub fn prepare_dataset(out: &Path, config: &InterpretationConfig) -> Result<PrepareReport> {
@@ -5669,6 +5688,59 @@ mod tests {
         };
         assert_eq!(greedy_collapse(&[0, 1, 1, 0, 2], &vocab), "AB");
         assert_eq!(ctc_greedy_decode(&[0, 1, 1, 0, 2], 0), vec![1, 2]);
+    }
+
+    #[test]
+    fn derived_homophone_artifact_preserves_linguistic_evidence_for_duplex() {
+        let artifact =
+            speaking::LinguisticEvidenceArtifact::new(speaking::UtteranceId("utt-1".into()));
+        let event = speaking::StreamEvent::DerivedArtifact {
+            stage: "interpretation_model".into(),
+            artifact_id: "interpretation-model-output".into(),
+            value: serde_json::json!({
+                "homophone_hypotheses": {
+                    "transcript": "their answer",
+                    "linguistic_evidence": artifact,
+                }
+            }),
+        };
+
+        let evidence = stream_event_to_evidence("stream:1", &event, 3, 9, 0.06, 0.18);
+
+        assert_eq!(evidence.content, "their answer");
+        let attached = evidence
+            .linguistic_evidence
+            .expect("derived homophone evidence should be attached");
+        assert_eq!(attached.utterance_id.0, "utt-1");
+        assert_eq!(
+            attached.schema_version,
+            speaking::LINGUISTIC_EVIDENCE_SCHEMA_V1
+        );
+        assert_eq!(
+            evidence.acoustic_span.expect("acoustic span").frame_start,
+            3
+        );
+    }
+
+    #[test]
+    fn direct_linguistic_claim_artifact_is_accepted_by_duplex_adapter() {
+        let artifact =
+            speaking::LinguisticEvidenceArtifact::new(speaking::UtteranceId("utt-2".into()));
+        let event = speaking::StreamEvent::DerivedArtifact {
+            stage: "linguistic_claims".into(),
+            artifact_id: "claims:utt-2".into(),
+            value: serde_json::to_value(&artifact).unwrap(),
+        };
+
+        let evidence = stream_event_to_evidence("stream:2", &event, 0, 0, 0.0, 0.0);
+
+        assert!(evidence.content.is_empty());
+        assert_eq!(
+            evidence
+                .linguistic_evidence
+                .expect("direct claim artifact should be attached"),
+            artifact
+        );
     }
 
     #[test]

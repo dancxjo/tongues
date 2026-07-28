@@ -5,8 +5,10 @@
 //! normalizes them, and only a directly supported common prefix may commit.
 
 mod learned;
+mod linguistic;
 
 pub use learned::*;
+pub use linguistic::*;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,13 +18,15 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result as AnyResult};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use speaking::{
-    CompletionHypothesisId, Confidence, EvidenceProvenance, EvidenceSource, ProsodyTrack,
-    SegmentId, GrammarAnalysis, StreamEvent, TextRange, TextRole, UtteranceId, VarietyId,
+    ClaimLifecycle, ClaimResolutionId, CompletionHypothesisId, Confidence, EvidenceProvenance,
+    EvidenceSource, GrammarAnalysis, LinguisticClaimError, LinguisticClaimId,
+    LinguisticEvidenceArtifact, ProsodyTrack, SegmentId, StreamEvent, TextRange, TextRole,
+    UtteranceId, VarietyId,
 };
 use thiserror::Error;
 
@@ -70,6 +74,11 @@ pub struct ObservedEvidence {
     /// survive every withdrawal, repair, and frontier revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acoustic_span: Option<AcousticSpan>,
+    /// Optional full linguistic claim ledger for this observation. The
+    /// simulator references claim IDs from proposals without copying claims
+    /// into provider-owned structures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linguistic_evidence: Option<LinguisticEvidenceArtifact>,
 }
 
 impl ObservedEvidence {
@@ -86,6 +95,7 @@ impl ObservedEvidence {
                 version: Some("1".into()),
             },
             acoustic_span: None,
+            linguistic_evidence: None,
         }
     }
 
@@ -102,6 +112,7 @@ impl ObservedEvidence {
                 version: Some("1".into()),
             },
             acoustic_span: None,
+            linguistic_evidence: None,
         }
     }
 
@@ -135,6 +146,9 @@ pub struct CompletionMorpheme {
     pub key: String,
     pub surface: String,
     pub variety: VarietyId,
+    /// Stable occurrence identity retained across revisions of a later tail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<speaking::MorphemeOccurrenceId>,
     /// IDs of direct text/acoustic evidence claimed for this occurrence.
     #[serde(default)]
     pub evidence: Vec<String>,
@@ -150,6 +164,7 @@ impl CompletionMorpheme {
             key: key.into(),
             surface: surface.into(),
             variety,
+            occurrence_id: None,
             evidence: Vec::new(),
         }
     }
@@ -169,6 +184,14 @@ pub struct CompletionProposal {
     pub prosody: Option<ProsodyTrack>,
     #[serde(default)]
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub claim_ids: Vec<LinguisticClaimId>,
+    #[serde(default)]
+    pub resolution_ids: Vec<ClaimResolutionId>,
+    #[serde(default)]
+    pub identity_evidence: Vec<MorphemeIdentityEvidence>,
+    #[serde(default)]
+    pub score_hints: LinguisticScoreHints,
     pub provenance: EvidenceProvenance,
 }
 
@@ -184,18 +207,70 @@ pub struct NormalizedCompletionHypothesis {
     pub prosody: Option<ProsodyTrack>,
     #[serde(default)]
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub claim_ids: Vec<LinguisticClaimId>,
+    #[serde(default)]
+    pub resolution_ids: Vec<ClaimResolutionId>,
+    #[serde(default)]
+    pub identity_evidence: Vec<MorphemeIdentityEvidence>,
+    #[serde(default)]
+    pub score: NormalizedLinguisticScore,
     pub provenance: EvidenceProvenance,
 }
 
 impl NormalizedCompletionHypothesis {
     fn from_proposal(proposal: CompletionProposal, total: f64) -> Self {
+        let provider_prior = proposal.weight / total;
+        let mut available_components = BTreeSet::from([LinguisticScoreComponent::ProviderPrior]);
+        for (component, available) in [
+            (
+                LinguisticScoreComponent::AcousticLikelihood,
+                proposal.score_hints.acoustic_likelihood.is_some(),
+            ),
+            (
+                LinguisticScoreComponent::LexicalEvidence,
+                proposal.score_hints.lexical_evidence.is_some(),
+            ),
+            (
+                LinguisticScoreComponent::GrammarParseRank,
+                proposal.score_hints.grammar_parse_rank.is_some(),
+            ),
+            (
+                LinguisticScoreComponent::ProsodyCompatibility,
+                proposal.score_hints.prosody_compatibility.is_some(),
+            ),
+            (
+                LinguisticScoreComponent::UserMarkup,
+                proposal.score_hints.user_markup.is_some(),
+            ),
+        ] {
+            if available {
+                available_components.insert(component);
+            }
+        }
         Self {
             id: proposal.id,
-            probability: proposal.weight / total,
+            probability: provider_prior,
             morphemes: proposal.morphemes,
             syntax: proposal.syntax,
             prosody: proposal.prosody,
             evidence: proposal.evidence,
+            claim_ids: proposal.claim_ids,
+            resolution_ids: proposal.resolution_ids,
+            identity_evidence: proposal.identity_evidence,
+            score: NormalizedLinguisticScore {
+                provider_prior,
+                acoustic_likelihood: proposal.score_hints.acoustic_likelihood.unwrap_or_default(),
+                lexical_evidence: proposal.score_hints.lexical_evidence.unwrap_or_default(),
+                grammar_parse_rank: proposal.score_hints.grammar_parse_rank.unwrap_or_default(),
+                prosody_compatibility: proposal
+                    .score_hints
+                    .prosody_compatibility
+                    .unwrap_or_default(),
+                user_markup: proposal.score_hints.user_markup.unwrap_or_default(),
+                available_components,
+                ..NormalizedLinguisticScore::default()
+            },
             provenance: proposal.provenance,
         }
     }
@@ -209,6 +284,8 @@ pub struct CompletionRequest {
     pub evidence: Vec<ObservedEvidence>,
     #[serde(default)]
     pub committed: Vec<CommittedMorpheme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linguistic_evidence: Option<LinguisticEvidenceArtifact>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -239,14 +316,26 @@ pub struct SimulatorConfig {
     /// Select the smallest highest-probability set whose cumulative posterior
     /// meets this threshold, then compute its longest common morpheme prefix.
     pub posterior_mass: f64,
+    #[serde(default)]
+    pub linguistic_weights: LinguisticScoreWeights,
+    /// A smaller best-vs-runner-up score gap abstains from advancing a
+    /// disputed frontier even when one provider branch has the largest prior.
+    #[serde(default = "default_min_commit_score_margin")]
+    pub min_commit_score_margin: f64,
 }
 
 impl Default for SimulatorConfig {
     fn default() -> Self {
         Self {
             posterior_mass: 0.8,
+            linguistic_weights: LinguisticScoreWeights::default(),
+            min_commit_score_margin: default_min_commit_score_margin(),
         }
     }
+}
+
+const fn default_min_commit_score_margin() -> f64 {
+    0.05
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +472,8 @@ pub struct CommittedMorpheme {
     pub key: String,
     pub surface: String,
     pub variety: VarietyId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<speaking::MorphemeOccurrenceId>,
     #[serde(default)]
     pub evidence: Vec<String>,
     pub confidence: f64,
@@ -396,6 +487,18 @@ pub struct CommittedMorpheme {
 pub enum SimulatorEventKind {
     EvidenceObserved {
         evidence: ObservedEvidence,
+    },
+    EvidenceRevised {
+        previous: ObservedEvidence,
+        replacement: ObservedEvidence,
+        retention: StableIdentityRetention,
+        reason: String,
+    },
+    LinguisticClaimsUpdated {
+        update: LinguisticClaimUpdateKind,
+        artifact: LinguisticEvidenceArtifact,
+        #[serde(default)]
+        affected_claim_ids: Vec<LinguisticClaimId>,
     },
     HypothesisProposed {
         hypothesis: NormalizedCompletionHypothesis,
@@ -414,6 +517,14 @@ pub enum SimulatorEventKind {
         covered_probability: f64,
         shared_prefix: Vec<String>,
     },
+    HypothesesReranked {
+        rankings: Vec<HypothesisRanking>,
+        score_margin: f64,
+        abstained: bool,
+    },
+    CommitDecisionRecorded {
+        diagnostic: CommitDecisionDiagnostic,
+    },
     CommitFrontierAdvanced {
         from: usize,
         to: usize,
@@ -422,18 +533,31 @@ pub enum SimulatorEventKind {
     VerificationEvaluated {
         result: ClosedLoopVerificationResult,
     },
+    SynthesisDeliveryUpdated {
+        record: SynthesisDeliveryRecord,
+    },
+    RepairDeliveryRequired {
+        decision: RepairDeliveryDecision,
+    },
 }
 
 impl SimulatorEventKind {
     pub fn layer(&self) -> &'static str {
         match self {
-            Self::EvidenceObserved { .. } => "evidence",
+            Self::EvidenceObserved { .. }
+            | Self::EvidenceRevised { .. }
+            | Self::LinguisticClaimsUpdated { .. } => "evidence",
             Self::HypothesisProposed { .. } => "prediction",
             Self::HypothesisWithdrawn { .. }
             | Self::HypothesisRepaired { .. }
-            | Self::BeamInferred { .. } => "inference",
+            | Self::BeamInferred { .. }
+            | Self::HypothesesReranked { .. }
+            | Self::CommitDecisionRecorded { .. } => "inference",
             Self::CommitFrontierAdvanced { .. } => "commitment",
             Self::VerificationEvaluated { .. } => "verification",
+            Self::SynthesisDeliveryUpdated { .. } | Self::RepairDeliveryRequired { .. } => {
+                "delivery"
+            }
         }
     }
 }
@@ -471,6 +595,18 @@ pub struct SimulatorState {
     pub committed: Vec<CommittedMorpheme>,
     #[serde(default)]
     pub verifications: Vec<ClosedLoopVerificationResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linguistic_evidence: Option<LinguisticEvidenceArtifact>,
+    #[serde(default)]
+    pub rankings: Vec<HypothesisRanking>,
+    #[serde(default)]
+    pub commit_diagnostics: Vec<CommitDecisionDiagnostic>,
+    #[serde(default)]
+    pub hypothesis_audit: BTreeMap<CompletionHypothesisId, Vec<HypothesisAuditEntry>>,
+    #[serde(default)]
+    pub deliveries: BTreeMap<String, SynthesisDeliveryRecord>,
+    #[serde(default)]
+    pub repair_delivery: Vec<RepairDeliveryDecision>,
 }
 
 impl SimulatorState {
@@ -485,6 +621,12 @@ impl SimulatorState {
             shared_prefix: Vec::new(),
             committed: Vec::new(),
             verifications: Vec::new(),
+            linguistic_evidence: None,
+            rankings: Vec::new(),
+            commit_diagnostics: Vec::new(),
+            hypothesis_audit: BTreeMap::new(),
+            deliveries: BTreeMap::new(),
+            repair_delivery: Vec::new(),
         }
     }
 
@@ -523,6 +665,53 @@ impl SimulatorState {
                     return Err(SimulatorError::DuplicateEvidence(evidence.id.clone()));
                 }
             }
+            SimulatorEventKind::EvidenceRevised {
+                previous,
+                replacement,
+                retention,
+                ..
+            } => {
+                validate_id(&replacement.id, "evidence")?;
+                if previous.id != replacement.id {
+                    return Err(SimulatorError::JournalStateMismatch(
+                        "an evidence revision must preserve evidence identity".into(),
+                    ));
+                }
+                let existing = self
+                    .evidence
+                    .get(&previous.id)
+                    .ok_or_else(|| SimulatorError::UnknownEvidence(previous.id.clone()))?;
+                if existing != previous {
+                    return Err(SimulatorError::JournalStateMismatch(format!(
+                        "revision for evidence '{}' does not match active evidence",
+                        previous.id
+                    )));
+                }
+                let expected_retained = stable_prefix_len(
+                    &evidence_support_keys(previous),
+                    &evidence_support_keys(replacement),
+                );
+                if retention.stable_morpheme_count != expected_retained {
+                    return Err(SimulatorError::JournalStateMismatch(format!(
+                        "evidence '{}' stable prefix is {}, event recorded {}",
+                        previous.id, expected_retained, retention.stable_morpheme_count
+                    )));
+                }
+                self.evidence
+                    .insert(replacement.id.clone(), replacement.clone());
+            }
+            SimulatorEventKind::LinguisticClaimsUpdated { artifact, .. } => {
+                artifact.validate().map_err(|error| {
+                    SimulatorError::InvalidLinguisticEvidence(error.to_string())
+                })?;
+                if artifact.utterance_id != self.utterance_id {
+                    return Err(SimulatorError::InvalidLinguisticEvidence(format!(
+                        "artifact utterance '{}' does not match simulator '{}'",
+                        artifact.utterance_id.0, self.utterance_id.0
+                    )));
+                }
+                self.linguistic_evidence = Some(artifact.clone());
+            }
             SimulatorEventKind::HypothesisProposed { hypothesis } => {
                 validate_id(&hypothesis.id.0, "hypothesis")?;
                 if self
@@ -532,6 +721,7 @@ impl SimulatorState {
                 {
                     return Err(SimulatorError::DuplicateHypothesis(hypothesis.id.clone()));
                 }
+                self.audit_hypothesis(hypothesis, HypothesisDecisionStatus::Candidate, Vec::new());
             }
             SimulatorEventKind::HypothesisWithdrawn { hypothesis, .. } => {
                 let existing = self
@@ -544,6 +734,11 @@ impl SimulatorState {
                         hypothesis.id.0
                     )));
                 }
+                self.audit_hypothesis(
+                    hypothesis,
+                    HypothesisDecisionStatus::Invalidated,
+                    Vec::new(),
+                );
             }
             SimulatorEventKind::HypothesisRepaired {
                 previous,
@@ -567,6 +762,7 @@ impl SimulatorState {
                 }
                 self.hypotheses
                     .insert(replacement.id.clone(), replacement.clone());
+                self.audit_hypothesis(replacement, HypothesisDecisionStatus::Revised, Vec::new());
             }
             SimulatorEventKind::BeamInferred {
                 selected,
@@ -580,6 +776,24 @@ impl SimulatorState {
                 }
                 self.selected_hypotheses = selected.clone();
                 self.shared_prefix = shared_prefix.clone();
+            }
+            SimulatorEventKind::HypothesesReranked { rankings, .. } => {
+                for ranking in rankings {
+                    let hypothesis = self
+                        .hypotheses
+                        .get(&ranking.id)
+                        .cloned()
+                        .ok_or_else(|| SimulatorError::UnknownHypothesis(ranking.id.clone()))?;
+                    self.audit_hypothesis(
+                        &hypothesis,
+                        ranking.status,
+                        ranking.block_reasons.clone(),
+                    );
+                }
+                self.rankings = rankings.clone();
+            }
+            SimulatorEventKind::CommitDecisionRecorded { diagnostic } => {
+                self.commit_diagnostics.push(diagnostic.clone());
             }
             SimulatorEventKind::CommitFrontierAdvanced {
                 from,
@@ -599,13 +813,79 @@ impl SimulatorState {
                     }
                 }
                 self.committed.extend(committed.iter().cloned());
+                for id in self.selected_hypotheses.clone() {
+                    if let Some(hypothesis) = self.hypotheses.get(&id).cloned() {
+                        self.audit_hypothesis(
+                            &hypothesis,
+                            HypothesisDecisionStatus::Committed,
+                            Vec::new(),
+                        );
+                    }
+                }
             }
             SimulatorEventKind::VerificationEvaluated { result } => {
                 self.verifications.push(result.clone());
+                if result.decision == VerificationDecision::Accept {
+                    for id in self.selected_hypotheses.clone() {
+                        if let Some(hypothesis) = self.hypotheses.get(&id).cloned() {
+                            self.audit_hypothesis(
+                                &hypothesis,
+                                HypothesisDecisionStatus::Verified,
+                                Vec::new(),
+                            );
+                        }
+                    }
+                }
+            }
+            SimulatorEventKind::SynthesisDeliveryUpdated { record } => {
+                validate_id(&record.emission_id, "emission")?;
+                if let Some(existing) = self.deliveries.get(&record.emission_id) {
+                    if existing.state == SynthesisDeliveryState::Played
+                        && record.state != SynthesisDeliveryState::Verified
+                    {
+                        return Err(SimulatorError::PlayedAudioImmutable(
+                            record.emission_id.clone(),
+                        ));
+                    }
+                    if record.state != SynthesisDeliveryState::Invalidated
+                        && record.state.phase() < existing.state.phase()
+                    {
+                        return Err(SimulatorError::DeliveryStateRegression {
+                            emission_id: record.emission_id.clone(),
+                            from: existing.state,
+                            to: record.state,
+                        });
+                    }
+                }
+                self.deliveries
+                    .insert(record.emission_id.clone(), record.clone());
+            }
+            SimulatorEventKind::RepairDeliveryRequired { decision } => {
+                self.repair_delivery.push(decision.clone());
             }
         }
         self.revision = self.revision.saturating_add(1);
         Ok(())
+    }
+
+    fn audit_hypothesis(
+        &mut self,
+        hypothesis: &NormalizedCompletionHypothesis,
+        status: HypothesisDecisionStatus,
+        reasons: Vec<CommitBlockReason>,
+    ) {
+        self.hypothesis_audit
+            .entry(hypothesis.id.clone())
+            .or_default()
+            .push(HypothesisAuditEntry {
+                sequence: self.revision,
+                status,
+                probability: hypothesis.probability,
+                score: hypothesis.score.clone(),
+                claim_ids: hypothesis.claim_ids.clone(),
+                resolution_ids: hypothesis.resolution_ids.clone(),
+                reasons,
+            });
     }
 }
 
@@ -628,6 +908,8 @@ pub enum SimulatorError {
     EmptyId { kind: &'static str },
     #[error("evidence id '{0}' is already present")]
     DuplicateEvidence(String),
+    #[error("unknown evidence id '{0}'")]
+    UnknownEvidence(String),
     #[error("hypothesis {0:?} is already present")]
     DuplicateHypothesis(CompletionHypothesisId),
     #[error("unknown hypothesis {0:?}")]
@@ -652,6 +934,24 @@ pub enum SimulatorError {
     EmptyObservedMel,
     #[error("rescore weights must be finite and non-negative")]
     InvalidRescoreWeights,
+    #[error("linguistic score weights or commit margin are invalid")]
+    InvalidLinguisticScoringConfig,
+    #[error("hypothesis {id:?} has an invalid {component} score {value}")]
+    InvalidLinguisticScore {
+        id: CompletionHypothesisId,
+        component: &'static str,
+        value: f64,
+    },
+    #[error("invalid linguistic evidence: {0}")]
+    InvalidLinguisticEvidence(String),
+    #[error("played audio '{0}' is immutable; deliver an explicit correction")]
+    PlayedAudioImmutable(String),
+    #[error("delivery '{emission_id}' cannot regress from {from:?} to {to:?}")]
+    DeliveryStateRegression {
+        emission_id: String,
+        from: SynthesisDeliveryState,
+        to: SynthesisDeliveryState,
+    },
 }
 
 impl From<CompletionProviderError> for SimulatorError {
@@ -700,15 +1000,38 @@ impl<P: CompletionProvider> DuplexSimulator<P> {
         evidence: ObservedEvidence,
     ) -> Result<Vec<SimulatorEvent>, SimulatorError> {
         let start = self.journal.events.len();
+        let artifact = evidence.linguistic_evidence.clone();
         self.record(SimulatorEventKind::EvidenceObserved { evidence })?;
+        if let Some(artifact) = artifact {
+            let affected_claim_ids = artifact
+                .claims
+                .iter()
+                .map(|claim| claim.id.clone())
+                .collect();
+            self.record(SimulatorEventKind::LinguisticClaimsUpdated {
+                update: LinguisticClaimUpdateKind::Created,
+                artifact,
+                affected_claim_ids,
+            })?;
+        }
+        self.refresh_hypotheses()?;
+        Ok(self.journal.events[start..].to_vec())
+    }
 
+    fn refresh_hypotheses(&mut self) -> Result<(), SimulatorError> {
         let request = CompletionRequest {
             utterance_id: self.state.utterance_id.clone(),
             variety: self.state.variety.clone(),
             evidence: self.state.evidence.values().cloned().collect(),
             committed: self.state.committed.clone(),
+            linguistic_evidence: self.state.linguistic_evidence.clone(),
         };
-        let beam = normalize_beam(self.provider.complete(&request)?)?;
+        let beam = normalize_and_score_beam(
+            self.provider.complete(&request)?,
+            &self.journal.config,
+            &self.state.evidence,
+            self.state.linguistic_evidence.as_ref(),
+        )?;
         let next = beam
             .iter()
             .cloned()
@@ -742,45 +1065,142 @@ impl<P: CompletionProvider> DuplexSimulator<P> {
         let (selected, covered_probability) =
             select_posterior_mass(&beam, self.journal.config.posterior_mass);
         let shared = longest_common_morpheme_prefix(&selected);
-        self.record(SimulatorEventKind::BeamInferred {
-            selected: selected
+        let score_margin = beam
+            .first()
+            .map(|leading| {
+                leading.probability
+                    - beam
+                        .get(1)
+                        .map(|runner_up| runner_up.probability)
+                        .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let from = self.state.committed.len();
+        let mut block_reasons = Vec::new();
+        let mut committable = Vec::new();
+        for (index, representative) in shared.iter().enumerate().skip(from) {
+            let mut position_reasons = Vec::new();
+            for hypothesis in &selected {
+                let Some(morpheme) = hypothesis.morphemes.get(index) else {
+                    position_reasons.push(CommitBlockReason::ProviderDisagreement);
+                    continue;
+                };
+                if normalize_key(&morpheme.key) != normalize_key(&representative.key) {
+                    position_reasons.push(CommitBlockReason::ProviderDisagreement);
+                }
+                if !directly_supported_occurrence(morpheme, &self.state.evidence) {
+                    position_reasons.push(CommitBlockReason::DirectEvidenceMissing {
+                        morpheme_index: index,
+                        key: morpheme.key.clone(),
+                    });
+                }
+                position_reasons.extend(identity_block_reasons(
+                    hypothesis,
+                    index,
+                    self.state.linguistic_evidence.as_ref(),
+                ));
+            }
+            position_reasons.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+            position_reasons.dedup();
+            if !position_reasons.is_empty() {
+                block_reasons.extend(position_reasons);
+                break;
+            }
+            let evidence = selected
                 .iter()
-                .map(|hypothesis| hypothesis.id.clone())
-                .collect(),
+                .filter_map(|hypothesis| hypothesis.morphemes.get(index))
+                .flat_map(|morpheme| morpheme.evidence.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            committable.push(CommittedMorpheme {
+                key: representative.key.clone(),
+                surface: representative.surface.clone(),
+                variety: representative.variety.clone(),
+                occurrence_id: representative.occurrence_id.clone(),
+                evidence,
+                confidence: covered_probability,
+            });
+        }
+        let beam_disagrees_at_frontier = beam.first().is_some_and(|leading| {
+            let leading_key = leading.morphemes.get(from).map(|morpheme| &morpheme.key);
+            beam.iter().skip(1).any(|hypothesis| {
+                hypothesis.morphemes.get(from).map(|morpheme| &morpheme.key) != leading_key
+            })
+        });
+        if score_margin < self.journal.config.min_commit_score_margin && beam_disagrees_at_frontier
+        {
+            committable.clear();
+            block_reasons.push(CommitBlockReason::LowScoreMargin);
+            block_reasons.push(CommitBlockReason::ProviderDisagreement);
+        }
+        if shared.len() <= from {
+            block_reasons.push(CommitBlockReason::NoSharedPrefix);
+            if selected.len() > 1 {
+                block_reasons.push(CommitBlockReason::ProviderDisagreement);
+            }
+            if score_margin < self.journal.config.min_commit_score_margin {
+                block_reasons.push(CommitBlockReason::LowScoreMargin);
+            }
+        }
+        if beam.first().is_some_and(|hypothesis| {
+            hypothesis
+                .score
+                .has_component(LinguisticScoreComponent::AcousticLikelihood)
+                && hypothesis.score.acoustic_likelihood < 0.15
+                && hypothesis.score.grammar_parse_rank > 0.8
+        }) {
+            block_reasons.push(CommitBlockReason::AcousticContradiction);
+        }
+        block_reasons.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+        block_reasons.dedup();
+        let selected_order = selected
+            .iter()
+            .map(|hypothesis| hypothesis.id.clone())
+            .collect::<Vec<_>>();
+        let selected_ids = selected_order.iter().cloned().collect::<BTreeSet<_>>();
+        let rankings = beam
+            .iter()
+            .map(|hypothesis| HypothesisRanking {
+                id: hypothesis.id.clone(),
+                probability: hypothesis.probability,
+                score: hypothesis.score.clone(),
+                status: if selected_ids.contains(&hypothesis.id) {
+                    HypothesisDecisionStatus::Selected
+                } else {
+                    HypothesisDecisionStatus::Candidate
+                },
+                block_reasons: if selected_ids.contains(&hypothesis.id) {
+                    block_reasons.clone()
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect::<Vec<_>>();
+        self.record(SimulatorEventKind::HypothesesReranked {
+            rankings,
+            score_margin,
+            abstained: committable.is_empty() && !block_reasons.is_empty(),
+        })?;
+        self.record(SimulatorEventKind::BeamInferred {
+            selected: selected_order,
             covered_probability,
             shared_prefix: shared.iter().map(|morpheme| morpheme.key.clone()).collect(),
         })?;
-
-        let from = self.state.committed.len();
-        let committable = shared
-            .iter()
-            .enumerate()
-            .skip(from)
-            .take_while(|(index, _)| {
-                selected.iter().all(|hypothesis| {
-                    hypothesis.morphemes.get(*index).is_some_and(|morpheme| {
-                        morpheme.key == shared[*index].key
-                            && directly_supported_occurrence(morpheme, &self.state.evidence)
-                    })
-                })
-            })
-            .map(|(index, representative)| {
-                let evidence = selected
-                    .iter()
-                    .filter_map(|hypothesis| hypothesis.morphemes.get(index))
-                    .flat_map(|morpheme| morpheme.evidence.iter().cloned())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                CommittedMorpheme {
-                    key: representative.key.clone(),
-                    surface: representative.surface.clone(),
-                    variety: representative.variety.clone(),
-                    evidence,
-                    confidence: covered_probability,
-                }
-            })
-            .collect::<Vec<_>>();
+        self.record(SimulatorEventKind::CommitDecisionRecorded {
+            diagnostic: CommitDecisionDiagnostic {
+                frontier_from: from,
+                frontier_to: from + committable.len(),
+                leading_hypothesis_id: beam.first().map(|hypothesis| hypothesis.id.clone()),
+                leading_probability: beam
+                    .first()
+                    .map(|hypothesis| hypothesis.probability)
+                    .unwrap_or_default(),
+                score_margin,
+                committed: !committable.is_empty(),
+                reasons: block_reasons,
+            },
+        })?;
         if !committable.is_empty() {
             self.record(SimulatorEventKind::CommitFrontierAdvanced {
                 from,
@@ -788,8 +1208,158 @@ impl<P: CompletionProvider> DuplexSimulator<P> {
                 committed: committable,
             })?;
         }
+        Ok(())
+    }
 
+    pub fn revise_evidence(
+        &mut self,
+        revision: TranscriptEvidenceRevision,
+    ) -> Result<Vec<SimulatorEvent>, SimulatorError> {
+        validate_id(&revision.evidence_id, "evidence")?;
+        if revision.reason.trim().is_empty() {
+            return Err(SimulatorError::JournalStateMismatch(
+                "evidence revision reason cannot be empty".into(),
+            ));
+        }
+        let start = self.journal.events.len();
+        let previous = self
+            .state
+            .evidence
+            .get(&revision.evidence_id)
+            .cloned()
+            .ok_or_else(|| SimulatorError::UnknownEvidence(revision.evidence_id.clone()))?;
+        let previous_supports = evidence_support_keys(&previous);
+        let mut replacement = previous.clone();
+        replacement.content = revision.replacement_content;
+        replacement.supports = tokenize_morphemes(&replacement.content);
+        let stable_morpheme_count = stable_prefix_len(&previous_supports, &replacement.supports);
+        let retained_occurrence_ids = self
+            .state
+            .hypotheses
+            .values()
+            .flat_map(|hypothesis| hypothesis.morphemes.iter())
+            .take(stable_morpheme_count)
+            .filter_map(|morpheme| morpheme.occurrence_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let mut invalidated_claim_ids = Vec::new();
+        let mut revised_artifact = self.state.linguistic_evidence.clone();
+        if let Some(artifact) = &mut revised_artifact {
+            match artifact
+                .invalidate_text_revision(revision.revised_range.clone(), revision.reason.clone())
+            {
+                Ok(ids) => invalidated_claim_ids = ids,
+                Err(LinguisticClaimError::CommittedClaimCannotChange(_)) => {
+                    // The transcript may still record a late correction, but
+                    // committed linguistic history remains immutable and
+                    // delivery policy must surface the correction explicitly.
+                    revised_artifact = None;
+                }
+                Err(error) => {
+                    return Err(SimulatorError::InvalidLinguisticEvidence(error.to_string()));
+                }
+            }
+        }
+        if let Some(artifact) = &revised_artifact {
+            replacement.linguistic_evidence = Some(artifact.clone());
+        }
+        let retention = StableIdentityRetention {
+            stable_morpheme_count,
+            retained_occurrence_ids,
+            invalidated_claim_ids: invalidated_claim_ids.clone(),
+        };
+        self.record(SimulatorEventKind::EvidenceRevised {
+            previous,
+            replacement,
+            retention,
+            reason: revision.reason.clone(),
+        })?;
+        if let Some(artifact) = revised_artifact {
+            self.record(SimulatorEventKind::LinguisticClaimsUpdated {
+                update: LinguisticClaimUpdateKind::Invalidated,
+                artifact,
+                affected_claim_ids: invalidated_claim_ids.clone(),
+            })?;
+        }
+
+        for delivery in self.state.deliveries.values().cloned().collect::<Vec<_>>() {
+            let affected = invalidated_claim_ids.is_empty()
+                || delivery
+                    .claim_ids
+                    .iter()
+                    .any(|claim_id| invalidated_claim_ids.contains(claim_id));
+            if !affected || delivery.state == SynthesisDeliveryState::Invalidated {
+                continue;
+            }
+            match delivery.state {
+                SynthesisDeliveryState::Played | SynthesisDeliveryState::Verified => {
+                    self.record(SimulatorEventKind::RepairDeliveryRequired {
+                        decision: RepairDeliveryDecision {
+                            emission_id: delivery.emission_id,
+                            policy: RepairDeliveryPolicy::DeliverPostPlaybackCorrection,
+                            reason: format!(
+                                "played output is immutable after transcript repair: {}",
+                                revision.reason
+                            ),
+                        },
+                    })?;
+                }
+                SynthesisDeliveryState::Prepared | SynthesisDeliveryState::Held => {
+                    self.record(SimulatorEventKind::RepairDeliveryRequired {
+                        decision: RepairDeliveryDecision {
+                            emission_id: delivery.emission_id.clone(),
+                            policy: RepairDeliveryPolicy::ReplaceHeldAudio,
+                            reason: format!(
+                                "prepared audio depends on revised linguistic claims: {}",
+                                revision.reason
+                            ),
+                        },
+                    })?;
+                    self.record(SimulatorEventKind::SynthesisDeliveryUpdated {
+                        record: SynthesisDeliveryRecord {
+                            state: SynthesisDeliveryState::Invalidated,
+                            ..delivery
+                        },
+                    })?;
+                }
+                SynthesisDeliveryState::Planned => {
+                    self.record(SimulatorEventKind::SynthesisDeliveryUpdated {
+                        record: SynthesisDeliveryRecord {
+                            state: SynthesisDeliveryState::Invalidated,
+                            ..delivery
+                        },
+                    })?;
+                }
+                SynthesisDeliveryState::Invalidated => {}
+            }
+        }
+        self.refresh_hypotheses()?;
         Ok(self.journal.events[start..].to_vec())
+    }
+
+    pub fn update_synthesis_delivery(
+        &mut self,
+        record: SynthesisDeliveryRecord,
+    ) -> Result<SimulatorEvent, SimulatorError> {
+        if !self.state.hypotheses.contains_key(&record.hypothesis_id)
+            && !self
+                .state
+                .hypothesis_audit
+                .contains_key(&record.hypothesis_id)
+        {
+            return Err(SimulatorError::UnknownHypothesis(record.hypothesis_id));
+        }
+        self.record(SimulatorEventKind::SynthesisDeliveryUpdated {
+            record: record.clone(),
+        })?;
+        Ok(self
+            .journal
+            .events
+            .last()
+            .cloned()
+            .expect("recording a delivery appends one event"))
     }
 
     pub fn into_parts(self) -> (SimulatorJournal, SimulatorState) {
@@ -847,6 +1417,12 @@ fn validate_config(config: &SimulatorConfig) -> Result<(), SimulatorError> {
     {
         return Err(SimulatorError::InvalidPosteriorMass(config.posterior_mass));
     }
+    if !config.linguistic_weights.validate()
+        || !config.min_commit_score_margin.is_finite()
+        || !(0.0..=1.0).contains(&config.min_commit_score_margin)
+    {
+        return Err(SimulatorError::InvalidLinguisticScoringConfig);
+    }
     Ok(())
 }
 
@@ -876,6 +1452,32 @@ pub fn normalize_beam(
                 weight: proposal.weight,
             });
         }
+        for (component, value) in [
+            (
+                "acoustic_likelihood",
+                proposal.score_hints.acoustic_likelihood,
+            ),
+            ("lexical_evidence", proposal.score_hints.lexical_evidence),
+            (
+                "grammar_parse_rank",
+                proposal.score_hints.grammar_parse_rank,
+            ),
+            (
+                "prosody_compatibility",
+                proposal.score_hints.prosody_compatibility,
+            ),
+            ("user_markup", proposal.score_hints.user_markup),
+        ] {
+            if let Some(value) = value
+                && !validate_unit_score(value)
+            {
+                return Err(SimulatorError::InvalidLinguisticScore {
+                    id: proposal.id.clone(),
+                    component,
+                    value,
+                });
+            }
+        }
         total += proposal.weight;
     }
     if !total.is_finite() || total <= 0.0 {
@@ -892,6 +1494,127 @@ pub fn normalize_beam(
         .collect::<Vec<_>>();
     normalized.sort_by(hypothesis_order);
     Ok(normalized)
+}
+
+fn normalize_and_score_beam(
+    proposals: Vec<CompletionProposal>,
+    config: &SimulatorConfig,
+    evidence: &BTreeMap<String, ObservedEvidence>,
+    artifact: Option<&LinguisticEvidenceArtifact>,
+) -> Result<Vec<NormalizedCompletionHypothesis>, SimulatorError> {
+    let mut hypotheses = normalize_beam(proposals)?;
+    for hypothesis in &mut hypotheses {
+        if let Some(syntax_rank) = hypothesis
+            .syntax
+            .as_ref()
+            .and_then(|syntax| syntax.ranked_parses.first())
+            .map(|parse| f64::from(parse.rank))
+        {
+            hypothesis.score.grammar_parse_rank =
+                hypothesis.score.grammar_parse_rank.max(syntax_rank);
+            hypothesis
+                .score
+                .mark_available(LinguisticScoreComponent::GrammarParseRank);
+        }
+        hypothesis.score.direct_observation = if hypothesis.morphemes.is_empty() {
+            0.0
+        } else {
+            hypothesis
+                .morphemes
+                .iter()
+                .filter(|morpheme| directly_supported_occurrence(morpheme, evidence))
+                .count() as f64
+                / hypothesis.morphemes.len() as f64
+        };
+        if !hypothesis.morphemes.is_empty() {
+            hypothesis
+                .score
+                .mark_available(LinguisticScoreComponent::DirectObservation);
+        }
+
+        if let Some(artifact) = artifact {
+            for claim_id in &hypothesis.claim_ids {
+                let claim = artifact.claim(claim_id).ok_or_else(|| {
+                    SimulatorError::InvalidLinguisticEvidence(format!(
+                        "hypothesis '{}' references unknown claim '{}'",
+                        hypothesis.id.0, claim_id.0
+                    ))
+                })?;
+                if !claim.lifecycle.is_resolution_eligible() {
+                    continue;
+                }
+                let Some(component) = component_for_source(&claim.provenance.source) else {
+                    continue;
+                };
+                let value = claim.confidence.probability;
+                match component {
+                    LinguisticScoreComponent::AcousticLikelihood => {
+                        hypothesis.score.acoustic_likelihood =
+                            hypothesis.score.acoustic_likelihood.max(value);
+                    }
+                    LinguisticScoreComponent::LexicalEvidence => {
+                        hypothesis.score.lexical_evidence =
+                            hypothesis.score.lexical_evidence.max(value);
+                    }
+                    LinguisticScoreComponent::GrammarParseRank => {
+                        hypothesis.score.grammar_parse_rank =
+                            hypothesis.score.grammar_parse_rank.max(value);
+                    }
+                    LinguisticScoreComponent::ProsodyCompatibility => {
+                        hypothesis.score.prosody_compatibility =
+                            hypothesis.score.prosody_compatibility.max(value);
+                    }
+                    LinguisticScoreComponent::UserMarkup => {
+                        hypothesis.score.user_markup = hypothesis.score.user_markup.max(value);
+                    }
+                    LinguisticScoreComponent::ProviderPrior
+                    | LinguisticScoreComponent::DirectObservation => {}
+                }
+                hypothesis
+                    .score
+                    .claim_attribution
+                    .entry(component)
+                    .or_default()
+                    .push(claim_id.clone());
+                hypothesis.score.mark_available(component);
+            }
+            for resolution_id in &hypothesis.resolution_ids {
+                if !artifact
+                    .resolutions
+                    .iter()
+                    .any(|resolution| &resolution.id == resolution_id)
+                {
+                    return Err(SimulatorError::InvalidLinguisticEvidence(format!(
+                        "hypothesis '{}' references unknown resolution '{}'",
+                        hypothesis.id.0, resolution_id.0
+                    )));
+                }
+            }
+        } else if !hypothesis.claim_ids.is_empty() || !hypothesis.resolution_ids.is_empty() {
+            return Err(SimulatorError::InvalidLinguisticEvidence(format!(
+                "hypothesis '{}' references claims without an evidence artifact",
+                hypothesis.id.0
+            )));
+        }
+        for claim_ids in hypothesis.score.claim_attribution.values_mut() {
+            claim_ids.sort();
+            claim_ids.dedup();
+        }
+        hypothesis.score.combine(&config.linguistic_weights);
+    }
+
+    let ranking_masses = hypotheses
+        .iter()
+        .map(|hypothesis| hypothesis.score.ranking_mass(&config.linguistic_weights))
+        .collect::<Vec<_>>();
+    let score_total = ranking_masses.iter().sum::<f64>();
+    if score_total > f64::EPSILON {
+        for (hypothesis, ranking_mass) in hypotheses.iter_mut().zip(ranking_masses) {
+            hypothesis.probability = ranking_mass / score_total;
+        }
+    }
+    hypotheses.sort_by(hypothesis_order);
+    Ok(hypotheses)
 }
 
 fn hypothesis_order(
@@ -954,6 +1677,67 @@ fn directly_supported_occurrence(
         })
 }
 
+fn identity_block_reasons(
+    hypothesis: &NormalizedCompletionHypothesis,
+    morpheme_index: usize,
+    artifact: Option<&LinguisticEvidenceArtifact>,
+) -> Vec<CommitBlockReason> {
+    let Some(identity) = hypothesis
+        .identity_evidence
+        .iter()
+        .find(|identity| identity.morpheme_index == morpheme_index)
+    else {
+        // Direct morpheme evidence is the identity authority for legacy or
+        // claim-free branches. Richer layers are required only when declared.
+        return Vec::new();
+    };
+    let Some(artifact) = artifact else {
+        return identity
+            .all_layers()
+            .into_iter()
+            .filter(|(_, claim_ids)| !claim_ids.is_empty())
+            .map(|(layer, _)| CommitBlockReason::IdentityLayerUnresolved {
+                morpheme_index,
+                layer: layer.to_string(),
+            })
+            .collect();
+    };
+    let mut reasons = Vec::new();
+    for (layer, claim_ids) in identity.all_layers() {
+        if claim_ids.is_empty() {
+            continue;
+        }
+        for claim_id in claim_ids {
+            if artifact.claim(claim_id).is_none() {
+                reasons.push(CommitBlockReason::ClaimMissing {
+                    claim_id: claim_id.clone(),
+                });
+            }
+        }
+        let committed_claim = claim_ids.iter().any(|claim_id| {
+            artifact
+                .claim(claim_id)
+                .is_some_and(|claim| claim.lifecycle == ClaimLifecycle::Committed)
+        });
+        let resolved_winner = hypothesis.resolution_ids.iter().any(|resolution_id| {
+            artifact.resolutions.iter().any(|resolution| {
+                &resolution.id == resolution_id
+                    && resolution
+                        .winner
+                        .as_ref()
+                        .is_some_and(|winner| claim_ids.contains(winner))
+            })
+        });
+        if !committed_claim && !resolved_winner {
+            reasons.push(CommitBlockReason::IdentityLayerUnresolved {
+                morpheme_index,
+                layer: layer.to_string(),
+            });
+        }
+    }
+    reasons
+}
+
 fn is_directly_supported(
     morpheme: &CommittedMorpheme,
     evidence: &BTreeMap<String, ObservedEvidence>,
@@ -979,6 +1763,14 @@ pub fn tokenize_morphemes(text: &str) -> Vec<String> {
             (!token.is_empty()).then(|| token.to_string())
         })
         .collect()
+}
+
+fn evidence_support_keys(evidence: &ObservedEvidence) -> Vec<String> {
+    if evidence.supports.is_empty() {
+        tokenize_morphemes(&evidence.content)
+    } else {
+        evidence.supports.clone()
+    }
 }
 
 fn normalize_key(key: &str) -> String {
@@ -1244,6 +2036,7 @@ impl CompletionProvider for OracleCompletionProvider {
                     key: normalize_key(&surface),
                     surface,
                     variety: request.variety.clone(),
+                    occurrence_id: None,
                     evidence: vec![evidence.id.clone()],
                 });
             }
@@ -1277,6 +2070,10 @@ impl CompletionProvider for OracleCompletionProvider {
                     .iter()
                     .map(|evidence| evidence.id.clone())
                     .collect(),
+                claim_ids: Vec::new(),
+                resolution_ids: Vec::new(),
+                identity_evidence: Vec::new(),
+                score_hints: LinguisticScoreHints::default(),
                 provenance: provenance.clone(),
             },
             CompletionProposal {
@@ -1290,6 +2087,10 @@ impl CompletionProvider for OracleCompletionProvider {
                     .iter()
                     .map(|evidence| evidence.id.clone())
                     .collect(),
+                claim_ids: Vec::new(),
+                resolution_ids: Vec::new(),
+                identity_evidence: Vec::new(),
+                score_hints: LinguisticScoreHints::default(),
                 provenance,
             },
         ])
@@ -1440,6 +2241,14 @@ pub struct DuplexBranchSnapshot {
     #[serde(default)]
     pub morphemes: Vec<String>,
     pub selected: bool,
+    #[serde(default)]
+    pub score: NormalizedLinguisticScore,
+    #[serde(default)]
+    pub claim_ids: Vec<LinguisticClaimId>,
+    #[serde(default)]
+    pub resolution_ids: Vec<ClaimResolutionId>,
+    #[serde(default)]
+    pub block_reasons: Vec<CommitBlockReason>,
     pub provenance: String,
 }
 
@@ -1600,7 +2409,13 @@ impl SpeculativeConsumer for RecordingSpeculativeConsumer {
                 self.provisional = self.provisional[self.provisional.len() - new_len..].to_vec();
             }
             SimulatorEventKind::EvidenceObserved { .. }
-            | SimulatorEventKind::VerificationEvaluated { .. } => {}
+            | SimulatorEventKind::EvidenceRevised { .. }
+            | SimulatorEventKind::LinguisticClaimsUpdated { .. }
+            | SimulatorEventKind::HypothesesReranked { .. }
+            | SimulatorEventKind::CommitDecisionRecorded { .. }
+            | SimulatorEventKind::VerificationEvaluated { .. }
+            | SimulatorEventKind::SynthesisDeliveryUpdated { .. }
+            | SimulatorEventKind::RepairDeliveryRequired { .. } => {}
         }
     }
 }
@@ -1720,12 +2535,18 @@ fn project_timeline_snapshot(
 fn studio_event_type(kind: &SimulatorEventKind) -> &'static str {
     match kind {
         SimulatorEventKind::EvidenceObserved { .. } => "evidence_observed",
+        SimulatorEventKind::EvidenceRevised { .. } => "evidence_revised",
+        SimulatorEventKind::LinguisticClaimsUpdated { .. } => "linguistic_claims_updated",
         SimulatorEventKind::HypothesisProposed { .. } => "hypothesis_proposed",
         SimulatorEventKind::HypothesisWithdrawn { .. } => "hypothesis_withdrawn",
         SimulatorEventKind::HypothesisRepaired { .. } => "hypothesis_repaired",
         SimulatorEventKind::BeamInferred { .. } => "beam_inferred",
+        SimulatorEventKind::HypothesesReranked { .. } => "hypotheses_reranked",
+        SimulatorEventKind::CommitDecisionRecorded { .. } => "commit_decision_recorded",
         SimulatorEventKind::CommitFrontierAdvanced { .. } => "commit_frontier_advanced",
         SimulatorEventKind::VerificationEvaluated { .. } => "verification_evaluated",
+        SimulatorEventKind::SynthesisDeliveryUpdated { .. } => "synthesis_delivery_updated",
+        SimulatorEventKind::RepairDeliveryRequired { .. } => "repair_delivery_required",
     }
 }
 
@@ -1740,6 +2561,24 @@ fn studio_event_message(kind: &SimulatorEventKind) -> String {
             evidence.id,
             evidence.content
         ),
+        SimulatorEventKind::EvidenceRevised {
+            previous,
+            replacement,
+            retention,
+            reason,
+        } => format!(
+            "Revised evidence {} ({} stable morphemes): {} → {} ({})",
+            previous.id,
+            retention.stable_morpheme_count,
+            previous.content,
+            replacement.content,
+            reason
+        ),
+        SimulatorEventKind::LinguisticClaimsUpdated {
+            update,
+            affected_claim_ids,
+            ..
+        } => format!("{update:?} {} linguistic claims", affected_claim_ids.len()),
         SimulatorEventKind::HypothesisProposed { hypothesis } => format!(
             "Proposed branch {} at p={:.3}",
             hypothesis.id.0, hypothesis.probability
@@ -1764,6 +2603,23 @@ fn studio_event_message(kind: &SimulatorEventKind) -> String {
             selected.len(),
             covered_probability
         ),
+        SimulatorEventKind::HypothesesReranked {
+            rankings,
+            score_margin,
+            abstained,
+        } => format!(
+            "Reranked {} branches (margin {:.3}, abstained={})",
+            rankings.len(),
+            score_margin,
+            abstained
+        ),
+        SimulatorEventKind::CommitDecisionRecorded { diagnostic } => format!(
+            "Commit decision {}→{} committed={} reasons={:?}",
+            diagnostic.frontier_from,
+            diagnostic.frontier_to,
+            diagnostic.committed,
+            diagnostic.reasons
+        ),
         SimulatorEventKind::CommitFrontierAdvanced {
             from,
             to,
@@ -1783,6 +2639,14 @@ fn studio_event_message(kind: &SimulatorEventKind) -> String {
             result.decision,
             result.evidence.len(),
             result.repair_causes.len()
+        ),
+        SimulatorEventKind::SynthesisDeliveryUpdated { record } => format!(
+            "Delivery {} for {} is {:?}",
+            record.emission_id, record.hypothesis_id.0, record.state
+        ),
+        SimulatorEventKind::RepairDeliveryRequired { decision } => format!(
+            "Delivery {} requires {:?}: {}",
+            decision.emission_id, decision.policy, decision.reason
         ),
     }
 }
@@ -1811,26 +2675,38 @@ fn branch_snapshots(state: &SimulatorState) -> Vec<DuplexBranchSnapshot> {
     branches.sort_by(hypothesis_order);
     branches
         .into_iter()
-        .map(|hypothesis| DuplexBranchSnapshot {
-            hypothesis_id: hypothesis.id.0.clone(),
-            probability: hypothesis.probability,
-            morphemes: hypothesis
-                .morphemes
-                .into_iter()
-                .map(|morpheme| morpheme.surface)
-                .collect(),
-            selected: selected.contains(hypothesis.id.0.as_str()),
-            provenance: format!(
-                "{:?}:{}{}",
-                hypothesis.provenance.source,
-                hypothesis.provenance.method,
-                hypothesis
-                    .provenance
-                    .version
-                    .as_ref()
-                    .map(|version| format!("@{version}"))
-                    .unwrap_or_default()
-            ),
+        .map(|hypothesis| {
+            let block_reasons = state
+                .rankings
+                .iter()
+                .find(|ranking| ranking.id == hypothesis.id)
+                .map(|ranking| ranking.block_reasons.clone())
+                .unwrap_or_default();
+            DuplexBranchSnapshot {
+                hypothesis_id: hypothesis.id.0.clone(),
+                probability: hypothesis.probability,
+                morphemes: hypothesis
+                    .morphemes
+                    .into_iter()
+                    .map(|morpheme| morpheme.surface)
+                    .collect(),
+                selected: selected.contains(hypothesis.id.0.as_str()),
+                score: hypothesis.score,
+                claim_ids: hypothesis.claim_ids,
+                resolution_ids: hypothesis.resolution_ids,
+                block_reasons,
+                provenance: format!(
+                    "{:?}:{}{}",
+                    hypothesis.provenance.source,
+                    hypothesis.provenance.method,
+                    hypothesis
+                        .provenance
+                        .version
+                        .as_ref()
+                        .map(|version| format!("@{version}"))
+                        .unwrap_or_default()
+                ),
+            }
         })
         .collect()
 }
@@ -2416,9 +3292,15 @@ fn rows_for_fixture(fixture: &DuplexFixture, corpus: &str) -> AnyResult<Vec<Dupl
                 }
 
                 SimulatorEventKind::EvidenceObserved { .. }
+                | SimulatorEventKind::EvidenceRevised { .. }
+                | SimulatorEventKind::LinguisticClaimsUpdated { .. }
                 | SimulatorEventKind::HypothesisProposed { .. }
                 | SimulatorEventKind::BeamInferred { .. }
-                | SimulatorEventKind::VerificationEvaluated { .. } => {}
+                | SimulatorEventKind::HypothesesReranked { .. }
+                | SimulatorEventKind::CommitDecisionRecorded { .. }
+                | SimulatorEventKind::VerificationEvaluated { .. }
+                | SimulatorEventKind::SynthesisDeliveryUpdated { .. }
+                | SimulatorEventKind::RepairDeliveryRequired { .. } => {}
             }
         }
     }
@@ -2664,6 +3546,7 @@ mod tests {
             key: key.into(),
             surface: key.into(),
             variety: VarietyId("en-US-GA".into()),
+            occurrence_id: None,
             evidence: evidence.iter().map(|id| (*id).into()).collect(),
         }
     }
@@ -2676,8 +3559,82 @@ mod tests {
             syntax: Some(GrammarAnalysis::default()),
             prosody: Some(ProsodyTrack::default()),
             evidence: Vec::new(),
+            claim_ids: Vec::new(),
+            resolution_ids: Vec::new(),
+            identity_evidence: Vec::new(),
+            score_hints: LinguisticScoreHints::default(),
             provenance: provenance(),
         }
+    }
+
+    #[derive(Debug, Clone)]
+    struct StaticLinguisticProvider {
+        proposals: Vec<CompletionProposal>,
+    }
+
+    impl CompletionProvider for StaticLinguisticProvider {
+        fn complete(
+            &mut self,
+            _request: &CompletionRequest,
+        ) -> Result<Vec<CompletionProposal>, CompletionProviderError> {
+            Ok(self.proposals.clone())
+        }
+    }
+
+    fn lexical_claim(
+        utterance_id: &str,
+        id: &str,
+        word: &str,
+        source: EvidenceSource,
+        probability: f64,
+        range: TextRange,
+    ) -> speaking::LinguisticClaim {
+        speaking::LinguisticClaim::new(
+            LinguisticClaimId(id.into()),
+            speaking::LinguisticTarget::word(
+                UtteranceId(utterance_id.into()),
+                format!("word-{word}"),
+                range,
+            ),
+            speaking::LinguisticClaimKind::LexicalIdentity,
+            speaking::LinguisticClaimValue::LexicalIdentity {
+                lexeme_id: word.into(),
+            },
+            EvidenceProvenance {
+                source,
+                method: "duplex-test".into(),
+                version: Some("1".into()),
+            },
+            speaking::ClaimConfidence::new(probability, Some("fixture".into())).unwrap(),
+            speaking::ClaimRationale::new(
+                "duplex.fixture",
+                "fixture linguistic evidence for duplex scoring",
+            ),
+        )
+        .unwrap()
+    }
+
+    fn artifact_with_claims(
+        utterance_id: &str,
+        claims: Vec<speaking::LinguisticClaim>,
+    ) -> LinguisticEvidenceArtifact {
+        let mut artifact = LinguisticEvidenceArtifact::new(UtteranceId(utterance_id.into()));
+        for claim in claims {
+            artifact.insert_claim(claim).unwrap();
+        }
+        artifact
+    }
+
+    fn proposal_with_claim(
+        id: &str,
+        weight: f64,
+        word: &str,
+        evidence_id: &str,
+        claim_id: &str,
+    ) -> CompletionProposal {
+        let mut proposal = proposal(id, weight, vec![morph(word, &[evidence_id])]);
+        proposal.claim_ids = vec![LinguisticClaimId(claim_id.into())];
+        proposal
     }
 
     #[test]
@@ -2803,18 +3760,14 @@ mod tests {
         let fixture = suite.fixture("garden-path").unwrap();
         let (journal, state) = run_fixture(fixture).unwrap();
         assert_eq!(state.committed_text(), "The old man the boats");
-        assert!(
-            journal
-                .events
-                .iter()
-                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisWithdrawn { .. }))
-        );
-        assert!(
-            journal
-                .events
-                .iter()
-                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. }))
-        );
+        assert!(journal
+            .events
+            .iter()
+            .any(|event| matches!(event.event, SimulatorEventKind::HypothesisWithdrawn { .. })));
+        assert!(journal
+            .events
+            .iter()
+            .any(|event| matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. })));
         assert_eq!(replay_journal(&journal).unwrap(), state);
     }
 
@@ -2850,13 +3803,11 @@ mod tests {
             .unwrap();
         assert_eq!(simulator.state().committed_text(), "hello world");
         assert_eq!(simulator.state().predicted_suffix().len(), 1);
-        assert!(
-            simulator
-                .state()
-                .hypotheses
-                .values()
-                .all(|hypothesis| hypothesis.syntax.is_some() && hypothesis.prosody.is_some())
-        );
+        assert!(simulator
+            .state()
+            .hypotheses
+            .values()
+            .all(|hypothesis| hypothesis.syntax.is_some() && hypothesis.prosody.is_some()));
     }
 
     #[test]
@@ -3072,11 +4023,9 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Retry);
-        assert!(
-            result
-                .repair_causes
-                .contains(&VerificationRepairCause::LinguisticDisagreement)
-        );
+        assert!(result
+            .repair_causes
+            .contains(&VerificationRepairCause::LinguisticDisagreement));
     }
 
     #[test]
@@ -3091,16 +4040,12 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Accept);
-        assert!(
-            result
-                .repair_causes
-                .contains(&VerificationRepairCause::AcceptedProjectionLoss)
-        );
-        assert!(
-            !result
-                .repair_causes
-                .contains(&VerificationRepairCause::LinguisticDisagreement)
-        );
+        assert!(result
+            .repair_causes
+            .contains(&VerificationRepairCause::AcceptedProjectionLoss));
+        assert!(!result
+            .repair_causes
+            .contains(&VerificationRepairCause::LinguisticDisagreement));
     }
 
     #[test]
@@ -3115,11 +4060,9 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Abstain);
-        assert!(
-            result
-                .repair_causes
-                .contains(&VerificationRepairCause::RecognizerUncertain)
-        );
+        assert!(result
+            .repair_causes
+            .contains(&VerificationRepairCause::RecognizerUncertain));
     }
 
     #[test]
@@ -3431,5 +4374,380 @@ mod tests {
                 + usize::from(test.iter().any(|row| row.fixture_id == fixture));
             assert_eq!(placements, 1);
         }
+    }
+
+    #[test]
+    fn acoustic_evidence_outweighs_a_tidy_grammar_without_becoming_provider_evidence() {
+        let utterance_id = "acoustic-grammar";
+        let acoustic = lexical_claim(
+            utterance_id,
+            "claim-acoustic-right",
+            "right",
+            EvidenceSource::AcousticModel,
+            0.98,
+            TextRange { start: 0, end: 5 },
+        );
+        let grammar = lexical_claim(
+            utterance_id,
+            "claim-grammar-write",
+            "write",
+            EvidenceSource::Grammar,
+            1.0,
+            TextRange { start: 0, end: 5 },
+        );
+        let artifact = artifact_with_claims(utterance_id, vec![acoustic, grammar]);
+        let proposals = vec![
+            proposal_with_claim(
+                "acoustic",
+                0.49,
+                "right",
+                "ambiguous-audio",
+                "claim-acoustic-right",
+            ),
+            proposal_with_claim(
+                "grammar",
+                0.51,
+                "write",
+                "ambiguous-audio",
+                "claim-grammar-write",
+            ),
+        ];
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId(utterance_id.into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig {
+                posterior_mass: 0.5,
+                ..SimulatorConfig::default()
+            },
+            StaticLinguisticProvider { proposals },
+        )
+        .unwrap();
+        let mut evidence = ObservedEvidence::acoustics("ambiguous-audio", "right");
+        evidence.supports = vec!["right".into(), "write".into()];
+        evidence.linguistic_evidence = Some(artifact);
+        simulator.observe(evidence).unwrap();
+
+        assert_eq!(
+            simulator.state().rankings[0].id,
+            CompletionHypothesisId("acoustic".into())
+        );
+        assert!(simulator.state().rankings[0]
+            .score
+            .has_component(LinguisticScoreComponent::AcousticLikelihood));
+        assert_eq!(
+            simulator.state().hypotheses[&CompletionHypothesisId("grammar".into())]
+                .provenance
+                .source,
+            EvidenceSource::Inference
+        );
+    }
+
+    #[test]
+    fn context_claims_rerank_uncommitted_homophones_and_revise_the_branch() {
+        let utterance_id = "context-rerank";
+        let artifact = |right_probability, write_probability| {
+            artifact_with_claims(
+                utterance_id,
+                vec![
+                    lexical_claim(
+                        utterance_id,
+                        "context-right",
+                        "right",
+                        EvidenceSource::Grammar,
+                        right_probability,
+                        TextRange { start: 0, end: 5 },
+                    ),
+                    lexical_claim(
+                        utterance_id,
+                        "context-write",
+                        "write",
+                        EvidenceSource::Grammar,
+                        write_probability,
+                        TextRange { start: 0, end: 5 },
+                    ),
+                ],
+            )
+        };
+        let mut right =
+            proposal_with_claim("right-branch", 0.5, "right", "ambiguous", "context-right");
+        right.identity_evidence = vec![MorphemeIdentityEvidence {
+            morpheme_index: 0,
+            pronunciation_claim_ids: vec![LinguisticClaimId("context-right".into())],
+            ..MorphemeIdentityEvidence::default()
+        }];
+        right.prosody = Some(ProsodyTrack::default());
+        let mut write =
+            proposal_with_claim("write-branch", 0.5, "write", "ambiguous", "context-write");
+        write.identity_evidence = vec![MorphemeIdentityEvidence {
+            morpheme_index: 0,
+            pronunciation_claim_ids: vec![LinguisticClaimId("context-write".into())],
+            ..MorphemeIdentityEvidence::default()
+        }];
+        write.prosody = Some(ProsodyTrack::default());
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId(utterance_id.into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig {
+                posterior_mass: 0.5,
+                ..SimulatorConfig::default()
+            },
+            StaticLinguisticProvider {
+                proposals: vec![right, write],
+            },
+        )
+        .unwrap();
+        let mut first = ObservedEvidence::acoustics("ambiguous", "right");
+        first.supports = vec!["right".into(), "write".into()];
+        first.linguistic_evidence = Some(artifact(0.95, 0.10));
+        simulator.observe(first).unwrap();
+        assert_eq!(
+            simulator.state().rankings[0].id,
+            CompletionHypothesisId("right-branch".into())
+        );
+        assert!(simulator.state().committed.is_empty());
+
+        let mut context = ObservedEvidence::text("later-context", "please write");
+        context.linguistic_evidence = Some(artifact(0.10, 0.95));
+        let events = simulator.observe(context).unwrap();
+        assert_eq!(
+            simulator.state().rankings[0].id,
+            CompletionHypothesisId("write-branch".into())
+        );
+        assert!(events
+            .iter()
+            .any(|event| { matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. }) }));
+        assert!(simulator
+            .state()
+            .hypothesis_audit
+            .values()
+            .flatten()
+            .any(|entry| entry.status == HypothesisDecisionStatus::Revised));
+    }
+
+    #[test]
+    fn low_margin_provider_disagreement_abstains_and_explains_the_block() {
+        let proposals = vec![
+            proposal("heavy", 0.51, vec![morph("right", &["ambiguous"])]),
+            proposal("runner", 0.49, vec![morph("write", &["ambiguous"])]),
+        ];
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId("low-margin".into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig {
+                posterior_mass: 0.5,
+                min_commit_score_margin: 0.05,
+                ..SimulatorConfig::default()
+            },
+            StaticLinguisticProvider { proposals },
+        )
+        .unwrap();
+        let mut evidence = ObservedEvidence::acoustics("ambiguous", "right");
+        evidence.supports = vec!["right".into(), "write".into()];
+        simulator.observe(evidence).unwrap();
+        let diagnostic = simulator.state().commit_diagnostics.last().unwrap();
+        assert!(!diagnostic.committed);
+        assert_eq!(
+            diagnostic.leading_hypothesis_id,
+            Some(CompletionHypothesisId("heavy".into()))
+        );
+        assert!(diagnostic
+            .reasons
+            .contains(&CommitBlockReason::LowScoreMargin));
+        assert!(diagnostic
+            .reasons
+            .contains(&CommitBlockReason::ProviderDisagreement));
+        assert!(simulator.state().committed.is_empty());
+    }
+
+    #[test]
+    fn unresolved_pronunciation_identity_blocks_a_directly_supported_commit() {
+        let utterance_id = "identity-gate";
+        let claim = lexical_claim(
+            utterance_id,
+            "pronunciation-choice",
+            "record",
+            EvidenceSource::Lexicon,
+            0.9,
+            TextRange { start: 0, end: 6 },
+        );
+        let mut branch =
+            proposal_with_claim("record", 1.0, "record", "text", "pronunciation-choice");
+        branch.identity_evidence = vec![MorphemeIdentityEvidence {
+            morpheme_index: 0,
+            pronunciation_claim_ids: vec![LinguisticClaimId("pronunciation-choice".into())],
+            ..MorphemeIdentityEvidence::default()
+        }];
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId(utterance_id.into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig::default(),
+            StaticLinguisticProvider {
+                proposals: vec![branch],
+            },
+        )
+        .unwrap();
+        let mut evidence = ObservedEvidence::text("text", "record");
+        evidence.linguistic_evidence = Some(artifact_with_claims(utterance_id, vec![claim]));
+        simulator.observe(evidence).unwrap();
+        assert!(simulator.state().committed.is_empty());
+        assert!(simulator.state().commit_diagnostics[0].reasons.contains(
+            &CommitBlockReason::IdentityLayerUnresolved {
+                morpheme_index: 0,
+                layer: "pronunciation".into(),
+            }
+        ));
+    }
+
+    #[test]
+    fn transcript_repair_retains_prefix_ids_and_coordinates_prepared_and_played_audio() {
+        let utterance_id = "repair-delivery";
+        let tail_claim = lexical_claim(
+            utterance_id,
+            "tail-claim",
+            "right",
+            EvidenceSource::Grammar,
+            0.8,
+            TextRange { start: 5, end: 10 },
+        );
+        let mut turn = morph("turn", &["speech"]);
+        turn.occurrence_id = Some(speaking::MorphemeOccurrenceId("occ-turn".into()));
+        let mut right = proposal(
+            "right",
+            0.55,
+            vec![turn.clone(), morph("right", &["speech"])],
+        );
+        right.claim_ids = vec![LinguisticClaimId("tail-claim".into())];
+        let mut left = proposal(
+            "left",
+            0.45,
+            vec![
+                turn,
+                CompletionMorpheme::predicted("left", "left", VarietyId("en-US".into())),
+            ],
+        );
+        left.claim_ids = vec![LinguisticClaimId("tail-claim".into())];
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId(utterance_id.into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig::default(),
+            StaticLinguisticProvider {
+                proposals: vec![right, left],
+            },
+        )
+        .unwrap();
+        let mut evidence = ObservedEvidence::acoustics("speech", "turn right");
+        evidence.linguistic_evidence = Some(artifact_with_claims(utterance_id, vec![tail_claim]));
+        simulator.observe(evidence).unwrap();
+        assert_eq!(simulator.state().committed_text(), "turn");
+
+        simulator
+            .update_synthesis_delivery(SynthesisDeliveryRecord {
+                emission_id: "held".into(),
+                hypothesis_id: CompletionHypothesisId("right".into()),
+                state: SynthesisDeliveryState::Prepared,
+                text: "turn right".into(),
+                claim_ids: vec![LinguisticClaimId("tail-claim".into())],
+            })
+            .unwrap();
+        simulator
+            .update_synthesis_delivery(SynthesisDeliveryRecord {
+                emission_id: "played".into(),
+                hypothesis_id: CompletionHypothesisId("right".into()),
+                state: SynthesisDeliveryState::Played,
+                text: "turn right".into(),
+                claim_ids: vec![LinguisticClaimId("tail-claim".into())],
+            })
+            .unwrap();
+        let events = simulator
+            .revise_evidence(TranscriptEvidenceRevision {
+                evidence_id: "speech".into(),
+                replacement_content: "turn left".into(),
+                revised_range: TextRange { start: 5, end: 10 },
+                reason: "later context repaired the uncommitted tail".into(),
+            })
+            .unwrap();
+        let retention = events
+            .iter()
+            .find_map(|event| match &event.event {
+                SimulatorEventKind::EvidenceRevised { retention, .. } => Some(retention),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(retention.stable_morpheme_count, 1);
+        assert_eq!(
+            retention.retained_occurrence_ids,
+            vec![speaking::MorphemeOccurrenceId("occ-turn".into())]
+        );
+        assert_eq!(
+            simulator.state().deliveries["held"].state,
+            SynthesisDeliveryState::Invalidated
+        );
+        assert_eq!(
+            simulator.state().deliveries["played"].state,
+            SynthesisDeliveryState::Played
+        );
+        assert!(simulator.state().repair_delivery.iter().any(|decision| {
+            decision.emission_id == "held"
+                && decision.policy == RepairDeliveryPolicy::ReplaceHeldAudio
+        }));
+        assert!(simulator.state().repair_delivery.iter().any(|decision| {
+            decision.emission_id == "played"
+                && decision.policy == RepairDeliveryPolicy::DeliverPostPlaybackCorrection
+        }));
+        assert_eq!(
+            replay_journal(simulator.journal()).unwrap(),
+            simulator.state().clone()
+        );
+    }
+
+    #[test]
+    fn selected_committed_and_verified_states_remain_auditable() {
+        let branch = proposal("only", 1.0, vec![morph("hello", &["speech"])]);
+        let mut simulator = DuplexSimulator::new(
+            UtteranceId("audit-states".into()),
+            VarietyId("en-US".into()),
+            SimulatorConfig::default(),
+            StaticLinguisticProvider {
+                proposals: vec![branch],
+            },
+        )
+        .unwrap();
+        simulator
+            .observe(ObservedEvidence::acoustics("speech", "hello"))
+            .unwrap();
+        simulator
+            .verify_held_audio(
+                ClosedLoopVerificationRequest {
+                    intended: VerificationSequence {
+                        morphemes: vec!["hello".into()],
+                        ..VerificationSequence::default()
+                    },
+                    recovered: VerificationSequence {
+                        morphemes: vec!["hello".into()],
+                        ..VerificationSequence::default()
+                    },
+                    accepted_projection_losses: Vec::new(),
+                    recognizer_confidence: 0.95,
+                    held_audio_replaceable: true,
+                    verification_latency_ms: 10.0,
+                },
+                ClosedLoopVerificationPolicy::default(),
+                0,
+            )
+            .unwrap();
+        let audit = &simulator.state().hypothesis_audit[&CompletionHypothesisId("only".into())];
+        for expected in [
+            HypothesisDecisionStatus::Candidate,
+            HypothesisDecisionStatus::Selected,
+            HypothesisDecisionStatus::Committed,
+            HypothesisDecisionStatus::Verified,
+        ] {
+            assert!(audit.iter().any(|entry| entry.status == expected));
+        }
+        assert!(simulator
+            .state()
+            .hypotheses
+            .contains_key(&CompletionHypothesisId("only".into())));
+        assert!(serde_json::to_string(simulator.journal()).is_ok());
     }
 }

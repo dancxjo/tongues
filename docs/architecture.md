@@ -219,30 +219,42 @@ consume only their conservative intersection.
 ### Deterministic duplex simulator
 
 `tongues-duplex` accepts a provider beam whose hypotheses carry normalized
-morpheme sequences, syntax, prosody, evidence references, and provenance. It
-sorts equal-probability branches by stable hypothesis ID, selects the smallest
-highest-probability set covering the configured posterior mass, and computes
-that set's longest common morpheme prefix.
+morpheme sequences, syntax, prosody, direct-evidence references, linguistic
+claim/resolution IDs, identity-layer support, and provenance. Provider prior,
+acoustic, lexical, grammar, prosody, user-markup, and direct-observation scores
+remain separate and are normalized by one deterministic policy. Each claim is
+attributed to only one component, missing scores stay missing rather than
+becoming negative evidence, and overwhelming acoustic contradiction caps a
+grammar-led branch. The rescored beam is then sorted by probability and stable
+hypothesis ID before posterior-mass selection.
 
 The shared prefix is only a candidate frontier. Each selected branch must tie
 each newly committed morpheme to direct text or acoustic evidence that supports
-the same normalized key. Predicted suffixes remain provisional even when all
-selected branches predict them. New evidence can withdraw or repair those
-branches without mutating the append-only committed prefix.
+the same normalized key. Declared morpheme, word, or pronunciation identity
+layers must also name a committed claim or a resolution whose winner agrees.
+Low-margin disagreement abstains even when one provider has the largest prior.
+Predicted suffixes remain provisional. New context can rerank, revise, or
+invalidate uncommitted branches and their pronunciation/prosody claims without
+mutating the append-only committed prefix.
 
 ```text
 direct text / mock acoustic evidence
   -> CompletionProvider proposals
-  -> normalized completion beam
+  -> claim-attributed component scoring
+  -> normalized, reranked completion beam
   -> posterior-mass hypothesis set
   -> longest common morpheme prefix
-  -> direct-support gate
+  -> direct-support + identity-resolution gate
   -> append-only commit frontier
 ```
 
-Every evidence, proposal, withdrawal, repair, beam inference, and frontier
-advance is written to a versioned simulator journal. Replay reconstructs the
-same final state without invoking the provider:
+Evidence/claim creation and revision, proposal changes, reranking, commit
+decisions, frontier advances, synthesis preparation, verification, held-audio
+replacement, and post-playback correction decisions are written to the
+versioned simulator journal. Selected, committed, and verified are distinct
+auditable states; losing hypotheses are retained in audit history. Replay
+reconstructs the same final state without invoking the provider. See
+[Duplex Linguistic Evidence and Commit Policy](duplex-linguistic-evidence.md).
 
 ```sh
 cargo run -p tongues-cli -- duplex demo --fixture who-shot-john-f
