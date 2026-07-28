@@ -76,10 +76,10 @@ jobs:
         run: scripts/check-feature-matrix.sh workspace
       - name: Build the speech CLI in release mode
         run: cargo build --release -p tongues-cli --locked
+      - name: Run bounded interpretation acceptance corpus
+        run: timeout 2m target/release/tongues duplex acceptance --profile ci --report target/interpretation/ci-report.json
       - name: Test workspace
         run: cargo test --workspace --no-fail-fast --locked
-      - name: Run bounded interpretation acceptance corpus
-        run: target/release/tongues duplex acceptance --profile ci --report target/interpretation/ci-report.json
       - name: Check server UI JavaScript
         run: |
           node --check crates/tongues-server/public/app.js
