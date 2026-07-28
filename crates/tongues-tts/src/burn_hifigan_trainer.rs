@@ -304,6 +304,33 @@ mod tests {
         }
     }
 
+    fn test_audio() -> crate::AudioFeatureConfig {
+        crate::AudioFeatureConfig {
+            fft_size: 8,
+            win_length: 8,
+            hop_length: 4,
+            sample_rate: 8_000,
+            preemphasis: 0.0,
+            log_func: "np.log".into(),
+            num_mels: 4,
+            mel_fmin: 0.0,
+            mel_fmax: Some(4_000.0),
+            spec_gain: 1.0,
+            signal_norm: false,
+            min_level_db: -100.0,
+            ref_level_db: Some(20.0),
+            symmetric_norm: true,
+            max_norm: 4.0,
+            clip_norm: true,
+            stats_path: None,
+            stats_sha256: None,
+            do_amp_to_db_mel: true,
+            stft_pad_mode: "reflect".into(),
+            centered: true,
+            stft_manual_padding: None,
+        }
+    }
+
     #[test]
     fn trainer_default_schedule_updates_both_parameter_groups() {
         let device = NdArrayDevice::Cpu;
@@ -344,7 +371,7 @@ mod tests {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 3);
         let gen = tiny_generator(&device);
-        let trainer = HifiganTrainer::new(
+        let trainer = HifiganTrainer::new_complete(
             gen,
             &device,
             VocoderLossWeights::default(),
@@ -352,6 +379,7 @@ mod tests {
                 discriminator_steps: 1,
                 generator_steps: 1,
             },
+            &test_audio(),
         );
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 1).expect("forward");
@@ -408,7 +436,13 @@ mod tests {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 5);
         let gen = tiny_generator(&device);
-        let trainer = HifiganTrainer::with_defaults(gen, &device);
+        let trainer = HifiganTrainer::new_complete(
+            gen,
+            &device,
+            VocoderLossWeights::default(),
+            VocoderAdversarialUpdateSchedule::EveryBatch,
+            &test_audio(),
+        );
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 0).expect("forward");
         assert_eq!(output.phase, VocoderTrainingPhase::Joint);
@@ -423,7 +457,13 @@ mod tests {
         let device = NdArrayDevice::Cpu;
         TestBackend::seed(&device, 6);
         let gen = tiny_generator(&device);
-        let trainer = HifiganTrainer::with_defaults(gen, &device);
+        let trainer = HifiganTrainer::new_complete(
+            gen,
+            &device,
+            VocoderLossWeights::default(),
+            VocoderAdversarialUpdateSchedule::EveryBatch,
+            &test_audio(),
+        );
         // 3 frames × (2×2) upsample = 12 samples
         let batch = make_batch(1, 3, 4, 12, &device);
         let output = trainer.training_forward(batch, 0).expect("forward");

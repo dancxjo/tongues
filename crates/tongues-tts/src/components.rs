@@ -279,7 +279,7 @@ pub fn native_speech_components() -> &'static [NativeSpeechComponent] {
 
 /// Classification table for every public `burn_*` implementation module in
 /// `tongues-tts`, plus the non-`burn_*` native modules that provide concrete
-/// speech functionality (`freevc`, `speaker_encoder`).
+/// speech functionality (`freevc`, `mbrola`, `speaker_encoder`).
 ///
 /// Each row is `(module_name, component_ids)` where:
 /// - `component_ids` is a slice of `NativeSpeechComponent::id` values from
@@ -333,6 +333,7 @@ pub const IMPLEMENTATION_MODULE_CLASSIFICATION: &[(&str, &[&str])] = &[
     ("burn_xtts", &["xtts-v2"]),
     // ── non-burn_* native modules ────────────────────────────────────────────
     ("freevc", &["freevc"]),
+    ("mbrola", &["mbrola-native-td-psola"]),
     ("speaker_encoder", &["speaker-encoder"]),
     // ── training hooks ───────────────────────────────────────────────────────
     ("burn_hifigan_trainer", &["hifigan-trainer"]),

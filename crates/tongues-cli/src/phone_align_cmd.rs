@@ -385,6 +385,25 @@ mod tests {
             languages,
             std::collections::BTreeSet::from(["en", "ja", "mul"])
         );
+        let cases = value["cases"].as_array().unwrap();
+        assert_eq!(
+            cases[0]["metrics"]["breakdowns"]["phone_class"]["stop"]["reference_units"],
+            2
+        );
+        assert_eq!(
+            cases[0]["metrics"]["breakdowns"]["evidence_source"]["forced_alignment"]
+                ["aligned_units"],
+            3
+        );
+        assert_eq!(
+            cases[0]["metrics"]["breakdowns"]["backend"]["fixture-common-phone/recorded-ctc/1"]
+                ["aligned_units"],
+            3
+        );
+        assert_eq!(
+            cases[2]["metrics"]["breakdowns"]["language"]["sw"]["reference_units"],
+            2
+        );
         assert!(!out.with_file_name("report.json.part").exists());
         fs::remove_dir_all(root).unwrap();
     }

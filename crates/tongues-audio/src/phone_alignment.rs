@@ -412,6 +412,8 @@ pub struct PhoneAlignmentArtifact {
     pub sample_rate_hz: u32,
     pub channels: u16,
     pub backend: AlignmentSourceIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_model_checksum: Option<String>,
     pub backend_capabilities: AlignmentBackendCapabilities,
     pub hypotheses: Vec<AlignmentHypothesis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -714,6 +716,7 @@ impl PhoneAlignmentArtifact {
                 version: "1".into(),
                 artifact_id: None,
             },
+            backend_model_checksum: None,
             backend_capabilities: AlignmentBackendCapabilities {
                 forced_alignment: true,
                 recognition_alignment: false,
@@ -840,6 +843,17 @@ pub fn check_alignment_conformance(
         diagnostics.push(AlignmentDiagnostic {
             code: "conformance.backend_identity".into(),
             detail: "backend provider, model, and version must be explicit".into(),
+            related_ids: Vec::new(),
+        });
+    }
+    if artifact
+        .backend_model_checksum
+        .as_deref()
+        .is_none_or(str::is_empty)
+    {
+        diagnostics.push(AlignmentDiagnostic {
+            code: "conformance.backend_checksum".into(),
+            detail: "backend model checksum must be explicit".into(),
             related_ids: Vec::new(),
         });
     }
@@ -1068,6 +1082,17 @@ impl PhoneAlignmentEngine {
             }
         }
         let unaligned_linguistic_ids = linguistic_ids.into_iter().collect();
+        if posterior
+            .model_checksum
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            diagnostics.push(AlignmentDiagnostic {
+                code: "backend.model_checksum_unavailable".into(),
+                detail: "alignment evidence did not identify the acoustic model checksum".into(),
+                related_ids: Vec::new(),
+            });
+        }
         let request_sha256 = sha256_json(request)?;
         let readiness = if selected.is_none() {
             if hypotheses.is_empty() {
@@ -1099,6 +1124,7 @@ impl PhoneAlignmentEngine {
             sample_rate_hz: audio.sample_rate_hz,
             channels: audio.channels,
             backend: posterior.source.clone(),
+            backend_model_checksum: posterior.model_checksum.clone(),
             backend_capabilities: ctc_capabilities(posterior, Some(request)),
             hypotheses,
             selected_hypothesis_id: selected,
@@ -2297,6 +2323,12 @@ impl StreamingPhoneAligner {
 pub struct ReferenceAlignmentUnit {
     pub symbol: String,
     pub interval: FrameInterval,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variety: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone_class: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2335,6 +2367,96 @@ pub struct AlignmentEvaluationReport {
     pub unaligned_reference_units: usize,
     pub language_tag: String,
     pub variety: String,
+    pub breakdowns: AlignmentEvaluationBreakdowns,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AlignmentEvaluationBreakdowns {
+    pub language: BTreeMap<String, AlignmentEvaluationSlice>,
+    pub variety: BTreeMap<String, AlignmentEvaluationSlice>,
+    pub phone_class: BTreeMap<String, AlignmentEvaluationSlice>,
+    pub evidence_source: BTreeMap<String, AlignmentEvaluationSlice>,
+    pub backend: BTreeMap<String, AlignmentEvaluationSlice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlignmentEvaluationSlice {
+    pub reference_units: usize,
+    pub aligned_units: usize,
+    pub boundary_observations: usize,
+    pub boundary_mean_absolute_error_frames: f64,
+    pub boundary_tolerance_accuracy: BTreeMap<u64, f64>,
+    pub boundary_interval_coverage: f64,
+}
+
+#[derive(Default)]
+struct AlignmentEvaluationSliceAccumulator {
+    reference_units: usize,
+    aligned_units: usize,
+    boundary_errors: Vec<f64>,
+    covered_units: usize,
+}
+
+impl AlignmentEvaluationSliceAccumulator {
+    fn add(&mut self, predicted: Option<&&AlignedUnit>, expected: &ReferenceAlignmentUnit) {
+        self.reference_units += 1;
+        let Some(predicted) = predicted else {
+            return;
+        };
+        let Some(interval) = predicted.interval.as_ref() else {
+            return;
+        };
+        self.aligned_units += 1;
+        self.boundary_errors.extend([
+            interval.start_frame.abs_diff(expected.interval.start_frame) as f64,
+            interval.end_frame.abs_diff(expected.interval.end_frame) as f64,
+        ]);
+        if predicted.start_boundary.as_ref().is_some_and(|range| {
+            (range.lower_frame..=range.upper_frame).contains(&expected.interval.start_frame)
+        }) && predicted.end_boundary.as_ref().is_some_and(|range| {
+            (range.lower_frame..=range.upper_frame).contains(&expected.interval.end_frame)
+        }) {
+            self.covered_units += 1;
+        }
+    }
+
+    fn finish(self, tolerances: &[u64]) -> AlignmentEvaluationSlice {
+        let boundary_tolerance_accuracy = tolerances
+            .iter()
+            .copied()
+            .map(|tolerance| {
+                let within_tolerance = self
+                    .boundary_errors
+                    .iter()
+                    .filter(|error| **error <= tolerance as f64)
+                    .count();
+                (
+                    tolerance,
+                    if self.boundary_errors.is_empty() {
+                        0.0
+                    } else {
+                        within_tolerance as f64 / self.boundary_errors.len() as f64
+                    },
+                )
+            })
+            .collect();
+        AlignmentEvaluationSlice {
+            reference_units: self.reference_units,
+            aligned_units: self.aligned_units,
+            boundary_observations: self.boundary_errors.len(),
+            boundary_mean_absolute_error_frames: if self.boundary_errors.is_empty() {
+                0.0
+            } else {
+                self.boundary_errors.iter().sum::<f64>() / self.boundary_errors.len() as f64
+            },
+            boundary_tolerance_accuracy,
+            boundary_interval_coverage: if self.aligned_units == 0 {
+                0.0
+            } else {
+                self.covered_units as f64 / self.aligned_units as f64
+            },
+        }
+    }
 }
 
 pub fn evaluate_alignment(
@@ -2468,6 +2590,7 @@ pub fn evaluate_alignment(
         }
     }
     let word_tolerance = reference.annotator_tolerance_frames as f64;
+    let breakdowns = evaluation_breakdowns(artifact, reference, &selected, tolerances);
     AlignmentEvaluationReport {
         reference_id: reference.id.clone(),
         selected_path_error_rate: if reference.units.is_empty() {
@@ -2514,6 +2637,75 @@ pub fn evaluate_alignment(
         unaligned_reference_units: reference.units.len().saturating_sub(aligned),
         language_tag: reference.language_tag.clone(),
         variety: reference.variety.clone(),
+        breakdowns,
+    }
+}
+
+fn evaluation_breakdowns(
+    artifact: &PhoneAlignmentArtifact,
+    reference: &AlignmentEvaluationReference,
+    selected: &[&AlignedUnit],
+    tolerances: &[u64],
+) -> AlignmentEvaluationBreakdowns {
+    let mut language = BTreeMap::<String, AlignmentEvaluationSliceAccumulator>::new();
+    let mut variety = BTreeMap::<String, AlignmentEvaluationSliceAccumulator>::new();
+    let mut phone_class = BTreeMap::<String, AlignmentEvaluationSliceAccumulator>::new();
+    let mut evidence_source = BTreeMap::<String, AlignmentEvaluationSliceAccumulator>::new();
+    let mut backend = BTreeMap::<String, AlignmentEvaluationSliceAccumulator>::new();
+    let backend_key = format!(
+        "{}/{}/{}",
+        artifact.backend.provider, artifact.backend.model, artifact.backend.version
+    );
+    for (index, expected) in reference.units.iter().enumerate() {
+        let predicted = selected.get(index);
+        let language_key = expected
+            .language_tag
+            .as_deref()
+            .unwrap_or(&reference.language_tag);
+        let variety_key = expected.variety.as_deref().unwrap_or(&reference.variety);
+        let phone_class_key = expected.phone_class.as_deref().unwrap_or("unclassified");
+        let evidence_source_key = predicted
+            .map(|unit| timing_authority_name(unit.timing_authority))
+            .unwrap_or("unaligned");
+        for (groups, key) in [
+            (&mut language, language_key),
+            (&mut variety, variety_key),
+            (&mut phone_class, phone_class_key),
+            (&mut evidence_source, evidence_source_key),
+            (&mut backend, backend_key.as_str()),
+        ] {
+            groups
+                .entry(key.to_string())
+                .or_default()
+                .add(predicted, expected);
+        }
+    }
+    AlignmentEvaluationBreakdowns {
+        language: finish_evaluation_slices(language, tolerances),
+        variety: finish_evaluation_slices(variety, tolerances),
+        phone_class: finish_evaluation_slices(phone_class, tolerances),
+        evidence_source: finish_evaluation_slices(evidence_source, tolerances),
+        backend: finish_evaluation_slices(backend, tolerances),
+    }
+}
+
+fn finish_evaluation_slices(
+    accumulators: BTreeMap<String, AlignmentEvaluationSliceAccumulator>,
+    tolerances: &[u64],
+) -> BTreeMap<String, AlignmentEvaluationSlice> {
+    accumulators
+        .into_iter()
+        .map(|(key, accumulator)| (key, accumulator.finish(tolerances)))
+        .collect()
+}
+
+fn timing_authority_name(authority: TimingAuthority) -> &'static str {
+    match authority {
+        TimingAuthority::ForcedAlignment => "forced_alignment",
+        TimingAuthority::RecognitionDerived => "recognition_derived",
+        TimingAuthority::SynthesisKnown => "synthesis_known",
+        TimingAuthority::ImportedAnnotation => "imported_annotation",
+        TimingAuthority::ManualCorrection => "manual_correction",
     }
 }
 
@@ -2893,6 +3085,16 @@ mod tests {
                 .map(|unit| ReferenceAlignmentUnit {
                     symbol: unit.symbol.clone(),
                     interval: unit.interval.clone().unwrap(),
+                    language_tag: Some("en".into()),
+                    variety: Some("en-US".into()),
+                    phone_class: Some(
+                        if unit.symbol == "æ" {
+                            "vowel"
+                        } else {
+                            "consonant"
+                        }
+                        .into(),
+                    ),
                 })
                 .collect(),
             words: Vec::new(),
@@ -2904,6 +3106,17 @@ mod tests {
         assert_eq!(report.boundary_mean_absolute_error_frames, 0.0);
         assert_eq!(report.boundary_tolerance_accuracy[&5], 1.0);
         assert_eq!(report.boundary_interval_coverage, 1.0);
+        assert_eq!(report.breakdowns.language["en"].reference_units, 3);
+        assert_eq!(report.breakdowns.variety["en-US"].aligned_units, 3);
+        assert_eq!(report.breakdowns.phone_class["vowel"].reference_units, 1);
+        assert_eq!(
+            report.breakdowns.evidence_source["forced_alignment"].aligned_units,
+            3
+        );
+        assert_eq!(
+            report.breakdowns.backend["common-phone/fixture-ctc/1"].aligned_units,
+            3
+        );
     }
 
     #[test]
@@ -2967,6 +3180,30 @@ mod tests {
         assert!(artifact.selected_hypothesis_id.is_none());
         assert_eq!(artifact.diagnostics[0].code, "path.abstained");
         assert!(artifact.diagnostics[0].detail.contains("inventory"));
+    }
+
+    #[test]
+    fn unidentified_acoustic_model_degrades_readiness_and_conformance() {
+        let path = PronunciationPath {
+            id: "cat".into(),
+            lexical_source: "fixture".into(),
+            language_tag: "en".into(),
+            inventory_id: "fixture-ipa".into(),
+            prior_probability: 1.0,
+            units: vec![unit("k", "k"), unit("ae", "æ"), unit("t", "t")],
+        };
+        let mut posteriors = posterior(rows(7));
+        posteriors.model_checksum = None;
+        let artifact = PhoneAlignmentEngine
+            .align_ctc(&audio(120), &request(vec![path]), &posteriors)
+            .unwrap();
+        assert_eq!(artifact.readiness, AlignmentReadiness::Partial);
+        assert!(artifact.backend_model_checksum.is_none());
+        assert!(artifact
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "backend.model_checksum_unavailable"));
+        assert!(!check_alignment_conformance(&artifact).passed);
     }
 
     #[test]

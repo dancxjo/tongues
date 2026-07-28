@@ -69,7 +69,9 @@ pub struct CmudictLexicon {
 }
 
 pub const GENERATED_OVERRIDES: &str = "\
+alice's AE1 L AH0 S AH0 Z
 logorrhea L AO2 G ER0 IY1 AH0
+reflection R IH0 F L EH1 K SH AH0 N
 sansome S AE1 N S AH0 M
 talkativeness T AO1 K AH0 T IH0 V N AH0 S
 wordiness W ER1 D IY0 N AH0 S
@@ -135,7 +137,7 @@ mmm M
 ",
             "extras",
         );
-        lexicon.extend_from_str(GENERATED_OVERRIDES, "generated overrides");
+        lexicon.apply_overrides_from_str(GENERATED_OVERRIDES, "generated overrides");
         lexicon
     }
 
@@ -190,7 +192,7 @@ mmm M
 ",
                     "extras",
                 );
-                lexicon.extend_from_str(GENERATED_OVERRIDES, "generated overrides");
+                lexicon.apply_overrides_from_str(GENERATED_OVERRIDES, "generated overrides");
                 return Some(lexicon);
             }
         }
@@ -279,6 +281,24 @@ mmm M
             if !entry.candidates.contains(&phonemes) {
                 entry.candidates.push(phonemes);
             }
+        }
+    }
+
+    fn apply_overrides_from_str(&mut self, data: &str, source: &'static str) {
+        let mut overrides = Self {
+            entries: HashMap::new(),
+        };
+        overrides.extend_from_str(data, source);
+        for (word, override_entry) in overrides.entries {
+            let entry = self.entries.entry(word).or_insert_with(|| LexiconEntry {
+                candidates: Vec::new(),
+                source,
+            });
+            for candidate in override_entry.candidates.into_iter().rev() {
+                entry.candidates.retain(|existing| existing != &candidate);
+                entry.candidates.insert(0, candidate);
+            }
+            entry.source = source;
         }
     }
 }

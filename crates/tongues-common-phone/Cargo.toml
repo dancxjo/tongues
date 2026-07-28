@@ -13,6 +13,7 @@ indicatif = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tar = "0.4"
 tongues-core = { path = "../tongues-core" }
 tongues-audio = { path = "../tongues-audio" }

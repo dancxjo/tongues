@@ -231,6 +231,15 @@ pub struct PunctuationProfile {
     pub ambiguous_period_abbreviations: Vec<String>,
     #[serde(default)]
     pub sentence_starter_words_after_ambiguous_abbreviation: Vec<String>,
+    #[serde(default)]
+    pub ambiguous_period_spoken_forms: Vec<AmbiguousPeriodSpokenForm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbiguousPeriodSpokenForm {
+    pub abbreviation: String,
+    pub continuing_name_form: String,
+    pub other_form: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

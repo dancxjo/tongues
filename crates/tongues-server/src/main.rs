@@ -12117,11 +12117,10 @@ mod tests {
 
     #[test]
     fn duplex_projection_can_replay_a_saved_relative_journal() {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|path| path.parent())
-            .expect("repository root")
-            .to_path_buf();
+        let workspace_root =
+            std::env::temp_dir().join(format!("tongues-duplex-replay-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(workspace_root.join("runs"))
+            .expect("create isolated workspace runs directory");
         let generated = build_duplex_projection(
             &workspace_root,
             DuplexProjectionRequest {
@@ -12152,7 +12151,7 @@ mod tests {
 
         assert_eq!(generated.timeline, replayed.timeline);
         assert_eq!(generated.transcript_events, replayed.transcript_events);
-        std::fs::remove_file(full_path).expect("remove saved journal");
+        std::fs::remove_dir_all(workspace_root).expect("remove isolated replay workspace");
     }
 
     #[test]

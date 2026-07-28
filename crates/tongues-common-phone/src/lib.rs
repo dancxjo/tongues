@@ -23,6 +23,7 @@ use burn::tensor::{Int, Tensor, TensorData};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tongues_core::Vocab;
 use tongues_neural::{make_recorder, write_manifest, ModelArtifactManifest};
 
@@ -1048,6 +1049,7 @@ pub struct CommonPhoneLiveDecoder {
     phone_vocab: Vocab,
     phoneme_vocab: Vocab,
     feature_bundle_vocab: Vocab,
+    model_checksum: String,
 }
 
 impl CommonPhoneLiveDecoder {
@@ -1062,6 +1064,7 @@ impl CommonPhoneLiveDecoder {
         let model_config: ModelConfig = read_json(&model_dir.join("model_config.json"))?;
         let device = NdArrayDevice::Cpu;
         let model = load_model_cpu(&model_config, model_dir, &device)?;
+        let model_checksum = sha256_file(&model_dir.join("model.bin"))?;
         Ok(Self {
             task,
             model_dir: model_dir.to_path_buf(),
@@ -1070,6 +1073,7 @@ impl CommonPhoneLiveDecoder {
             phone_vocab,
             phoneme_vocab,
             feature_bundle_vocab,
+            model_checksum,
         })
     }
 
@@ -1210,7 +1214,7 @@ impl CommonPhoneLiveDecoder {
             blank_index: 0,
             symbols: self.phone_vocab.tokens.clone(),
             probabilities,
-            model_checksum: None,
+            model_checksum: Some(self.model_checksum.clone()),
         })
     }
 
@@ -2778,6 +2782,29 @@ fn write_text_atomic(path: &Path, text: impl AsRef<str>) -> Result<()> {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(serde_json::from_str(&text)?)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut reader = BufReader::new(
+        File::open(path).with_context(|| format!("opening {} for checksum", path.display()))?,
+    );
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .with_context(|| format!("reading {} for checksum", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let checksum = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("sha256:{checksum}"))
 }
 
 fn build_token_vocab<'a>(tokens: impl Iterator<Item = &'a String>) -> Vocab {

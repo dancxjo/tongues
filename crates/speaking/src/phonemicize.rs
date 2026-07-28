@@ -3578,7 +3578,7 @@ fn normalize_text_for_variety(text: &str, variety: &VarietyId) -> String {
 }
 
 fn apply_spoken_form_rewrites(text: &str, variety: &LinguisticVariety) -> String {
-    let mut out = text.to_string();
+    let mut out = apply_ambiguous_period_spoken_forms(text, variety);
     for rewrite in &variety.text_normalization.spoken_form_rewrites {
         if rewrite.from == "No." {
             continue;
@@ -3586,6 +3586,58 @@ fn apply_spoken_form_rewrites(text: &str, variety: &LinguisticVariety) -> String
         out = out.replace(&rewrite.from, &rewrite.to);
     }
     out
+}
+
+fn apply_ambiguous_period_spoken_forms(text: &str, variety: &LinguisticVariety) -> String {
+    let Some(profile) = variety.punctuation.as_ref() else {
+        return text.to_string();
+    };
+    if profile.ambiguous_period_spoken_forms.is_empty() {
+        return text.to_string();
+    }
+    let words = tokenize_words(text);
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut replacements = Vec::new();
+    for (word_index, word) in words.iter().enumerate() {
+        let Some(rewrite) = profile
+            .ambiguous_period_spoken_forms
+            .iter()
+            .find(|rewrite| rewrite.abbreviation == word.normalized)
+        else {
+            continue;
+        };
+        if chars.get(word.span.end_char) != Some(&'.') {
+            continue;
+        }
+        let next = words.get(word_index + 1);
+        let next_is_uppercase = next
+            .and_then(|word| word.text.chars().next())
+            .is_some_and(char::is_uppercase);
+        let next_is_sentence_starter = next.is_some_and(|word| {
+            profile
+                .sentence_starter_words_after_ambiguous_abbreviation
+                .contains(&word.normalized)
+        });
+        let continuing_name = next_is_uppercase && !next_is_sentence_starter;
+        let terminal = next.is_none() || (next_is_uppercase && next_is_sentence_starter);
+        let mut replacement = if continuing_name {
+            rewrite.continuing_name_form.clone()
+        } else {
+            rewrite.other_form.clone()
+        };
+        if terminal {
+            replacement.push('.');
+        }
+        replacements.push((word.span.start_char, word.span.end_char + 1, replacement));
+    }
+    if replacements.is_empty() {
+        return text.to_string();
+    }
+    let mut out = chars;
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        out.splice(start..end, replacement.chars());
+    }
+    out.into_iter().collect()
 }
 
 fn replace_number_abbreviation_from_variety_data(
@@ -5235,7 +5287,14 @@ mod tests {
                 "He lives on Sansome St. The house is blue.",
                 &VarietyId("en-US".into())
             ),
-            "He lives on Sansome St. The house is blue."
+            "He lives on Sansome Street. The house is blue."
+        );
+        assert_eq!(
+            spoken_form_for_variety(
+                "We visited St. Charles and stayed on Sansome St. in San Francisco.",
+                &VarietyId("en-US".into())
+            ),
+            "We visited Saint Charles and stayed on Sansome Street in San Francisco."
         );
     }
 
@@ -7463,7 +7522,7 @@ mod tests {
             output
                 .graphemes
                 .get(b.after_grapheme_index)
-                .is_some_and(|g| g.text == "St")
+                .is_some_and(|g| g.text == "Street")
         });
         assert!(
             st_boundary.is_some_and(|b| b.terminal.is_none()),
@@ -7480,7 +7539,7 @@ mod tests {
             output2
                 .graphemes
                 .get(b.after_grapheme_index)
-                .is_some_and(|g| g.text == "St")
+                .is_some_and(|g| g.text == "Street")
         });
         assert!(
             st_boundary2.is_some_and(|b| b.terminal == Some(TerminalPunctuation::Period)),
@@ -7494,11 +7553,11 @@ mod tests {
             output3
                 .graphemes
                 .get(b.after_grapheme_index)
-                .is_some_and(|g| g.text == "St")
+                .is_some_and(|g| g.text == "Saint")
         });
         assert!(
             st_boundary3.is_none() || st_boundary3.is_some_and(|b| b.terminal.is_none()),
-            "St. Charles should not have a terminal period after St."
+            "St. Charles should not have a terminal period after Saint"
         );
 
         let output4 = VarietyDataPhonemicizer
@@ -7508,7 +7567,7 @@ mod tests {
             output4
                 .graphemes
                 .get(b.after_grapheme_index)
-                .is_some_and(|g| g.text == "St")
+                .is_some_and(|g| g.text == "Street")
         });
         assert!(
             st_boundary4.is_some_and(|b| b.terminal == Some(TerminalPunctuation::Period)),

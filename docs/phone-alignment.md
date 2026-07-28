@@ -53,6 +53,9 @@ posterior shape and probability mass, sample rate, blank index, language,
 inventory, symbol vocabulary, and configured frame/state/total-lattice-cell
 limits. The cell-product limit bounds actual trellis memory even when each
 dimension is individually valid. Unsupported paths abstain.
+The resulting artifact carries the acoustic model checksum. Evidence without a
+checksum degrades to partial readiness and fails backend conformance rather
+than silently presenting an unidentified model as reproducible.
 No evenly divided fallback exists. `AlignmentCancellation` is checked between
 paths and at bounded trellis intervals so long inputs can stop without waiting
 for the whole matrix.
@@ -103,7 +106,12 @@ uncertainty, migrated points are tagged
 insertion/deletion/substitution counts, boundary mean absolute error, tolerance
 accuracy, supported-interval coverage, phone-presence and path-selection Brier
 scores, word boundary error/tolerance accuracy, unaligned reference units,
-language, and variety.
+language, and variety. Every report also includes metric slices by
+language/variety, explicitly annotated phone class, timing evidence authority,
+and backend provider/model/version. Reference units may override the
+case-level language and variety for code-switch evaluation; omitted phone
+classes remain visible under `unclassified` rather than being guessed from a
+symbol.
 
 ```text
 tongues phone-align ... \
@@ -119,9 +127,10 @@ and metrics without requiring a model download.
 
 `fixtures/phone-alignment/multilingual-synthetic-v1.json` is CC0-1.0 and
 contains reproducible English repeated-phone, Japanese no-whitespace, and
-Swahili/English code-switch cases. It is deliberately labeled synthetic: it is
-a contract/metric regression corpus, not evidence of natural-speech quality.
-Generate its per-language/per-variety report with one supported command:
+Swahili/English code-switch cases with explicit language, variety, and phone
+class annotations. It is deliberately labeled synthetic: it is a
+contract/metric regression corpus, not evidence of natural-speech quality.
+Generate its dimension-broken-out report with one supported command:
 
 ```text
 tongues phone-alignment-eval --out outputs/phone-alignment-evaluation.json

@@ -13,8 +13,9 @@ use std::collections::BTreeSet;
 use crate::ids::VarietyId;
 use crate::prosody::ProsodyProfile;
 use crate::variety::{
-    Language, LinguisticVariety, NumberName, NumberNormalizationProfile, PunctuationProfile,
-    QuestionContourProfile, ScaleName, TextNormalizationProfile, TextRewrite, UnitName,
+    AmbiguousPeriodSpokenForm, Language, LinguisticVariety, NumberName, NumberNormalizationProfile,
+    PunctuationProfile, QuestionContourProfile, ScaleName, TextNormalizationProfile, TextRewrite,
+    UnitName,
 };
 use isolang::Language as IsoLanguage;
 use langtag::LangTag;
@@ -138,6 +139,11 @@ pub fn english_punctuation_profile() -> PunctuationProfile {
             "there", "here", "but", "and", "then", "so", "if", "when", "as", "what", "who", "how",
             "why", "my", "your", "our", "their", "his", "her", "its",
         ]),
+        ambiguous_period_spoken_forms: vec![AmbiguousPeriodSpokenForm {
+            abbreviation: "st".into(),
+            continuing_name_form: "Saint".into(),
+            other_form: "Street".into(),
+        }],
     }
 }
 
@@ -154,6 +160,7 @@ pub fn french_punctuation_profile() -> PunctuationProfile {
             "elles", "ce", "cette", "ces", "mais", "et", "donc", "que", "qui", "quand", "pourquoi",
             "comment",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -170,6 +177,7 @@ pub fn spanish_punctuation_profile() -> PunctuationProfile {
             "ella", "nosotros", "ellos", "ellas", "este", "esta", "estos", "estas", "pero", "y",
             "entonces", "que", "qué", "cuando", "cuándo", "por", "quién", "quien", "cómo", "como",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -185,6 +193,7 @@ pub fn german_punctuation_profile() -> PunctuationProfile {
             "der", "die", "das", "ein", "eine", "ich", "du", "er", "sie", "es", "wir", "ihr",
             "aber", "und", "dann", "wenn", "was", "wer", "wie", "warum", "wo",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -197,6 +206,7 @@ pub fn esperanto_punctuation_profile() -> PunctuationProfile {
             "la", "mi", "vi", "li", "ŝi", "sxi", "ĝi", "gxi", "ni", "ili", "ĉu", "cxu", "kiu",
             "kio", "kie", "kiam", "kial", "kiel", "sed", "kaj",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -209,6 +219,7 @@ pub fn latin_punctuation_profile() -> PunctuationProfile {
             "hic", "haec", "hoc", "ille", "ego", "tu", "nos", "vos", "et", "sed", "aut", "quis",
             "quid", "cur", "ubi", "quando",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -242,6 +253,7 @@ pub fn greek_punctuation_profile() -> PunctuationProfile {
             "πώς",
             "πως",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
@@ -279,6 +291,7 @@ pub fn sanskrit_punctuation_profile() -> PunctuationProfile {
             "vā",
             "va",
         ]),
+        ambiguous_period_spoken_forms: Vec::new(),
     }
 }
 
