@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Require an unchanged lockfile
         run: cargo metadata --locked --format-version 1 > /dev/null
 
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.97.1
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       - name: Check RustSec advisories
