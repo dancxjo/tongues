@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
@@ -284,9 +284,51 @@ mmm M
 }
 
 static BUNDLED: OnceLock<CmudictLexicon> = OnceLock::new();
+static HOMOPHONES: OnceLock<HashMap<Vec<String>, Vec<String>>> = OnceLock::new();
 
 pub fn bundled() -> &'static CmudictLexicon {
     BUNDLED.get_or_init(CmudictLexicon::bundled)
+}
+
+/// Returns every bundled CMUdict spelling that shares a stress-normalized
+/// pronunciation with `word`. Results retain their own pronunciation source.
+pub fn homophones(word: &str) -> Vec<PronunciationEntry> {
+    let lexicon = bundled();
+    let source = lexicon.lookup_entry(word);
+    if source.status == PronunciationStatus::Missing {
+        return Vec::new();
+    }
+    let reverse = HOMOPHONES.get_or_init(|| {
+        let mut reverse = HashMap::<Vec<String>, Vec<String>>::new();
+        for (spelling, entry) in &lexicon.entries {
+            for candidate in &entry.candidates {
+                let key = candidate
+                    .iter()
+                    .map(|phoneme| phoneme.base.clone())
+                    .collect::<Vec<_>>();
+                reverse.entry(key).or_default().push(spelling.to_string());
+            }
+        }
+        for spellings in reverse.values_mut() {
+            spellings.sort();
+            spellings.dedup();
+        }
+        reverse
+    });
+    let mut spellings = BTreeSet::new();
+    for candidate in source.candidates {
+        let key = candidate
+            .iter()
+            .map(|phoneme| phoneme.base.clone())
+            .collect::<Vec<_>>();
+        if let Some(matches) = reverse.get(&key) {
+            spellings.extend(matches.iter().cloned());
+        }
+    }
+    spellings
+        .into_iter()
+        .map(|spelling| lexicon.lookup_entry(&spelling))
+        .collect()
 }
 
 pub fn normalize_for_lookup(word: &str) -> String {
@@ -321,6 +363,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Z", "AY", "L", "AH", "F", "OW", "N"]
         );
+    }
+
+    #[test]
+    fn homophones_find_other_spellings_without_a_corpus_vocabulary() {
+        let spellings = homophones("pair")
+            .into_iter()
+            .map(|entry| entry.lookup)
+            .collect::<BTreeSet<_>>();
+        assert!(spellings.contains("pair"));
+        assert!(spellings.contains("pear"));
     }
 
     #[test]

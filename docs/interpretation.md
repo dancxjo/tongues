@@ -106,11 +106,28 @@ Rows include utterance metadata, the acoustic feature path, transcript text,
 sentence spans, approximate frame spans, boundary labels, rendered
 phonemes/phones, and serialized phonemicizer output. Each row also includes
 `repair_examples`:
-deterministic synthetic mishears such as homophone substitutions and dropped
-middle words, paired with the corrected sentence and `<boundary:repair>`.
+bounded pronunciation-derived alternatives and optional deletion/insertion
+examples, paired with the corrected sentence and `<boundary:repair>`. Exact
+homophones come from normalized CMUdict or variety-phonemicizer sequences, not
+a spelling replacement table. Augmentation runs only after speaker/chapter
+groups are assigned to train, validation, and test. Every generated row records
+its split key, seed, candidate rank, relation, pronunciation source/variety,
+and shared acoustic-evidence identifier. The same input and seed reproduce the
+same bounded candidate set without consulting another split.
 Rows also include word-level supervision and deterministic masked-word cloze
 examples for predicting previous/current/next words and reconstructing a hidden
 word plus phonemes.
+
+Runtime interpretation builds an aligned spelling lattice for exact homophones,
+near-homophones, contractions, number forms, deletion, and insertion. Every
+candidate retains the ASR text/frame span and exact homophones point to one
+shared acoustic pronunciation claim. Calibrated acoustic, previous/current/next
+word, masked cloze, grammar, licensed lexical-frequency, and explicit-context
+scores remain separate in the serialized output before their weighted combined
+posterior is computed. Consequently a contextual winner is described as a word
+identity inference, never as the spelling recognized by acoustics. Close
+posteriors remain provisional and emit a clarification requirement instead of
+committing a spelling.
 
 Each sentence is also enriched with grammar parser output.
 `syntax` contains parser words, POS-like tags, typed link labels, linked word
@@ -207,7 +224,10 @@ Evaluation reports loss, CTC/frame token error rate, word error rate, seq-style
 token error rate, boundary F1, repair F1, phoneme token error rate, phone token
 error rate, and masked-audio reconstruction MSE. It also reports
 previous/current/next word accuracy, masked-word accuracy, and masked-word
-phoneme token error rate.
+phoneme token error rate. The homophone evaluator reports top-1/top-k accuracy,
+expected calibration error, oracle candidate recall, repair precision/recall,
+and separate acoustic-only, context-only, grammar-only, and combined
+contributions.
 
 ## Stream
 
@@ -222,5 +242,8 @@ JSON containing both `partial_transcript` from the streaming CTC-style transcrip
 head and `seq2seq_transcript` from the after-utterance head. It also emits final
 sentence events with attached phonemic supervision, repair events using the same
 `<boundary:repair>` semantics as `sentence-boundary`, and previous/current/next
-word predictions with phoneme-side predictions. Live microphone chunking can
-reuse the same `stream_from_samples` library path.
+word predictions with phoneme-side predictions. Its
+`homophone_hypotheses` artifact contains the aligned alternatives, component
+scores, posterior/decision, clarification message when needed, and the
+linguistic claim ledger. Live microphone chunking can reuse the same
+`stream_from_samples` library path.

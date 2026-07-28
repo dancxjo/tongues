@@ -6,6 +6,10 @@
 //! style greedy collapse. Word-context and masked-word heads use Burn's native
 //! CTC loss over compact target sequences.
 
+pub mod homophones;
+
+pub use homophones::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -161,6 +165,10 @@ pub struct InterpretationConfig {
     pub max_wiktionary_audio: Option<usize>,
     #[serde(default)]
     pub download_wiktionary_audio: bool,
+    /// Reproducible, bounded confusable-word augmentation applied separately
+    /// after train/validation/test groups are assigned.
+    #[serde(default)]
+    pub homophone_augmentation: HomophoneAugmentationConfig,
 }
 
 impl Default for InterpretationConfig {
@@ -183,6 +191,7 @@ impl Default for InterpretationConfig {
             wiktionary_audio_data_dir: Some(DEFAULT_WIKTIONARY_AUDIO_DATA_DIR.to_string()),
             max_wiktionary_audio: Some(DEFAULT_MAX_WIKTIONARY_AUDIO),
             download_wiktionary_audio: true,
+            homophone_augmentation: HomophoneAugmentationConfig::default(),
         }
     }
 }
@@ -661,6 +670,8 @@ pub struct RepairSupervision {
     pub end_frame: usize,
     pub repair_label: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homophone_provenance: Option<HomophoneAugmentationProvenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -707,6 +718,8 @@ pub struct EvalReport {
     pub next_word_accuracy: f32,
     pub masked_word_accuracy: f32,
     pub masked_word_phoneme_token_error_rate: f32,
+    #[serde(default)]
+    pub homophone: HomophoneEvaluationReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -964,7 +977,9 @@ fn prepare_dataset_inner(
                 transcript
             };
             let sentences = sentence_supervision(&detector, &transcript, frames, config)?;
-            let repair_examples = repair_supervision(&sentences);
+            // Split-scoped confusable augmentation is applied only after
+            // speaker/chapter groups have been assigned.
+            let repair_examples = Vec::new();
             let word_supervision = word_supervision(&sentences);
             let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
             let row = LibriSpeechUtterance {
@@ -1042,8 +1057,52 @@ fn prepare_dataset_inner(
         !rows.is_empty(),
         "no usable utterances remained after transcript preparation"
     );
-    let (train, valid, test) =
+    let (mut train, mut valid, mut test) =
         split_rows_by_group(rows, config.train_frac, config.valid_frac, config.seed);
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Generating split-scoped confusable repairs for {} train rows",
+            format_count(train.len())
+        ),
+    });
+    augment_repairs_for_split(&mut train, "train", config)?;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Generated {} train repairs; generating validation repairs for {} rows",
+            format_count(
+                train
+                    .iter()
+                    .map(|row| row.repair_examples.len())
+                    .sum::<usize>()
+            ),
+            format_count(valid.len())
+        ),
+    });
+    augment_repairs_for_split(&mut valid, "valid", config)?;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Generated {} validation repairs; generating test repairs for {} rows",
+            format_count(
+                valid
+                    .iter()
+                    .map(|row| row.repair_examples.len())
+                    .sum::<usize>()
+            ),
+            format_count(test.len())
+        ),
+    });
+    augment_repairs_for_split(&mut test, "test", config)?;
+    progress(PrepareProgress::Stage {
+        message: format!(
+            "Generated {} test repairs; writing split JSONL files to {}",
+            format_count(
+                test.iter()
+                    .map(|row| row.repair_examples.len())
+                    .sum::<usize>()
+            ),
+            out.display()
+        ),
+    });
     let n = train.len() + valid.len() + test.len();
     write_prepare_state(out, "writing", config, n, None)?;
     write_jsonl_atomic(&out.join("train.jsonl"), &train, progress)?;
@@ -1115,7 +1174,7 @@ fn enrich_row_supervision(
     config: &InterpretationConfig,
 ) -> Result<()> {
     row.sentences = sentence_supervision(detector, &row.transcript, row.num_frames, config)?;
-    row.repair_examples = repair_supervision(&row.sentences);
+    row.repair_examples.clear();
     row.word_supervision = word_supervision(&row.sentences);
     row.masked_word_examples = masked_word_examples(&row.word_supervision, &row.transcript);
     Ok(())
@@ -1171,7 +1230,8 @@ fn process_librispeech_item_without_refiner(
         transcript
     };
     let sentences = sentence_supervision(detector, &transcript, frames, config)?;
-    let repair_examples = repair_supervision(&sentences);
+    // Split-scoped confusable augmentation is applied after group assignment.
+    let repair_examples = Vec::new();
     let word_supervision = word_supervision(&sentences);
     let masked_word_examples = masked_word_examples(&word_supervision, &transcript);
     Ok(PreparedLibriSpeechRow {
@@ -2459,57 +2519,104 @@ fn phone_training_symbol(id: &speaking::PhoneId) -> Option<&str> {
 }
 
 fn repair_supervision(sentences: &[SentenceSupervision]) -> Vec<RepairSupervision> {
+    let words = sentences
+        .iter()
+        .flat_map(|sentence| {
+            sentence
+                .text
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let Ok(index) = ConfusablePronunciationIndex::from_words(words, "en-US") else {
+        return Vec::new();
+    };
+    let config = HomophoneAugmentationConfig {
+        max_candidates_per_sentence: 1,
+        ..HomophoneAugmentationConfig::default()
+    };
+    repair_supervision_with_index(sentences, "unsplit", "sentence", &index, &config)
+}
+
+fn augment_repairs_for_split(
+    rows: &mut [LibriSpeechUtterance],
+    split_key: &str,
+    config: &InterpretationConfig,
+) -> Result<()> {
+    let words = rows
+        .iter()
+        .flat_map(|row| {
+            row.transcript
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut index = ConfusablePronunciationIndex::from_words(words, &config.variety)?;
+    index.extend_resource_entries(
+        rows.iter()
+            .filter(|row| row.speaker_id == "wiktionary")
+            .flat_map(|row| {
+                row.sentences.iter().filter_map(|sentence| {
+                    let pronunciation = if sentence.phones.trim().is_empty() {
+                        &sentence.phonemes
+                    } else {
+                        &sentence.phones
+                    };
+                    let candidate = pronunciation
+                        .split_whitespace()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    (!candidate.is_empty()).then(|| PronunciationResourceEntry {
+                        spelling: sentence.text.clone(),
+                        candidates: vec![candidate],
+                        resource: "prepared-wiktionary".to_string(),
+                        variety: row.chapter_id.clone(),
+                    })
+                })
+            }),
+    );
+    for row in rows {
+        row.repair_examples = repair_supervision_with_index(
+            &row.sentences,
+            split_key,
+            &row.utterance_id,
+            &index,
+            &HomophoneAugmentationConfig {
+                seed: config.homophone_augmentation.seed ^ config.seed,
+                ..config.homophone_augmentation.clone()
+            },
+        );
+    }
+    Ok(())
+}
+
+fn repair_supervision_with_index(
+    sentences: &[SentenceSupervision],
+    split_key: &str,
+    utterance_id: &str,
+    index: &ConfusablePronunciationIndex,
+    config: &HomophoneAugmentationConfig,
+) -> Vec<RepairSupervision> {
     let mut repairs = Vec::new();
-    for sentence in sentences {
-        if let Some(misheard) = mishear_sentence(&sentence.text) {
+    for (sentence_index, sentence) in sentences.iter().enumerate() {
+        let sentence_id = format!("{utterance_id}:sentence-{sentence_index}");
+        for augmented in augment_sentence(&sentence_id, &sentence.text, split_key, index, config) {
             repairs.push(RepairSupervision {
-                misheard_text: misheard,
+                misheard_text: augmented.text,
                 corrected_text: sentence.text.clone(),
                 start_char: sentence.start_char,
                 end_char: sentence.end_char,
                 start_frame: sentence.start_frame,
                 end_frame: sentence.end_frame,
                 repair_label: BOUNDARY_REPAIR.to_string(),
-                source: "synthetic-mishear".to_string(),
+                source: "pronunciation-derived-confusable-augmentation".to_string(),
+                homophone_provenance: Some(augmented.provenance),
             });
         }
     }
     repairs
-}
-
-fn mishear_sentence(text: &str) -> Option<String> {
-    const SUBSTITUTIONS: &[(&str, &str)] = &[
-        (" TO ", " TWO "),
-        (" TWO ", " TO "),
-        (" FOR ", " FOUR "),
-        (" FOUR ", " FOR "),
-        (" THERE ", " THEIR "),
-        (" THEIR ", " THERE "),
-        (" YOUR ", " YOU'RE "),
-        (" YOU'RE ", " YOUR "),
-        (" ITS ", " IT'S "),
-        (" IT'S ", " ITS "),
-        (" NO ", " KNOW "),
-        (" KNOW ", " NO "),
-        (" RIGHT ", " WRITE "),
-        (" WRITE ", " RIGHT "),
-        (" HEAR ", " HERE "),
-        (" HERE ", " HEAR "),
-    ];
-    let padded = format!(" {text} ");
-    for (from, to) in SUBSTITUTIONS {
-        if padded.contains(from) {
-            return Some(padded.replacen(from, to, 1).trim().to_string());
-        }
-    }
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    if words.len() >= 4 {
-        let mut edited = words;
-        let index = edited.len() / 2;
-        edited.remove(index);
-        return Some(edited.join(" "));
-    }
-    None
 }
 
 fn word_supervision(sentences: &[SentenceSupervision]) -> Vec<WordSupervision> {
@@ -4965,12 +5072,25 @@ pub fn evaluate<B: Backend>(
             next_word_accuracy: 0.0,
             masked_word_accuracy: 0.0,
             masked_word_phoneme_token_error_rate: 0.0,
+            homophone: HomophoneEvaluationReport::default(),
         });
     }
     let mut total_loss = 0.0;
     let mut batches = 0usize;
     let mut stats = EvalSampleStats::default();
     let mut audio_mse_total = 0.0f32;
+    let eval_variety = fs::read_to_string(data_dir.join("dataset_config.json"))
+        .ok()
+        .and_then(|json| serde_json::from_str::<InterpretationConfig>(&json).ok())
+        .map(|config| config.variety)
+        .unwrap_or_else(|| "en-US".to_string());
+    let homophone_index = ConfusablePronunciationIndex::from_words(
+        eval_rows
+            .iter()
+            .flat_map(|row| row.transcript.split_whitespace().map(str::to_string)),
+        &eval_variety,
+    )?;
+    let mut homophone_cases = Vec::new();
     for chunk in eval_rows.chunks(config.batch_size.max(1)) {
         let batch = make_batch::<B>(
             data_dir,
@@ -5127,6 +5247,83 @@ pub fn evaluate<B: Backend>(
                 acc
             });
         stats.merge(chunk_stats);
+        for (row_index, row) in chunk.iter().enumerate() {
+            let mut context = HomophoneContextScores::default();
+            if let Some(word) = last_decoded_word(&prev_word_preds[row_index], word_vocab) {
+                context.previous_word_head.insert(word, 1.0);
+            }
+            if let Some(word) = last_decoded_word(&current_word_preds[row_index], word_vocab) {
+                context.current_word_head.insert(word, 1.0);
+            }
+            if let Some(word) = last_decoded_word(&next_word_preds[row_index], word_vocab) {
+                context.next_word_head.insert(word, 1.0);
+            }
+            if let Some(word) = last_decoded_word(&masked_word_preds[row_index], word_vocab) {
+                context.masked_cloze.insert(word, 1.0);
+            }
+            for (repair_index, repair) in row.repair_examples.iter().enumerate() {
+                let Some(provenance) = &repair.homophone_provenance else {
+                    continue;
+                };
+                let (Some(expected), Some(original)) =
+                    (&provenance.source_word, &provenance.candidate_word)
+                else {
+                    continue;
+                };
+                let observations = word_spans(&repair.misheard_text)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(word_index, (start_char, end_char, word))| {
+                        let start_frame = char_to_frame(
+                            start_char,
+                            repair.misheard_text.len().max(1),
+                            repair.end_frame.saturating_sub(repair.start_frame),
+                        ) + repair.start_frame;
+                        let end_frame = char_to_frame(
+                            end_char,
+                            repair.misheard_text.len().max(1),
+                            repair.end_frame.saturating_sub(repair.start_frame),
+                        )
+                        .max(start_frame + 1)
+                        .min(repair.end_frame.max(start_frame + 1));
+                        AlignedWordObservation {
+                            word,
+                            word_index,
+                            start_char,
+                            end_char,
+                            start_frame,
+                            end_frame,
+                            acoustic_evidence_id: provenance.acoustic_evidence_id.clone(),
+                            observed_phonemes: Vec::new(),
+                            lattice_alternatives: Vec::new(),
+                            acoustic_score: 0.5,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let lattice = rank_homophone_hypotheses(
+                    &format!("{}:repair-{repair_index}", row.utterance_id),
+                    &repair.misheard_text,
+                    &observations,
+                    &homophone_index,
+                    &context,
+                    &HomophoneHypothesisConfig::default(),
+                )?;
+                if let Some(alternatives) = lattice.alternatives.into_iter().find(|alternatives| {
+                    alternatives
+                        .iter()
+                        .any(|candidate| candidate.spelling == *expected)
+                        && alternatives
+                            .iter()
+                            .any(|candidate| candidate.spelling == *original)
+                }) {
+                    homophone_cases.push(HomophoneEvaluationCase {
+                        expected: expected.clone(),
+                        original: original.clone(),
+                        alternatives,
+                    });
+                }
+            }
+        }
     }
     let precision =
         stats.boundary_tp as f32 / (stats.boundary_tp + stats.boundary_fp).max(1) as f32;
@@ -5161,6 +5358,7 @@ pub fn evaluate<B: Backend>(
             / stats.masked_word_total.max(1) as f32,
         masked_word_phoneme_token_error_rate: stats.masked_phoneme_errors as f32
             / stats.masked_phoneme_total.max(1) as f32,
+        homophone: evaluate_homophone_cases(&homophone_cases, 3),
     })
 }
 
@@ -5281,6 +5479,7 @@ pub fn stream_from_samples<B: Backend>(
     let prev_word_ids = argmax_ids(output.prev_word_logits);
     let current_word_ids = argmax_ids(output.current_word_logits);
     let next_word_ids = argmax_ids(output.next_word_logits);
+    let masked_word_ids = argmax_ids(output.masked_word_logits);
     let phoneme_ids = argmax_ids(output.phoneme_logits);
     let phonemes = phoneme_ids
         .first()
@@ -5289,13 +5488,80 @@ pub fn stream_from_samples<B: Backend>(
     let detector = SentenceDetectorDialog::new()?;
     let sentences = sentence_supervision(&detector, &partial, features.len(), config)?;
     let repair_events = repair_supervision(&sentences);
+    let mut homophone_context = HomophoneContextScores::default();
+    if let Some(word) = prev_word_ids
+        .first()
+        .and_then(|ids| last_decoded_word(ids, word_vocab))
+    {
+        homophone_context.previous_word_head.insert(word, 1.0);
+    }
+    if let Some(word) = current_word_ids
+        .first()
+        .and_then(|ids| last_decoded_word(ids, word_vocab))
+    {
+        homophone_context.current_word_head.insert(word, 1.0);
+    }
+    if let Some(word) = next_word_ids
+        .first()
+        .and_then(|ids| last_decoded_word(ids, word_vocab))
+    {
+        homophone_context.next_word_head.insert(word, 1.0);
+    }
+    if let Some(word) = masked_word_ids
+        .first()
+        .and_then(|ids| last_decoded_word(ids, word_vocab))
+    {
+        homophone_context.masked_cloze.insert(word, 1.0);
+    }
+    let runtime_words = partial
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let homophone_index = ConfusablePronunciationIndex::from_words(runtime_words, &config.variety)?;
+    let aligned_words = word_spans(&partial)
+        .into_iter()
+        .enumerate()
+        .map(
+            |(word_index, (start_char, end_char, word))| AlignedWordObservation {
+                word,
+                word_index,
+                start_char,
+                end_char,
+                start_frame: char_to_frame(start_char, partial.len().max(1), features.len()),
+                end_frame: char_to_frame(end_char, partial.len().max(1), features.len())
+                    .max(char_to_frame(start_char, partial.len().max(1), features.len()) + 1)
+                    .min(features.len()),
+                acoustic_evidence_id: format!(
+                    "interpretation-recognition:frames-{}-{}",
+                    char_to_frame(start_char, partial.len().max(1), features.len()),
+                    char_to_frame(end_char, partial.len().max(1), features.len())
+                        .max(char_to_frame(start_char, partial.len().max(1), features.len()) + 1)
+                        .min(features.len())
+                ),
+                observed_phonemes: Vec::new(),
+                lattice_alternatives: Vec::new(),
+                // The current model exposes frame logits rather than calibrated
+                // word posteriors. This neutral value keeps that limitation
+                // explicit while preserving the aligned acoustic evidence.
+                acoustic_score: 0.5,
+            },
+        )
+        .collect::<Vec<_>>();
+    let homophone_hypotheses = rank_homophone_hypotheses(
+        "interpretation-recognition",
+        &partial,
+        &aligned_words,
+        &homophone_index,
+        &homophone_context,
+        &HomophoneHypothesisConfig::default(),
+    )?;
     let segment_id = speaking::SegmentId("interpretation-recognition".into());
     let mut events = Vec::new();
     if !partial.is_empty() {
         events.push(speaking::StreamEvent::PartialHypothesis {
             role: speaking::TextRole::Recognition,
             segment_id: segment_id.clone(),
-            text: partial,
+            text: partial.clone(),
             confidence: None,
         });
     }
@@ -5317,6 +5583,7 @@ pub fn stream_from_samples<B: Backend>(
             "seq2seq_transcript": seq2seq_transcript,
             "sentence_supervision": sentences,
             "repair_events": repair_events,
+            "homophone_hypotheses": homophone_hypotheses,
             "previous_word": word_prediction(prev_word_ids.first(), word_vocab, phonemes.clone()),
             "current_word": word_prediction(current_word_ids.first(), word_vocab, phonemes.clone()),
             "next_word": word_prediction(next_word_ids.first(), word_vocab, phonemes),
@@ -5640,6 +5907,37 @@ mod tests {
         assert_eq!(repairs[0].repair_label, BOUNDARY_REPAIR);
         assert_ne!(repairs[0].misheard_text, repairs[0].corrected_text);
         assert_eq!(repairs[0].corrected_text, "I WENT TO TOWN.");
+    }
+
+    #[test]
+    fn prepared_repairs_are_reproducible_and_carry_the_assigned_split() {
+        let cfg = InterpretationConfig::default();
+        let detector = SentenceDetectorDialog::new().unwrap();
+        let mut train_row = test_utterance("train-u", "features/train.mel.bin", 100);
+        train_row.transcript = "I WENT TO TOWN.".into();
+        train_row.sentences =
+            sentence_supervision(&detector, &train_row.transcript, 100, &cfg).unwrap();
+        let mut first = vec![train_row.clone()];
+        let mut second = vec![train_row];
+        augment_repairs_for_split(&mut first, "train", &cfg).unwrap();
+        augment_repairs_for_split(&mut second, "train", &cfg).unwrap();
+        assert_eq!(first, second);
+        assert!(!first[0].repair_examples.is_empty());
+        assert!(first[0].repair_examples.iter().all(|repair| {
+            repair
+                .homophone_provenance
+                .as_ref()
+                .is_some_and(|provenance| provenance.split_key == "train")
+        }));
+
+        let mut validation = first.clone();
+        augment_repairs_for_split(&mut validation, "valid", &cfg).unwrap();
+        assert!(validation[0].repair_examples.iter().all(|repair| {
+            repair
+                .homophone_provenance
+                .as_ref()
+                .is_some_and(|provenance| provenance.split_key == "valid")
+        }));
     }
 
     #[test]
