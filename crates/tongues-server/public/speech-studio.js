@@ -17,6 +17,8 @@
         audioInputCapabilities: null,
         languageRoutingCapabilities: null,
         audioUrl: null,
+        speechRun: null,
+        restoringSpeechSelection: false,
         runtimeTimer: null,
         runtimePollController: null,
         runtimePollGeneration: 0,
@@ -713,6 +715,8 @@
                             </div>
                             <a id="speech-download" class="secondary-button"
                                 download="tongues-speech.wav">Download WAV</a>
+                            <a id="speech-run-link" class="secondary-button hidden"
+                                href="/speech">Permanent run link</a>
                         </div>
                         <audio id="audio-player" controls></audio>
                         <dl id="speech-result-metadata" class="metadata-grid"></dl>
@@ -1112,13 +1116,68 @@
     }
 
     function navigateWorkflow(workflow) {
-        const destination = WORKFLOWS[workflow]?.path || WORKFLOWS.speak.path;
-        if (browser?.history && browser.location?.pathname !== destination) {
+        const path = WORKFLOWS[workflow]?.path || WORKFLOWS.speak.path;
+        const current = speechSelectionFromLocation();
+        const query = new URLSearchParams();
+        if (current.recipeId) query.set('recipe', current.recipeId);
+        if (current.compositionId) query.set('composition', current.compositionId);
+        if (current.modelId) query.set('model', current.modelId);
+        if (current.runId) query.set('run', current.runId);
+        const destination = `${path}${query.size ? `?${query}` : ''}`;
+        if (
+            browser?.history
+            && `${browser.location?.pathname}${browser.location?.search}` !== destination
+        ) {
             browser.history.pushState({}, '', destination);
             browser.dispatchEvent(new PopStateEvent('popstate'));
         } else {
-            setWorkflow(destination, { focus: true });
+            setWorkflow(path, { focus: true });
         }
+    }
+
+    function speechSelectionFromLocation(locationLike = browser?.location) {
+        const params = new URLSearchParams(locationLike?.search || '');
+        return {
+            runId: params.get('run') || '',
+            recipeId: params.get('recipe') || '',
+            compositionId: params.get('composition') || '',
+            modelId: params.get('model') || '',
+        };
+    }
+
+    function syncSpeechSelectionUrl({ runId = '' } = {}) {
+        if (!browser?.history || !browser.location) return '';
+        const url = new URL(browser.location.href);
+        const path = selectedPath();
+        if (state.presetId) url.searchParams.set('recipe', state.presetId);
+        else url.searchParams.delete('recipe');
+        if (state.pathKey) url.searchParams.set('composition', state.pathKey);
+        else url.searchParams.delete('composition');
+        if (path?.model) url.searchParams.set('model', path.model);
+        else url.searchParams.delete('model');
+        if (runId) {
+            state.speechRun = {
+                id: runId,
+                compositionId: state.pathKey,
+                recipeId: state.presetId,
+            };
+        }
+        const matchingRun = state.speechRun
+            && state.speechRun.compositionId === state.pathKey
+            && state.speechRun.recipeId === state.presetId
+            ? state.speechRun.id
+            : '';
+        if (matchingRun) url.searchParams.set('run', matchingRun);
+        else url.searchParams.delete('run');
+        const destination = `${url.pathname}${url.search}`;
+        browser.history.replaceState({ workflow: state.workflow }, '', destination);
+        return destination;
+    }
+
+    function markSpeechSelectionChanged() {
+        state.speechRun = null;
+        byId('speech-run-link')?.classList.add('hidden');
+        syncSpeechSelectionUrl();
     }
 
     function loadUserRecipes() {
@@ -1342,6 +1401,7 @@
         input.addEventListener('input', () => {
             setStoredValue(control.field, control.kind === 'boolean' ? input.checked : input.value);
             syncBlendControls();
+            markSpeechSelectionChanged();
         });
         const help = document.createElement('small');
         help.textContent = [control.help, control.unit ? `Unit: ${control.unit}.` : '']
@@ -2251,6 +2311,7 @@
             clearError(byId('compose-error'));
         }
         renderCompareCandidates();
+        if (!state.restoringSpeechSelection) syncSpeechSelectionUrl();
     }
 
     function catalogFamily(item) {
@@ -2666,9 +2727,13 @@
     function renderResult(metadata, url) {
         byId('audio-player').src = url;
         const download = byId('speech-download');
-        download.href = url;
+        download.href = metadata.audio_url || url;
         download.download = `tongues-${metadata.backend || 'speech'}.wav`;
+        const runLink = byId('speech-run-link');
+        runLink.classList.toggle('hidden', !metadata.run_url);
+        if (metadata.run_url) runLink.href = metadata.run_url;
         const fields = [
+            ['Run', metadata.run_id],
             ['Pipeline', metadata.pipeline_id || metadata.path],
             ['Backend', metadata.backend],
             ['Projector', metadata.projector],
@@ -2686,6 +2751,10 @@
             ['Synthesis', `${Number(metadata.synthesis_ms || 0).toFixed(2)} ms`],
             ['Real-time factor', Number(metadata.real_time_factor || 0).toFixed(3)],
             ['Resident model', metadata.resident_model_reused ? 'Reused' : 'Loaded for this request'],
+            ['Input retention', metadata.text_retained === false ? 'Input text not retained' : null],
+            ['Content diagnostics', metadata.content_detail_retained === false
+                ? 'Content-derived details not retained'
+                : null],
         ].filter(([, value]) => value != null && value !== '');
         byId('speech-result-metadata').replaceChildren(
             ...fields.map(([label, value]) => metadataItem(label, value)),
@@ -3337,6 +3406,8 @@
 
     async function synthesisPayload(path, values, context) {
         const payload = buildPayload(path, values, context);
+        payload.recipe_id = state.presetId || null;
+        payload.composition_id = state.pathKey || null;
         const tokenFields = ['pitch', 'energy', 'durations']
             .filter((field) => Array.isArray(payload[field]));
         let projection = null;
@@ -3363,6 +3434,85 @@
             }
         }
         return { payload, projection };
+    }
+
+    async function restoreSpeechSelectionFromLocation() {
+        const requested = speechSelectionFromLocation();
+        if (!requested.runId && !requested.compositionId && !requested.recipeId) return false;
+        let record = null;
+        if (requested.runId) {
+            const response = await fetch(`/api/speech/runs/${encodeURIComponent(requested.runId)}`, {
+                cache: 'no-store',
+            });
+            if (!response.ok) throw new Error(await response.text());
+            record = await response.json();
+        }
+        const selection = record?.selection || {};
+        const modelId = requested.modelId
+            || selection.model
+            || selection.pipeline?.end_to_end
+            || selection.pipeline?.acoustic_model
+            || '';
+        const compositionId = record?.composition_id || requested.compositionId;
+        if (
+            modelId
+            && !(state.discovery?.compositions || []).some(
+                (composition) => composition.id === compositionId,
+            )
+        ) {
+            const targeted = await fetchDiscoveryPage(0, 32, { model_ids: modelId });
+            state.discovery = mergeInventoryDiscovery(state.discovery, targeted);
+        }
+        const composition = (state.discovery?.compositions || []).find(
+            (candidate) => candidate.id === compositionId,
+        ) || (state.discovery?.compositions || []).find(
+            (candidate) => candidate.backend === selection.backend && candidate.model === selection.model,
+        );
+        if (!composition) {
+            throw new Error(`Saved speech composition ${compositionId || modelId} is unavailable.`);
+        }
+        state.pathKey = composition.id;
+        state.presetId = record?.recipe_id || requested.recipeId;
+        const path = pathForComposition(composition);
+        const controls = Object.fromEntries(
+            (path.controls || [])
+                .filter((control) => selection[control.field] != null)
+                .map((control) => [control.field, selection[control.field]]),
+        );
+        restoreRecipeValues(state.values, path, {
+            controls,
+            variety: selection.variety,
+            speaker: selection.speaker,
+        });
+        renderSpeechSamples();
+        renderPathSelector();
+        renderSelectedPath();
+        if (record) {
+            state.speechRun = {
+                id: record.run_id,
+                compositionId: composition.id,
+                recipeId: record.recipe_id || requested.recipeId,
+            };
+            const metadata = {
+                ...record.metadata,
+                run_id: record.run_id,
+                run_url: record.speech_url,
+                audio_url: record.audio_url,
+                recipe_id: record.recipe_id,
+                composition_id: record.composition_id,
+                text_retained: record.text_retained,
+                content_detail_retained: record.content_detail_retained,
+            };
+            renderResult(metadata, record.audio_url);
+            byId('speech-result-state').dataset.state = 'ready';
+            byId('speech-result-state').textContent = 'Completed';
+            byId('speech-submit-status').textContent = (
+                `Restored speech run ${record.run_id}; input text was not retained.`
+            );
+        }
+        state.restoringSpeechSelection = false;
+        syncSpeechSelectionUrl({ runId: record?.run_id || '' });
+        return true;
     }
 
     async function requestSynthesis(path, values, context, options = {}) {
@@ -4548,6 +4698,12 @@
         if (!page) return;
         page.innerHTML = studioShell();
         loadUserRecipes();
+        const requestedSpeechSelection = speechSelectionFromLocation();
+        state.restoringSpeechSelection = Boolean(
+            requestedSpeechSelection.runId
+            || requestedSpeechSelection.recipeId
+            || requestedSpeechSelection.compositionId
+        );
         document.querySelectorAll('[data-studio-route]').forEach((link) => {
             link.addEventListener('click', (event) => {
                 event.preventDefault();
@@ -4570,6 +4726,14 @@
             submit.disabled = true;
             byId('speech-runtime-state').dataset.state = 'failed';
             byId('speech-runtime-state').textContent = 'failed';
+        }
+        if (state.restoringSpeechSelection) {
+            try {
+                await restoreSpeechSelectionFromLocation();
+            } catch (error) {
+                state.restoringSpeechSelection = false;
+                showError(`Saved speech selection could not be restored: ${error.message}`);
+            }
         }
         const linkedDuplexRequest = duplexRequestFromLocation(browser?.location);
         if (linkedDuplexRequest) {
@@ -4640,6 +4804,7 @@
             renderSelectedPath();
         });
         byId('speech-language').addEventListener('change', (event) => {
+            markSpeechSelectionChanged();
             const language = event.target.value;
             const current = selectedComposition();
             const candidates = availableCompositions(state.discovery).filter((composition) => (
@@ -4664,8 +4829,12 @@
                 (candidate) => candidate.code === byId('speech-language').value,
             );
             const text = language?.texts?.[Number(event.target.value)];
-            if (text) byId('text').value = text;
+            if (text) {
+                byId('text').value = text;
+                markSpeechSelectionChanged();
+            }
         });
+        byId('text').addEventListener('input', markSpeechSelectionChanged);
         byId('live-recipe').addEventListener('change', (event) => {
             byId('speech-preset').value = event.target.value;
             byId('speech-preset').dispatchEvent(new Event('change'));
@@ -4763,10 +4932,12 @@
         byId('variety').addEventListener('change', (event) => {
             const path = selectedPath();
             if (path) state.values.set(`variety:${path.id}`, event.target.value);
+            markSpeechSelectionChanged();
         });
         byId('speaker').addEventListener('input', (event) => {
             const path = selectedPath();
             if (path) state.values.set(`speaker:${path.id}`, event.target.value);
+            markSpeechSelectionChanged();
         });
         byId('select-mock-path').addEventListener('click', () => {
             const mock = state.discovery.compositions.find((path) => path.backend === 'mock');
@@ -5003,6 +5174,9 @@
                 if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
                 state.audioUrl = result.url;
                 renderResult(result.metadata, state.audioUrl);
+                syncSpeechSelectionUrl({
+                    runId: result.metadata.run_id,
+                });
                 byId('speech-result-state').dataset.state = 'ready';
                 byId('speech-result-state').textContent = 'Completed';
                 byId('speech-submit-status').textContent = 'Speech synthesis complete.';
@@ -5074,6 +5248,7 @@
         SPEECH_SAMPLES,
         setWorkflow,
         speechInstructionForPath,
+        speechSelectionFromLocation,
         studioShell,
         liveProviderMessages,
         updateLiveAssistant,

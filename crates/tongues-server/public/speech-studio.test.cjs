@@ -886,6 +886,23 @@ test('recipes persist controls and navigation carries current state between work
     assert.match(studioSource, /open-pipeline-in-speak/);
 });
 
+test('recipe and generated speech URLs restore backend-owned selection and durable audio', () => {
+    assert.deepEqual(studio.speechSelectionFromLocation({
+        search: '?recipe=preset%2Fmock&composition=composition%2Fmock&model=deterministic&run=speak-1',
+    }), {
+        recipeId: 'preset/mock',
+        compositionId: 'composition/mock',
+        modelId: 'deterministic',
+        runId: 'speak-1',
+    });
+    assert.match(studioSource, /payload\.recipe_id = state\.presetId/);
+    assert.match(studioSource, /payload\.composition_id = state\.pathKey/);
+    assert.match(studioSource, /\/api\/speech\/runs\/\$\{encodeURIComponent\(requested\.runId\)\}/);
+    assert.match(studioSource, /metadata\.audio_url \|\| url/);
+    assert.match(studioSource, /syncSpeechSelectionUrl\(\{[\s\S]{0,100}runId: result\.metadata\.run_id/);
+    assert.match(studio.studioShell(), /id="speech-run-link"/);
+});
+
 test('deletes only the selected saved pipeline copy', () => {
     const recipes = [
         { id: 'user/first', name: 'First copy' },

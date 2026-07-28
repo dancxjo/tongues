@@ -375,6 +375,11 @@ fn build_app(state: AppState) -> Router {
             "/api/styletts2-reference-audio/{*sample_id}",
             get(get_styletts2_reference_audio),
         )
+        .route("/api/speech/runs/{run_id}", get(get_speech_generation))
+        .route(
+            "/api/speech/runs/{run_id}/audio",
+            get(get_speech_generation_audio),
+        )
         .route("/api/speak", post(speak))
         .route("/", get(serve_app_index))
         .route("/styletts2", get(serve_app_index))
@@ -888,6 +893,7 @@ const PIPELINE_GRAPH_DIR: &str = "data/speech-graphs";
 const PIPELINE_RUN_DIR: &str = "data/speech-runs";
 const TIMELINE_SESSION_DIR: &str = "data/speech-sessions";
 const COMMAND_JOB_DIR: &str = "data/command-jobs";
+const SPEECH_GENERATION_DIR: &str = "data/speech-generations";
 static PIPELINE_RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize)]
@@ -7361,9 +7367,11 @@ fn encode_wav_mono_f32(sample_rate_hz: u32, samples: &[f32]) -> anyhow::Result<V
     Ok(cursor.into_inner())
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct SpeakRequest {
     text: String,
+    recipe_id: Option<String>,
+    composition_id: Option<String>,
     pipeline: Option<tongues_tts::SpeechPipelineSelection>,
     cpu: Option<bool>,
     cuda_device: Option<usize>,
@@ -7408,6 +7416,143 @@ struct SpeakRequest {
     debug_pronunciation: Option<bool>,
     timings: Option<bool>,
     fail_on_guessed_pronunciation: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SpeechGenerationRecord {
+    schema_version: u16,
+    run_id: String,
+    created_at_ms: u128,
+    recipe_id: Option<String>,
+    composition_id: Option<String>,
+    selection: serde_json::Value,
+    metadata: serde_json::Value,
+    audio_url: String,
+    speech_url: String,
+    text_retained: bool,
+    content_detail_retained: bool,
+    input_chars: usize,
+}
+
+fn speech_generation_file(root: &FsPath, run_id: &str) -> Result<PathBuf, String> {
+    durable_record_file(root, SPEECH_GENERATION_DIR, run_id, "speech run")
+}
+
+fn speech_generation_audio_file(root: &FsPath, run_id: &str) -> Result<PathBuf, String> {
+    Ok(speech_generation_file(root, run_id)?.with_extension("wav"))
+}
+
+fn speech_selection(payload: &SpeakRequest) -> Result<serde_json::Value, String> {
+    let mut selection = serde_json::to_value(payload).map_err(|error| error.to_string())?;
+    let object = selection
+        .as_object_mut()
+        .ok_or_else(|| "speech selection did not serialize as an object".to_string())?;
+    object.remove("text");
+    Ok(selection)
+}
+
+fn durable_speech_metadata(mut metadata: serde_json::Value) -> serde_json::Value {
+    if let Some(diagnostics) = metadata
+        .get_mut("diagnostics")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        diagnostics.remove("pronunciation_plan");
+        diagnostics.remove("pronunciation_warnings");
+        diagnostics.insert("content_detail_retained".into(), json!(false));
+    }
+    metadata
+}
+
+fn write_durable_bytes(path: &FsPath, bytes: &[u8]) -> Result<(), String> {
+    let Some(directory) = path.parent() else {
+        return Err("durable byte record path has no parent".into());
+    };
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let part = path.with_extension("wav.part");
+    let mut file = std::fs::File::create(&part).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    std::fs::rename(part, path).map_err(|error| error.to_string())
+}
+
+fn persist_speech_generation(
+    root: &FsPath,
+    payload: &SpeakRequest,
+    metadata: serde_json::Value,
+    wav: &[u8],
+) -> Result<SpeechGenerationRecord, String> {
+    let run_id = format!("speak-{}", uuid::Uuid::new_v4());
+    let record_path = speech_generation_file(root, &run_id)?;
+    let audio_path = speech_generation_audio_file(root, &run_id)?;
+    let record = SpeechGenerationRecord {
+        schema_version: 1,
+        run_id: run_id.clone(),
+        created_at_ms: now_ms(),
+        recipe_id: payload.recipe_id.clone(),
+        composition_id: payload.composition_id.clone(),
+        selection: speech_selection(payload)?,
+        metadata,
+        audio_url: format!("/api/speech/runs/{run_id}/audio"),
+        speech_url: format!("/speech?run={run_id}"),
+        text_retained: false,
+        content_detail_retained: false,
+        input_chars: payload.text.chars().count(),
+    };
+    write_durable_bytes(&audio_path, wav)?;
+    if let Err(error) = write_durable_json(&record_path, &record) {
+        let _ = std::fs::remove_file(audio_path);
+        return Err(error);
+    }
+    Ok(record)
+}
+
+fn read_speech_generation(root: &FsPath, run_id: &str) -> Result<SpeechGenerationRecord, String> {
+    let path = speech_generation_file(root, run_id)?;
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let record = serde_json::from_slice::<SpeechGenerationRecord>(&bytes)
+        .map_err(|error| error.to_string())?;
+    if record.run_id != run_id {
+        return Err("speech run identity does not match its durable record".into());
+    }
+    Ok(record)
+}
+
+async fn get_speech_generation(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Response {
+    match read_speech_generation(&state.workspace_root, &run_id) {
+        Ok(record) => Json(record).into_response(),
+        Err(error) => (StatusCode::NOT_FOUND, error).into_response(),
+    }
+}
+
+async fn get_speech_generation_audio(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Response {
+    if read_speech_generation(&state.workspace_root, &run_id).is_err() {
+        return (StatusCode::NOT_FOUND, "unknown speech run").into_response();
+    }
+    let path = match speech_generation_audio_file(&state.workspace_root, &run_id) {
+        Ok(path) => path,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    match tokio::fs::read(path).await {
+        Ok(wav) => Response::builder()
+            .header("Content-Type", "audio/wav")
+            .header(
+                "Content-Disposition",
+                format!("inline; filename=\"tongues-{run_id}.wav\""),
+            )
+            .body(axum::body::Body::from(wav))
+            .unwrap(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            format!("speech run audio is unavailable: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn speak(
@@ -7537,7 +7682,7 @@ async fn speak(
             let pipeline_id = pipeline
                 .canonical_id()
                 .expect("normalized speech pipeline remains valid");
-            let metadata = json!({
+            let mut metadata = json!({
                 "backend": payload.backend.as_deref().unwrap_or("burn"),
                 "path": payload.model.as_deref().unwrap_or(&output.engine_key),
                 "pipeline_id": pipeline_id,
@@ -7569,6 +7714,26 @@ async fn speak(
                 },
                 "input_audio": output.input_audio,
             });
+            let generation = match persist_speech_generation(
+                &state.workspace_root,
+                &payload,
+                durable_speech_metadata(metadata.clone()),
+                &output.wav,
+            ) {
+                Ok(generation) => generation,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Speech completed but its durable run could not be saved: {error}"),
+                    )
+                        .into_response();
+                }
+            };
+            metadata["run_id"] = json!(&generation.run_id);
+            metadata["run_url"] = json!(&generation.speech_url);
+            metadata["audio_url"] = json!(&generation.audio_url);
+            metadata["recipe_id"] = json!(&generation.recipe_id);
+            metadata["composition_id"] = json!(&generation.composition_id);
             let metadata_header = serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".into());
             Response::builder()
                 .header("Content-Type", "audio/wav")
@@ -7580,6 +7745,7 @@ async fn speak(
                     ),
                 )
                 .header("X-Tongues-Speech-Metadata", metadata_header)
+                .header("X-Tongues-Speech-Run", generation.run_id)
                 .header("X-Tongues-Speech-Engine", output.engine_key)
                 .header("X-Tongues-Speech-Device", output.device.kind())
                 .header(
@@ -10568,6 +10734,18 @@ fn validate_speak_request(payload: &SpeakRequest) -> Result<(), String> {
     if payload.text.trim().is_empty() && payload.backend.as_deref() != Some("freevc") {
         return Err("text is required".into());
     }
+    for (label, id) in [
+        ("recipe_id", payload.recipe_id.as_deref()),
+        ("composition_id", payload.composition_id.as_deref()),
+    ] {
+        if let Some(id) = id {
+            if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+                return Err(format!(
+                    "{label} must be a non-empty, bounded identifier without control characters"
+                ));
+            }
+        }
+    }
     if let Some(quality) = payload.quality.as_deref() {
         if !quality.is_empty() && quality != "balanced" && quality != "fast" {
             return Err("quality must be `balanced` or `fast`".into());
@@ -13185,6 +13363,73 @@ mod tests {
         );
 
         std::fs::remove_dir_all(workspace).expect("remove durable job workspace");
+    }
+
+    #[test]
+    fn speech_generation_records_restore_selection_without_retaining_input_content() {
+        let workspace = test_workspace("durable-speech-generation");
+        let payload = serde_json::from_value::<SpeakRequest>(json!({
+            "text": "Private input text",
+            "recipe_id": "preset/mock",
+            "composition_id": "composition/mock",
+            "backend": "mock",
+            "model": "deterministic",
+            "variety": "en-US-GA",
+            "speed": 1.0
+        }))
+        .expect("speech request fixture");
+        let metadata = json!({
+            "backend": "mock",
+            "pipeline_id": "mock:deterministic",
+            "diagnostics": {
+                "stages": [{"name": "synthesis"}],
+                "pronunciation_plan": {"words": ["Private", "input", "text"]},
+                "pronunciation_warnings": [{"word": "Private"}]
+            }
+        });
+        let record = persist_speech_generation(
+            &workspace,
+            &payload,
+            durable_speech_metadata(metadata),
+            b"RIFFfixture-WAVE",
+        )
+        .expect("persist speech generation");
+        let restored =
+            read_speech_generation(&workspace, &record.run_id).expect("restore speech generation");
+
+        assert_eq!(restored.recipe_id.as_deref(), Some("preset/mock"));
+        assert_eq!(restored.composition_id.as_deref(), Some("composition/mock"));
+        assert_eq!(restored.input_chars, 18);
+        assert!(!restored.text_retained);
+        assert!(!restored.content_detail_retained);
+        assert!(restored.selection.get("text").is_none());
+        assert_eq!(restored.selection["speed"], 1.0);
+        assert!(
+            restored.metadata["diagnostics"]
+                .get("pronunciation_plan")
+                .is_none()
+        );
+        assert!(
+            restored.metadata["diagnostics"]
+                .get("pronunciation_warnings")
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(speech_generation_audio_file(&workspace, &record.run_id).unwrap())
+                .expect("restore speech audio"),
+            b"RIFFfixture-WAVE"
+        );
+        assert!(
+            !speech_generation_audio_file(&workspace, &record.run_id)
+                .unwrap()
+                .with_extension("wav.part")
+                .exists()
+        );
+        let mut invalid_identity = payload.clone();
+        invalid_identity.recipe_id = Some("bad\nidentity".into());
+        assert!(validate_speak_request(&invalid_identity).is_err());
+
+        std::fs::remove_dir_all(workspace).expect("remove speech generation workspace");
     }
 
     #[test]

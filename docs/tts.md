@@ -637,6 +637,20 @@ Supplying both pipeline and legacy selection is rejected as ambiguous. Legacy
 requests are normalized to the same canonical pipeline before validation,
 resident model lookup, and inference.
 
+Every successful server synthesis is also a durable, backend-owned speech run.
+The response metadata and `X-Tongues-Speech-Run` header identify it; `GET
+/api/speech/runs/{run-id}` restores the selected recipe/composition, resolved
+pipeline metadata, and stable `/api/speech/runs/{run-id}/audio` output. Speech
+Studio preserves `recipe`, `composition`, and `model` in workflow URLs and adds
+`run` after generation, so refresh and cross-workflow handoffs restore the same
+backend selection and result.
+
+The record intentionally does not retain input text or content-derived
+pronunciation plans/warnings. It retains the input character count, selection,
+runtime/provenance metadata, and generated WAV under
+`data/speech-generations`. The UI states this retention boundary when a run is
+restored.
+
 Discovery itself is lightweight. Its `verification_ids` list contains only
 installed entries that are new, changed, previously failed, or lack a valid
 cached result; unavailable entries are never queued. `POST
