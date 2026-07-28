@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use speaking::{
-    FeatureBundle, FeatureId, FeatureValue, PauseKind, PhoneDecompositionPolicy,
-    RealizationOptions, Spec, Stress, TerminalPunctuation, UtterancePlan, phone_display_symbol,
-    phoneme_default_phone_display_symbol, realize_phoneme_at, token_stress, variety_by_code,
+    phone_display_symbol, phoneme_default_phone_display_symbol, realize_phoneme_at, token_stress,
+    variety_by_code, FeatureBundle, FeatureId, FeatureValue, PauseKind, PhoneDecompositionPolicy,
+    RealizationOptions, Spec, Stress, TerminalPunctuation, UtterancePlan,
 };
 
 use crate::{LinguisticInputKind, LinguisticIntent, LinguisticProjector, ModelInputContract};

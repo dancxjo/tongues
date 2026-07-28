@@ -43,8 +43,7 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tongues_duplex::{
     DuplexFixtureSuite, DuplexSimulator, DuplexStudioProjection, FixtureCompletionProvider,
     InspectionWarning, InterpretationInspectionQuery, ObservedEvidence, OracleCompletionProvider,
-    SimulatorConfig, SimulatorJournal,
-    studio_projection_from_journal_with_inspection,
+    SimulatorConfig, SimulatorJournal, studio_projection_from_journal_with_inspection,
 };
 use tower_http::services::ServeDir;
 
@@ -2179,10 +2178,7 @@ async fn save_timeline_session(
         .context
         .interpretation_deep_link
         .as_deref()
-        .is_some_and(|link| {
-            !link.starts_with("/speech/operate?")
-                && link != "/speech/operate"
-        })
+        .is_some_and(|link| !link.starts_with("/speech/operate?") && link != "/speech/operate")
     {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -7848,8 +7844,7 @@ fn build_duplex_projection(
     workspace_root: &FsPath,
     request: DuplexProjectionRequest,
 ) -> Result<DuplexStudioProjection, String> {
-    let (run_id, journal, migration_warnings) =
-        duplex_run_and_journal(workspace_root, &request)?;
+    let (run_id, journal, migration_warnings) = duplex_run_and_journal(workspace_root, &request)?;
     let mut projection = studio_projection_from_journal_with_inspection(
         run_id,
         &journal,
@@ -8000,11 +7995,7 @@ fn legacy_syntax_alias_warnings(bytes: &[u8]) -> Vec<InspectionWarning> {
         "link_grammar_projection",
     ];
     let mut found = BTreeSet::new();
-    fn visit(
-        value: &serde_json::Value,
-        aliases: &[&str],
-        found: &mut BTreeSet<String>,
-    ) {
+    fn visit(value: &serde_json::Value, aliases: &[&str], found: &mut BTreeSet<String>) {
         match value {
             serde_json::Value::Object(fields) => {
                 for (key, value) in fields {

@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result as AnyResult};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use speaking::{
     ClaimLifecycle, ClaimResolutionId, CompletionHypothesisId, Confidence, EvidenceProvenance,
@@ -3782,14 +3782,18 @@ mod tests {
         let fixture = suite.fixture("garden-path").unwrap();
         let (journal, state) = run_fixture(fixture).unwrap();
         assert_eq!(state.committed_text(), "The old man the boats");
-        assert!(journal
-            .events
-            .iter()
-            .any(|event| matches!(event.event, SimulatorEventKind::HypothesisWithdrawn { .. })));
-        assert!(journal
-            .events
-            .iter()
-            .any(|event| matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. })));
+        assert!(
+            journal
+                .events
+                .iter()
+                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisWithdrawn { .. }))
+        );
+        assert!(
+            journal
+                .events
+                .iter()
+                .any(|event| matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. }))
+        );
         assert_eq!(replay_journal(&journal).unwrap(), state);
     }
 
@@ -3825,11 +3829,13 @@ mod tests {
             .unwrap();
         assert_eq!(simulator.state().committed_text(), "hello world");
         assert_eq!(simulator.state().predicted_suffix().len(), 1);
-        assert!(simulator
-            .state()
-            .hypotheses
-            .values()
-            .all(|hypothesis| hypothesis.syntax.is_some() && hypothesis.prosody.is_some()));
+        assert!(
+            simulator
+                .state()
+                .hypotheses
+                .values()
+                .all(|hypothesis| hypothesis.syntax.is_some() && hypothesis.prosody.is_some())
+        );
     }
 
     #[test]
@@ -4045,9 +4051,11 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Retry);
-        assert!(result
-            .repair_causes
-            .contains(&VerificationRepairCause::LinguisticDisagreement));
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::LinguisticDisagreement)
+        );
     }
 
     #[test]
@@ -4062,12 +4070,16 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Accept);
-        assert!(result
-            .repair_causes
-            .contains(&VerificationRepairCause::AcceptedProjectionLoss));
-        assert!(!result
-            .repair_causes
-            .contains(&VerificationRepairCause::LinguisticDisagreement));
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::AcceptedProjectionLoss)
+        );
+        assert!(
+            !result
+                .repair_causes
+                .contains(&VerificationRepairCause::LinguisticDisagreement)
+        );
     }
 
     #[test]
@@ -4082,9 +4094,11 @@ mod tests {
         };
         let result = verify_closed_loop(&request, &ClosedLoopVerificationPolicy::default(), 0);
         assert_eq!(result.decision, VerificationDecision::Abstain);
-        assert!(result
-            .repair_causes
-            .contains(&VerificationRepairCause::RecognizerUncertain));
+        assert!(
+            result
+                .repair_causes
+                .contains(&VerificationRepairCause::RecognizerUncertain)
+        );
     }
 
     #[test]
@@ -4453,9 +4467,11 @@ mod tests {
             simulator.state().rankings[0].id,
             CompletionHypothesisId("acoustic".into())
         );
-        assert!(simulator.state().rankings[0]
-            .score
-            .has_component(LinguisticScoreComponent::AcousticLikelihood));
+        assert!(
+            simulator.state().rankings[0]
+                .score
+                .has_component(LinguisticScoreComponent::AcousticLikelihood)
+        );
         assert_eq!(
             simulator.state().hypotheses[&CompletionHypothesisId("grammar".into())]
                 .provenance
@@ -4535,15 +4551,19 @@ mod tests {
             simulator.state().rankings[0].id,
             CompletionHypothesisId("write-branch".into())
         );
-        assert!(events
-            .iter()
-            .any(|event| { matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. }) }));
-        assert!(simulator
-            .state()
-            .hypothesis_audit
-            .values()
-            .flatten()
-            .any(|entry| entry.status == HypothesisDecisionStatus::Revised));
+        assert!(
+            events.iter().any(|event| {
+                matches!(event.event, SimulatorEventKind::HypothesisRepaired { .. })
+            })
+        );
+        assert!(
+            simulator
+                .state()
+                .hypothesis_audit
+                .values()
+                .flatten()
+                .any(|entry| entry.status == HypothesisDecisionStatus::Revised)
+        );
     }
 
     #[test]
@@ -4572,12 +4592,16 @@ mod tests {
             diagnostic.leading_hypothesis_id,
             Some(CompletionHypothesisId("heavy".into()))
         );
-        assert!(diagnostic
-            .reasons
-            .contains(&CommitBlockReason::LowScoreMargin));
-        assert!(diagnostic
-            .reasons
-            .contains(&CommitBlockReason::ProviderDisagreement));
+        assert!(
+            diagnostic
+                .reasons
+                .contains(&CommitBlockReason::LowScoreMargin)
+        );
+        assert!(
+            diagnostic
+                .reasons
+                .contains(&CommitBlockReason::ProviderDisagreement)
+        );
         assert!(simulator.state().committed.is_empty());
     }
 
@@ -4766,10 +4790,12 @@ mod tests {
         ] {
             assert!(audit.iter().any(|entry| entry.status == expected));
         }
-        assert!(simulator
-            .state()
-            .hypotheses
-            .contains_key(&CompletionHypothesisId("only".into())));
+        assert!(
+            simulator
+                .state()
+                .hypotheses
+                .contains_key(&CompletionHypothesisId("only".into()))
+        );
         assert!(serde_json::to_string(simulator.journal()).is_ok());
     }
 
@@ -4814,11 +4840,9 @@ mod tests {
             Some(LinguisticClaimId("claim-right".into()))
         );
 
-        let mut right =
-            proposal_with_claim("right-branch", 0.55, "right", "audio", "claim-right");
+        let mut right = proposal_with_claim("right-branch", 0.55, "right", "audio", "claim-right");
         right.resolution_ids = vec![ClaimResolutionId("resolution-right-write".into())];
-        let mut write =
-            proposal_with_claim("write-branch", 0.45, "write", "audio", "claim-write");
+        let mut write = proposal_with_claim("write-branch", 0.45, "write", "audio", "claim-write");
         write.resolution_ids = vec![ClaimResolutionId("resolution-right-write".into())];
         let mut simulator = DuplexSimulator::new(
             UtteranceId(utterance_id.into()),
@@ -4883,12 +4907,12 @@ mod tests {
 
     #[test]
     fn interpretation_inspection_paginates_and_marks_missing_or_unknown_targets() {
-        let mut state =
-            SimulatorState::new(UtteranceId("inspect-page".into()), VarietyId("en-US".into()));
-        let missing = interpretation_inspection_from_state(
-            &state,
-            &InterpretationInspectionQuery::default(),
+        let mut state = SimulatorState::new(
+            UtteranceId("inspect-page".into()),
+            VarietyId("en-US".into()),
         );
+        let missing =
+            interpretation_inspection_from_state(&state, &InterpretationInspectionQuery::default());
         assert_eq!(missing.evidence_status, InspectionEvidenceStatus::Missing);
         assert_eq!(missing.total, 0);
         assert!(missing.warnings.iter().any(|warning| {

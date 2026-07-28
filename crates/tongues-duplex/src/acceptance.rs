@@ -13,12 +13,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use speaking::{
-    phonemicizer_for_variety, syllables_to_ipa, GrammarAnalysisStatus, GrammarBackendState,
-    GrammarParser, GrammarParserBackend, PhonemicizeRequest, PhonemicizeStyle, Spec, Stress,
-    SyntacticLinkKind, VarietyGrammarParser, VarietyId,
+    GrammarAnalysisStatus, GrammarBackendState, GrammarParser, GrammarParserBackend,
+    PhonemicizeRequest, PhonemicizeStyle, Spec, Stress, SyntacticLinkKind, VarietyGrammarParser,
+    VarietyId, phonemicizer_for_variety, syllables_to_ipa,
 };
 
-use crate::{run_fixture, DuplexFixtureSuite, LearnedDuplexModel, SimulatorEventKind};
+use crate::{DuplexFixtureSuite, LearnedDuplexModel, SimulatorEventKind, run_fixture};
 
 pub const INTERPRETATION_ACCEPTANCE_SCHEMA_VERSION: u32 = 1;
 pub const INTERPRETATION_ACCEPTANCE_REPORT_VERSION: u32 = 1;
@@ -1402,10 +1402,12 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(first.backend_probes.iter().all(|probe| probe.passed));
-        assert!(first
-            .backend_probes
-            .iter()
-            .any(|probe| probe.disposition == BackendDisposition::Skipped));
+        assert!(
+            first
+                .backend_probes
+                .iter()
+                .any(|probe| probe.disposition == BackendDisposition::Skipped)
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ use seams::SentenceDetectorDialog;
 use serde::{Deserialize, Serialize};
 use speaking::segment::TerminalPunctuation;
 use speaking::syntax::{
-    GrammarParser, PartOfSpeech, GrammarAnalysis, SyntacticLinkKind, VarietyGrammarParser,
+    GrammarAnalysis, GrammarParser, PartOfSpeech, SyntacticLinkKind, VarietyGrammarParser,
 };
 use speaking::{
     phonemicizer_for_variety, syllables_to_ipa, PhonemicizeRequest, ProsodyTrack,

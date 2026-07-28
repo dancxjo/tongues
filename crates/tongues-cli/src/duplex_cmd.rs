@@ -6,20 +6,20 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use speaking::{UtteranceId, VarietyId};
 use tongues_duplex::{
-    discover_duplex_models, evaluate_duplex_model, evaluate_interpretation_acceptance_with_progress,
-    export_duplex_model, load_interpretation_acceptance_corpus, prepare_dataset_with_progress,
-    replay_journal, train_duplex_model, AcceptanceProfile, AcceptanceProgress, DuplexFixtureSuite,
-    DuplexPrepareProgress, DuplexSimulator, EvidenceModality, FixtureCompletionProvider,
-    InterpretationAcceptanceReport, InterpretationClaimView, InterpretationInspectionPage,
-    InterpretationInspectionQuery, LearnedCompletionProvider, LearnedDuplexConfig,
-    LearnedDuplexModel, NormalizedCompletionHypothesis, ObservedEvidence,
-    OracleCompletionProvider, SimulatorConfig, SimulatorEventKind, SimulatorJournal, SimulatorState,
-    studio_projection_from_journal_with_inspection,
+    discover_duplex_models, evaluate_duplex_model,
+    evaluate_interpretation_acceptance_with_progress, export_duplex_model,
+    load_interpretation_acceptance_corpus, prepare_dataset_with_progress, replay_journal,
+    studio_projection_from_journal_with_inspection, train_duplex_model, AcceptanceProfile,
+    AcceptanceProgress, DuplexFixtureSuite, DuplexPrepareProgress, DuplexSimulator,
+    EvidenceModality, FixtureCompletionProvider, InterpretationAcceptanceReport,
+    InterpretationClaimView, InterpretationInspectionPage, InterpretationInspectionQuery,
+    LearnedCompletionProvider, LearnedDuplexConfig, LearnedDuplexModel,
+    NormalizedCompletionHypothesis, ObservedEvidence, OracleCompletionProvider, SimulatorConfig,
+    SimulatorEventKind, SimulatorJournal, SimulatorState,
 };
 
 const DEFAULT_FIXTURES_PATH: &str = "fixtures/duplex/completion_scenarios_v1.json";
-const DEFAULT_ACCEPTANCE_CORPUS_PATH: &str =
-    "fixtures/interpretation/ambiguity-acceptance-v1.json";
+const DEFAULT_ACCEPTANCE_CORPUS_PATH: &str = "fixtures/interpretation/ambiguity-acceptance-v1.json";
 const DEFAULT_ACCEPTANCE_REPORT_PATH: &str =
     "target/interpretation/ambiguity-acceptance-report.json";
 const DEFAULT_DUPLEX_DATA_DIR: &str = "datasets/duplex/v0";
@@ -609,11 +609,7 @@ fn write_journal_atomic(path: &Path, journal: &SimulatorJournal) -> Result<()> {
     write_json_atomic(path, journal, "duplex journal")
 }
 
-fn write_json_atomic(
-    path: &Path,
-    value: &impl serde::Serialize,
-    artifact: &str,
-) -> Result<()> {
+fn write_json_atomic(path: &Path, value: &impl serde::Serialize, artifact: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -890,9 +886,7 @@ fn print_interpretation_explanation(page: &InterpretationInspectionPage) {
         );
     }
     if let Some(next) = page.next_cursor {
-        println!(
-            "[interpretation] more targets: rerun with --evidence-cursor {next}"
-        );
+        println!("[interpretation] more targets: rerun with --evidence-cursor {next}");
     }
 }
 

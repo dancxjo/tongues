@@ -138,9 +138,11 @@ fn run_source<S: AudioSource>(
             threshold_rms: command.energy_threshold_rms,
         })?),
         VadBackendArg::WebRtc => {
-            let mut vad = WebRtcVadConfig::default();
-            vad.minimum_speech_rms = command.minimum_speech_rms;
-            vad.noise_gate_multiplier = command.noise_gate_multiplier;
+            let vad = WebRtcVadConfig {
+                minimum_speech_rms: command.minimum_speech_rms,
+                noise_gate_multiplier: command.noise_gate_multiplier,
+                ..WebRtcVadConfig::default()
+            };
             Box::new(WebRtcVad::new(vad)?)
         }
     };

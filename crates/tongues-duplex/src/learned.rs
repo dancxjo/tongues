@@ -14,9 +14,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use speaking::{
-    CompletionHypothesisId, EvidenceProvenance, EvidenceSource, GrammarAnalysis,
-};
+use speaking::{CompletionHypothesisId, EvidenceProvenance, EvidenceSource, GrammarAnalysis};
 use tongues_data::check_group_split_leakage;
 
 use crate::{

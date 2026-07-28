@@ -3046,7 +3046,7 @@ impl AudioStreamPlayer {
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => device.build_output_stream(
-                stream_config.clone(),
+                stream_config,
                 move |output: &mut [f32], _| {
                     let guard = samples_clone.lock().unwrap();
                     let mut frame_idx = 0;
@@ -3078,7 +3078,7 @@ impl AudioStreamPlayer {
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_output_stream(
-                stream_config.clone(),
+                stream_config,
                 move |output: &mut [i16], _| {
                     let guard = samples_clone.lock().unwrap();
                     let mut frame_idx = 0;

@@ -8,13 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use speaking::data::lexicons::{PronunciationStatus, cmudict};
+use speaking::data::lexicons::{cmudict, PronunciationStatus};
 use speaking::syntax::{GrammarAnalysisStatus, GrammarParser, VarietyGrammarParser};
 use speaking::{
-    ClaimConfidence, ClaimRationale, ClaimResolutionId, EvidenceProvenance, EvidenceSource,
-    LinguisticClaim, LinguisticClaimId, LinguisticClaimKind, LinguisticClaimValue,
-    LinguisticEvidenceArtifact, LinguisticTarget, PhonemeId, PhonemicizeRequest, TextRange,
-    UtteranceId, VarietyId, phonemicizer_for_variety,
+    phonemicizer_for_variety, ClaimConfidence, ClaimRationale, ClaimResolutionId,
+    EvidenceProvenance, EvidenceSource, LinguisticClaim, LinguisticClaimId, LinguisticClaimKind,
+    LinguisticClaimValue, LinguisticEvidenceArtifact, LinguisticTarget, PhonemeId,
+    PhonemicizeRequest, TextRange, UtteranceId, VarietyId,
 };
 
 /// Small shared lexicon used to make common ambiguity classes available even
@@ -1324,13 +1324,11 @@ mod tests {
         .unwrap();
         assert_eq!(lattice.decision, HomophoneDecision::ClarificationRequired);
         assert!(lattice.selected_transcript.is_none());
-        assert!(
-            lattice
-                .alternatives
-                .iter()
-                .flatten()
-                .all(|candidate| !candidate.selected)
-        );
+        assert!(lattice
+            .alternatives
+            .iter()
+            .flatten()
+            .all(|candidate| !candidate.selected));
         assert!(lattice.linguistic_evidence.resolutions.is_empty());
     }
 
@@ -1345,17 +1343,13 @@ mod tests {
         let second = augment_sentence("utt", "GO TO THEIR HOUSE NOW", "train", &index, &config);
         assert_eq!(first, second);
         assert_eq!(first.len(), 3);
-        assert!(
-            first
-                .iter()
-                .all(|candidate| candidate.provenance.split_key == "train")
-        );
+        assert!(first
+            .iter()
+            .all(|candidate| candidate.provenance.split_key == "train"));
         let validation = augment_sentence("utt", "GO TO THEIR HOUSE NOW", "valid", &index, &config);
-        assert!(
-            validation
-                .iter()
-                .all(|candidate| candidate.provenance.split_key == "valid")
-        );
+        assert!(validation
+            .iter()
+            .all(|candidate| candidate.provenance.split_key == "valid"));
         assert_ne!(first, validation);
     }
 
