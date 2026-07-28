@@ -587,6 +587,17 @@ export function createPatchCanvas(options) {
     return card;
   }
 
+  function updateNodeCard(existing, fresh) {
+    for (const attribute of [...existing.attributes]) {
+      if (!fresh.hasAttribute(attribute.name)) existing.removeAttribute(attribute.name);
+    }
+    for (const attribute of fresh.attributes) {
+      existing.setAttribute(attribute.name, attribute.value);
+    }
+    existing.replaceChildren(...fresh.childNodes);
+    return existing;
+  }
+
   function renderNodeCards() {
     const hasPendingControlEdit = Boolean(cardLayer.querySelector("[data-pending-edit=true]"));
     if (hasPendingControlEdit || (cardLayer.contains(document.activeElement) && editableTarget(document.activeElement))) return;
@@ -603,13 +614,22 @@ export function createPatchCanvas(options) {
       return;
     }
     cardRenderAt = now;
-    cardLayer.replaceChildren();
     const visibleIds=getVisibleNodeIds();
-    for (const node of pipeline().nodes.filter(node=>!visibleIds||visibleIds.has(node.id))) {
-      const card = renderNodeCard(node);
-      if (!card) continue;
+    const visibleNodes=pipeline().nodes.filter(node=>!visibleIds||visibleIds.has(node.id));
+    const existingCards=new Map(
+      [...cardLayer.querySelectorAll(":scope > .patch-node-card")]
+        .map(card=>[card.dataset.nodeId,card]),
+    );
+    const renderedCards=[];
+    for (const node of visibleNodes) {
+      const fresh = renderNodeCard(node);
+      if (!fresh) continue;
+      const existing=existingCards.get(node.id);
+      const card=existing?updateNodeCard(existing,fresh):fresh;
+      existingCards.delete(node.id);
+      renderedCards.push(card);
+      if (!existing) cardLayer.append(card);
       const collapsed = card.dataset.state === "collapsed";
-      cardLayer.append(card);
       const viewport = overlayBounds();
       const bounds = card.getBoundingClientRect();
       card.inert = (
@@ -629,6 +649,12 @@ export function createPatchCanvas(options) {
         control.tabIndex = enclosed ? 0 : -1;
       }
       persistNodeGeometryFromCard(node, card, collapsed);
+    }
+    for (const stale of existingCards.values()) stale.remove();
+    const currentOrder=[...cardLayer.children].map(card=>card.dataset.nodeId);
+    const renderedOrder=renderedCards.map(card=>card.dataset.nodeId);
+    if (currentOrder.some((nodeId,index)=>nodeId!==renderedOrder[index])) {
+      for (const card of renderedCards) cardLayer.append(card);
     }
   }
 
