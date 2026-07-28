@@ -221,6 +221,7 @@ impl MbrolaSymbolMap {
             ("sil", "_"),
             ("h", "h"),
             ("l", "l"),
+            ("ɫ", "l"),
             ("m", "m"),
             ("b", "b"),
             ("ɪ", "I"),
@@ -379,6 +380,12 @@ impl MbrolaSymbolMap {
                         ("eə", "e@"),
                         ("ɪə", "I@"),
                         ("ʊə", "U@"),
+                        ("pʰ", "p"),
+                        ("p˭", "p"),
+                        ("tʰ", "t"),
+                        ("t˭", "t"),
+                        ("kʰ", "k"),
+                        ("k˭", "k"),
                         ("AA", "A:"),
                         ("AO", "O:"),
                         ("EH", "e"),
@@ -721,7 +728,11 @@ impl MbrolaProjector {
                 report.inserted_breaks += 1;
                 speech_boundary_index += 1;
             }
-            let source = phone_display_symbol(spec_phone(token)?);
+            let phone = spec_phone(token)?;
+            if is_structural_boundary(phone) {
+                continue;
+            }
+            let source = phone_display_symbol(phone);
             let symbols = self
                 .symbol_map
                 .resolve(source, &self.voice, &self.inventory)?;
@@ -829,6 +840,10 @@ impl MbrolaProjector {
         }
         Ok((PhoneTimedPlan::new(phones), report))
     }
+}
+
+fn is_structural_boundary(phone: &speaking::PhoneId) -> bool {
+    phone.as_str().starts_with("boundary.") || phone.as_str() == "ipa.phone.|"
 }
 
 fn split_duration(duration_ms: u32, parts: usize) -> Result<Vec<u32>, MbrolaLoweringError> {
@@ -1400,6 +1415,72 @@ mod tests {
         assert!(first.phones[0].pitch_targets.is_empty());
         assert!(first.phones[1].duration_ms > first.phones[0].duration_ms);
         assert!(first.phones[1].pitch_targets.last().unwrap().hz > 100.0);
+    }
+
+    #[test]
+    fn english_en1_lowers_ipa_allophones_to_card_inventory() {
+        let config = MbrolaVoiceConfig::for_id("mbrola-en1").expect("British English voice config");
+        let voice = MbrolaVoiceMetadata {
+            id: config.id.into(),
+            variety: config.variety.into(),
+            baseline_hz: None,
+            pitch_range_hz: None,
+        };
+        let inventory = ["_", "k", "l", "p", "t"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        let map = config.symbol_map();
+        for (phone, expected) in [
+            ("ɫ", "l"),
+            ("pʰ", "p"),
+            ("p˭", "p"),
+            ("tʰ", "t"),
+            ("t˭", "t"),
+            ("kʰ", "k"),
+            ("k˭", "k"),
+        ] {
+            assert_eq!(
+                map.resolve(phone, &voice, &inventory).unwrap(),
+                vec![expected],
+                "en1 card projection for {phone}"
+            );
+        }
+    }
+
+    #[test]
+    fn structural_phone_boundaries_are_not_lowered_as_voice_symbols() {
+        let mut plan = plan();
+        plan.target_phones.insert(1, token("boundary.word", None));
+        plan.target_phones.insert(2, token("ipa.phone.|", None));
+        let projector = MbrolaProjector {
+            voice: MbrolaVoiceMetadata {
+                id: "tiny".into(),
+                variety: "en-GB".into(),
+                baseline_hz: Some(115.0),
+                pitch_range_hz: Some(35.0),
+            },
+            symbol_map: MbrolaSymbolMap::new(
+                "fixture-map",
+                [("h", "h"), ("AH", "@"), ("AH1", "@")],
+            ),
+            inventory: ["_", "h", "@"].into_iter().map(str::to_string).collect(),
+            timing: MbrolaTimingProfile::default(),
+            control_baseline_hz: None,
+            control_pitch_range_hz: None,
+        };
+
+        let (lowered, _) = projector.project(&plan).unwrap();
+
+        assert_eq!(
+            lowered
+                .phones
+                .iter()
+                .map(|phone| phone.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "@", "_"]
+        );
     }
 
     #[test]
