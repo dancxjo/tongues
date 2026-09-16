@@ -1011,9 +1011,46 @@ pub fn phoneme_sequence_from_plan(plan: &UtterancePlan) -> Result<PhonemeSequenc
             push_symbol(&mut symbols, &symbol);
         }
     }
+    if let Some(text) = plan.intended_text.as_deref() {
+        insert_missing_compound_boundaries(&mut symbols, text);
+    }
     apply_speech_prosody_terminal_hint(&mut symbols, plan);
     append_default_terminal_symbol(&mut symbols);
     Ok(PhonemeSequence { symbols })
+}
+
+fn insert_missing_compound_boundaries(symbols: &mut Vec<String>, text: &str) {
+    let expected_words = word_spans(text).len();
+    let rendered_words = usize::from(!symbols.is_empty())
+        + symbols
+            .iter()
+            .filter(|symbol| symbol.as_str() == " ")
+            .count();
+    let mut missing = expected_words.saturating_sub(rendered_words);
+    if missing == 0 || !text.contains('-') {
+        return;
+    }
+
+    let mut index = 1;
+    while index < symbols.len() && missing > 0 {
+        let (base, stress) = split_arpabet_stress(&symbols[index]);
+        if matches!(stress, Some('1' | '2')) && is_arpabet_vowel(base) {
+            let mut boundary = index;
+            while boundary > 0 {
+                let (previous_base, _) = split_arpabet_stress(&symbols[boundary - 1]);
+                if is_arpabet_vowel(previous_base) || symbols[boundary - 1] == " " {
+                    break;
+                }
+                boundary -= 1;
+            }
+            if boundary > 0 && symbols[boundary - 1] != " " {
+                symbols.insert(boundary, " ".into());
+                missing -= 1;
+                index += 1;
+            }
+        }
+        index += 1;
+    }
 }
 
 #[doc(hidden)]
@@ -2537,6 +2574,42 @@ mod tests {
         let config = VoiceConfig::from_json_str(RYAN_LIKE_CONFIG_JSON).expect("config");
         let ids = phoneme_ids_from_text("hello world", "en-US", &config).expect("ids");
         assert!(!ids.ids.is_empty());
+    }
+
+    #[test]
+    fn onnx_lowering_restores_hyphenated_compound_boundary() -> Result<()> {
+        let plan = utterance_plan_from_text(SpeechRequest {
+            text: "twenty-one".into(),
+            variety: "en-US".into(),
+        })?;
+
+        let sequence = phoneme_sequence_from_plan(&plan)?;
+
+        assert_eq!(
+            sequence.symbols,
+            ["T", "W", "EH1", "N", "T", "IY0", " ", "W", "AO2", "N", "."]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn onnx_lowering_keeps_ordinary_word_boundary() -> Result<()> {
+        let plan = utterance_plan_from_text(SpeechRequest {
+            text: "twenty one".into(),
+            variety: "en-US".into(),
+        })?;
+
+        let sequence = phoneme_sequence_from_plan(&plan)?;
+
+        assert_eq!(
+            sequence
+                .symbols
+                .iter()
+                .filter(|symbol| *symbol == " ")
+                .count(),
+            1
+        );
+        Ok(())
     }
 
     #[test]
