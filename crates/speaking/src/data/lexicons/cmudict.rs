@@ -141,6 +141,7 @@ mmm M
         lexicon
     }
 
+    #[cfg(feature = "embedded-cmudict")]
     fn extend_from_embedded_cmudict(&mut self) {
         let embedded = arpabet_cmudict::load_cmudict();
         let mut words = embedded.keys().map(String::as_str).collect::<Vec<_>>();
@@ -166,6 +167,9 @@ mmm M
             }
         }
     }
+
+    #[cfg(not(feature = "embedded-cmudict"))]
+    fn extend_from_embedded_cmudict(&mut self) {}
 
     fn load_from_runtime_path() -> Option<Self> {
         for runtime_files in RUNTIME_FILES {
@@ -360,6 +364,7 @@ pub fn normalize_for_lookup(word: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "embedded-cmudict")]
     #[test]
     fn bundled_cmudict_preserves_expected_entries_and_stress() {
         let lexicon = bundled();
@@ -385,6 +390,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embedded-cmudict")]
     #[test]
     fn homophones_find_other_spellings_without_a_corpus_vocabulary() {
         let spellings = homophones("pair")
@@ -395,6 +401,7 @@ mod tests {
         assert!(spellings.contains("pear"));
     }
 
+    #[cfg(feature = "embedded-cmudict")]
     #[test]
     fn lookup_entry_reports_normalized_and_missing_status() {
         assert_eq!(
