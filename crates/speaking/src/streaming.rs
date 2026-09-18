@@ -236,6 +236,150 @@ fn is_closing_quote(character: char) -> bool {
     matches!(character, '"' | '\'' | ')' | ']' | '}')
 }
 
+const DEFAULT_MIN_CLAUSE_CHARS: usize = 48;
+const DEFAULT_MAX_SEGMENT_CHARS: usize = 64;
+
+/// Provider-neutral streaming text segmentation used by immediate speech
+/// output. This owns the safe irreversible boundary policy shared by server,
+/// CLI, and embedding runtimes.
+#[derive(Debug, Clone)]
+pub struct StreamingSegmenter {
+    pending: String,
+    minimum_clause_chars: usize,
+    maximum_segment_chars: usize,
+}
+
+impl Default for StreamingSegmenter {
+    fn default() -> Self {
+        Self {
+            pending: String::new(),
+            minimum_clause_chars: DEFAULT_MIN_CLAUSE_CHARS,
+            maximum_segment_chars: DEFAULT_MAX_SEGMENT_CHARS,
+        }
+    }
+}
+
+impl StreamingSegmenter {
+    pub fn with_bounds(
+        minimum_clause_chars: usize,
+        maximum_segment_chars: usize,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(minimum_clause_chars > 0, "minimum clause extent must be positive");
+        anyhow::ensure!(
+            maximum_segment_chars >= minimum_clause_chars,
+            "maximum segment extent must not be smaller than minimum clause extent"
+        );
+        Ok(Self {
+            pending: String::new(),
+            minimum_clause_chars,
+            maximum_segment_chars,
+        })
+    }
+
+    pub fn pending_text(&self) -> &str {
+        &self.pending
+    }
+
+    pub fn push(&mut self, delta: &str) -> Vec<String> {
+        self.pending.push_str(delta);
+        let mut committed = Vec::new();
+        while let Some(boundary) = streaming_boundary(
+            &self.pending,
+            self.minimum_clause_chars,
+            self.maximum_segment_chars,
+        ) {
+            let remainder = self.pending.split_off(boundary);
+            let segment = std::mem::replace(&mut self.pending, remainder);
+            if !segment.trim().is_empty() {
+                committed.push(segment);
+            }
+        }
+        committed
+    }
+
+    pub fn finish(&mut self) -> Vec<String> {
+        let final_segment = std::mem::take(&mut self.pending);
+        if final_segment.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![final_segment]
+        }
+    }
+
+    pub fn cancel(&mut self) {
+        self.pending.clear();
+    }
+}
+
+fn streaming_boundary(
+    text: &str,
+    minimum_clause_chars: usize,
+    maximum_segment_chars: usize,
+) -> Option<usize> {
+    let chars = text.char_indices().collect::<Vec<_>>();
+    let abbreviations = [
+        "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "e.g.", "i.e.",
+    ];
+    let mut quote_depth = false;
+    let mut nesting = 0_i32;
+    let mut clause = None;
+    let mut soft = None;
+    for (position, &(byte, character)) in chars.iter().enumerate() {
+        match character {
+            '"' | '“' | '”' | '«' | '»' => quote_depth = !quote_depth,
+            '(' | '[' | '{' => nesting += 1,
+            ')' | ']' | '}' => nesting = (nesting - 1).max(0),
+            _ => {}
+        }
+        let char_count = position + 1;
+        let end = byte + character.len_utf8();
+        if character.is_whitespace() && char_count >= maximum_segment_chars && soft.is_none() {
+            soft = Some(end);
+        }
+        if !quote_depth
+            && nesting == 0
+            && matches!(character, ',' | ';' | ':' | '，' | '；' | '：')
+            && char_count >= minimum_clause_chars
+        {
+            clause = Some(end);
+        }
+        if matches!(character, '.' | '!' | '?' | '。' | '！' | '？' | '።') {
+            let previous = position.checked_sub(1).and_then(|index| chars.get(index));
+            let next = chars.get(position + 1);
+            let decimal = previous.is_some_and(|(_, value)| value.is_ascii_digit())
+                && next.is_some_and(|(_, value)| value.is_ascii_digit());
+            let closes_quote = next.is_some_and(|(_, value)| {
+                matches!(value, '"' | '”' | '»' | '\'' | ')' | ']' | '}')
+            });
+            let prefix = text[..end].trim_end().to_ascii_lowercase();
+            let abbreviation = abbreviations.iter().any(|item| prefix.ends_with(item));
+            if !decimal
+                && !abbreviation
+                && (!quote_depth || closes_quote)
+                && (nesting == 0 || closes_quote)
+            {
+                if char_count > maximum_segment_chars
+                    && let Some(soft_boundary) = soft
+                {
+                    return Some(soft_boundary);
+                }
+                let mut boundary = end;
+                for &(next_byte, next_char) in chars.iter().skip(position + 1) {
+                    if matches!(next_char, '"' | '”' | '»' | '\'' | ')' | ']' | '}')
+                        || next_char.is_whitespace()
+                    {
+                        boundary = next_byte + next_char.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                return Some(boundary);
+            }
+        }
+    }
+    clause.or(soft)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
