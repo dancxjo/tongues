@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
-use speaking::{SegmentId, StreamEvent, TextRole};
+use speaking::{SegmentId, StreamEvent, StreamingSegmenter, TextRole};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
@@ -11,8 +11,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 const DEFAULT_OLLAMA_HOST: &str = "http://127.0.0.1:11434";
-const MIN_CLAUSE_CHARS: usize = 48;
-const MAX_SEGMENT_CHARS: usize = 64;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
@@ -504,99 +502,6 @@ fn nonempty(value: &Option<String>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-#[derive(Default)]
-pub struct StreamingSegmenter {
-    pending: String,
-}
-
-impl StreamingSegmenter {
-    pub fn push(&mut self, delta: &str) -> Vec<String> {
-        self.pending.push_str(delta);
-        let mut committed = Vec::new();
-        while let Some(boundary) = find_boundary(&self.pending) {
-            let remainder = self.pending.split_off(boundary);
-            let segment = std::mem::replace(&mut self.pending, remainder);
-            if !segment.trim().is_empty() {
-                committed.push(segment);
-            }
-        }
-        committed
-    }
-
-    pub fn finish(&mut self) -> Vec<String> {
-        let final_segment = std::mem::take(&mut self.pending);
-        if final_segment.trim().is_empty() {
-            Vec::new()
-        } else {
-            vec![final_segment]
-        }
-    }
-}
-
-fn find_boundary(text: &str) -> Option<usize> {
-    let chars = text.char_indices().collect::<Vec<_>>();
-    let abbreviations = [
-        "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "e.g.", "i.e.",
-    ];
-    let mut quote_depth = false;
-    let mut nesting = 0_i32;
-    let mut clause = None;
-    let mut soft = None;
-    for (position, &(byte, character)) in chars.iter().enumerate() {
-        match character {
-            '"' | '“' | '”' | '«' | '»' => quote_depth = !quote_depth,
-            '(' | '[' | '{' => nesting += 1,
-            ')' | ']' | '}' => nesting = (nesting - 1).max(0),
-            _ => {}
-        }
-        let char_count = position + 1;
-        let end = byte + character.len_utf8();
-        if character.is_whitespace() && char_count >= MAX_SEGMENT_CHARS && soft.is_none() {
-            soft = Some(end);
-        }
-        if !quote_depth
-            && nesting == 0
-            && matches!(character, ',' | ';' | ':' | '，' | '；' | '：')
-            && char_count >= MIN_CLAUSE_CHARS
-        {
-            clause = Some(end);
-        }
-        if matches!(character, '.' | '!' | '?' | '。' | '！' | '？' | '።') {
-            let previous = position.checked_sub(1).and_then(|index| chars.get(index));
-            let next = chars.get(position + 1);
-            let decimal = previous.is_some_and(|(_, value)| value.is_ascii_digit())
-                && next.is_some_and(|(_, value)| value.is_ascii_digit());
-            let closes_quote = next.is_some_and(|(_, value)| {
-                matches!(value, '"' | '”' | '»' | '\'' | ')' | ']' | '}')
-            });
-            let prefix = text[..end].trim_end().to_ascii_lowercase();
-            let abbreviation = abbreviations.iter().any(|item| prefix.ends_with(item));
-            if !decimal
-                && !abbreviation
-                && (!quote_depth || closes_quote)
-                && (nesting == 0 || closes_quote)
-            {
-                if char_count > MAX_SEGMENT_CHARS
-                    && let Some(soft_boundary) = soft
-                {
-                    return Some(soft_boundary);
-                }
-                let mut boundary = end;
-                for &(next_byte, next_char) in chars.iter().skip(position + 1) {
-                    if matches!(next_char, '"' | '”' | '»' | '\'' | ')' | ']' | '}')
-                        || next_char.is_whitespace()
-                    {
-                        boundary = next_byte + next_char.len_utf8();
-                    } else {
-                        break;
-                    }
-                }
-                return Some(boundary);
-            }
-        }
-    }
-    clause.or(soft)
-}
 
 #[cfg(test)]
 mod tests {
