@@ -654,13 +654,26 @@ impl AsrSession for FixtureAsrSession {
     }
 }
 
+/// Projects one immutable recognition commit from the shared speech event IR.
+///
+/// Generated speech commits deliberately do not pass this boundary.
+pub fn committed_recognition_segment(event: &StreamEvent) -> Option<(&SegmentId, &str)> {
+    match event {
+        StreamEvent::CommittedSegment {
+            role: TextRole::Recognition,
+            segment_id,
+            text,
+            ..
+        } => Some((segment_id, text.as_str())),
+        _ => None,
+    }
+}
+
 pub fn committed_transcript(events: &[StreamEvent]) -> String {
     events
         .iter()
-        .filter_map(|event| match event {
-            StreamEvent::CommittedSegment { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
+        .filter_map(committed_recognition_segment)
+        .map(|(_, text)| text)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -720,6 +733,41 @@ mod provider_runtime_tests {
             maximum_estimated_memory_mb: 128,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn committed_recognition_projection_excludes_unstable_and_generated_text() {
+        let segment = SegmentId("recognition:1".into());
+        let committed = StreamEvent::CommittedSegment {
+            role: TextRole::Recognition,
+            segment_id: segment.clone(),
+            text: "hello".into(),
+            words: Vec::new(),
+            language: None,
+            speaker_id: None,
+            confidence: None,
+        };
+        assert_eq!(
+            committed_recognition_segment(&committed),
+            Some((&segment, "hello"))
+        );
+        assert!(committed_recognition_segment(&StreamEvent::PartialHypothesis {
+            role: TextRole::Recognition,
+            segment_id: segment.clone(),
+            text: "hel".into(),
+            confidence: None,
+        })
+        .is_none());
+        assert!(committed_recognition_segment(&StreamEvent::CommittedSegment {
+            role: TextRole::Generation,
+            segment_id: SegmentId("generation:1".into()),
+            text: "response".into(),
+            words: Vec::new(),
+            language: None,
+            speaker_id: None,
+            confidence: None,
+        })
+        .is_none());
     }
 
     #[test]
