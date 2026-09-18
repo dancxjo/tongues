@@ -5,11 +5,12 @@ license.workspace = true
 edition = "2021"
 
 [features]
-default = ["vad-webrtc"]
+default = ["vad-webrtc", "system-audio"]
 vad-webrtc = ["dep:webrtc-vad"]
+system-audio = ["dep:cpal"]
 
 [dependencies]
-cpal = { workspace = true }
+cpal = { workspace = true, optional = true }
 hound = { workspace = true }
 rustfft = { workspace = true }
 serde = { workspace = true }
