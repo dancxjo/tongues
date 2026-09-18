@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::LanguageId;
-use crate::event::StreamEvent;
+use crate::event::{SegmentId, StreamEvent, TextRole};
 use crate::transcript::{TranscriptCandidateTracker, TranscriptChunk};
 use crate::word_stream::TranscriptWord;
 
