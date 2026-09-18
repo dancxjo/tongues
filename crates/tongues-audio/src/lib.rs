@@ -19,7 +19,9 @@ mod phonetic_segmentation;
 mod segmentation;
 mod source;
 mod speech_pipeline;
+#[cfg(feature = "system-audio")]
 mod system_input;
+#[cfg(feature = "system-audio")]
 mod system_output;
 mod transform;
 mod vad;
@@ -62,10 +64,12 @@ pub use source::{
     PushedAudioChunk, SourceAudioChunk, WavAudioSource,
 };
 pub use speech_pipeline::{VadPipelineEvent, VadSegmentationPipeline};
+#[cfg(feature = "system-audio")]
 pub use system_input::{
     input_capabilities, input_device_inventory, AudioInputCapabilities, CpalAudioSource,
     InputDeviceInfo,
 };
+#[cfg(feature = "system-audio")]
 pub use system_output::{
     output_device_inventory, write_wav_output, CpalAudioSink, OutputDeviceInfo,
 };
