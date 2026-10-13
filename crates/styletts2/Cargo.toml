@@ -21,7 +21,7 @@ tongues-audio = { path = "../tongues-audio" }
 tongues-tts = { path = "../tongues-tts", default-features = false }
 
 [dependencies.ort]
-version = "=2.0.0-rc.12"
+version = "=2.0.0-rc.13"
 optional = true
 default-features = false
 features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-rustls", "api-23"]
